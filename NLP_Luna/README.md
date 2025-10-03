@@ -4,13 +4,6 @@ This project is a web-based AI Safety Inspector tool that analyzes workplace sce
 - **Deepseek R1 7B** (no RAG)
 - **Llama3** (with RAG and incident similarity)
 
-## Features
-- Modern, responsive UI
-- Two-column results layout (Hazards & Suggested Actions)
-- Loading spinner for analysis feedback
-- Detailed cards for summary, persons, PPE, hazards, and actions
-- Local Python server for static file hosting
-
 ## Requirements
 - **Python 3.x** (for local web server)
 - **Ollama** (for running LLMs locally)
@@ -31,20 +24,7 @@ ollama pull deepseek-r1:7b
 ollama pull llama3
 ```
 
-### 4. Set CORS for Ollama (if using browser)
-To allow browser access, set the environment variable before starting Ollama:
-- On Windows (PowerShell):
-  ```powershell
-  $env:OLLAMA_ORIGINS="*"
-  ollama serve
-  ```
-- On Mac/Linux:
-  ```bash
-  export OLLAMA_ORIGINS="*"
-  ollama serve
-  ```
-
-### 5. Start the Python Server
+### 4. Start the Python Server
 Run the batch file:
 ```
 start.bat
@@ -67,6 +47,4 @@ Visit:
 - `style.css` — Unified styles
 - `libs/d3-dsv.js` — CSV parsing for RAG
 - `start.bat` — Batch file to start server and open browser
-
-## Team & License
-See `LICENSE` for details. Contributions welcome!
+```

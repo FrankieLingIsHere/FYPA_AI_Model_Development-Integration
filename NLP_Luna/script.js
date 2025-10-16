@@ -5,6 +5,34 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsContainer = document.getElementById('results-container');
     const personsGrid = document.getElementById('persons-grid');
 
+    // Image upload functionality
+    const imageUpload = document.getElementById('image-upload');
+    const uploadTrigger = document.getElementById('upload-trigger');
+    const imagePreview = document.getElementById('image-preview');
+    const imagePreviewArea = document.getElementById('image-preview-area');
+
+    uploadTrigger.addEventListener('click', () => {
+        imageUpload.click();
+    });
+
+    imageUpload.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imagePreview.src = e.target.result;
+                imagePreview.style.display = 'block';
+                uploadTrigger.style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // Optional: Click on image to change it
+    imagePreview.addEventListener('click', () => {
+        imageUpload.click();
+    });
+
     analyzeBtn.addEventListener('click', async () => {
         const sceneDescription = sceneInput.value.trim();
         if (!sceneDescription) {

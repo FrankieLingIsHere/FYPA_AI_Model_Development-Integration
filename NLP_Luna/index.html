@@ -15,7 +15,27 @@
 
         <main>
             <div class="input-section">
-                <textarea id="scene-input" placeholder="e.g., A construction site with two workers, one is not wearing a hard hat..."></textarea>
+                <div class="input-grid">
+                    <div class="text-input-container">
+                        <label for="scene-input">Text Analysis</label>
+                        <textarea id="scene-input" placeholder="e.g., A construction site with two workers, one is not wearing a hard hat..."></textarea>
+                    </div>
+                    <div class="image-upload-container">
+                        <label for="image-upload">Upload Image</label>
+                        <div class="image-upload-square" id="image-preview-area">
+                            <input type="file" id="image-upload" accept="image/*" style="display: none;">
+                            <button class="upload-btn" id="upload-trigger">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span>Upload Image</span>
+                            </button>
+                            <img id="image-preview" src="" alt="Preview" style="display: none;">
+                        </div>
+                    </div>
+                </div>
                 <button id="analyze-btn">Analyze Scene</button>
             </div>
 

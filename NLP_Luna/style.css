@@ -61,9 +61,30 @@ header p {
     margin-bottom: 2rem;
 }
 
+.input-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.text-input-container,
+.image-upload-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.text-input-container label,
+.image-upload-container label {
+    font-weight: 500;
+    color: var(--primary-color);
+    font-size: 1rem;
+}
+
 #scene-input {
     width: 100%;
-    min-height: 150px;
+    min-height: 250px;
     padding: 1rem;
     border-radius: 8px;
     border: 1px solid var(--border-color);
@@ -80,6 +101,65 @@ header p {
     box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
 }
 
+.image-upload-square {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border: 2px dashed var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #f8f9fa;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s, background-color 0.3s;
+}
+
+.image-upload-square:hover {
+    border-color: var(--secondary-color);
+    background-color: #f0f4f8;
+}
+
+.upload-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    color: var(--secondary-color);
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 1rem;
+    transition: transform 0.2s, color 0.2s;
+}
+
+.upload-btn:hover {
+    transform: scale(1.05);
+    color: #2980b9;
+}
+
+.upload-btn svg {
+    width: 48px;
+    height: 48px;
+}
+
+#image-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    position: absolute;
+    top: 0;
+    left: 0;
+    cursor: pointer;
+    transition: opacity 0.3s;
+}
+
+#image-preview:hover {
+    opacity: 0.9;
+}
+
 #analyze-btn {
     padding: 1rem 1.5rem;
     background: linear-gradient(45deg, var(--secondary-color), #2980b9);
@@ -91,6 +171,7 @@ header p {
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.3s;
     align-self: flex-end;
+    width: fit-content;
 }
 
 #analyze-btn:hover {
@@ -298,3 +379,23 @@ header p {
 .ppe-status-mentioned { background-color: #eafaf1; color: #28a745; }
 .ppe-status-not-mentioned { background-color: #f8f9fa; color: #6c757d; }
 .ppe-status-missing { background-color: #fbeae5; color: var(--error-color); }
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .input-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+    
+    .results-main-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    body {
+        padding: 1rem;
+    }
+    
+    .container {
+        padding: 1.5rem;
+    }
+}

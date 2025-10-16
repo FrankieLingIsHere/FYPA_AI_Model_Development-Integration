@@ -47,4 +47,3 @@ Visit:
 - `style.css` — Unified styles
 - `libs/d3-dsv.js` — CSV parsing for RAG
 - `start.bat` — Batch file to start server and open browser
-```

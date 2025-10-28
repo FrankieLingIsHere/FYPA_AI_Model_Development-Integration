@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Safety Inspector</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Safety Inspector</h1>
+            <p>Describe a workplace scene to identify potential hazards and PPE violations.</p>
+        </header>
+
+        <main>
+            <div class="input-section">
+                <div class="input-grid">
+                    <div class="text-input-container">
+                        <label for="scene-input">Text Analysis</label>
+                        <textarea id="scene-input" placeholder="e.g., A construction site with two workers, one is not wearing a hard hat..."></textarea>
+                    </div>
+                    <div class="image-upload-container">
+                        <label for="image-upload">Upload Image</label>
+                        <div class="image-upload-square" id="image-preview-area">
+                            <input type="file" id="image-upload" accept="image/*" style="display: none;">
+                            <button class="upload-btn" id="upload-trigger">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span>Upload Image</span>
+                            </button>
+                            <img id="image-preview" src="" alt="Preview" style="display: none;">
+                        </div>
+                    </div>
+                </div>
+                <button id="analyze-btn">Analyze Scene</button>
+            </div>
+
+            <div id="loading-indicator"></div>
+
+            <div class="output-section" id="results-container" style="display: none;">
+                <div class="results-main-grid">
+                    <!-- Left Column -->
+                    <div class="results-left-column">
+                        <div class="info-card" id="summary-card">
+                            <div class="card-header">
+                                <h2>Analysis Summary</h2>
+                                <div id="confidence-score">
+                                    Confidence: <span class="score">0%</span>
+                                </div>
+                            </div>
+                            <div class="card-content"></div>
+                        </div>
+                        <div id="persons-grid">
+                            <!-- Person cards will be inserted here -->
+                        </div>
+                    </div>
+                    <!-- Right Column removed per user request; content consolidated into Person card -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const sceneInput = document.getElementById('scene-input');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const resultsContainer = document.getElementById('results-container');
+        const personsGrid = document.getElementById('persons-grid');
+
+        // Image upload functionality
+        const imageUpload = document.getElementById('image-upload');
+        const uploadTrigger = document.getElementById('upload-trigger');
+        const imagePreview = document.getElementById('image-preview');
+        const imagePreviewArea = document.getElementById('image-preview-area');
+
+        uploadTrigger.addEventListener('click', () => {
+            imageUpload.click();
+        });
+
+        imageUpload.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file && file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    imagePreview.src = e.target.result;
+                    imagePreview.style.display = 'block';
+                    uploadTrigger.style.display = 'none';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Optional: Click on image to change it
+        imagePreview.addEventListener('click', () => {
+            imageUpload.click();
+        });
+
+        analyzeBtn.addEventListener('click', async () => {
+            const sceneDescription = sceneInput.value.trim();
+            if (!sceneDescription) {
+                alert('Please enter a scene description.');
+                return;
+            }
+
+            // Show loading spinner and hide previous results
+            loadingIndicator.innerHTML = '<div class="spinner"></div>';
+            loadingIndicator.style.display = 'block';
+            resultsContainer.style.display = 'none';
+            analyzeBtn.disabled = true;
+
+            try {
+                const response = await callFlaskAPI(sceneDescription);
+                displayResults(response);
+            } catch (error) {
+                console.error('Error analyzing scene:', error);
+                alert('An error occurred while analyzing the scene. Please check the server is running.');
+            } finally {
+                // Hide loading spinner and show results
+                loadingIndicator.style.display = 'none';
+                resultsContainer.style.display = 'block';
+                analyzeBtn.disabled = false;
+            }
+        });
+
+        async function callFlaskAPI(description) {
+            console.log('Sending request to Flask API:', description);
+
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    scene_description: description
+                }),
+            });
+
+            console.log('Received response status:', response.status);
+            if (!response.ok) {
+                throw new Error(`API request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            console.log('API response data:', data);
+            return data;
+        }
+
+        function displayResults(data) {
+            // Populate Summary Card
+            const summaryEl = document.querySelector('#summary-card .card-content');
+            const confidenceEl = document.querySelector('#confidence-score .score');
+
+            if (summaryEl) {
+                summaryEl.textContent = data.summary || 'No summary provided.';
+            }
+            if (confidenceEl) {
+                const score = parseInt(data.confidence_score, 10) || 0;
+                confidenceEl.textContent = `${score}%`;
+                confidenceEl.className = 'score'; // Reset
+                if (score < 50) {
+                    confidenceEl.classList.add('low');
+                } else if (score < 85) {
+                    confidenceEl.classList.add('medium');
+                } else {
+                    confidenceEl.classList.add('high');
+                }
+            }
+
+            // Populate Person Cards
+            personsGrid.innerHTML = ''; // Clear previous results
+            if (data.persons && data.persons.length > 0) {
+                data.persons.forEach(person => {
+                    const card = document.createElement('div');
+                    card.className = 'person-card';
+
+                    const ppeItems = Object.entries(person.ppe).map(([key, value]) => {
+                        const statusClass = value.toLowerCase().replace(/ /g, '-');
+                        return `<div class="ppe-item">
+                                    <span class="ppe-label">${key.replace(/_/g, ' ')}:</span>
+                                    <span class="ppe-status ppe-status-${statusClass}">${value}</span>
+                                </div>`;
+                    }).join('');
+
+                    const createList = (items) => items && items.length > 0 ?
+                        `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
+
+                    card.innerHTML = `
+                        <div class="card-header">
+                            <h3>Person ${person.id}</h3>
+                            <p>${person.description}</p>
+                        </div>
+                        <div class="card-content">
+                            <div class="details-section">
+                                <h4>Suggested Actions</h4>
+                                ${createList(person.actions)}
+                            </div>
+                            <div class="details-section">
+                                <h4>Hazards Faced</h4>
+                                ${createList(person.hazards_faced)}
+                            </div>
+                            <div class="details-section">
+                                <h4>Potential Risks of OSHA Violations</h4>
+                                ${createList(person.risks)}
+                            </div>
+                            <div class="details-section">
+                                <h4>PPE Status</h4>
+                                <div class="ppe-grid">${ppeItems}</div>
+                            </div>
+                        </div>
+                    `;
+                    personsGrid.appendChild(card);
+                });
+            } else {
+                personsGrid.innerHTML = '<div class="info-card"><div class="card-content"><p>No persons were identified in the scene.</p></div></div>';
+            }
+
+            // Right-column cards removed; Suggested Actions, Hazards Faced and Potential Risks
+            // are displayed inside the Person card. No extra population required here.
+        }
+    });
+    </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "llama_model": "llama3.1:latest",
+  "embedding_model": "nomic-embed-text",
+  "chroma_db_path": "./chroma_db",
+  "ppe_collection": "ppe_guidelines",
+  "scenarios_collection": "accident_scenarios"
+}

@@ -3,53 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Safety Inspector</title>
+    <title>AI Safety Inspector - Workplace Safety Analysis</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     <div class="container">
         <header>
+            <div class="header-icon">
+                <i class="fas fa-hard-hat"></i>
+            </div>
             <h1>AI Safety Inspector</h1>
-            <p>Describe a workplace scene to identify potential hazards and PPE violations.</p>
+            <p class="subtitle">Advanced Workplace Safety Analysis Powered by AI</p>
+            <div class="header-badge">
+                <i class="fas fa-shield-alt"></i>
+                <span>OSHA Compliant</span>
+            </div>
         </header>
 
         <main>
             <div class="input-section">
                 <div class="input-grid">
                     <div class="text-input-container">
-                        <label for="scene-input">Text Analysis</label>
-                        <textarea id="scene-input" placeholder="e.g., A construction site with two workers, one is not wearing a hard hat..."></textarea>
+                        <label for="scene-input">
+                            <i class="fas fa-file-alt"></i>
+                            Scene Description
+                        </label>
+                        <textarea id="scene-input" placeholder="e.g., A construction site with two workers, one is not wearing a hard hat while operating near scaffolding..."></textarea>
                     </div>
                     <div class="image-upload-container">
-                        <label for="image-upload">Upload Image</label>
+                        <label for="image-upload">
+                            <i class="fas fa-image"></i>
+                            Upload Image (Optional)
+                        </label>
                         <div class="image-upload-square" id="image-preview-area">
                             <input type="file" id="image-upload" accept="image/*" style="display: none;">
                             <button class="upload-btn" id="upload-trigger">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="17 8 12 3 7 8"></polyline>
-                                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                                </svg>
-                                <span>Upload Image</span>
+                                <i class="fas fa-cloud-upload-alt"></i>
+                                <span>Click or Drag to Upload</span>
+                                <small>PNG, JPG up to 10MB</small>
                             </button>
                             <img id="image-preview" src="" alt="Preview" style="display: none;">
                         </div>
                     </div>
                 </div>
-                <button id="analyze-btn">Analyze Scene</button>
+                <button id="analyze-btn">
+                    <i class="fas fa-search"></i>
+                    Analyze Scene
+                </button>
             </div>
 
-            <div id="loading-indicator"></div>
+            <div id="loading-indicator">
+                <div class="loading-content">
+                    <div class="spinner"></div>
+                    <p>Analyzing safety compliance...</p>
+                </div>
+            </div>
 
             <div class="output-section" id="results-container" style="display: none;">
                 <div class="results-main-grid">
                     <!-- Left Column -->
                     <div class="results-left-column">
-                        <div class="info-card" id="summary-card">
+                        <div class="info-card summary-card" id="summary-card">
                             <div class="card-header">
-                                <h2>Analysis Summary</h2>
-                                <div id="confidence-score">
-                                    Confidence: <span class="score">0%</span>
+                                <div class="header-title">
+                                    <i class="fas fa-clipboard-check"></i>
+                                    <h2>Analysis Summary</h2>
+                                </div>
+                                <div id="confidence-score" class="confidence-badge">
+                                    <div class="confidence-circle">
+                                        <svg class="progress-ring" width="80" height="80">
+                                            <circle class="progress-ring-circle" stroke="#e0e0e0" stroke-width="6" fill="transparent" r="32" cx="40" cy="40"/>
+                                            <circle class="progress-ring-circle progress" stroke-width="6" fill="transparent" r="32" cx="40" cy="40"/>
+                                        </svg>
+                                        <div class="confidence-text">
+                                            <span class="score">0</span>
+                                            <small>%</small>
+                                        </div>
+                                    </div>
+                                    <span class="confidence-label">Confidence</span>
                                 </div>
                             </div>
                             <div class="card-content"></div>
@@ -58,7 +90,6 @@
                             <!-- Person cards will be inserted here -->
                         </div>
                     </div>
-                    <!-- Right Column removed per user request; content consolidated into Person card -->
                 </div>
             </div>
         </main>
@@ -152,20 +183,41 @@
             // Populate Summary Card
             const summaryEl = document.querySelector('#summary-card .card-content');
             const confidenceEl = document.querySelector('#confidence-score .score');
+            const progressCircle = document.querySelector('.progress-ring-circle.progress');
+            const confidenceBadge = document.getElementById('confidence-score');
 
             if (summaryEl) {
                 summaryEl.textContent = data.summary || 'No summary provided.';
             }
             if (confidenceEl) {
                 const score = parseInt(data.confidence_score, 10) || 0;
-                confidenceEl.textContent = `${score}%`;
-                confidenceEl.className = 'score'; // Reset
-                if (score < 50) {
-                    confidenceEl.classList.add('low');
-                } else if (score < 85) {
-                    confidenceEl.classList.add('medium');
-                } else {
-                    confidenceEl.classList.add('high');
+                confidenceEl.textContent = score;
+                
+                // Animate circular progress
+                const radius = 32;
+                const circumference = 2 * Math.PI * radius;
+                const offset = circumference - (score / 100) * circumference;
+                
+                if (progressCircle) {
+                    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+                    progressCircle.style.strokeDashoffset = circumference;
+                    
+                    setTimeout(() => {
+                        progressCircle.style.transition = 'stroke-dashoffset 1s ease-in-out, stroke 0.3s ease';
+                        progressCircle.style.strokeDashoffset = offset;
+                        
+                        // Set color based on score
+                        if (score < 50) {
+                            progressCircle.style.stroke = '#e74c3c';
+                            confidenceBadge.classList.add('low');
+                        } else if (score < 85) {
+                            progressCircle.style.stroke = '#f39c12';
+                            confidenceBadge.classList.add('medium');
+                        } else {
+                            progressCircle.style.stroke = '#2ecc71';
+                            confidenceBadge.classList.add('high');
+                        }
+                    }, 100);
                 }
             }
 
@@ -176,37 +228,64 @@
                     const card = document.createElement('div');
                     card.className = 'person-card';
 
+                    // PPE Icons mapping
+                    const ppeIcons = {
+                        'hardhat': 'fas fa-hard-hat',
+                        'safety_glasses': 'fas fa-glasses',
+                        'gloves': 'fas fa-hands',
+                        'safety_vest': 'fas fa-vest',
+                        'footwear': 'fas fa-socks'
+                    };
+
                     const ppeItems = Object.entries(person.ppe).map(([key, value]) => {
                         const statusClass = value.toLowerCase().replace(/ /g, '-');
+                        const icon = ppeIcons[key] || 'fas fa-circle';
+                        const statusIcon = value === 'Mentioned' ? 'fas fa-check-circle' : 
+                                         value === 'Missing' ? 'fas fa-times-circle' : 
+                                         'fas fa-minus-circle';
                         return `<div class="ppe-item">
-                                    <span class="ppe-label">${key.replace(/_/g, ' ')}:</span>
-                                    <span class="ppe-status ppe-status-${statusClass}">${value}</span>
+                                    <span class="ppe-label">
+                                        <i class="${icon}"></i>
+                                        ${key.replace(/_/g, ' ')}
+                                    </span>
+                                    <span class="ppe-status ppe-status-${statusClass}">
+                                        <i class="${statusIcon}"></i>
+                                        ${value}
+                                    </span>
                                 </div>`;
                     }).join('');
 
-                    const createList = (items) => items && items.length > 0 ?
-                        `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
+                    const createList = (items, icon) => items && items.length > 0 ?
+                        `<ul>${items.map(i => `<li><i class="${icon}"></i>${i}</li>`).join('')}</ul>` : 
+                        '<p class="empty-message"><i class="fas fa-info-circle"></i>None specified.</p>';
 
                     card.innerHTML = `
                         <div class="card-header">
-                            <h3>Person ${person.id}</h3>
-                            <p>${person.description}</p>
+                            <div class="person-header">
+                                <div class="person-icon">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div class="person-info">
+                                    <h3>Analysis Subject</h3>
+                                    <p>${person.description}</p>
+                                </div>
+                            </div>
                         </div>
                         <div class="card-content">
-                            <div class="details-section">
-                                <h4>Suggested Actions</h4>
-                                ${createList(person.actions)}
+                            <div class="details-section actions-section">
+                                <h4><i class="fas fa-clipboard-list"></i> Suggested Actions</h4>
+                                ${createList(person.actions, 'fas fa-arrow-right')}
                             </div>
-                            <div class="details-section">
-                                <h4>Hazards Faced</h4>
-                                ${createList(person.hazards_faced)}
+                            <div class="details-section hazards-section">
+                                <h4><i class="fas fa-exclamation-triangle"></i> Hazards Faced</h4>
+                                ${createList(person.hazards_faced, 'fas fa-warning')}
                             </div>
-                            <div class="details-section">
-                                <h4>Potential Risks of OSHA Violations</h4>
-                                ${createList(person.risks)}
+                            <div class="details-section risks-section">
+                                <h4><i class="fas fa-shield-alt"></i> Potential Risks of OSHA Violations</h4>
+                                ${createList(person.risks, 'fas fa-exclamation')}
                             </div>
-                            <div class="details-section">
-                                <h4>PPE Status</h4>
+                            <div class="details-section ppe-section">
+                                <h4><i class="fas fa-user-shield"></i> PPE Status</h4>
                                 <div class="ppe-grid">${ppeItems}</div>
                             </div>
                         </div>
@@ -214,7 +293,7 @@
                     personsGrid.appendChild(card);
                 });
             } else {
-                personsGrid.innerHTML = '<div class="info-card"><div class="card-content"><p>No persons were identified in the scene.</p></div></div>';
+                personsGrid.innerHTML = '<div class="info-card"><div class="card-content"><p><i class="fas fa-info-circle"></i> No persons were identified in the scene.</p></div></div>';
             }
 
             // Right-column cards removed; Suggested Actions, Hazards Faced and Potential Risks

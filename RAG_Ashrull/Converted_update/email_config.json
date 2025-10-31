@@ -1,0 +1,24 @@
+{
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "sender_email": "skilletg21@gmail.com",
+  "sender_password": "ltbyqrmznupndrhg",
+  "recipient_email": "frankieling8@gmail.com",
+  "enabled": true,
+  "send_on_risk_levels": ["HIGH", "MEDIUM", "LOW"],
+  "notes": {
+    "IMPORTANT": "You need to set up Gmail App Password for skilletg21@gmail.com",
+    "how_to_get_app_password": [
+      "1. Go to https://myaccount.google.com/",
+      "2. Click 'Security' in the left sidebar",
+      "3. Enable '2-Step Verification' if not already enabled",
+      "4. Scroll down and click 'App passwords'",
+      "5. Select 'Mail' and 'Other (Custom name)' -> enter 'AI Safety Inspector'",
+      "6. Click 'Generate'",
+      "7. Copy the 16-character password (e.g., 'abcd efgh ijkl mnop')",
+      "8. Replace YOUR_APP_PASSWORD_HERE above with that password (no spaces)"
+    ],
+    "current_status": "Email notifications are ENABLED but need App Password to work"
+  }
+}
+

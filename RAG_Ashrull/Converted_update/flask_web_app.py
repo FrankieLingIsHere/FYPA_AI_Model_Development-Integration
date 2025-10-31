@@ -13,6 +13,7 @@ import ollama
 from pathlib import Path
 import re
 import os
+from email_notifier import send_notification, load_email_config
 
 app = Flask(__name__)
 CORS(app)
@@ -38,6 +39,13 @@ with open(models_path / "model_metrics.json", "r") as f:
 with open(models_path / "rag_config.json", "r") as f:
     rag_config = json.load(f)
 print("  ✅ Configurations loaded")
+
+# Load email configuration
+email_config = load_email_config()
+if email_config.get('enabled'):
+    print(f"  ✅ Email notifications enabled → {email_config.get('recipient_email')}")
+else:
+    print("  ℹ️ Email notifications disabled (update email_config.json to enable)")
 
 # Initialize ChromaDB
 class OllamaEmbeddingFunction:
@@ -157,11 +165,11 @@ def calculate_confidence_score(scenario_text, ppe_items, context, risk_proba, ll
 def extract_ppe_items(scenario_text):
     """
     Extract PPE items mentioned in the scenario with context awareness
-    Detects negations like 'not wearing', 'without', etc.
+    Detects negations like 'not wearing', 'without', 'neither', etc.
     """
     ppe_keywords = {
         'hardhat': ['hard hat', 'hardhat', 'helmet', 'hard-hat'],
-        'safety_glasses': ['safety glasses', 'goggles', 'eye protection', 'safety goggles', 'glasses'],
+        'safety_glasses': ['safety glasses', 'goggles', 'eye protection', 'safety goggles', 'glasses', 'eyewear'],
         'gloves': ['gloves', 'hand protection', 'glove'],
         'safety_vest': ['safety vest', 'hi-vis', 'high visibility', 'reflective vest', 'vest'],
         'footwear': ['safety boots', 'steel-toe', 'safety shoes', 'protective footwear', 'boots', 'shoes']
@@ -170,33 +178,178 @@ def extract_ppe_items(scenario_text):
     detected_ppe = {}
     text_lower = scenario_text.lower()
     
+    # Enhanced negation patterns - now includes "neither"
+    negation_patterns = [
+        'not wearing', 'without', 'no ', 'missing', 'not using',
+        'lacks', 'absent', 'not have', "doesn't have", 'removed',
+        'but not', 'except', 'not a ', "isn't wearing", 'failed to wear',
+        'neither', 'nor', 'not equipped', 'lacking', 'fails to wear',
+        'does not have', 'do not have', 'not provided', 'not visible',
+        'appears to be without', 'appear to be without', 'not appear to'
+    ]
+    
+    # Check for broad negations that affect multiple PPE items
+    # E.g., "Neither worker appears to be wearing respiratory protection, safety glasses, or hard hats"
+    broad_negation_phrases = [
+        'neither worker appears to be wearing',
+        'neither worker is wearing',
+        'both workers are not wearing',
+        'no workers are wearing',
+        'workers are not wearing',
+        'none of the workers'
+    ]
+    
+    has_broad_negation = any(phrase in text_lower for phrase in broad_negation_phrases)
+    
     # For each PPE type, check if mentioned AND check for negation context
     for ppe_type, keywords in ppe_keywords.items():
+        found = False
         for keyword in keywords:
             if keyword in text_lower:
-                # Find the position of the keyword
+                found = True
+                # Find all occurrences of the keyword
                 keyword_pos = text_lower.find(keyword)
-                # Get surrounding context (60 chars before the keyword)
-                context_before = text_lower[max(0, keyword_pos-60):keyword_pos]
                 
-                # Negation indicators
-                negations = ['not wearing', 'without', 'no ', 'missing', 'not using', 
-                            'lacks', 'absent', 'not have', "doesn't have", 'removed',
-                            'but not', 'except', 'not a ', "isn't wearing", 'failed to wear']
+                # Get surrounding context (100 chars before and 20 chars after)
+                context_before = text_lower[max(0, keyword_pos-100):keyword_pos]
+                context_after = text_lower[keyword_pos:min(len(text_lower), keyword_pos + len(keyword) + 20)]
+                full_context = context_before + context_after
                 
-                is_negated = any(neg in context_before for neg in negations)
+                # Check for negation in context
+                is_negated = any(neg in full_context for neg in negation_patterns)
+                
+                # Also check if this PPE is in a broad negation phrase
+                if has_broad_negation:
+                    # If we found a broad negation, check if this PPE is mentioned after it
+                    for phrase in broad_negation_phrases:
+                        phrase_pos = text_lower.find(phrase)
+                        if phrase_pos != -1 and keyword_pos > phrase_pos:
+                            # Check if keyword is within 200 chars of the broad negation
+                            if keyword_pos - phrase_pos < 200:
+                                is_negated = True
+                                break
                 
                 if is_negated:
                     detected_ppe[ppe_type] = "Missing"
+                    print(f"  🔴 {ppe_type}: MISSING (negation detected)")
                 else:
                     detected_ppe[ppe_type] = "Mentioned"
+                    print(f"  🟢 {ppe_type}: MENTIONED (present)")
                 break
         
         # If not found at all, mark as "Not Mentioned"
-        if ppe_type not in detected_ppe:
+        if not found:
             detected_ppe[ppe_type] = "Not Mentioned"
+            print(f"  ⚪ {ppe_type}: NOT MENTIONED (not in text)")
     
     return detected_ppe
+
+def extract_worker_count(scenario_text):
+    """Extract the number of workers mentioned in the scenario"""
+    text_lower = scenario_text.lower()
+    
+    # Pattern matching for explicit numbers
+    patterns = [
+        (r'(\d+)\s+workers?', 1),
+        (r'two workers?', 2),
+        (r'three workers?', 3),
+        (r'four workers?', 4),
+        (r'five workers?', 5),
+        (r'both workers?', 2),
+        (r'neither worker', 2),
+        (r'multiple workers?', 2),  # Default to 2 for "multiple"
+        (r'several workers?', 3),   # Default to 3 for "several"
+    ]
+    
+    for pattern, count in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            if isinstance(count, int):
+                return count
+            else:
+                return int(match.group(count))
+    
+    # Default to 1 worker
+    return 1
+
+def extract_worker_descriptions(scenario_text, worker_count):
+    """
+    Extract individual worker descriptions from scenario text
+    Looks for patterns like "one is...", "the other...", "another..."
+    Returns list of (description, text_segment) tuples
+    """
+    text_lower = scenario_text.lower()
+    descriptions = []
+    
+    if worker_count == 1:
+        return [(scenario_text[:100] + ('...' if len(scenario_text) > 100 else ''), scenario_text)]
+    
+    # Patterns for identifying individual workers with their context
+    worker_patterns = [
+        (r'one\s+(?:is|was|has|worker)\s+([^,\.]+(?:[^\.]*?)(?:,|\.|\s+while|\s+and))', 'one'),
+        (r'the\s+other\s+(?:is|was|has|worker)?\s*([^,\.]+(?:[^\.]*?)(?:,|\.))', 'other'),
+        (r'another\s+(?:is|was|has|worker)?\s*([^,\.]+)', 'another'),
+        (r'first\s+worker\s+(?:is|was|has)\s+([^,\.]+)', 'first'),
+        (r'second\s+worker\s+(?:is|was|has)\s+([^,\.]+)', 'second'),
+        (r'third\s+worker\s+(?:is|was|has)\s+([^,\.]+)', 'third'),
+    ]
+    
+    for pattern, worker_type in worker_patterns:
+        matches = re.finditer(pattern, text_lower)
+        for match in matches:
+            full_text = match.group(1).strip()
+            desc = full_text[:80] if len(full_text) > 80 else full_text
+            if desc and len(desc) > 5:  # Valid description
+                # Store both description and the full segment for PPE analysis
+                descriptions.append((desc, full_text))
+    
+    # If we found descriptions, use them
+    if descriptions:
+        # Pad with generic descriptions if needed
+        while len(descriptions) < worker_count:
+            descriptions.append((f"Worker {len(descriptions) + 1} from the scenario", ""))
+        return descriptions[:worker_count]
+    
+    # Fallback: generic descriptions
+    return [(f"Worker {i} from the scenario", "") for i in range(1, worker_count + 1)]
+
+def extract_individual_worker_ppe(worker_text, global_ppe_status):
+    """
+    Extract PPE status for a specific worker based on their text segment
+    Returns PPE status dict for that worker
+    """
+    worker_ppe = global_ppe_status.copy()
+    
+    if not worker_text:
+        return worker_ppe
+    
+    text_lower = worker_text.lower()
+    
+    # PPE keywords
+    ppe_keywords = {
+        'hardhat': ['hard hat', 'hardhat', 'helmet', 'hard-hat'],
+        'safety_glasses': ['safety glasses', 'goggles', 'eye protection', 'safety goggles', 'glasses', 'eyewear'],
+        'gloves': ['gloves', 'hand protection', 'glove'],
+        'safety_vest': ['safety vest', 'hi-vis', 'high visibility', 'reflective vest', 'vest'],
+        'footwear': ['safety boots', 'steel-toe', 'safety shoes', 'protective footwear', 'boots', 'shoes']
+    }
+    
+    # Check if this worker specifically mentions PPE
+    for ppe_type, keywords in ppe_keywords.items():
+        for keyword in keywords:
+            if keyword in text_lower:
+                # Check if it's positive (wearing) or negative (not wearing)
+                keyword_pos = text_lower.find(keyword)
+                context = text_lower[max(0, keyword_pos-50):keyword_pos]
+                
+                # Positive indicators
+                if any(word in context or word in text_lower[keyword_pos:keyword_pos+20] 
+                       for word in ['wearing', 'has', 'with', 'using', 'equipped']):
+                    worker_ppe[ppe_type] = "Mentioned"
+                    print(f"    🟢 {ppe_type}: MENTIONED (found '{keyword}' with positive context)")
+                    break
+    
+    return worker_ppe
 
 def create_fallback_response(scenario_text):
     """Create a basic response when LLM parsing fails"""
@@ -215,7 +368,7 @@ def create_fallback_response(scenario_text):
         "confidence_score": "30"
     }
 
-def generate_rag_response(scenario_text, context):
+def generate_rag_response(scenario_text, context, scenario_worker_count=None):
     """Generate analysis using RAG with Ollama"""
     
     # Build context string from retrieved guidelines
@@ -225,28 +378,104 @@ def generate_rag_response(scenario_text, context):
         for guideline in context['guidelines'][:2]:  # Limit to 2 guidelines
             context_str += f"{guideline['text'][:500]}\n"
     
-    prompt = f"""Analyze PPE compliance for this workplace scenario.
+    prompt = f"""You are a workplace safety expert analyzing PPE compliance. Read the scenario VERY CAREFULLY and analyze EACH WORKER INDIVIDUALLY.
 
-Guidelines: {context_str}
+OSHA Guidelines: {context_str}
 
-Scenario: {scenario_text}
+Scenario to Analyze:
+{scenario_text}
 
-RULES:
-1. Check what PPE is mentioned in the scenario
-2. ✅ = PPE is mentioned/worn | ❌ = PPE NOT mentioned/missing
-3. Each PPE item needs brief explanation (max 30 words)
-4. Provide safety recommendations
+CRITICAL INSTRUCTIONS - READ CAREFULLY:
 
-OUTPUT FORMAT:
+1. COUNT WORKERS FIRST: Identify how many workers are in the scenario.
 
-RISK LEVEL: [HIGH/MEDIUM/LOW] - [Explanation]
+2. ANALYZE EACH WORKER SEPARATELY: If there are multiple workers, track what EACH individual worker is wearing or not wearing.
+   - Example: "one is bending down" → Worker 1
+   - Example: "the other stands nearby wearing gloves" → Worker 2 has gloves
 
-PPE VIOLATIONS:
-✅ [PPE Item] - [Reason why compliant]
-❌ [PPE Item] - [Reason why violation/missing]
+3. PAY ATTENTION TO INDIVIDUAL DESCRIPTIONS:
+   - "one worker is wearing X" → Only that worker has X
+   - "the other worker has Y" → Only that worker has Y
+   - "neither worker has Z" → Both workers missing Z
+   - "both workers have W" → Both workers have W
 
-SAFETY RECOMMENDATIONS:
-1. Make the recommendations clear and detailed. Use professional language and make sure to give a good recommendations and long
+4. PPE STATUS MEANINGS:
+   ✅ = PPE is BEING WORN (compliant) - Only if explicitly stated for THAT worker
+   ❌ = PPE is NOT BEING WORN (violation) - If stated "not wearing", "without", "missing"
+   ⚠️ = UNCLEAR (if not mentioned for that specific worker but might have it)
+
+5. NEGATION PHRASES: "NOT wearing", "without", "missing", "neither worker", "lacks", etc. → ❌
+
+OUTPUT FORMAT (FOLLOW EXACTLY):
+
+WORKER COUNT: [number]
+
+RISK LEVEL: [HIGH/MEDIUM/LOW] - [Brief explanation]
+
+--- FOR EACH WORKER, CREATE A SECTION LIKE THIS ---
+
+WORKER 1:
+Description: [What is this worker doing? e.g., "bending down cutting concrete blocks"]
+
+PPE Status:
+✅/❌ Hardhat - [Reason specific to this worker]
+✅/❌ Safety Glasses - [Reason specific to this worker]
+✅/❌ Gloves - [Reason specific to this worker]
+✅/❌ Safety Vest - [Reason specific to this worker]
+✅/❌ Boots - [Reason specific to this worker]
+
+Hazards Faced by This Worker:
+- [Specific hazard 1 that THIS worker faces based on their activity/location]
+- [Specific hazard 2 that THIS worker faces]
+- [Specific hazard 3 that THIS worker faces]
+
+Potential Risks for This Worker:
+- [Specific risk 1 for THIS worker based on their missing PPE]
+- [Specific risk 2 for THIS worker]
+- [Specific risk 3 for THIS worker]
+
+Suggested Actions for This Worker:
+- [Specific action 1 for THIS worker]
+- [Specific action 2 for THIS worker]
+- [Specific action 3 for THIS worker]
+
+---
+
+WORKER 2:
+Description: [What is this worker doing? e.g., "standing nearby"]
+
+PPE Status:
+✅/❌ Hardhat - [Reason specific to this worker]
+✅/❌ Safety Glasses - [Reason specific to this worker]
+✅/❌ Gloves - [Reason specific to this worker]
+✅/❌ Safety Vest - [Reason specific to this worker]
+✅/❌ Boots - [Reason specific to this worker]
+
+Hazards Faced by This Worker:
+- [Specific hazard 1 that THIS worker faces based on their activity/location]
+- [Specific hazard 2 that THIS worker faces]
+- [Specific hazard 3 that THIS worker faces]
+
+Potential Risks for This Worker:
+- [Specific risk 1 for THIS worker based on their missing PPE]
+- [Specific risk 2 for THIS worker]
+- [Specific risk 3 for THIS worker]
+
+Suggested Actions for This Worker:
+- [Specific action 1 for THIS worker]
+- [Specific action 2 for THIS worker]
+- [Specific action 3 for THIS worker]
+
+---
+
+[Continue for Worker 3, 4, etc. if more workers]
+
+--- END INDIVIDUAL WORKER SECTIONS ---
+
+GENERAL SAFETY RECOMMENDATIONS (for all workers):
+1. [Overall site-wide recommendation]
+2. [Another general recommendation]
+3. [etc.]
 
 Please explain:
 1. What OSHA rules may have been violated? 
@@ -259,30 +488,41 @@ Please explain:
 2. Why the situation was unsafe?
    - Explain the specific hazards present
    - Describe potential consequences
+   - If multiple workers, mention all of them
 
 3. What should have been done to prevent it?
    - Provide specific corrective actions
    - Reference OSHA compliance requirements
 
-IMPORTANT: For question 1, provide COMPLETE and DETAILED OSHA citations with CFR numbers for every violation. Be specific and comprehensive."""
+IMPORTANT: 
+- For question 1, provide COMPLETE and DETAILED OSHA citations with CFR numbers for every violation
+- Pay careful attention to negation words (not, without, neither, etc.)
+- If multiple workers are mentioned, address all of them"""
 
     try:
         response = ollama.generate(
             model=rag_config['llama_model'],
             prompt=prompt,
             options={
-                'num_predict': 800,
-                'temperature': 0.2,
-                'top_k': 10,
-                'top_p': 0.5
+                'num_predict': 2000,  # Increased to 2000 for detailed per-worker analysis
+                'temperature': 0.1,    # Lower for more deterministic/accurate responses
+                'top_k': 5,            # More focused on top choices
+                'top_p': 0.3           # More conservative sampling
             }
         )
         
         analysis_text = response['response']
-        print(f"\n📝 Raw LLM Response (first 500 chars):\n{analysis_text[:500]}")
+        print(f"\n📝 Raw LLM Response (first 800 chars):\n{analysis_text[:800]}")
+        print(f"\n📝 Full response length: {len(analysis_text)} characters")
         
-        # Parse the structured text response (not JSON)
-        parsed_result = parse_ppe_analysis(analysis_text)
+        # Check if response contains worker sections
+        if 'WORKER 1:' in analysis_text or 'Worker 1:' in analysis_text:
+            print("  ✅ LLM generated individual worker sections")
+        else:
+            print("  ⚠️ LLM did NOT generate individual worker sections - will use fallback")
+        
+        # Parse the structured text response (not JSON) - pass scenario worker count
+        parsed_result = parse_ppe_analysis(analysis_text, scenario_worker_count)
         
         print(f"\n📋 Parsed Result Structure:")
         print(f"  - risk_level: {parsed_result.get('risk_level', 'N/A')}")
@@ -298,19 +538,149 @@ IMPORTANT: For question 1, provide COMPLETE and DETAILED OSHA citations with CFR
         traceback.print_exc()
         return create_fallback_response(scenario_text), ""
 
-def parse_ppe_analysis(analysis_text):
-    """Parse the RAG analysis into structured format"""
+def parse_ppe_analysis(analysis_text, scenario_worker_count=None):
+    """Parse the RAG analysis into structured format with individual worker tracking"""
     # Initialize all variables
     risk_level = "MEDIUM"
     risk_explanation = "Unable to determine risk level."
-    ppe_items = []
+    ppe_items = []  # Legacy format - will be deprecated
     recommendations = []
     osha_rules = []
     why_unsafe = []
     what_should_be_done = []
+    worker_count = scenario_worker_count if scenario_worker_count else 1  # Use scenario count as default
+    workers_data = []  # NEW: Individual worker data
+    
+    # Parse worker count from LLM response (but don't override if scenario count is higher)
+    worker_count_match = re.search(r'WORKER COUNT:\s*(\d+)', analysis_text, re.IGNORECASE)
+    if worker_count_match:
+        llm_worker_count = int(worker_count_match.group(1))
+        if scenario_worker_count and llm_worker_count < scenario_worker_count:
+            print(f"  ⚠️ LLM said {llm_worker_count} but scenario has {scenario_worker_count} - using {scenario_worker_count}")
+            worker_count = scenario_worker_count
+        else:
+            worker_count = llm_worker_count
+            print(f"  📊 Detected {worker_count} worker(s) in LLM response")
+    
+    # Parse individual worker sections with ALL their data
+    worker_pattern = r'WORKER (\d+):\s*Description:\s*(.+?)\s*PPE Status:\s*(.+?)\s*Hazards Faced by This Worker:\s*(.+?)\s*Potential Risks for This Worker:\s*(.+?)\s*Suggested Actions for This Worker:\s*(.+?)(?=---|\nWORKER \d+:|$)'
+    worker_matches = re.finditer(worker_pattern, analysis_text, re.IGNORECASE | re.DOTALL)
+    
+    for match in worker_matches:
+        worker_id = int(match.group(1))
+        worker_description = match.group(2).strip()
+        ppe_section = match.group(3).strip()
+        hazards_section = match.group(4).strip()
+        risks_section = match.group(5).strip()
+        actions_section = match.group(6).strip()
+        
+        # Parse PPE items for this specific worker
+        worker_ppe = {
+            'hardhat': 'Not Mentioned',
+            'safety_glasses': 'Not Mentioned',
+            'gloves': 'Not Mentioned',
+            'safety_vest': 'Not Mentioned',
+            'footwear': 'Not Mentioned'
+        }
+        
+        # Parse each PPE line
+        ppe_lines = ppe_section.split('\n')
+        for line in ppe_lines:
+            line = line.strip()
+            if '✅' in line or '❌' in line or '⚠️' in line:
+                status = 'Mentioned' if '✅' in line else ('Missing' if '❌' in line else 'Not Mentioned')
+                
+                # Extract PPE type and reason
+                ppe_match = re.match(r'[✅❌⚠️]\s*(.+?)\s*-\s*(.+)', line)
+                if ppe_match:
+                    ppe_name = ppe_match.group(1).strip().lower()
+                    reason = ppe_match.group(2).strip()
+                    
+                    # Map to standard keys
+                    if 'hardhat' in ppe_name or 'helmet' in ppe_name or 'hard hat' in ppe_name:
+                        worker_ppe['hardhat'] = status
+                    elif 'glasses' in ppe_name or 'goggles' in ppe_name or 'eye' in ppe_name:
+                        worker_ppe['safety_glasses'] = status
+                    elif 'glove' in ppe_name:
+                        worker_ppe['gloves'] = status
+                    elif 'vest' in ppe_name:
+                        worker_ppe['safety_vest'] = status
+                    elif 'boot' in ppe_name or 'shoe' in ppe_name or 'footwear' in ppe_name:
+                        worker_ppe['footwear'] = status
+        
+        # Parse hazards for this worker
+        worker_hazards = []
+        for line in hazards_section.split('\n'):
+            line = line.strip()
+            if line and (line.startswith('-') or line.startswith('•')):
+                clean_line = re.sub(r'^[•\-\*]+\s*', '', line).strip()
+                if clean_line:
+                    worker_hazards.append(clean_line)
+        
+        # Parse risks for this worker
+        worker_risks = []
+        for line in risks_section.split('\n'):
+            line = line.strip()
+            if line and (line.startswith('-') or line.startswith('•')):
+                clean_line = re.sub(r'^[•\-\*]+\s*', '', line).strip()
+                if clean_line:
+                    worker_risks.append(clean_line)
+        
+        # Parse actions for this worker
+        worker_actions = []
+        for line in actions_section.split('\n'):
+            line = line.strip()
+            if line and (line.startswith('-') or line.startswith('•')):
+                clean_line = re.sub(r'^[•\-\*]+\s*', '', line).strip()
+                if clean_line:
+                    worker_actions.append(clean_line)
+        
+        workers_data.append({
+            'id': worker_id,
+            'description': worker_description,
+            'ppe': worker_ppe,
+            'hazards': worker_hazards,
+            'risks': worker_risks,
+            'actions': worker_actions
+        })
+        
+        print(f"  👤 Worker {worker_id}: {worker_description[:50]}...")
+        for ppe_type, status in worker_ppe.items():
+            emoji = "🔴" if status == "Missing" else ("🟢" if status == "Mentioned" else "⚪")
+            print(f"     {emoji} {ppe_type}: {status}")
+        print(f"     📋 {len(worker_hazards)} hazards, {len(worker_risks)} risks, {len(worker_actions)} actions")
+    
+    # If no individual worker sections found but we have multiple workers, create them manually
+    if not workers_data and worker_count > 1:
+        print(f"  ⚠️ No individual worker sections found in LLM response")
+        print(f"  🔧 Creating {worker_count} individual worker data structures manually...")
+        
+        # This function needs scenario_text, which we need to pass through
+        # For now, create basic worker data - will be enhanced in transform function
+        workers_data = []
+        for i in range(1, worker_count + 1):
+            # Each worker gets base data - will be populated with extracted info later
+            workers_data.append({
+                'id': i,
+                'description': f"Worker {i}",  # Will be enhanced later
+                'ppe': {
+                    'hardhat': 'Not Mentioned',
+                    'safety_glasses': 'Not Mentioned',
+                    'gloves': 'Not Mentioned',
+                    'safety_vest': 'Not Mentioned',
+                    'footwear': 'Not Mentioned'
+                },
+                'hazards': [],
+                'risks': [],
+                'actions': []
+            })
+        print(f"  ✅ Created {len(workers_data)} worker data structures (will be enhanced with scenario data)")
+    elif not workers_data:
+        print("  ⚠️ No individual worker sections found, using legacy parsing for single worker")
+        workers_data = None  # Signal to use old method
     
     # Parse risk level
-    risk_match = re.search(r'RISK LEVEL:\s*([A-Z]+)\s*-\s*(.+?)(?=\n\n|PPE|$)', analysis_text, re.IGNORECASE | re.DOTALL)
+    risk_match = re.search(r'RISK LEVEL:\s*([A-Z]+)\s*-\s*(.+?)(?=\n\n|WORKER|---)', analysis_text, re.IGNORECASE | re.DOTALL)
     if risk_match:
         risk_level = risk_match.group(1).upper()
         risk_explanation = risk_match.group(2).strip()
@@ -469,24 +839,41 @@ def parse_ppe_analysis(analysis_text):
     return {
         'risk_level': risk_level,
         'risk_explanation': risk_explanation,
-        'ppe_items': ppe_items,
+        'ppe_items': ppe_items,  # Legacy - kept for backward compatibility
         'recommendations': recommendations,
         'osha_rules': osha_rules,
         'why_unsafe': why_unsafe,
-        'what_should_be_done': what_should_be_done
+        'what_should_be_done': what_should_be_done,
+        'worker_count': worker_count,
+        'workers_data': workers_data  # NEW: Individual worker data with their own PPE status
     }
 
 def transform_to_frontend_format(analysis_result, scenario_text, risk_level, confidence_score, detected_ppe):
     """
     Transform the backend analysis result to match frontend expected format
     Frontend expects: summary, confidence_score, persons, hazards_detected, suggested_actions
+    
+    NEW: Handles individual worker data when available
     """
+    # Get worker count from analysis or extract from scenario
+    worker_count = analysis_result.get('worker_count', extract_worker_count(scenario_text))
+    
     # Build summary from risk level and explanation
     risk_explanation = analysis_result.get('risk_explanation', '')
-    summary = f"Risk Level: {risk_level}. {risk_explanation}"
+    worker_text = f"{worker_count} worker(s) identified. " if worker_count > 1 else ""
+    summary = f"{worker_text}Risk Level: {risk_level}. {risk_explanation}"
     
-    # Initialize PPE status with all required items (frontend expects these exact keys)
-    ppe_status = {
+    # Check if we have individual worker data from LLM
+    workers_data = analysis_result.get('workers_data', None)
+    use_individual_tracking = workers_data is not None and len(workers_data) > 0
+    
+    if use_individual_tracking:
+        print(f"\n✅ Using individual worker tracking for {len(workers_data)} worker(s)")
+    else:
+        print(f"\n⚠️ Using unified PPE status for all workers")
+    
+    # Initialize default PPE status (used if no individual data)
+    default_ppe_status = {
         'hardhat': 'Not Mentioned',
         'safety_glasses': 'Not Mentioned',
         'gloves': 'Not Mentioned',
@@ -494,50 +881,54 @@ def transform_to_frontend_format(analysis_result, scenario_text, risk_level, con
         'footwear': 'Not Mentioned'
     }
     
-    # Map common PPE names to frontend keys
-    ppe_mapping = {
-        'helmet': 'hardhat',
-        'hard hat': 'hardhat',
-        'hardhat': 'hardhat',
-        'hat': 'hardhat',
-        'safety glasses': 'safety_glasses',
-        'glasses': 'safety_glasses',
-        'goggles': 'safety_glasses',
-        'safety_glasses': 'safety_glasses',
-        'glove': 'gloves',
-        'gloves': 'gloves',
-        'vest': 'safety_vest',
-        'safety vest': 'safety_vest',
-        'safety_vest': 'safety_vest',
-        'high visibility vest': 'safety_vest',
-        'boot': 'footwear',
-        'boots': 'footwear',
-        'shoes': 'footwear',
-        'footwear': 'footwear',
-        'safety shoes': 'footwear'
-    }
-    
-    # Update PPE status from analysis result
-    for item in analysis_result.get('ppe_items', []):
-        item_name = item.get('item', '').lower()
-        status = item.get('status', 'Not Mentioned')
+    # If no individual worker data, build unified PPE status (legacy method)
+    if not use_individual_tracking:
+        ppe_status = default_ppe_status.copy()
         
-        # Map to frontend key
-        frontend_key = ppe_mapping.get(item_name, None)
-        if frontend_key:
-            # Convert status to frontend format
-            if status == 'Mentioned':
-                ppe_status[frontend_key] = "Mentioned"
-            elif status == 'Missing':
-                ppe_status[frontend_key] = "Missing"
-            else:
-                ppe_status[frontend_key] = "Not Mentioned"
-    
-    # Override with detected PPE items from scenario text (more reliable)
-    for ppe_item, status in detected_ppe.items():
-        if ppe_item in ppe_status:
-            # Use the detected status (which includes negation detection)
-            ppe_status[ppe_item] = status
+        # Map common PPE names to frontend keys
+        ppe_mapping = {
+            'helmet': 'hardhat',
+            'hard hat': 'hardhat',
+            'hardhat': 'hardhat',
+            'hat': 'hardhat',
+            'safety glasses': 'safety_glasses',
+            'glasses': 'safety_glasses',
+            'goggles': 'safety_glasses',
+            'safety_glasses': 'safety_glasses',
+            'glove': 'gloves',
+            'gloves': 'gloves',
+            'vest': 'safety_vest',
+            'safety vest': 'safety_vest',
+            'safety_vest': 'safety_vest',
+            'high visibility vest': 'safety_vest',
+            'boot': 'footwear',
+            'boots': 'footwear',
+            'shoes': 'footwear',
+            'footwear': 'footwear',
+            'safety shoes': 'footwear'
+        }
+        
+        # Update PPE status from analysis result
+        for item in analysis_result.get('ppe_items', []):
+            item_name = item.get('item', '').lower()
+            status = item.get('status', 'Not Mentioned')
+            
+            # Map to frontend key
+            frontend_key = ppe_mapping.get(item_name, None)
+            if frontend_key:
+                # Convert status to frontend format
+                if status == 'Mentioned':
+                    ppe_status[frontend_key] = "Mentioned"
+                elif status == 'Missing':
+                    ppe_status[frontend_key] = "Missing"
+                else:
+                    ppe_status[frontend_key] = "Not Mentioned"
+        
+        # Override with detected PPE items from scenario text (more reliable)
+        for ppe_item, status in detected_ppe.items():
+            if ppe_item in ppe_status:
+                # Use the detected status (which includes negation detection)
+                ppe_status[ppe_item] = status
     
     # Build person object (single person from scenario)
     # Actions renamed to "Suggested Actions"
@@ -549,7 +940,7 @@ def transform_to_frontend_format(analysis_result, scenario_text, risk_level, con
     # Keep everything as-is — user requested OSHA citation lines remain available in suggested actions
     filtered_actions = list(all_actions)
     
-    # Dynamically build potential risks for all missing PPE
+    # Dynamically build potential risks for all missing PPE (use detected_ppe which is always available)
     potential_risks = []
     missing_risk_map = {
         'hardhat': 'Risk of head injuries from falling objects or impacts due to missing head protection.',
@@ -558,7 +949,7 @@ def transform_to_frontend_format(analysis_result, scenario_text, risk_level, con
         'safety_vest': 'Risk of reduced visibility and increased accident risk due to missing safety vest.',
         'footwear': 'Risk of foot injuries from heavy objects, sharp debris, or slips due to missing protective footwear.'
     }
-    for ppe_key, status in ppe_status.items():
+    for ppe_key, status in detected_ppe.items():
         if status == 'Missing' and ppe_key in missing_risk_map:
             potential_risks.append(missing_risk_map[ppe_key])
     # Always include general OSHA violation risks
@@ -566,14 +957,105 @@ def transform_to_frontend_format(analysis_result, scenario_text, risk_level, con
     potential_risks.append('Legal and compliance risks for employer due to safety violations.')
     potential_risks.append('Increased liability exposure from inadequate PPE compliance.')
 
-    person = {
-        'id': 1,
-        'description': scenario_text[:100] + ('...' if len(scenario_text) > 100 else ''),
-        'actions': filtered_actions[:5],  # Suggested Actions - OSHA citations removed
-        'hazards_faced': analysis_result.get('why_unsafe', [])[:5],  # Why unsafe
-        'risks': potential_risks[:5],  # Now dynamic based on missing PPE
-        'ppe': ppe_status
-    }
+    # Create person objects - one for each worker mentioned
+    persons = []
+    
+    if use_individual_tracking:
+        # Extract worker descriptions from scenario if needed
+        worker_descriptions_data = extract_worker_descriptions(scenario_text, len(workers_data))
+        
+        # USE INDIVIDUAL WORKER DATA - Each worker has their own everything
+        for idx, worker_data in enumerate(workers_data):
+            worker_id = worker_data['id']
+            worker_description = worker_data['description']
+            worker_text_segment = ""
+            
+            # Enhance description if it's generic
+            if worker_description == f"Worker {worker_id}":
+                if idx < len(worker_descriptions_data):
+                    worker_description, worker_text_segment = worker_descriptions_data[idx]
+            
+            worker_ppe = worker_data['ppe'].copy()
+            
+            # If PPE status is all "Not Mentioned" (fallback mode), analyze individual worker
+            if all(status == "Not Mentioned" for status in worker_ppe.values()):
+                print(f"  🔧 Analyzing individual PPE for Worker {worker_id}")
+                # First, apply global detected PPE as baseline
+                for ppe_key, status in detected_ppe.items():
+                    if ppe_key in worker_ppe:
+                        worker_ppe[ppe_key] = status
+                
+                # Then, override with worker-specific PPE if found in their text segment
+                if worker_text_segment:
+                    print(f"    📝 Worker {worker_id} segment: '{worker_text_segment[:60]}...'")
+                    worker_ppe = extract_individual_worker_ppe(worker_text_segment, worker_ppe)
+            
+            # Get individual data from LLM response (if available)
+            worker_hazards = worker_data.get('hazards', [])
+            worker_risks = worker_data.get('risks', [])
+            worker_actions = worker_data.get('actions', [])
+            
+            # Fallback: If LLM didn't provide individual sections, calculate them
+            if not worker_hazards:
+                worker_hazards = analysis_result.get('why_unsafe', [])[:5]
+            
+            if not worker_risks:
+                # Calculate individual risks based on THIS worker's missing PPE
+                individual_risks = []
+                missing_risk_map = {
+                    'hardhat': 'Risk of head injuries from falling objects or impacts due to missing head protection.',
+                    'gloves': 'Risk of hand injuries from cuts, abrasions, or chemicals due to missing gloves.',
+                    'safety_glasses': 'Risk of eye injuries from flying particles, chemicals, or equipment due to missing safety glasses.',
+                    'safety_vest': 'Risk of reduced visibility and increased accident risk due to missing safety vest.',
+                    'footwear': 'Risk of foot injuries from heavy objects, sharp debris, or slips due to missing protective footwear.'
+                }
+                
+                for ppe_key, status in worker_ppe.items():
+                    if status == 'Missing' and ppe_key in missing_risk_map:
+                        individual_risks.append(missing_risk_map[ppe_key])
+                
+                # Always include general OSHA violation risks
+                if len(individual_risks) > 0:
+                    individual_risks.append('Potential for serious injury or fatality from OSHA violations.')
+                    individual_risks.append('Legal and compliance risks for employer due to safety violations.')
+                
+                worker_risks = individual_risks
+            
+            if not worker_actions:
+                worker_actions = filtered_actions[:5]
+            
+            person = {
+                'id': worker_id,
+                'description': worker_description,
+                'actions': worker_actions[:5],  # INDIVIDUAL Suggested Actions for this worker
+                'hazards_faced': worker_hazards[:5],  # INDIVIDUAL Hazards for this worker
+                'risks': worker_risks[:5],  # INDIVIDUAL Risks for this worker
+                'ppe': worker_ppe  # INDIVIDUAL PPE status for this worker
+            }
+            persons.append(person)
+            
+            print(f"  ✅ Worker {worker_id}: {len(worker_actions)} actions, {len(worker_hazards)} hazards, {len(worker_risks)} risks")
+    
+    else:
+        # LEGACY METHOD - All workers have same PPE status
+        for worker_id in range(1, worker_count + 1):
+            # Create description based on worker count
+            if worker_count > 1:
+                worker_description = f"Worker {worker_id}: {scenario_text[:80]}..." if len(scenario_text) > 80 else f"Worker {worker_id}: {scenario_text}"
+            else:
+                worker_description = scenario_text[:100] + ('...' if len(scenario_text) > 100 else '')
+            
+            person = {
+                'id': worker_id,
+                'description': worker_description,
+                'actions': filtered_actions[:5],  # Suggested Actions
+                'hazards_faced': analysis_result.get('why_unsafe', [])[:5],  # Why unsafe
+                'risks': potential_risks[:5],  # General risks
+                'ppe': ppe_status.copy()  # Same PPE status for all workers
+            }
+            persons.append(person)
+            
+            print(f"  ⚠️ Created person card for Worker {worker_id} with unified PPE status")
     
     # Previously we placed OSHA citations in hazards_detected; per user request,
     # move OSHA citation content into the bottom "Suggested Actions" section
@@ -591,10 +1073,13 @@ def transform_to_frontend_format(analysis_result, scenario_text, risk_level, con
 
     hazards_detected = []  # keep empty as OSHA citations moved to suggested_actions
 
+    tracking_method = "individual PPE tracking" if use_individual_tracking else "unified PPE status"
+    print(f"\n👥 Created {len(persons)} person card(s) for {worker_count} worker(s) using {tracking_method}")
+
     return {
         'summary': summary,
         'confidence_score': str(int(confidence_score)),
-        'persons': [person],
+        'persons': persons,
         'hazards_detected': hazards_detected[:5],  # intentionally empty
         'suggested_actions': suggested_actions[:8]  # show top items (citations + actions)
     }
@@ -636,9 +1121,14 @@ def analyze_scene():
         print("="*80)
         print(f"Scenario: {scenario_text[:100]}...")
         
-        # Step 1: Extract PPE items from text
+        # Step 1: Extract worker count
+        worker_count = extract_worker_count(scenario_text)
+        print(f"\n👥 Worker Count: {worker_count}")
+        
+        # Step 2: Extract PPE items from text with negation detection
+        print(f"\n🦺 Extracting PPE Items with Negation Detection:")
         ppe_items = extract_ppe_items(scenario_text)
-        print(f"\n🦺 PPE Items Detected:")
+        print(f"\n📊 PPE Detection Summary:")
         for ppe, status in ppe_items.items():
             print(f"  - {ppe}: {status}")
         
@@ -688,7 +1178,14 @@ def analyze_scene():
         
         # Step 3: Generate RAG-based analysis
         print("\n🤖 Generating AI analysis...")
-        analysis_result, analysis_text = generate_rag_response(scenario_text, context)
+        analysis_result, analysis_text = generate_rag_response(scenario_text, context, worker_count)
+        
+        # CRITICAL FIX: Override worker_count if LLM didn't detect it properly
+        llm_worker_count = analysis_result.get('worker_count', 1)
+        if llm_worker_count != worker_count:
+            print(f"  ⚠️ LLM detected {llm_worker_count} worker(s), but scenario has {worker_count} worker(s)")
+            print(f"  🔧 Using scenario-extracted count: {worker_count}")
+            analysis_result['worker_count'] = worker_count
         
         # Step 4: Get risk classification from ML model
         print("\n⚠️  Classifying risk level...")
@@ -737,6 +1234,30 @@ def analyze_scene():
         
         print("\n✅ Analysis complete!")
         print("="*80)
+        
+        # Send email notification if enabled
+        if email_config.get('enabled', False):
+            # Check if we should send for this risk level (case-insensitive)
+            send_on_levels = [level.upper() for level in email_config.get('send_on_risk_levels', ['HIGH', 'MEDIUM', 'LOW'])]
+            if risk_level.upper() in send_on_levels:
+                print("\n📧 Sending email notification...")
+                try:
+                    send_notification(
+                        analysis_data={
+                            'risk_level': risk_level,
+                            'confidence_score': str(int(confidence_score)),
+                            'persons': frontend_response['persons'],
+                            'summary': frontend_response['summary']
+                        },
+                        scenario_text=scenario_text,
+                        config=email_config
+                    )
+                except Exception as e:
+                    print(f"⚠️ Email notification failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"ℹ️ Risk level {risk_level} not in notification list {send_on_levels}, skipping email")
         
         return jsonify(frontend_response)
         

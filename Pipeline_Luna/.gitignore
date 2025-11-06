@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Large Model Files (download separately)
+Meta-Llama-3-8B-Instruct/
+*.safetensors
+*.bin
+*.pth
+*.ckpt
+
+# LLaVA Cache
+.cache/
+transformers_cache/
+
+# Dataset (download from Kaggle)
+data/train/
+data/valid/
+data/test/
+NewClassTest1/data/
+NewClassTest1/merged_dataset/
+
+# Generated Reports & Violations
+pipeline/backend/reports/
+pipeline/violations/
+*.html
+!report_templates/*.html
+!frontend/index.html
+
+# Training Results (keep config, remove large files)
+Results/*/weights/*.pt
+!Results/ppe_yolov86/weights/best.pt
+runs/
+wandb/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Data files
+*.csv
+!NLP_Luna/Trim1.csv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+
+# Node modules (if any)
+node_modules/
+
+# PyTorch
+*.pth.tar
+
+# Misc
+*.bak
+*.backup
+*.old

@@ -1,0 +1,71 @@
+MIT License
+
+Copyright (c) 2025 PPE Safety Monitor Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+THIRD-PARTY LICENSES AND ACKNOWLEDGMENTS
+
+This project uses the following third-party software and models:
+
+1. YOLOv8 (Ultralytics)
+   - License: AGPL-3.0
+   - Source: https://github.com/ultralytics/ultralytics
+
+2. LLaVA (Visual Instruction Tuning)
+   - License: Apache 2.0
+   - Source: https://github.com/haotian-liu/LLaVA
+
+3. Meta Llama 3 8B Instruct
+   - License: Meta Llama 3 Community License
+   - Source: https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct
+   - Note: Requires separate acceptance of Meta's license terms
+
+4. PyTorch
+   - License: BSD 3-Clause
+   - Source: https://github.com/pytorch/pytorch
+
+5. Transformers (HuggingFace)
+   - License: Apache 2.0
+   - Source: https://github.com/huggingface/transformers
+
+6. Flask
+   - License: BSD 3-Clause
+   - Source: https://github.com/pallets/flask
+
+7. PPE Dataset (Training Data)
+   - Author: Shlok Raval
+   - Source: https://www.kaggle.com/datasets/shlokraval/ppe-dataset-yolov8
+   - Note: Check dataset license on Kaggle
+
+DISCLAIMER
+
+This software is provided for educational and research purposes. It is not
+intended to replace professional safety inspections or human judgment in
+workplace safety matters. Users should always follow proper safety protocols
+and regulations applicable to their jurisdiction.
+
+The authors and contributors are not responsible for any accidents, injuries,
+or damages that may occur as a result of using this software.
+
+For production use in critical safety applications, please consult with
+qualified safety professionals and ensure compliance with all relevant
+safety standards and regulations (OSHA, ISO, etc.).

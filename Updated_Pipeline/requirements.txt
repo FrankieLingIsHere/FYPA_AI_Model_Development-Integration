@@ -1,6 +1,6 @@
 # LUNA PPE Safety Monitor - Requirements
 # =========================================
-# AI-powered PPE compliance monitoring system with YOLOv8, LLaVA, and RAG
+# AI-powered PPE compliance monitoring system with YOLOv8, LLaVA (Ollama), and RAG
 
 # Core Framework
 Flask==3.1.2
@@ -12,11 +12,9 @@ ultralytics==8.3.228
 torch==2.9.1
 torchvision==0.24.1
 
-# Image Captioning (LLaVA)
-transformers==4.57.1
-accelerate==1.12.0
-bitsandbytes==0.48.2
-safetensors==0.6.2
+# Image Captioning (Ollama LLaVA - Fast!)
+# Note: Uses Ollama's llava:7b model instead of transformers
+# Generates captions in 30-60 seconds instead of 10+ minutes
 pillow==12.0.0
 
 # RAG & Vector Database
@@ -54,8 +52,9 @@ Jinja2==3.1.6
 python-dotenv==1.2.1
 rich==14.2.0
 
-# Note: Ollama must be installed separately
+# Note: Ollama must be installed separately for LLaVA captioning and Llama3 reports
 # Download from: https://ollama.ai
 # Required models:
-#   - ollama pull llama3
-#   - ollama pull nomic-embed-text
+#   - ollama pull llava:7b        (for image captioning - 30-60 sec per image)
+#   - ollama pull llama3          (for report generation)
+#   - ollama pull nomic-embed-text (for DOSH RAG embeddings)

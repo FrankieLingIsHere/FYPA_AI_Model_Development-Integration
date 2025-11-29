@@ -117,7 +117,7 @@ LLAVA_CONFIG = {
 OLLAMA_CONFIG = {
     'base_url': 'http://localhost:11434',
     'model': 'llama3',
-    'timeout': 300,  # 5 minutes for slower systems
+    'timeout': 600,  # 10 minutes for detailed NLP analysis
     'use_local_model': False,
     'temperature': 0.7,
     'max_tokens': 2000

@@ -53,15 +53,8 @@ class CaptionGenerator:
         """
         self.config = config
         
-        # LLaVA settings
-        llava_config = config.get('LLAVA_CONFIG', {})
-        self.model_id = llava_config.get('model_id', 'llava-hf/llava-1.5-7b-hf')
-        self.load_in_4bit = llava_config.get('load_in_4bit', True)
-        self.max_new_tokens = llava_config.get('max_new_tokens', 150)
-        self.prompt_template = llava_config.get(
-            'prompt_template',
-            "USER: <image>\nDescribe this workplace safety scene in detail, focusing on workers, their actions, and any safety equipment visible."
-        )
+        # Note: Prompt is now defined in caption_image.py (Ollama LLaVA)
+        # This class serves as a wrapper for pipeline integration
         
         # Model will be loaded lazily when first caption is requested
         self.model_loaded = False

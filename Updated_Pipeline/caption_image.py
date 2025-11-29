@@ -1,90 +1,140 @@
 """
-Image Captioning with LLaVA 1.5
+Image Captioning with LLaVA via Ollama
 
-This script loads the llava-1.5-7b-hf model in 4-bit precision
-and generates a caption for a given image.
+Fast image captioning using Ollama's llava model.
+Generates captions in seconds instead of minutes.
 
 Usage:
     python caption_image.py path/to/image.jpg
 """
 import sys
-import torch
-from PIL import Image
-from transformers import LlavaForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
-import os
+import requests
+import base64
+from pathlib import Path
 
-# --- MODEL SELECTION ---
-model_id = "llava-hf/llava-1.5-7b-hf"
-# ------------------------
+# --- OLLAMA CONFIGURATION ---
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "llava:7b"  # or "llava:13b" for better quality
+TIMEOUT = 120  # 2 minutes timeout
+# ---------------------------
 
 def caption_image_llava(image_path):
+    """
+    Generate caption using Ollama's LLaVA model.
     
-    print(f"Loading model: {model_id}")
+    Args:
+        image_path: Path to image file
     
-    # Configure 4-bit quantization with CPU offload for limited RAM
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16,
-        llm_int8_enable_fp32_cpu_offload=True  # Allow CPU offloading when RAM is low
-    )
+    Returns:
+        Caption string or None if failed
+    """
+    print(f"Using Ollama LLaVA model: {OLLAMA_MODEL}")
     
-    # 1. Load the model and processor
-    model = LlavaForConditionalGeneration.from_pretrained(
-        model_id,
-        quantization_config=quantization_config,
-        device_map="auto",
-        low_cpu_mem_usage=True
-    )
-    processor = AutoProcessor.from_pretrained(model_id)
-    
-    # model.device will show 'cuda:0' if 4-bit loading was successful
-    print(f"Model loaded onto device: {model.device}")
-
-    # Load image
+    # Load and encode image to base64
     try:
-        image = Image.open(image_path).convert("RGB")
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        print(f"Image loaded: {Path(image_path).name}")
     except FileNotFoundError:
         print(f"Error: Image file not found at {image_path}")
         return None
-
-    # 2. Define the LLaVA prompt
-    # The <image> token is a placeholder that the processor will handle.
-    prompt = "USER: <image>\nDescribe this workplace safety scene in detail, focusing on workers and safety equipment."
-
-    # 3. Process the image and prompt
-    print("Processing image and prompt...")
-    inputs = processor(
-        text=prompt, 
-        images=image, 
-        return_tensors="pt"
-    ).to(model.device, dtype=torch.float16) # Ensure inputs are also float16
-
-    # 4. Generate the caption
-    print("Generating caption (this may take 10-20 minutes on CPU)...")
-    print("Please wait - model is generating tokens silently...")
-    output = model.generate(
-        **inputs, 
-        max_new_tokens=50,  # Reduced from 150 to speed up generation
-        do_sample=False  # Deterministic output, faster
-    )
-    print("Caption generation complete!")
-
-    # 5. Decode the output
-    # We must decode the *entire* output, including the prompt
-    full_text = processor.decode(output[0], skip_special_tokens=True)
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return None
     
-    # 6. Clean the output
-    # The output will be "USER: <image>\nDescribe this image. ASSISTANT: <caption_text>"
-    # We just want the <caption_text>
+    # Build prompt for construction site safety analysis
+    prompt = """You are a construction site safety inspector. Describe what you observe at this construction site in a natural narrative style.
+
+Start directly describing the worker(s) and scene. DO NOT use phrases like "In the image" or "The image shows".
+
+Describe in order:
+- Worker(s): What are they doing? Where are they positioned?
+- PPE Status: Be EXPLICIT and SPECIFIC:
+  * State clearly what PPE items ARE visible/worn 
+  * State clearly what PPE items are NOT visible/missing
+  * Check each item: hardhat, safety vest, gloves, safety boots, goggles, mask
+  * DO NOT use vague terms like "casual attire" or "no visible safety gear" - list each PPE item specifically
+- Work Environment: Construction area details, equipment, materials
+- Safety Concerns: Any visible hazards or unsafe conditions
+
+
+Treat this as a construction site even if it appears to be indoors or an office area. Write a flowing paragraph, not a numbered list."""
+    
+    # Call Ollama API
     try:
-        caption = full_text.split("ASSISTANT:")[1].strip()
-    except IndexError:
-        print("Error: Could not parse model output.")
-        print(f"Full output: {full_text}")
-        # Return the full text if parsing fails
-        caption = full_text
-    
-    return caption
+        print("Generating caption with Ollama...")
+        response = requests.post(
+            OLLAMA_API_URL,
+            json={
+                'model': OLLAMA_MODEL,
+                'prompt': prompt,
+                'images': [image_base64],
+                'stream': False,
+                'options': {
+                    'temperature': 0.6,
+                    'num_predict': 250,  # Increased for complete sentences
+                    'stop': ['\n\n\n']  # Stop at triple newlines to avoid mid-sentence cuts
+                }
+            },
+            timeout=TIMEOUT
+        )
+        
+        if not response.ok:
+            print(f"Error: Ollama API returned {response.status_code}")
+            print(f"Response: {response.text}")
+            return None
+        
+        data = response.json()
+        caption = data.get('response', '').strip()
+        
+        if caption:
+            # Clean up common prefixes
+            prefixes_to_remove = [
+                "In the image, ",
+                "In the image ",
+                "The image shows ",
+                "The image depicts ",
+                "This image shows ",
+                "This image depicts ",
+                "In this image, ",
+                "In this image "
+            ]
+            
+            for prefix in prefixes_to_remove:
+                if caption.startswith(prefix):
+                    caption = caption[len(prefix):]
+                    # Capitalize first letter after removal
+                    if caption:
+                        caption = caption[0].upper() + caption[1:]
+                    break
+            
+            # Ensure complete sentence - truncate to last period if incomplete
+            if caption and not caption.endswith(('.', '!', '?')):
+                # Find last complete sentence
+                last_period = caption.rfind('.')
+                if last_period > 0:
+                    caption = caption[:last_period + 1]
+                else:
+                    # If no period found, add one
+                    caption = caption + '.'
+            
+            print("Caption generation complete!")
+            return caption
+        else:
+            print("Error: Empty response from Ollama")
+            return None
+            
+    except requests.exceptions.Timeout:
+        print(f"Error: Request timed out after {TIMEOUT} seconds")
+        return None
+    except requests.exceptions.ConnectionError:
+        print("Error: Could not connect to Ollama. Make sure Ollama is running.")
+        print("Start Ollama with: ollama serve")
+        return None
+    except Exception as e:
+        print(f"Error calling Ollama API: {e}")
+        return None
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

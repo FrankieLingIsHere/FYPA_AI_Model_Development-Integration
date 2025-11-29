@@ -66,7 +66,7 @@ class ReportGenerator:
         self.api_url = ollama_config.get('api_url', 'http://localhost:11434/api/generate')
         self.model = ollama_config.get('model', 'llama3')
         self.temperature = ollama_config.get('temperature', 0.7)
-        self.ollama_timeout = ollama_config.get('timeout', 300)  # Default 5 minutes
+        self.ollama_timeout = ollama_config.get('timeout', 600)  # Default 10 minutes for detailed analysis
         
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
@@ -314,24 +314,60 @@ class ReportGenerator:
         violation_summary = report_data.get('violation_summary', '')
         person_count = report_data.get('person_count', 0)
         
-        # Build detection description
+        # Build detection description and identify missing PPE
         detection_desc = []
+        missing_ppe = []
         for det in detections:
             # Handle both 'confidence' and 'score' keys
             conf_value = det.get('confidence', det.get('score', 0.0))
+            class_name = det['class_name']
             detection_desc.append(
-                f"- {det['class_name']} (confidence: {conf_value:.2f})"
+                f"- {class_name} (confidence: {conf_value:.2f})"
             )
+            
+            # Identify missing PPE from NO-X detections
+            if class_name.startswith('NO-'):
+                ppe_item = class_name.replace('NO-', '').replace('Hardhat', 'Safety Helmet').replace('Safety Vest', 'High-Visibility Vest')
+                missing_ppe.append(ppe_item)
+        
+        # Also parse caption for missing PPE keywords
+        caption_lower = caption.lower()
+        ppe_keywords = {
+            'hardhat': ['hardhat', 'hard hat', 'safety helmet', 'helmet'],
+            'safety_vest': ['vest', 'high-visibility', 'hi-vis', 'safety vest'],
+            'gloves': ['gloves', 'hand protection'],
+            'goggles': ['goggles', 'eye protection', 'safety glasses'],
+            'footwear': ['boots', 'safety boots', 'footwear', 'safety shoes'],
+            'mask': ['mask', 'respirator', 'face mask']
+        }
+        
+        caption_missing = []
+        for ppe_type, keywords in ppe_keywords.items():
+            for keyword in keywords:
+                # Check if caption mentions NOT wearing this PPE
+                if any(phrase in caption_lower for phrase in [
+                    f'not wearing {keyword}',
+                    f'without {keyword}',
+                    f'no {keyword}',
+                    f'absence of {keyword}',
+                    f'lack of {keyword}',
+                    f'missing {keyword}'
+                ]):
+                    caption_missing.append(ppe_type.replace('_', ' ').title())
+                    break
+        
+        # Combine detected and caption-identified missing PPE
+        all_missing = list(set(missing_ppe + caption_missing))
+        missing_ppe_text = f"**CONFIRMED MISSING PPE**: {', '.join(all_missing)} (Mark these as 'Missing' in PPE status)" if all_missing else "All required PPE present"
         
         # Build context from DOSH documentation (primary source)
         dosh_text = ""
         if dosh_context and len(dosh_context) > 0:
             dosh_text = "=== DOSH SAFETY REGULATIONS (Authoritative Source) ===\n\n"
             for i, chunk in enumerate(dosh_context, 1):
-                relevance = chunk.get('relevance_score', 0.0)
                 content = chunk.get('content', '')
                 source = chunk.get('metadata', {}).get('source', 'DOSH Documentation')
-                dosh_text += f"[Regulation {i}] (Relevance: {relevance:.2f})\n{content}\n\n"
+                dosh_text += f"[Regulation {i}]\n{content}\n\n"
             dosh_text += "=== END DOSH REGULATIONS ===\n\n"
         
         # Build context from similar incidents (secondary source)
@@ -347,42 +383,90 @@ class ReportGenerator:
 
 {dosh_text if dosh_text else ""}{context_text if context_text else ""}
 ---
-SCENE:
+SCENE ANALYSIS:
 Caption: {caption}
-Objects: {chr(10).join(detection_desc) if detection_desc else 'None'}
-Violation: {violation_summary}
-People: {person_count}
+Detected Objects: {chr(10).join(detection_desc) if detection_desc else 'None'}
+{missing_ppe_text}
+Violation Summary: {violation_summary}
+People Count: {person_count}
 
 ---
-RULES:
-1. Reference DOSH regulations provided above when making assessments
-2. Detect environment: Construction Site, Office, Warehouse, Manufacturing, Laboratory, Other
-3. Construction/Warehouse/Manufacturing require: Hardhat, vest, footwear (per DOSH standards)
-4. Office environments: PPE NOT needed unless specified by DOSH
-5. PPE status: "Mentioned", "Not Mentioned", "Missing", or "Not Required"
-6. Create one person block per detected person
-7. Fall detection = CRITICAL severity
-8. Cite specific DOSH regulations when applicable in your assessment
+CRITICAL INSTRUCTIONS FOR PROFESSIONAL SAFETY ANALYSIS:
+
+1. PPE STATUS - IGNORE THIS FIELD:
+   - PPE status is AUTOMATICALLY determined by the YOLO detection system
+   - If "NO-Hardhat" is detected, system marks hardhat as Missing
+   - If "NO-Mask" is detected, system marks mask as Missing
+   - You do NOT need to fill in the "ppe" field in your response
+   - You can set all PPE items to "Not Mentioned" - the system will override them
+   - Focus instead on: person description, actions, hazards_faced, and risks
+   - "Mentioned" = PPE is present and worn properly
+   - "Not Mentioned" = Cannot determine from available data
+   - "Not Required" = Environment/task does not mandate this PPE
+
+2. ACTIONS - Corrective and Preventive Measures:
+   - These are NOT descriptions of what the worker is currently doing wrong
+   - These ARE the corrective actions needed to prevent the identified risks
+   - Describe specific steps to address each safety violation and hazard
+   - Include: immediate actions required, PPE that must be worn, procedural changes needed
+   - Reference relevant safety protocols, equipment requirements, and work practices
+   - Be specific about implementation: what needs to be done, how, and by whom
+   - Use professional safety management terminology and action-oriented language
+
+3. HAZARDS FACED - Detailed Technical Analysis:
+   - Provide detailed descriptions of each hazard (2-3 sentences per hazard)
+   - Include: hazard type (mechanical/electrical/chemical/ergonomic/environmental), source, exposure mechanism
+   - Specify affected body parts and severity rating with justification
+   - Reference specific site conditions from caption and connect to DOSH regulations
+
+4. POTENTIAL RISKS - Medical and Regulatory Analysis:
+   - For each hazard, provide comprehensive risk assessment (3-4 sentences per risk)
+   - Medical component: injury types with proper medical terminology, affected anatomical structures and body systems, severity classification
+   - Mechanism: describe how injury would occur and contributing factors
+   - Regulatory: cite specific DOSH section numbers from provided context, legal consequences, regulatory penalties
+   - Include likelihood assessment (low/medium/high/very high) with justification
+
+5. DOSH CITATIONS:
+   - Extract specific regulation section numbers from the DOSH context provided (e.g., Section 21.5.1, Section 15.3)
+   - Format regulation field as: "DOSH Section [number] - [brief description]"
+   - Example: "DOSH Section 21.5.1 - Safety helmet of approved type must be worn at all times on construction sites"
+   - Quote relevant requirements verbatim when possible
 
 JSON structure:
 {{
   "summary": "Brief summary with environment and main concerns",
   "environment_type": "Construction Site|Office|Warehouse|Manufacturing|Laboratory|Other",
   "environment_assessment": "Why this environment type and what standards apply",
+  "dosh_regulations_cited": [
+    {{
+      "regulation": "DOSH Section [number] - [brief description of regulation]",
+      "requirement": "What the regulation specifically requires"
+    }}
+  ],
   "persons": [
     {{
       "id": 1,
-      "description": "Person's role/actions",
+      "description": "Professional detailed description of person's role, activity, and positioning",
       "ppe": {{
-        "hardhat": "Mentioned|Not Mentioned|Missing|Not Required",
-        "safety_vest": "Mentioned|Not Mentioned|Missing|Not Required",
-        "gloves": "Mentioned|Not Mentioned|Missing|Not Required",
-        "goggles": "Mentioned|Not Mentioned|Missing|Not Required",
-        "footwear": "Mentioned|Not Mentioned|Missing|Not Required"
+        "hardhat": "Missing|Mentioned|Not Mentioned|Not Required",
+        "safety_vest": "Missing|Mentioned|Not Mentioned|Not Required",
+        "gloves": "Missing|Mentioned|Not Mentioned|Not Required",
+        "goggles": "Missing|Mentioned|Not Mentioned|Not Required",
+        "footwear": "Missing|Mentioned|Not Mentioned|Not Required"
       }},
-      "actions": ["actions list"],
-      "hazards_faced": ["hazards list"],
-      "risks": ["risks list"],
+      "actions": [
+        "Specific corrective action to address identified violations and prevent risks",
+        "Another preventive measure with implementation details",
+        "Additional safety protocol or procedural requirement"
+      ],
+      "hazards_faced": [
+        "Comprehensive hazard description with classification, source, mechanism, affected body parts, severity, and environmental context (2-3 detailed sentences)",
+        "Another detailed hazard if present"
+      ],
+      "risks": [
+        "Extensive risk analysis with medical terminology, injury mechanisms, body systems, severity/likelihood assessment, DOSH citations, and legal consequences (3-4 detailed sentences)",
+        "Another comprehensive risk assessment"
+      ],
       "compliance_status": "Compliant|Non-Compliant|Partially Compliant"
     }}
   ],
@@ -996,14 +1080,11 @@ Respond with JSON only:"""
                 </div>
             </div>
             
+            <!-- DOSH Regulations -->
+            {self._generate_dosh_regulations_section(nlp_analysis)}
+            
             <!-- Individual Person Analysis -->
-            {self._generate_person_cards_section(nlp_analysis)}
-            
-            <!-- Hazards -->
-            {self._generate_hazards_section(nlp_analysis)}
-            
-            <!-- Recommendations -->
-            {self._generate_recommendations_section(nlp_analysis)}
+            {self._generate_person_cards_section(nlp_analysis, report_data)}
         </div>
         
         <div class="footer">
@@ -1051,7 +1132,41 @@ Respond with JSON only:"""
             </div>
         """
     
-    def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any]) -> str:
+    def _generate_dosh_regulations_section(self, nlp_analysis: Dict[str, Any]) -> str:
+        """Generate DOSH regulations section with cited regulations."""
+        regulations = nlp_analysis.get('dosh_regulations_cited', [])
+        if not regulations:
+            return ""
+        
+        reg_items = []
+        for i, reg in enumerate(regulations, 1):
+            regulation = reg.get('regulation', 'N/A')
+            requirement = reg.get('requirement', 'N/A')
+            
+            reg_items.append(f"""
+                <div class="card" style="margin-bottom: 1rem;">
+                    <div class="card-header" style="background: linear-gradient(135deg, #e67e22, #d35400); color: white;">
+                        <i class="fas fa-book-open"></i> {regulation}
+                    </div>
+                    <div class="card-content">
+                        <p style="margin-bottom: 0;"><strong>Requirement:</strong> {requirement}</p>
+                    </div>
+                </div>
+            """)
+        
+        return f"""
+            <div class="section">
+                <h2 class="section-title">📚 Applicable DOSH Regulations</h2>
+                <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <p style="margin: 0; color: #e67e22; font-weight: 600;">
+                        <i class="fas fa-info-circle"></i> The following DOSH (Department of Occupational Safety and Health) regulations apply to this violation:
+                    </p>
+                </div>
+                {''.join(reg_items)}
+            </div>
+        """
+    
+    def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
         """Generate per-person analysis cards (inspired by NLP_Luna)."""
         persons = nlp_analysis.get('persons', [])
         if not persons:
@@ -1066,6 +1181,29 @@ Respond with JSON only:"""
             </div>
             """
         
+        # Extract missing PPE from YOLO detections (NO-Hardhat, NO-Mask, etc.)
+        detections = report_data.get('detections', [])
+        yolo_missing_ppe = set()
+        for det in detections:
+            class_name = det.get('class_name', det.get('class', ''))
+            if class_name.startswith('NO-'):
+                ppe_item = class_name.replace('NO-', '').lower()
+                # Map YOLO class names to PPE field names
+                mapping = {
+                    'hardhat': 'hardhat',
+                    'mask': 'mask',
+                    'safety vest': 'safety_vest',
+                    'vest': 'safety_vest',
+                    'gloves': 'gloves',
+                    'safety shoes': 'footwear',
+                    'shoes': 'footwear',
+                    'goggles': 'goggles'
+                }
+                for key, value in mapping.items():
+                    if key in ppe_item:
+                        yolo_missing_ppe.add(value)
+                        break
+        
         # Generate card for each person
         person_cards = []
         for person in persons:
@@ -1073,10 +1211,20 @@ Respond with JSON only:"""
             description = person.get('description', 'No description')
             compliance = person.get('compliance_status', 'Unknown')
             
-            # PPE status grid
+            # PPE status grid - Override with YOLO detections
             ppe = person.get('ppe', {})
             ppe_items = []
-            for ppe_type, status in ppe.items():
+            
+            # Define standard PPE items
+            standard_ppe = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
+            for ppe_type in standard_ppe:
+                # Override status if YOLO detected missing PPE
+                if ppe_type in yolo_missing_ppe:
+                    status = 'Missing'
+                else:
+                    status = ppe.get(ppe_type, 'Not Mentioned')
+                
+                # Determine status class
                 # Determine status class
                 if status == 'Missing':
                     status_class = 'ppe-status-missing'
@@ -1099,13 +1247,51 @@ Respond with JSON only:"""
             actions = person.get('actions', [])
             actions_html = ''.join([f"<li>{a}</li>" for a in actions]) if actions else '<li>No actions specified</li>'
             
-            # Hazards list
+            # Hazards list - handle both string and dict formats
             hazards = person.get('hazards_faced', [])
-            hazards_html = ''.join([f"<li>{h}</li>" for h in hazards]) if hazards else '<li>No hazards identified</li>'
+            hazards_formatted = []
+            for h in hazards:
+                if isinstance(h, dict):
+                    # Format dict as readable text
+                    parts = []
+                    if 'type' in h:
+                        parts.append(f"{h['type']}")
+                    if 'source' in h:
+                        parts.append(f"Source: {h['source']}")
+                    if 'mechanism' in h:
+                        parts.append(f"Mechanism: {h['mechanism']}")
+                    if 'affected_body_part' in h:
+                        parts.append(f"Affected: {h['affected_body_part']}")
+                    if 'severity' in h:
+                        parts.append(f"Severity: {h['severity']}")
+                    hazards_formatted.append(' - '.join(parts))
+                else:
+                    hazards_formatted.append(str(h))
+            hazards_html = ''.join([f"<li>{h}</li>" for h in hazards_formatted]) if hazards_formatted else '<li>No hazards identified</li>'
             
-            # Risks list
+            # Risks list - handle both string and dict formats
             risks = person.get('risks', [])
-            risks_html = ''.join([f"<li>{r}</li>" for r in risks]) if risks else '<li>No risks identified</li>'
+            risks_formatted = []
+            for r in risks:
+                if isinstance(r, dict):
+                    # Format dict as readable text
+                    parts = []
+                    if 'injury_type' in r:
+                        parts.append(f"{r['injury_type']}")
+                    if 'medical_terminology' in r:
+                        parts.append(f"Medical: {r['medical_terminology']}")
+                    if 'body_systems_affected' in r:
+                        parts.append(f"Body systems: {r['body_systems_affected']}")
+                    if 'severity_classification' in r:
+                        parts.append(f"Severity: {r['severity_classification']}")
+                    if 'regulation_citation' in r:
+                        parts.append(f"Regulation: {r['regulation_citation']}")
+                    if 'legal_regulatory_consequences' in r:
+                        parts.append(f"Legal consequences: {r['legal_regulatory_consequences']}")
+                    risks_formatted.append(' | '.join(parts))
+                else:
+                    risks_formatted.append(str(r))
+            risks_html = ''.join([f"<li>{r}</li>" for r in risks_formatted]) if risks_formatted else '<li>No risks identified</li>'
             
             # Compliance badge
             if compliance == 'Compliant':

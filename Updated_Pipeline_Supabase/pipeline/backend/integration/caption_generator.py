@@ -161,8 +161,8 @@ class CaptionGenerator:
         return {
             'available': CAPTION_AVAILABLE,
             'model_loaded': self.model_loaded,
-            'model_id': self.model_id,
-            'load_in_4bit': self.load_in_4bit
+            'backend': 'Ollama LLaVA',
+            'model': 'llava:7b'
         }
 
 

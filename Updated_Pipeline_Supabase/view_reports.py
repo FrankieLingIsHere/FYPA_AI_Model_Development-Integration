@@ -406,4 +406,6 @@ if __name__ == '__main__':
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 60)
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # Use debug mode only for development (set via environment variable)
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host='0.0.0.0', port=5001, debug=debug_mode)

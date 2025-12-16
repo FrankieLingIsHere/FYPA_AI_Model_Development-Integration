@@ -50,7 +50,8 @@ pipeline/reports/
 violations.db
 *.db
 
-# Model weights (large files)
+# Model weights (large files - not committed to repo)
+# Users should copy from Updated_Pipeline/Results/ or train their own model
 Results/
 *.pt
 *.pth

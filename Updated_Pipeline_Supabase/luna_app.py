@@ -886,10 +886,16 @@ if __name__ == '__main__':
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 80)
     
+    # Debug mode should ONLY be enabled for local development, NEVER in production
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    if debug_mode:
+        logger.warning("⚠️  Flask debug mode is ENABLED - This should ONLY be used for local development!")
+        logger.warning("⚠️  NEVER enable debug mode in production as it allows arbitrary code execution!")
+    
     app.run(
         host='0.0.0.0',
         port=5000,
-        debug=True,
+        debug=debug_mode,
         threaded=True,
         use_reloader=False  # Prevent double initialization
     )

@@ -1,0 +1,62 @@
+# Environment variables (NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local storage
+pipeline/violations/
+pipeline/reports/
+violations.db
+*.db
+
+# Model weights (large files)
+Results/
+*.pt
+*.pth
+*.onnx
+
+# Temporary files
+tmp/
+temp/
+*.tmp

@@ -1,0 +1,571 @@
+"""
+Supabase Database Manager
+==========================
+
+Handles database operations with Supabase Postgres.
+Manages violations in detection_events, violations, and flood_logs tables.
+"""
+
+import logging
+import os
+import json
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
+
+logger = logging.getLogger(__name__)
+
+
+class SupabaseDatabaseManager:
+    """
+    Manages database operations with Supabase Postgres.
+    
+    Tables:
+    - detection_events: Main violation event records
+    - violations: Detailed violation data with storage keys
+    - flood_logs: System event logging
+    """
+    
+    def __init__(self, db_url: str):
+        """
+        Initialize Supabase Database Manager.
+        
+        Args:
+            db_url: Postgres connection URL (from Supabase dashboard)
+        """
+        self.db_url = db_url
+        self.conn = None
+        
+        try:
+            self._connect()
+            logger.info("Supabase Database Manager initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            raise
+    
+    def _connect(self):
+        """Establish database connection."""
+        try:
+            self.conn = psycopg2.connect(
+                self.db_url,
+                cursor_factory=RealDictCursor
+            )
+            self.conn.autocommit = False
+            logger.info("Connected to Supabase Postgres")
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise
+    
+    def _ensure_connection(self):
+        """Ensure database connection is active."""
+        if self.conn is None or self.conn.closed:
+            logger.warning("Database connection lost, reconnecting...")
+            self._connect()
+    
+    def close(self):
+        """Close database connection."""
+        if self.conn and not self.conn.closed:
+            self.conn.close()
+            logger.info("Database connection closed")
+    
+    # =========================================================================
+    # DETECTION EVENTS
+    # =========================================================================
+    
+    def insert_detection_event(
+        self,
+        report_id: str,
+        timestamp: datetime,
+        person_count: int = 0,
+        violation_count: int = 0,
+        severity: str = 'HIGH'
+    ) -> Optional[str]:
+        """
+        Insert a detection event record.
+        
+        Args:
+            report_id: Unique report identifier
+            timestamp: Detection timestamp
+            person_count: Number of people detected
+            violation_count: Number of violations
+            severity: Severity level (HIGH/MEDIUM/LOW)
+        
+        Returns:
+            Report ID if successful, None otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO public.detection_events 
+                    (report_id, timestamp, person_count, violation_count, severity)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING report_id
+                """, (report_id, timestamp, person_count, violation_count, severity))
+                
+                result = cur.fetchone()
+                self.conn.commit()
+                
+                logger.info(f"Inserted detection event: {report_id}")
+                return result['report_id'] if result else None
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to insert detection event: {e}")
+            return None
+    
+    def get_detection_event(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a detection event by report_id.
+        
+        Args:
+            report_id: Report identifier
+        
+        Returns:
+            Detection event dictionary or None
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT * FROM public.detection_events
+                    WHERE report_id = %s
+                """, (report_id,))
+                
+                result = cur.fetchone()
+                return dict(result) if result else None
+                
+        except Exception as e:
+            logger.error(f"Failed to get detection event {report_id}: {e}")
+            return None
+    
+    def get_recent_detection_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Retrieve recent detection events.
+        
+        Args:
+            limit: Maximum number of events to retrieve
+        
+        Returns:
+            List of detection event dictionaries
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT * FROM public.detection_events
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """, (limit,))
+                
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"Failed to get recent detection events: {e}")
+            return []
+    
+    # =========================================================================
+    # VIOLATIONS
+    # =========================================================================
+    
+    def insert_violation(
+        self,
+        report_id: str,
+        violation_summary: Optional[str] = None,
+        caption: Optional[str] = None,
+        nlp_analysis: Optional[Dict[str, Any]] = None,
+        detection_data: Optional[Dict[str, Any]] = None,
+        original_image_key: Optional[str] = None,
+        annotated_image_key: Optional[str] = None,
+        report_html_key: Optional[str] = None,
+        report_pdf_key: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Insert a violation record with storage keys.
+        
+        Args:
+            report_id: Report identifier (foreign key to detection_events)
+            violation_summary: Summary text
+            caption: Image caption from LLaVA
+            nlp_analysis: NLP analysis from Llama3 (stored as JSONB)
+            detection_data: YOLO detection data (stored as JSONB)
+            original_image_key: Storage key for original image
+            annotated_image_key: Storage key for annotated image
+            report_html_key: Storage key for HTML report
+            report_pdf_key: Storage key for PDF report
+        
+        Returns:
+            UUID of inserted violation or None
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO public.violations 
+                    (report_id, violation_summary, caption, nlp_analysis, detection_data,
+                     original_image_key, annotated_image_key, report_html_key, report_pdf_key)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    report_id,
+                    violation_summary,
+                    caption,
+                    Json(nlp_analysis) if nlp_analysis else None,
+                    Json(detection_data) if detection_data else None,
+                    original_image_key,
+                    annotated_image_key,
+                    report_html_key,
+                    report_pdf_key
+                ))
+                
+                result = cur.fetchone()
+                self.conn.commit()
+                
+                logger.info(f"Inserted violation: {report_id}")
+                return str(result['id']) if result else None
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to insert violation: {e}")
+            return None
+    
+    def get_violation(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve violation by report_id.
+        
+        Args:
+            report_id: Report identifier
+        
+        Returns:
+            Violation dictionary or None
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT v.*, de.timestamp, de.person_count, de.violation_count, de.severity
+                    FROM public.violations v
+                    JOIN public.detection_events de ON v.report_id = de.report_id
+                    WHERE v.report_id = %s
+                """, (report_id,))
+                
+                result = cur.fetchone()
+                return dict(result) if result else None
+                
+        except Exception as e:
+            logger.error(f"Failed to get violation {report_id}: {e}")
+            return None
+    
+    def get_recent_violations(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Retrieve recent violations with detection event data.
+        
+        Args:
+            limit: Maximum number of violations to retrieve
+        
+        Returns:
+            List of violation dictionaries
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT v.*, de.timestamp, de.person_count, de.violation_count, de.severity
+                    FROM public.violations v
+                    JOIN public.detection_events de ON v.report_id = de.report_id
+                    ORDER BY de.timestamp DESC
+                    LIMIT %s
+                """, (limit,))
+                
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"Failed to get recent violations: {e}")
+            return []
+    
+    def update_violation_storage_keys(
+        self,
+        report_id: str,
+        original_image_key: Optional[str] = None,
+        annotated_image_key: Optional[str] = None,
+        report_html_key: Optional[str] = None,
+        report_pdf_key: Optional[str] = None
+    ) -> bool:
+        """
+        Update storage keys for a violation.
+        
+        Args:
+            report_id: Report identifier
+            original_image_key: Storage key for original image
+            annotated_image_key: Storage key for annotated image
+            report_html_key: Storage key for HTML report
+            report_pdf_key: Storage key for PDF report
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            updates = []
+            params = []
+            
+            if original_image_key is not None:
+                updates.append("original_image_key = %s")
+                params.append(original_image_key)
+            
+            if annotated_image_key is not None:
+                updates.append("annotated_image_key = %s")
+                params.append(annotated_image_key)
+            
+            if report_html_key is not None:
+                updates.append("report_html_key = %s")
+                params.append(report_html_key)
+            
+            if report_pdf_key is not None:
+                updates.append("report_pdf_key = %s")
+                params.append(report_pdf_key)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = NOW()")
+            params.append(report_id)
+            
+            with self.conn.cursor() as cur:
+                query = f"""
+                    UPDATE public.violations
+                    SET {', '.join(updates)}
+                    WHERE report_id = %s
+                """
+                cur.execute(query, params)
+                self.conn.commit()
+                
+                logger.info(f"Updated storage keys for: {report_id}")
+                return cur.rowcount > 0
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to update storage keys: {e}")
+            return False
+    
+    def delete_violation(self, report_id: str) -> bool:
+        """
+        Delete a violation and its detection event (cascade).
+        
+        Args:
+            report_id: Report identifier
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                # Delete detection event (cascade will delete violation)
+                cur.execute("""
+                    DELETE FROM public.detection_events
+                    WHERE report_id = %s
+                """, (report_id,))
+                
+                self.conn.commit()
+                logger.info(f"Deleted violation: {report_id}")
+                return cur.rowcount > 0
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to delete violation: {e}")
+            return False
+    
+    # =========================================================================
+    # FLOOD LOGS
+    # =========================================================================
+    
+    def log_event(
+        self,
+        event_type: str,
+        message: str,
+        report_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Log a system event to flood_logs table.
+        
+        Args:
+            event_type: Event type (e.g., 'upload', 'error', 'violation')
+            message: Event message
+            report_id: Associated report ID (optional)
+            metadata: Additional metadata (stored as JSONB)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO public.flood_logs 
+                    (event_type, report_id, message, metadata)
+                    VALUES (%s, %s, %s, %s)
+                """, (
+                    event_type,
+                    report_id,
+                    message,
+                    Json(metadata) if metadata else None
+                ))
+                
+                self.conn.commit()
+                logger.debug(f"Logged event: {event_type}")
+                return True
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to log event: {e}")
+            return False
+    
+    def get_recent_logs(self, limit: int = 50, event_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Retrieve recent event logs.
+        
+        Args:
+            limit: Maximum number of logs to retrieve
+            event_type: Filter by event type (optional)
+        
+        Returns:
+            List of log dictionaries
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                if event_type:
+                    cur.execute("""
+                        SELECT * FROM public.flood_logs
+                        WHERE event_type = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                    """, (event_type, limit))
+                else:
+                    cur.execute("""
+                        SELECT * FROM public.flood_logs
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                    """, (limit,))
+                
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"Failed to get recent logs: {e}")
+            return []
+
+
+# =============================================================================
+# FACTORY FUNCTION
+# =============================================================================
+
+def create_db_manager_from_env() -> SupabaseDatabaseManager:
+    """
+    Create SupabaseDatabaseManager from environment variables.
+    
+    Required environment variable:
+        - SUPABASE_DB_URL: Postgres connection URL
+    
+    Returns:
+        SupabaseDatabaseManager instance
+    """
+    db_url = os.getenv('SUPABASE_DB_URL')
+    
+    if not db_url:
+        raise ValueError("SUPABASE_DB_URL must be set in environment")
+    
+    return SupabaseDatabaseManager(db_url)
+
+
+# =============================================================================
+# TESTING
+# =============================================================================
+
+if __name__ == '__main__':
+    import sys
+    from dotenv import load_dotenv
+    
+    logging.basicConfig(level=logging.INFO)
+    
+    # Load environment variables
+    load_dotenv()
+    
+    print("=" * 70)
+    print("SUPABASE DATABASE MANAGER TEST")
+    print("=" * 70)
+    
+    try:
+        manager = create_db_manager_from_env()
+        print(f"\n[OK] Database manager initialized")
+        
+        # Test detection event
+        test_report_id = f"TEST_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print(f"\n--- Testing Detection Event ---")
+        
+        result = manager.insert_detection_event(
+            report_id=test_report_id,
+            timestamp=datetime.now(),
+            person_count=2,
+            violation_count=1,
+            severity='HIGH'
+        )
+        
+        if result:
+            print(f"[OK] Inserted detection event: {result}")
+            
+            # Test violation
+            print(f"\n--- Testing Violation ---")
+            violation_id = manager.insert_violation(
+                report_id=test_report_id,
+                violation_summary="Test violation",
+                caption="Test caption",
+                nlp_analysis={"test": "data"},
+                detection_data={"test": "detections"}
+            )
+            
+            if violation_id:
+                print(f"[OK] Inserted violation: {violation_id}")
+                
+                # Test retrieval
+                print(f"\n--- Testing Retrieval ---")
+                violation = manager.get_violation(test_report_id)
+                if violation:
+                    print(f"[OK] Retrieved violation: {violation['report_id']}")
+                
+                # Test log
+                print(f"\n--- Testing Log ---")
+                manager.log_event('test', 'Test event', test_report_id, {'test': 'metadata'})
+                print(f"[OK] Logged event")
+                
+                # Clean up
+                print(f"\n--- Testing Deletion ---")
+                if manager.delete_violation(test_report_id):
+                    print(f"[OK] Deleted test violation")
+        
+        manager.close()
+        print("\n[OK] All tests passed!")
+        
+    except Exception as e:
+        print(f"\n[X] Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    
+    print("=" * 70)

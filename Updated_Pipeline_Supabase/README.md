@@ -199,17 +199,65 @@ Copy YOLOv8 weights from the original Updated_Pipeline:
 cp -r ../Updated_Pipeline/Results ./
 ```
 
+### 4. Verify Setup
+
+Run the validation tests:
+
+```bash
+# Full system validation
+python test_setup.py
+
+# Quick smoke test (database round-trip)
+python smoke_test.py
+```
+
+Both tests should pass before proceeding.
+
 ---
 
 ## 🎮 Usage
 
-### Start the Application
+### Quick Start (Recommended)
+
+Use the startup scripts for easiest setup:
+
+**Linux/Mac:**
+```bash
+./start.sh
+```
+
+**Windows:**
+```bash
+start.bat
+```
+
+The scripts will:
+- Check for `.env` file
+- Create virtual environment if needed
+- Install dependencies
+- Start the LUNA application
+
+### Manual Start
 
 ```bash
+# Activate virtual environment
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Start main application
 python luna_app.py
 ```
 
 Then open your browser to: `http://localhost:5000`
+
+### Alternative: Report Viewer Only
+
+If you only want to view existing reports without live monitoring:
+
+```bash
+python view_reports.py
+```
+
+Then open: `http://localhost:5001`
 
 ### Features
 
@@ -217,6 +265,7 @@ Then open your browser to: `http://localhost:5000`
 - **Report Management** - Browse violations stored in Supabase
 - **Cloud Access** - Access reports from any device
 - **Signed URLs** - Secure access to private images and reports
+- **Standalone** - No dependencies on parent folder at runtime
 
 ---
 

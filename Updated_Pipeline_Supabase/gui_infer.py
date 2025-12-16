@@ -98,7 +98,8 @@ class InferGUI(tk.Tk):
         w, h = pil.size
         scale = min(MAX_DISPLAY_WIDTH / w, MAX_DISPLAY_HEIGHT / h, 1.0)
         if scale < 1.0:
-            pil = pil.resize((int(w * scale), int(h * scale)), Image.ANTIALIAS)
+            # Use LANCZOS for better compatibility with newer Pillow versions
+            pil = pil.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         imgtk = ImageTk.PhotoImage(pil)
         self._imgtk = imgtk

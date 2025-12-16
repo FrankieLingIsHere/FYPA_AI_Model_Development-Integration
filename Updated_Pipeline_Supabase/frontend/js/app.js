@@ -44,7 +44,7 @@ function showBackendWarning() {
         <i class="fas fa-exclamation-triangle"></i>
         <div>
             <strong>Backend Not Running</strong><br>
-            <small>Start the backend server: <code>python view_reports.py</code></small>
+            <small>Start the backend server: <code>python luna_app.py</code></small>
         </div>
         <button onclick="this.parentElement.remove()" style="margin-left: auto; background: none; border: none; cursor: pointer; font-size: 1.2rem;">×</button>
     `;

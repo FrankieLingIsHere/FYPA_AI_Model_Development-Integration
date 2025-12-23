@@ -172,6 +172,94 @@ class SupabaseDatabaseManager:
             logger.warning(f"Could not update detection status (column may not exist): {e}")
             return False
     
+    def fix_stuck_reports(self) -> int:
+        """
+        Fix reports stuck in pending/generating status by checking actual data.
+        
+        This checks each report's actual state:
+        - If has report_html_key -> completed
+        - If has violation record but no report -> failed (likely timed out)
+        - If no violation record and old -> failed
+        
+        Returns:
+            Number of reports fixed
+        """
+        self._ensure_connection()
+        fixed_count = 0
+        
+        try:
+            with self.conn.cursor() as cur:
+                # Get all reports with pending or generating status (or NULL/unknown)
+                cur.execute("""
+                    SELECT 
+                        de.report_id,
+                        de.timestamp,
+                        de.status,
+                        v.id as violation_id,
+                        v.report_html_key,
+                        v.annotated_image_key
+                    FROM public.detection_events de
+                    LEFT JOIN public.violations v ON de.report_id = v.report_id
+                    WHERE de.status IS NULL 
+                       OR de.status = 'pending' 
+                       OR de.status = 'generating'
+                       OR de.status = 'unknown'
+                """)
+                
+                stuck_reports = cur.fetchall()
+                
+                for report in stuck_reports:
+                    report_id = report['report_id']
+                    has_violation = report['violation_id'] is not None
+                    has_report = report['report_html_key'] is not None
+                    has_annotated = report['annotated_image_key'] is not None
+                    report_time = report['timestamp']
+                    
+                    # Determine correct status
+                    new_status = None
+                    
+                    if has_report:
+                        # Has full report - mark completed
+                        new_status = 'completed'
+                    elif has_violation and has_annotated:
+                        # Has violation record with annotated image but no report
+                        # Check if it's old (more than 5 minutes) - likely failed
+                        from datetime import datetime, timedelta
+                        if report_time and (datetime.now() - report_time) > timedelta(minutes=5):
+                            new_status = 'partial'  # Has some data but incomplete
+                        # else leave as generating - might still be processing
+                    elif has_violation:
+                        # Has violation record but no images/report
+                        from datetime import datetime, timedelta
+                        if report_time and (datetime.now() - report_time) > timedelta(minutes=5):
+                            new_status = 'failed'
+                    else:
+                        # No violation record at all
+                        from datetime import datetime, timedelta
+                        if report_time and (datetime.now() - report_time) > timedelta(minutes=5):
+                            new_status = 'failed'  # Timed out without generating anything
+                    
+                    if new_status:
+                        try:
+                            cur.execute("""
+                                UPDATE public.detection_events 
+                                SET status = %s, updated_at = NOW()
+                                WHERE report_id = %s
+                            """, (new_status, report_id))
+                            fixed_count += 1
+                            logger.info(f"Fixed stuck report {report_id}: {report['status']} -> {new_status}")
+                        except Exception as e:
+                            logger.warning(f"Could not fix report {report_id}: {e}")
+                
+                self.conn.commit()
+                logger.info(f"Fixed {fixed_count} stuck reports")
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"Could not fix stuck reports: {e}")
+        
+        return fixed_count
+    
     def get_detection_event(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve a detection event by report_id.

@@ -113,6 +113,13 @@ def initialize_pipeline_components():
         if db_manager is None:
             logger.info("Initializing Supabase database manager...")
             db_manager = create_db_manager_from_env()
+            
+            # Fix any stuck reports from previous sessions
+            if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
+                logger.info("Checking for stuck reports...")
+                fixed = db_manager.fix_stuck_reports()
+                if fixed > 0:
+                    logger.info(f"✓ Fixed {fixed} stuck reports")
         
         if storage_manager is None:
             logger.info("Initializing Supabase storage manager...")
@@ -691,6 +698,27 @@ def api_report_status(report_id):
     except Exception as e:
         logger.error(f"Error fetching report status: {e}")
         return jsonify({'error': 'Failed to fetch status'}), 500
+
+
+@app.route('/api/fix-stuck-reports', methods=['POST'])
+def api_fix_stuck_reports():
+    """Manually trigger fixing of stuck reports."""
+    if db_manager is None:
+        return jsonify({'error': 'Database not available'}), 503
+    
+    try:
+        if hasattr(db_manager, 'fix_stuck_reports'):
+            fixed_count = db_manager.fix_stuck_reports()
+            return jsonify({
+                'success': True,
+                'fixed_count': fixed_count,
+                'message': f'Fixed {fixed_count} stuck reports'
+            })
+        else:
+            return jsonify({'error': 'Fix method not available'}), 500
+    except Exception as e:
+        logger.error(f"Error fixing stuck reports: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/reports/pending')

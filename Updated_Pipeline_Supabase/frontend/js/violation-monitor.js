@@ -190,7 +190,7 @@ const ViolationMonitor = {
                     title: '📋 Violation Summary',
                     action: {
                         text: 'View Reports',
-                        onClick: `window.location.hash = '#/reports'`
+                        onClick: `Router.navigate('reports')`
                     }
                 }
             );

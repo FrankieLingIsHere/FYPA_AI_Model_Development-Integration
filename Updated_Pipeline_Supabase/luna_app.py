@@ -161,10 +161,9 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         last_violation_time = current_time
         
-        # Check for ANY PPE violations
-        violation_keywords = ['no-hardhat', 'nohardhat', 'no-gloves', 'nogloves', 
-                             'no-vest', 'novest', 'no-boots', 'noboots',
-                             'no-mask', 'nomask', 'no-goggles', 'nogoggles']
+        # Check for ANY PPE violations (match actual model class names)
+        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 
+                             'no-mask', 'no-goggles']
         
         violation_detections = [d for d in detections 
                                if any(keyword in d['class_name'].lower() 
@@ -187,6 +186,22 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"📁 Created violation directory: {violation_dir}")
+        
+        # === IMMEDIATE: Insert "pending" detection event ===
+        # This makes the violation visible in the frontend immediately
+        if db_manager:
+            try:
+                db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=timestamp,
+                    person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
+                    violation_count=len(violation_detections),
+                    severity='HIGH',
+                    status='pending'
+                )
+                logger.info(f"✓ Inserted PENDING detection event: {report_id} (visible in frontend now)")
+            except Exception as e:
+                logger.error(f"Failed to insert pending event: {e}")
         
         # Save original frame
         original_path = violation_dir / 'original.jpg'
@@ -234,6 +249,14 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         if report_generator:
             try:
+                # Update status to "generating"
+                if db_manager:
+                    try:
+                        db_manager.update_detection_status(report_id, 'generating')
+                        logger.info(f"✓ Status updated to GENERATING: {report_id}")
+                    except Exception as e:
+                        logger.warning(f"Could not update status: {e}")
+                
                 logger.info("📄 Generating NLP report with Llama3...")
                 
                 report_data = {
@@ -263,6 +286,13 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     if target_html.exists():
                         logger.info(f"✓ Report generated: {target_html}")
                         report_created = True
+                        # Update status to "completed"
+                        if db_manager:
+                            try:
+                                db_manager.update_detection_status(report_id, 'completed')
+                                logger.info(f"✓ Status updated to COMPLETED: {report_id}")
+                            except Exception as e:
+                                logger.warning(f"Could not update status: {e}")
                     else:
                         logger.warning(f"❌ Report not found in violations directory: {target_html}")
                 else:
@@ -270,6 +300,13 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     
             except Exception as e:
                 logger.error(f"❌ Report generation failed: {e}", exc_info=True)
+                # Update status to "failed"
+                if db_manager:
+                    try:
+                        db_manager.update_detection_status(report_id, 'failed', str(e))
+                        logger.info(f"✓ Status updated to FAILED: {report_id}")
+                    except Exception as e2:
+                        logger.warning(f"Could not update status: {e2}")
         
         # Create placeholder report if generation failed or unavailable
         if not report_created:
@@ -396,14 +433,30 @@ def api_violations():
                             with open(metadata_file, 'r') as f:
                                 metadata = json.load(f)
                         
+                        # Determine status from files present
+                        has_report = (violation_dir / 'report.html').exists()
+                        has_original = (violation_dir / 'original.jpg').exists()
+                        has_annotated = (violation_dir / 'annotated.jpg').exists()
+                        
+                        # Infer status from what files exist
+                        if has_report:
+                            status = 'completed'
+                        elif has_annotated:
+                            status = 'generating'  # Has annotated but no report yet
+                        elif has_original:
+                            status = 'pending'  # Just original image saved
+                        else:
+                            status = 'pending'
+                        
                         violations.append({
                             'report_id': report_id,
                             'timestamp': timestamp.isoformat(),
-                            'has_original': (violation_dir / 'original.jpg').exists(),
-                            'has_annotated': (violation_dir / 'annotated.jpg').exists(),
-                            'has_report': (violation_dir / 'report.html').exists(),
-                            'severity': metadata.get('severity', 'medium'),
-                            'violation_type': metadata.get('violation_type', 'Unknown'),
+                            'has_original': has_original,
+                            'has_annotated': has_annotated,
+                            'has_report': has_report,
+                            'status': status,
+                            'severity': metadata.get('severity', 'HIGH'),
+                            'violation_type': metadata.get('violation_type', 'PPE Violation'),
                             'location': metadata.get('location', 'Unknown')
                         })
                     except ValueError:
@@ -411,23 +464,46 @@ def api_violations():
                         continue
         return jsonify(violations)
     
-    # Use Supabase
+    # Use Supabase - get ALL violations including pending
     try:
-        violations = db_manager.get_recent_violations(limit=100)
+        # Use the new method that includes pending detection events
+        if hasattr(db_manager, 'get_all_violations_with_status'):
+            violations = db_manager.get_all_violations_with_status(limit=100)
+        else:
+            violations = db_manager.get_recent_violations(limit=100)
         
         # Format violations for API response
         formatted_violations = []
         for v in violations:
+            # Extract caption validation data if available
+            detection_data = v.get('detection_data') or {}
+            caption_validation = detection_data.get('caption_validation')
+            
+            # Determine status - use actual status if available, otherwise infer from data
+            status = v.get('status', 'unknown')
+            if status == 'unknown':
+                if v.get('report_html_key') or v.get('violation_id'):
+                    status = 'completed'
+                else:
+                    status = 'pending'
+            
             formatted_violations.append({
                 'report_id': v['report_id'],
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
                 'person_count': v.get('person_count', 0),
                 'violation_count': v.get('violation_count', 0),
                 'severity': v.get('severity', 'UNKNOWN'),
+                'status': status,
+                'device_id': v.get('device_id'),
+                'error_message': v.get('error_message'),
                 'violation_summary': v.get('violation_summary'),
+                'violation_type': 'PPE Violation',
                 'has_original': bool(v.get('original_image_key')),
                 'has_annotated': bool(v.get('annotated_image_key')),
-                'has_report': bool(v.get('report_html_key'))
+                'has_report': bool(v.get('report_html_key')),
+                'detection_data': {
+                    'caption_validation': caption_validation
+                } if caption_validation else None
             })
         
         return jsonify(formatted_violations)
@@ -502,6 +578,201 @@ def api_stats():
         return jsonify({'error': 'Failed to fetch statistics'}), 500
 
 
+# =========================================================================
+# API ENDPOINTS - STATUS & MONITORING (from Pipeline_Luna)
+# =========================================================================
+
+@app.route('/api/violation/<report_id>')
+def api_get_violation(report_id):
+    """Get a specific violation with full details and status."""
+    if db_manager is None:
+        # Fallback to local filesystem
+        violation_dir = VIOLATIONS_DIR / report_id
+        if not violation_dir.exists():
+            return jsonify({'error': 'Violation not found'}), 404
+        
+        metadata_file = violation_dir / 'metadata.json'
+        metadata = {}
+        if metadata_file.exists():
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+        
+        try:
+            timestamp = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
+        except ValueError:
+            timestamp = datetime.now()
+        
+        return jsonify({
+            'report_id': report_id,
+            'timestamp': timestamp.isoformat(),
+            'has_original': (violation_dir / 'original.jpg').exists(),
+            'has_annotated': (violation_dir / 'annotated.jpg').exists(),
+            'has_report': (violation_dir / 'report.html').exists(),
+            'status': 'completed' if (violation_dir / 'report.html').exists() else 'pending',
+            **metadata
+        })
+    
+    # Use Supabase
+    try:
+        violation = db_manager.get_violation(report_id)
+        if not violation:
+            return jsonify({'error': 'Violation not found'}), 404
+        
+        return jsonify({
+            'report_id': violation['report_id'],
+            'timestamp': violation['timestamp'].isoformat() if violation.get('timestamp') else None,
+            'person_count': violation.get('person_count', 0),
+            'violation_count': violation.get('violation_count', 0),
+            'severity': violation.get('severity', 'UNKNOWN'),
+            'status': violation.get('status', 'unknown'),
+            'device_id': violation.get('device_id'),
+            'error_message': violation.get('error_message'),
+            'violation_summary': violation.get('violation_summary'),
+            'caption': violation.get('caption'),
+            'has_original': bool(violation.get('original_image_key')),
+            'has_annotated': bool(violation.get('annotated_image_key')),
+            'has_report': bool(violation.get('report_html_key'))
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching violation: {e}")
+        return jsonify({'error': 'Failed to fetch violation'}), 500
+
+
+@app.route('/api/report/<report_id>/status')
+def api_report_status(report_id):
+    """Get the status of a specific report (for fallback modal)."""
+    if db_manager is None:
+        # Fallback to local filesystem
+        violation_dir = VIOLATIONS_DIR / report_id
+        if not violation_dir.exists():
+            return jsonify({
+                'status': 'not_found',
+                'message': 'Report not found'
+            })
+        
+        has_report = (violation_dir / 'report.html').exists()
+        return jsonify({
+            'status': 'completed' if has_report else 'generating',
+            'has_report': has_report,
+            'has_original': (violation_dir / 'original.jpg').exists(),
+            'has_annotated': (violation_dir / 'annotated.jpg').exists(),
+            'message': 'Report is ready' if has_report else 'Report is being generated...'
+        })
+    
+    # Use Supabase
+    try:
+        status_info = db_manager.get_status(report_id)
+        if not status_info:
+            return jsonify({
+                'status': 'not_found',
+                'message': 'Report not found'
+            })
+        
+        status = status_info.get('status', 'unknown')
+        messages = {
+            'pending': 'Report is queued for processing',
+            'generating': 'AI is analyzing the violation and generating the report',
+            'completed': 'Report is ready to view',
+            'failed': f"Report generation failed: {status_info.get('error_message', 'Unknown error')}",
+            'partial': 'Report was partially generated'
+        }
+        
+        return jsonify({
+            'status': status,
+            'has_report': status_info.get('has_report', False),
+            'has_original': status_info.get('has_original', False),
+            'has_annotated': status_info.get('has_annotated', False),
+            'device_id': status_info.get('device_id'),
+            'error_message': status_info.get('error_message'),
+            'message': messages.get(status, 'Status unknown')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching report status: {e}")
+        return jsonify({'error': 'Failed to fetch status'}), 500
+
+
+@app.route('/api/reports/pending')
+def api_pending_reports():
+    """Get all reports that are still pending or generating."""
+    if db_manager is None:
+        # Fallback to local filesystem
+        pending = []
+        if VIOLATIONS_DIR.exists():
+            for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+                if violation_dir.is_dir():
+                    if not (violation_dir / 'report.html').exists():
+                        try:
+                            timestamp = datetime.strptime(violation_dir.name, '%Y%m%d_%H%M%S')
+                            pending.append({
+                                'report_id': violation_dir.name,
+                                'timestamp': timestamp.isoformat(),
+                                'status': 'generating'
+                            })
+                        except ValueError:
+                            continue
+        return jsonify(pending[:10])
+    
+    # Use Supabase
+    try:
+        pending = db_manager.get_pending_reports(limit=10)
+        formatted = [{
+            'report_id': p['report_id'],
+            'timestamp': p['timestamp'].isoformat() if p.get('timestamp') else None,
+            'status': p.get('status', 'pending'),
+            'device_id': p.get('device_id'),
+            'severity': p.get('severity')
+        } for p in pending]
+        return jsonify(formatted)
+        
+    except Exception as e:
+        logger.error(f"Error fetching pending reports: {e}")
+        return jsonify({'error': 'Failed to fetch pending reports'}), 500
+
+
+@app.route('/api/logs')
+def api_logs():
+    """Get recent system event logs."""
+    limit = request.args.get('limit', 50, type=int)
+    event_type = request.args.get('event_type', None)
+    
+    if db_manager is None:
+        return jsonify([])  # No logs without Supabase
+    
+    try:
+        logs = db_manager.get_recent_logs(limit=limit, event_type=event_type)
+        formatted = [{
+            'id': log.get('id'),
+            'event_type': log.get('event_type'),
+            'report_id': log.get('report_id'),
+            'device_id': log.get('device_id'),
+            'message': log.get('message'),
+            'metadata': log.get('metadata'),
+            'created_at': log['created_at'].isoformat() if log.get('created_at') else None
+        } for log in logs]
+        return jsonify(formatted)
+        
+    except Exception as e:
+        logger.error(f"Error fetching logs: {e}")
+        return jsonify({'error': 'Failed to fetch logs'}), 500
+
+
+@app.route('/api/device/<device_id>/stats')
+def api_device_stats(device_id):
+    """Get statistics for a specific device."""
+    if db_manager is None:
+        return jsonify({'error': 'Supabase not configured'}), 503
+    
+    try:
+        stats = db_manager.get_device_stats(device_id)
+        return jsonify(stats)
+        
+    except Exception as e:
+        logger.error(f"Error fetching device stats: {e}")
+        return jsonify({'error': 'Failed to fetch device stats'}), 500
+
+
 @app.route('/report/<report_id>')
 def view_report(report_id):
     """View a specific violation report from Supabase or local storage."""
@@ -531,14 +802,17 @@ def view_report(report_id):
         if not report_html_key:
             abort(404, description="Report HTML not found")
         
-        # Get signed URL
-        signed_url = storage_manager.get_signed_url(report_html_key)
-        
-        if not signed_url:
-            abort(404, description="Failed to generate signed URL")
-        
-        # Redirect to signed URL
-        return redirect(signed_url)
+        # Download the HTML content and render it
+        try:
+            html_content = storage_manager.download_file_content(report_html_key)
+            if not html_content:
+                abort(404, description="Failed to download report HTML")
+            
+            # Return the HTML content directly so browser renders it
+            return html_content, 200, {'Content-Type': 'text/html; charset=utf-8'}
+        except Exception as e:
+            logger.error(f"Error downloading report HTML: {e}")
+            abort(500, description=f"Error loading report: {str(e)}")
         
     except Exception as e:
         logger.error(f"Error fetching report from Supabase: {e}")
@@ -654,10 +928,9 @@ def generate_frames(conf=0.10):
                 
                 # Check for violations in background thread (non-blocking)
                 if detections and FULL_PIPELINE_AVAILABLE:
-                    # Check for ANY PPE violations (no-hardhat, no-gloves, no-vest, etc.)
-                    violation_keywords = ['no-hardhat', 'nohardhat', 'no-gloves', 'nogloves', 
-                                         'no-vest', 'novest', 'no-boots', 'noboots',
-                                         'no-mask', 'nomask', 'no-goggles', 'nogoggles']
+                    # Check for ANY PPE violations (match actual model class names)
+                    violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
+                                         'no-mask', 'no-goggles']
                     
                     has_violation = any(
                         any(keyword in d['class_name'].lower() for keyword in violation_keywords)
@@ -765,7 +1038,7 @@ def live_status():
 
 @app.route('/api/inference/upload', methods=['POST'])
 def upload_inference():
-    """Run inference on uploaded image."""
+    """Run inference on uploaded image and generate report if violations detected."""
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
     
@@ -776,12 +1049,40 @@ def upload_inference():
     try:
         # Read image
         img_bytes = file.read()
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return jsonify({'error': 'Invalid image format'}), 400
         
         # Get confidence threshold
         conf = float(request.form.get('conf', 0.10))
         
         # Run inference
-        detections, annotated = predict_image(img_bytes, conf=conf)
+        detections, annotated = predict_image(frame, conf=conf)
+        
+        # Check for violations
+        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
+                             'no-mask', 'no-goggles']
+        
+        violation_detections = [d for d in detections 
+                               if any(keyword in d['class_name'].lower() 
+                                     for keyword in violation_keywords)]
+        
+        # If violations detected, process in background
+        if violation_detections and FULL_PIPELINE_AVAILABLE:
+            violation_types = [d['class_name'] for d in violation_detections]
+            logger.info(f"🚨 Uploaded image violation detected: {violation_types}")
+            
+            # Process violation in background thread
+            frame_copy = frame.copy()
+            detections_copy = detections.copy()
+            violation_thread = Thread(
+                target=process_violation,
+                args=(frame_copy, detections_copy),
+                daemon=True
+            )
+            violation_thread.start()
         
         # Encode annotated image to base64
         _, buffer = cv2.imencode('.jpg', annotated)
@@ -791,7 +1092,9 @@ def upload_inference():
             'success': True,
             'detections': detections,
             'annotated_image': f'data:image/jpeg;base64,{img_base64}',
-            'count': len(detections)
+            'count': len(detections),
+            'violations_detected': len(violation_detections) > 0,
+            'violation_count': len(violation_detections)
         })
         
     except Exception as e:

@@ -192,6 +192,8 @@ DATABASE_CONFIG = {
 # =========================================================================
 
 import os
+import hashlib
+from datetime import datetime
 
 SUPABASE_CONFIG = {
     'url': os.getenv('SUPABASE_URL', ''),
@@ -200,5 +202,78 @@ SUPABASE_CONFIG = {
     'images_bucket': os.getenv('SUPABASE_IMAGES_BUCKET', 'violation-images'),
     'reports_bucket': os.getenv('SUPABASE_REPORTS_BUCKET', 'reports'),
     'signed_url_ttl': int(os.getenv('SUPABASE_SIGNED_URL_TTL_SECONDS', '3600')),
-    'upload_pdf': os.getenv('UPLOAD_PDF', 'false').lower() == 'true'
+    'upload_pdf': os.getenv('UPLOAD_PDF', 'false').lower() == 'true',
+    'connection_retry_max': 3,
+    'connection_retry_delay': 2
 }
+
+# =========================================================================
+# QUEUE CONFIGURATION (Multi-Device Handling)
+# =========================================================================
+
+QUEUE_CONFIG = {
+    'max_queue_size': 100,           # Maximum violations in queue
+    'batch_size': 5,                  # Violations to process per batch
+    'rate_limit_per_device': 10,      # Max violations per device per minute
+    'num_workers': 2,                 # Worker threads for processing
+    'processing_timeout': 300,        # Seconds before timeout
+    'retry_failed': True,             # Retry failed reports
+    'max_retries': 3                  # Max retry attempts
+}
+
+# =========================================================================
+# HELPER FUNCTIONS
+# =========================================================================
+
+def generate_report_id(device_id: str = None) -> str:
+    """
+    Generate a unique report ID that prevents collisions from multiple devices.
+    
+    Format: YYYYMMDD_HHMMSS_<device_hash>_<counter>
+    
+    Args:
+        device_id: Optional device identifier
+    
+    Returns:
+        Unique report ID string
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    if device_id:
+        # Create short hash of device_id
+        device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
+    else:
+        device_hash = 'local'
+    
+    # Add microseconds for uniqueness
+    micro = datetime.now().strftime('%f')[:4]
+    
+    return f"{timestamp}_{device_hash}_{micro}"
+
+
+def is_supabase_configured() -> bool:
+    """Check if Supabase is properly configured."""
+    return bool(
+        SUPABASE_CONFIG.get('url') and 
+        SUPABASE_CONFIG.get('service_role_key') and
+        SUPABASE_CONFIG.get('db_url')
+    )
+
+
+def get_severity_priority(severity: str) -> int:
+    """
+    Get priority level for a severity (lower = higher priority).
+    
+    Args:
+        severity: Severity string (CRITICAL, HIGH, MEDIUM, LOW)
+    
+    Returns:
+        Priority integer (1-4)
+    """
+    priorities = {
+        'CRITICAL': 1,
+        'HIGH': 2,
+        'MEDIUM': 3,
+        'LOW': 4
+    }
+    return priorities.get(severity.upper(), 3)

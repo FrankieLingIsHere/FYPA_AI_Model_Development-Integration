@@ -80,7 +80,8 @@ class SupabaseDatabaseManager:
         timestamp: datetime,
         person_count: int = 0,
         violation_count: int = 0,
-        severity: str = 'HIGH'
+        severity: str = 'HIGH',
+        status: str = 'pending'
     ) -> Optional[str]:
         """
         Insert a detection event record.
@@ -91,6 +92,7 @@ class SupabaseDatabaseManager:
             person_count: Number of people detected
             violation_count: Number of violations
             severity: Severity level (HIGH/MEDIUM/LOW)
+            status: Processing status (pending/generating/completed/failed)
         
         Returns:
             Report ID if successful, None otherwise
@@ -99,23 +101,76 @@ class SupabaseDatabaseManager:
         
         try:
             with self.conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO public.detection_events 
-                    (report_id, timestamp, person_count, violation_count, severity)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING report_id
-                """, (report_id, timestamp, person_count, violation_count, severity))
+                # Try with status column first, fallback without if column doesn't exist
+                try:
+                    cur.execute("""
+                        INSERT INTO public.detection_events 
+                        (report_id, timestamp, person_count, violation_count, severity, status)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING report_id
+                    """, (report_id, timestamp, person_count, violation_count, severity, status))
+                except Exception:
+                    # Fallback without status column
+                    cur.execute("""
+                        INSERT INTO public.detection_events 
+                        (report_id, timestamp, person_count, violation_count, severity)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING report_id
+                    """, (report_id, timestamp, person_count, violation_count, severity))
                 
                 result = cur.fetchone()
                 self.conn.commit()
                 
-                logger.info(f"Inserted detection event: {report_id}")
+                logger.info(f"Inserted detection event: {report_id} (status: {status})")
                 return result['report_id'] if result else None
                 
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to insert detection event: {e}")
             return None
+    
+    def update_detection_status(
+        self,
+        report_id: str,
+        status: str,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """
+        Update the status of a detection event.
+        
+        Args:
+            report_id: Report identifier
+            status: New status (pending/generating/completed/failed)
+            error_message: Optional error message for failed status
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                if error_message:
+                    cur.execute("""
+                        UPDATE public.detection_events 
+                        SET status = %s, error_message = %s, updated_at = NOW()
+                        WHERE report_id = %s
+                    """, (status, error_message, report_id))
+                else:
+                    cur.execute("""
+                        UPDATE public.detection_events 
+                        SET status = %s, updated_at = NOW()
+                        WHERE report_id = %s
+                    """, (status, report_id))
+                
+                self.conn.commit()
+                logger.info(f"Updated detection status: {report_id} -> {status}")
+                return True
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"Could not update detection status (column may not exist): {e}")
+            return False
     
     def get_detection_event(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -168,6 +223,85 @@ class SupabaseDatabaseManager:
                 
         except Exception as e:
             logger.error(f"Failed to get recent detection events: {e}")
+            return []
+    
+    def get_all_violations_with_status(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Retrieve ALL detection events with their violation data (including pending).
+        Uses LEFT JOIN to include detection events that don't have violation records yet.
+        
+        This is the MAIN method to use for the frontend API - it returns:
+        - Pending violations (detection event exists but no violation record)
+        - Generating violations (in process)
+        - Completed violations (full violation record exists)
+        - Failed violations
+        
+        Args:
+            limit: Maximum number of events to retrieve
+        
+        Returns:
+            List of violation dictionaries with status
+        """
+        self._ensure_connection()
+        
+        try:
+            with self.conn.cursor() as cur:
+                # Try query with status column first
+                try:
+                    cur.execute("""
+                        SELECT 
+                            de.report_id,
+                            de.timestamp,
+                            de.person_count,
+                            de.violation_count,
+                            de.severity,
+                            de.status,
+                            de.error_message,
+                            v.id as violation_id,
+                            v.violation_summary,
+                            v.caption,
+                            v.nlp_analysis,
+                            v.detection_data,
+                            v.original_image_key,
+                            v.annotated_image_key,
+                            v.report_html_key,
+                            v.report_pdf_key
+                        FROM public.detection_events de
+                        LEFT JOIN public.violations v ON de.report_id = v.report_id
+                        ORDER BY de.timestamp DESC
+                        LIMIT %s
+                    """, (limit,))
+                except Exception:
+                    # Fallback without status column
+                    cur.execute("""
+                        SELECT 
+                            de.report_id,
+                            de.timestamp,
+                            de.person_count,
+                            de.violation_count,
+                            de.severity,
+                            'unknown' as status,
+                            NULL as error_message,
+                            v.id as violation_id,
+                            v.violation_summary,
+                            v.caption,
+                            v.nlp_analysis,
+                            v.detection_data,
+                            v.original_image_key,
+                            v.annotated_image_key,
+                            v.report_html_key,
+                            v.report_pdf_key
+                        FROM public.detection_events de
+                        LEFT JOIN public.violations v ON de.report_id = v.report_id
+                        ORDER BY de.timestamp DESC
+                        LIMIT %s
+                    """, (limit,))
+                
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"Failed to get violations with status: {e}")
             return []
     
     # =========================================================================

@@ -199,6 +199,43 @@ class SupabaseStorageManager:
             logger.error(f"Failed to generate signed URL for {storage_key}: {e}")
             return None
     
+    def download_file_content(self, storage_key: str) -> Optional[bytes]:
+        """
+        Download file content from storage.
+        
+        Args:
+            storage_key: Full storage key (e.g., 'reports/20231205_143022/report.html')
+        
+        Returns:
+            File content as bytes or None if download failed
+        """
+        if not storage_key:
+            logger.warning("Empty storage key provided")
+            return None
+        
+        # Parse bucket and path from storage key
+        parts = storage_key.split('/', 1)
+        if len(parts) != 2:
+            logger.error(f"Invalid storage key format: {storage_key}")
+            return None
+        
+        bucket_name, path = parts
+        
+        try:
+            # Download file content
+            result = self.client.storage.from_(bucket_name).download(path)
+            
+            if result:
+                logger.debug(f"Downloaded content from: {storage_key}")
+                return result
+            else:
+                logger.error(f"No content returned for: {storage_key}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to download file from {storage_key}: {e}")
+            return None
+    
     def get_image_signed_url(self, report_id: str, filename: str) -> Optional[str]:
         """
         Generate signed URL for an image.

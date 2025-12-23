@@ -14,7 +14,10 @@ from pathlib import Path
 
 # --- OLLAMA CONFIGURATION ---
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llava:7b"  # or "llava:13b" for better quality
+OLLAMA_MODEL = "llava-phi3:3.8b"  # Smaller model for systems with limited RAM (needs ~3GB)
+# Alternative options:
+# - "llava:7b" - Original (needs 4.3GB RAM) 
+# - "llava:13b" - Best quality (needs 8GB+ RAM)
 TIMEOUT = 120  # 2 minutes timeout
 # ---------------------------
 
@@ -48,16 +51,22 @@ def caption_image_llava(image_path):
 
 Start directly describing the worker(s) and scene. DO NOT use phrases like "In the image" or "The image shows".
 
+IMPORTANT GUIDELINES:
+- HARDHAT vs HAIR: Be VERY careful distinguishing hardhats from hair! A hardhat is a rigid protective helmet, usually white/yellow/orange. Dark hair, styled hair, or hair accessories are NOT hardhats. Only report "wearing hardhat" if you see an actual rigid safety helmet.
+- SAFETY BOOTS: ONLY mention safety boots if you can clearly see the person's feet/lower legs. If only upper body is visible, do NOT mention boots at all - say "feet not visible" instead.
+- BODY VISIBILITY: Note which parts of body are visible (full body, upper half only, etc.) before commenting on PPE for those areas.
+
 Describe in order:
-- Worker(s): What are they doing? Where are they positioned?
+- Worker(s): What are they doing? What body parts are visible?
 - PPE Status: Be EXPLICIT and SPECIFIC:
-  * State clearly what PPE items ARE visible/worn 
-  * State clearly what PPE items are NOT visible/missing
-  * Check each item: hardhat, safety vest, gloves, safety boots, goggles, mask
-  * DO NOT use vague terms like "casual attire" or "no visible safety gear" - list each PPE item specifically
+  * For HEAD: Is there a rigid safety helmet/hardhat? (NOT hair or hair accessories)
+  * For TORSO: Is there a high-visibility vest/jacket?
+  * For HANDS: Are there work gloves?
+  * For FEET: ONLY if feet are visible - are there safety boots?
+  * For FACE: Are there goggles, mask, or face shield?
+  * DO NOT assume PPE for body parts that are not visible in frame
 - Work Environment: Construction area details, equipment, materials
 - Safety Concerns: Any visible hazards or unsafe conditions
-
 
 Treat this as a construction site even if it appears to be indoors or an office area. Write a flowing paragraph, not a numbered list."""
     

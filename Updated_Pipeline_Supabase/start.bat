@@ -12,6 +12,11 @@ echo LUNA Supabase Edition - Starting...
 echo ==========================================
 echo.
 
+REM Change to script directory
+cd /d "%~dp0"
+echo Working directory: %CD%
+echo.
+
 REM Check if .env file exists
 if not exist .env (
     echo Error: .env file not found!
@@ -24,31 +29,73 @@ if not exist .env (
     exit /b 1
 )
 
-REM Check if venv exists
-if not exist venv (
-    echo Warning: Virtual environment not found.
-    echo.
-    echo Creating virtual environment...
+REM Check if venv exists and activate it
+if not exist venv\Scripts\activate.bat (
+    echo Virtual environment not found. Creating...
     python -m venv venv
-    echo Virtual environment created
+    if %errorlevel% neq 0 (
+        echo Failed to create virtual environment!
+        pause
+        exit /b 1
+    )
+    echo Virtual environment created.
     echo.
+)
+
+echo Activating virtual environment...
+call venv\Scripts\activate.bat
+if %errorlevel% neq 0 (
+    echo Failed to activate virtual environment!
+    pause
+    exit /b 1
+)
+echo Virtual environment activated: %VIRTUAL_ENV%
+echo.
+
+REM Check if requirements need to be installed
+pip show flask >nul 2>&1
+if %errorlevel% neq 0 (
     echo Installing dependencies...
-    call venv\Scripts\activate.bat
     pip install -r requirements.txt
-    echo Dependencies installed
-) else (
-    echo Virtual environment found
-    call venv\Scripts\activate.bat
+    if %errorlevel% neq 0 (
+        echo Failed to install dependencies!
+        pause
+        exit /b 1
+    )
+    echo Dependencies installed.
+    echo.
 )
 
 echo.
-echo Starting LUNA application...
+echo ==========================================
+echo Starting Ollama Server...
+echo ==========================================
+echo.
+
+REM Check if Ollama is installed
+where ollama >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Warning: Ollama not found in PATH!
+    echo Please install Ollama from: https://ollama.ai
+    echo.
+    echo The app will start but AI reports won't be generated.
+    timeout /t 5
+) else (
+    echo Ollama found. Starting server in background...
+    start "Ollama Server" /min cmd /c "ollama serve"
+    timeout /t 3
+    echo Ollama server started
+)
+
+echo.
+echo ==========================================
+echo Starting LUNA Application...
+echo ==========================================
 echo.
 echo Once started, open your browser to:
 echo   http://localhost:5000
 echo.
-echo Press Ctrl+C to stop the server.
-echo.
+echo To stop: Close this window or press Ctrl+C
 echo ==========================================
 echo.
 

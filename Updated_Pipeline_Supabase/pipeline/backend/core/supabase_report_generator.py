@@ -7,9 +7,10 @@ and store metadata in Supabase Postgres.
 
 Workflow:
 1. Generate local files (HTML, images) as usual
-2. Upload files to Supabase Storage (private buckets)
-3. Store metadata and storage keys in Supabase Postgres
-4. Keep local files for backup/fallback
+2. Validate caption against annotations
+3. Upload files to Supabase Storage (private buckets)
+4. Store metadata and storage keys in Supabase Postgres
+5. Keep local files for backup/fallback
 """
 
 import logging
@@ -20,6 +21,7 @@ from datetime import datetime
 from pipeline.backend.core.report_generator import ReportGenerator
 from pipeline.backend.core.supabase_storage import SupabaseStorageManager
 from pipeline.backend.core.supabase_db import SupabaseDatabaseManager
+from pipeline.backend.integration.caption_validator import validate_caption
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,29 @@ class SupabaseReportGenerator(ReportGenerator):
             logger.error(f"Failed to generate local report: {report_id}")
             return result
         
+        # Step 1.5: Validate caption against annotations
+        caption = report_data.get('caption', '')
+        detections = report_data.get('detections', [])
+        detected_classes = [d.get('class', '') for d in detections]
+        
+        validation_result = None
+        try:
+            validation_result = validate_caption(caption, detections, detected_classes)
+            
+            if not validation_result['is_valid']:
+                logger.warning(f"Caption validation failed for {report_id}:")
+                for contradiction in validation_result['contradictions']:
+                    logger.warning(f"  - {contradiction}")
+            else:
+                logger.info(f"Caption validated: {validation_result['validation_summary']}")
+                
+            # Store validation result for later use
+            result['caption_validation'] = validation_result
+            
+        except Exception as e:
+            logger.error(f"Error validating caption: {e}")
+            # Continue anyway
+        
         # Step 2: Insert detection event in Supabase Postgres
         try:
             timestamp = report_data.get('timestamp', datetime.now())
@@ -146,19 +171,32 @@ class SupabaseReportGenerator(ReportGenerator):
             logger.error(f"Error uploading artifacts to Supabase: {e}")
             # Continue anyway - local files are still available
         
-        # Step 4: Insert violation record with storage keys
+        # Step 4: Insert violation record with storage keys and validation
         try:
             violation_summary = report_data.get('violation_summary')
             caption = report_data.get('caption')
             nlp_analysis = result.get('nlp_analysis')
             detection_data = report_data.get('detections')
             
+            # Add validation data to metadata
+            metadata = {
+                'detections': detection_data
+            }
+            if validation_result:
+                metadata['caption_validation'] = {
+                    'is_valid': validation_result['is_valid'],
+                    'confidence': validation_result['confidence'],
+                    'contradictions': validation_result['contradictions'],
+                    'warnings': validation_result['warnings'],
+                    'summary': validation_result['validation_summary']
+                }
+            
             violation_id = self.db_manager.insert_violation(
                 report_id=report_id,
                 violation_summary=violation_summary,
                 caption=caption,
                 nlp_analysis=nlp_analysis,
-                detection_data={'detections': detection_data} if detection_data else None,
+                detection_data=metadata,
                 original_image_key=storage_keys.get('original_image_key'),
                 annotated_image_key=storage_keys.get('annotated_image_key'),
                 report_html_key=storage_keys.get('report_html_key'),

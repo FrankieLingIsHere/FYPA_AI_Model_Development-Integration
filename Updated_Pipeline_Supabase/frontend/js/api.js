@@ -1,6 +1,6 @@
 // API Functions
 const API = {
-    // Fetch all violations
+    // Fetch all violations with status info
     async getViolations() {
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}`);
@@ -12,7 +12,43 @@ const API = {
         }
     },
 
-    // Get violation statistics
+    // Get violation by ID with status info
+    async getViolation(reportId) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/violation/${reportId}`);
+            if (!response.ok) throw new Error('Failed to fetch violation');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching violation:', error);
+            return null;
+        }
+    },
+
+    // Get report status
+    async getReportStatus(reportId) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/status`);
+            if (!response.ok) throw new Error('Failed to fetch report status');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching report status:', error);
+            return { status: 'unknown', message: 'Unable to check status' };
+        }
+    },
+
+    // Get pending reports
+    async getPendingReports() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/pending`);
+            if (!response.ok) throw new Error('Failed to fetch pending reports');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching pending reports:', error);
+            return [];
+        }
+    },
+
+    // Get violation statistics with status breakdown
     async getStats() {
         try {
             const violations = await this.getViolations();
@@ -26,6 +62,9 @@ const API = {
                 total: violations.length,
                 today: 0,
                 thisWeek: 0,
+                pending: 0,
+                completed: 0,
+                failed: 0,
                 severity: {
                     high: 0,
                     medium: 0,
@@ -40,8 +79,17 @@ const API = {
                 if (vDate >= today) stats.today++;
                 if (vDate >= weekAgo) stats.thisWeek++;
                 
-                // For now, all violations are high severity (missing hardhat)
-                stats.severity.high++;
+                // Count by status
+                const status = v.status || (v.has_report ? 'completed' : 'pending');
+                if (status === 'completed') stats.completed++;
+                else if (status === 'failed') stats.failed++;
+                else stats.pending++;
+                
+                // Count by severity
+                const severity = (v.severity || 'HIGH').toLowerCase();
+                if (severity === 'high' || severity === 'critical') stats.severity.high++;
+                else if (severity === 'medium') stats.severity.medium++;
+                else stats.severity.low++;
             });
 
             return stats;
@@ -51,6 +99,9 @@ const API = {
                 total: 0,
                 today: 0,
                 thisWeek: 0,
+                pending: 0,
+                completed: 0,
+                failed: 0,
                 severity: { high: 0, medium: 0, low: 0 },
                 recentViolations: []
             };
@@ -65,5 +116,31 @@ const API = {
     // Get report URL
     getReportUrl(reportId) {
         return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REPORT(reportId)}`;
+    },
+
+    // Get event logs
+    async getLogs(limit = 50, eventType = null) {
+        try {
+            let url = `${API_CONFIG.BASE_URL}/api/logs?limit=${limit}`;
+            if (eventType) url += `&event_type=${eventType}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to fetch logs');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching logs:', error);
+            return [];
+        }
+    },
+
+    // Get device statistics
+    async getDeviceStats(deviceId) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/device/${deviceId}/stats`);
+            if (!response.ok) throw new Error('Failed to fetch device stats');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching device stats:', error);
+            return {};
+        }
     }
 };

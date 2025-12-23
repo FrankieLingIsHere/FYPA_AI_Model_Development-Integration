@@ -162,7 +162,7 @@ class CaptionGenerator:
             'available': CAPTION_AVAILABLE,
             'model_loaded': self.model_loaded,
             'backend': 'Ollama LLaVA',
-            'model': 'llava:7b'
+            'model': 'llava-phi3:3.8b'  # Smaller model for lower memory systems
         }
 
 

@@ -53,8 +53,8 @@ python-dotenv==1.2.1
 rich==14.2.0
 
 # Supabase Integration (Cloud Backend)
-supabase==2.3.4
-psycopg2-binary==2.9.9
+supabase
+psycopg2-binary
 
 # Note: Ollama must be installed separately for LLaVA captioning and Llama3 reports
 # Download from: https://ollama.ai

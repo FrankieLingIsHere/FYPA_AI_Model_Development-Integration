@@ -14,10 +14,16 @@ from pathlib import Path
 
 # --- OLLAMA CONFIGURATION ---
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llava-phi3:3.8b"  # Smaller model for systems with limited RAM (needs ~3GB)
-# Alternative options:
-# - "llava:7b" - Original (needs 4.3GB RAM) 
-# - "llava:13b" - Best quality (needs 8GB+ RAM)
+
+# Model options (in order of memory usage, lowest to highest):
+# - "moondream:1.8b"  - Smallest, needs ~1.5GB RAM (for low RAM systems)
+# - "llava-phi3:3.8b" - Medium, needs ~3.6GB RAM
+# - "llava:7b"        - Large, needs ~4.3GB RAM
+# - "llava:13b"       - Best quality, needs ~8GB+ RAM
+
+# NOTE: Only ONE Ollama call can run at a time (controlled by semaphore in luna_app.py)
+# This prevents VRAM exhaustion from concurrent calls
+OLLAMA_MODEL = "llava-phi3:3.8b"  # Original model
 TIMEOUT = 120  # 2 minutes timeout
 # ---------------------------
 
@@ -145,6 +151,140 @@ Treat this as a construction site even if it appears to be indoors or an office 
         print(f"Error calling Ollama API: {e}")
         return None
 
+
+def validate_work_environment(image_path):
+    """
+    Quick check to determine if the image shows a valid work environment
+    where PPE monitoring is appropriate (construction site, factory, warehouse, etc.).
+    
+    CLASSIFICATION LOGIC:
+    =====================
+    The LLaVA model classifies the scene into 4 categories:
+    
+    A) CONSTRUCTION/INDUSTRIAL → is_valid=TRUE, confidence=HIGH
+       - Construction sites, factories, warehouses, workshops
+       - Manufacturing plants, work zones, industrial areas
+       - Any place where PPE is typically required
+    
+    B) OFFICE/COMMERCIAL → is_valid=TRUE, confidence=MEDIUM  
+       - Office buildings, retail stores, meeting rooms
+       - These environments MAY require PPE in certain areas
+       - Still processed (not skipped)
+    
+    C) RESIDENTIAL/CASUAL → is_valid=FALSE, confidence=HIGH
+       - Homes, living rooms, bedrooms, kitchens
+       - Parks, beaches, restaurants, casual settings
+       - These are SKIPPED (no report generated)
+    
+    D) OTHER/UNCLEAR → is_valid=TRUE, confidence=LOW
+       - Outdoor roads, vehicle interiors, unclear scenes
+       - Benefit of doubt - still processed
+    
+    ONLY Category C causes violations to be SKIPPED.
+    Categories A, B, D all proceed with normal processing.
+    
+    Args:
+        image_path: Path to image file
+    
+    Returns:
+        dict with:
+            - is_valid: bool - True if this is a work environment (A, B, D) or False (C only)
+            - confidence: str - 'high', 'medium', 'low'
+            - environment_type: str - type of environment detected
+            - reason: str - explanation
+    """
+    print(f"Validating work environment...")
+    
+    # Load and encode image to base64
+    try:
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Could not load image for validation'}
+    
+    # Quick environment classification prompt
+    prompt = """Classify this image in ONE LINE. Is this:
+A) CONSTRUCTION/INDUSTRIAL: construction site, factory, warehouse, workshop, manufacturing plant, work zone, any place with workers doing physical labor
+B) OFFICE/COMMERCIAL: office building, retail store, meeting room, reception area
+C) RESIDENTIAL/CASUAL: home, living room, bedroom, kitchen, park, beach, restaurant, casual setting with no work activity
+D) OTHER: outdoor road, vehicle interior, unclear, or doesn't fit above categories
+
+Answer with just the letter (A/B/C/D) followed by 2-3 words describing what you see. Example: "A - construction workers on scaffolding" or "C - person in living room" """
+
+    try:
+        response = requests.post(
+            OLLAMA_API_URL,
+            json={
+                'model': OLLAMA_MODEL,
+                'prompt': prompt,
+                'images': [image_base64],
+                'stream': False,
+                'options': {
+                    'temperature': 0.3,  # Lower temperature for more consistent classification
+                    'num_predict': 30,   # Short response
+                }
+            },
+            timeout=30  # Shorter timeout for quick check
+        )
+        
+        if not response.ok:
+            print(f"Environment validation failed: {response.status_code}")
+            return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'API error - defaulting to valid'}
+        
+        data = response.json()
+        answer = data.get('response', '').strip().upper()
+        
+        print(f"Environment check result: {answer}")
+        
+        # Parse the response - ONLY category C causes is_valid=False
+        if answer.startswith('A'):
+            return {
+                'is_valid': True,
+                'confidence': 'high',
+                'environment_type': 'construction/industrial',
+                'reason': answer
+            }
+        elif answer.startswith('B'):
+            # Office environments may still need PPE in certain areas
+            return {
+                'is_valid': True,
+                'confidence': 'medium',
+                'environment_type': 'office/commercial',
+                'reason': answer
+            }
+        elif answer.startswith('C'):
+            return {
+                'is_valid': False,
+                'confidence': 'high',
+                'environment_type': 'residential/casual',
+                'reason': answer
+            }
+        elif answer.startswith('D'):
+            return {
+                'is_valid': True,
+                'confidence': 'low',
+                'environment_type': 'other',
+                'reason': answer
+            }
+        else:
+            # Couldn't parse - default to valid with low confidence
+            return {
+                'is_valid': True,
+                'confidence': 'low',
+                'environment_type': 'unknown',
+                'reason': f'Unparseable response: {answer[:50]}'
+            }
+            
+    except requests.exceptions.Timeout:
+        print("Environment validation timed out - defaulting to valid")
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Timeout'}
+    except Exception as e:
+        print(f"Environment validation error: {e}")
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': str(e)}
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python caption_image.py path/to/image.jpg")
@@ -153,9 +293,21 @@ if __name__ == "__main__":
     image_path = sys.argv[1]
 
     try:
-        caption = caption_image_llava(image_path)
-        if caption:
-            print("Caption:", caption)
+        # First validate environment
+        env_result = validate_work_environment(image_path)
+        print(f"\nEnvironment Validation:")
+        print(f"  Valid work environment: {env_result['is_valid']}")
+        print(f"  Confidence: {env_result['confidence']}")
+        print(f"  Type: {env_result['environment_type']}")
+        print(f"  Reason: {env_result['reason']}")
+        
+        if env_result['is_valid']:
+            print("\n--- Generating full caption ---")
+            caption = caption_image_llava(image_path)
+            if caption:
+                print("Caption:", caption)
+        else:
+            print("\n⚠️ Skipping caption - not a valid work environment")
             
     except ImportError as e:
         print(f"\nImportError: {e}")

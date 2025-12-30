@@ -65,7 +65,7 @@ class CaptionGenerator:
         self,
         image: Union[str, np.ndarray, Path],
         prompt: Optional[str] = None,
-        max_retries: int = 3
+        max_retries: int = 1  # Reduced from 3 - avoid retry storms on memory errors
     ) -> str:
         """
         Generate a caption for an image.
@@ -73,7 +73,7 @@ class CaptionGenerator:
         Args:
             image: Image path, numpy array, or Path object
             prompt: Optional custom prompt override
-            max_retries: Number of retry attempts
+            max_retries: Number of retry attempts (reduced to prevent VRAM exhaustion)
         
         Returns:
             Generated caption string

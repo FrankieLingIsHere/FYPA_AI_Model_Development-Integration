@@ -49,6 +49,7 @@ try:
     from pipeline.backend.core.supabase_report_generator import create_supabase_report_generator
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
+    from pipeline.backend.core.violation_queue import ViolationQueueManager, QueuedViolation
     from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
@@ -86,7 +87,57 @@ report_generator = None
 db_manager = None
 storage_manager = None
 last_violation_time = 0
-VIOLATION_COOLDOWN = 60  # seconds between violation captures (increased to allow model loading time)
+VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
+
+# Queue-based violation handling (to prevent missing violations)
+violation_queue = None  # ViolationQueueManager instance
+queue_worker_thread = None  # Background worker for processing queue
+queue_worker_running = False
+
+# =========================================================================
+# OLLAMA CONCURRENCY CONTROL
+# =========================================================================
+# Semaphore to ensure only ONE Ollama call at a time (prevents VRAM exhaustion)
+# LLaVA needs ~3.6GB VRAM, multiple concurrent calls will fail
+from threading import Semaphore
+ollama_semaphore = Semaphore(1)  # Only 1 concurrent Ollama call allowed
+
+# =========================================================================
+# ENVIRONMENT VALIDATION SETTINGS
+# =========================================================================
+# Set to False to DISABLE environment checking (process ALL violations)
+# Useful for testing when you can't simulate a real construction site
+ENVIRONMENT_VALIDATION_ENABLED = False  # <-- SET TO False TO DISABLE SKIPPING
+
+# How environment classification works:
+# 1. LLaVA model analyzes the image and classifies it as:
+#    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop → VALID
+#    B) OFFICE/COMMERCIAL - office, retail, meeting room → VALID (may need PPE)
+#    C) RESIDENTIAL/CASUAL - home, living room, park, beach → INVALID (skipped)
+#    D) OTHER - unclear scenes → VALID (benefit of doubt)
+#
+# 2. Only category C (residential/casual) causes skipping
+# 3. Categories A, B, D all proceed with report generation
+
+# Keywords used for SECONDARY validation (checking caption content)
+# These are checked AFTER environment validation passes
+VALID_ENVIRONMENT_KEYWORDS = [
+    'construction', 'site', 'worker', 'building', 'scaffold', 'crane', 'excavator',
+    'factory', 'warehouse', 'industrial', 'manufacturing', 'machinery', 'equipment',
+    'hard hat', 'hardhat', 'safety vest', 'ppe', 'protective', 'helmet',
+    'work zone', 'workshop', 'labor', 'labourer', 'employee', 'contractor',
+    'concrete', 'steel', 'beam', 'framework', 'renovation', 'demolition',
+    'forklift', 'loader', 'truck', 'heavy equipment', 'tools', 'ladder',
+    'welding', 'cutting', 'drilling', 'lifting', 'hauling', 'assembly'
+]
+
+# Keywords that suggest NON-work environment (only used for warning, not skipping)
+INVALID_ENVIRONMENT_KEYWORDS = [
+    'living room', 'bedroom', 'kitchen', 'bathroom', 'dining', 'lounge',
+    'office desk', 'computer screen', 'monitor', 'keyboard', 'coffee',
+    'restaurant', 'cafe', 'park', 'garden', 'beach', 'vacation',
+    'selfie', 'portrait', 'family photo', 'pet', 'cat', 'dog'
+]
 
 # =========================================================================
 # VIOLATION PROCESSING
@@ -95,6 +146,7 @@ VIOLATION_COOLDOWN = 60  # seconds between violation captures (increased to allo
 def initialize_pipeline_components():
     """Initialize violation detector, caption generator, report generator, and Supabase managers."""
     global violation_detector, caption_generator, report_generator, db_manager, storage_manager
+    global violation_queue, queue_worker_thread, queue_worker_running
     
     if not FULL_PIPELINE_AVAILABLE:
         logger.warning("Full pipeline not available - skipping component initialization")
@@ -137,6 +189,22 @@ def initialize_pipeline_components():
                 'SUPABASE_CONFIG': SUPABASE_CONFIG
             }
             report_generator = create_supabase_report_generator(report_config)
+        
+        # Initialize violation queue for handling multiple violations
+        if violation_queue is None:
+            logger.info("Initializing violation queue manager...")
+            violation_queue = ViolationQueueManager(
+                max_size=100,           # Max violations in queue
+                rate_limit_per_device=20,  # Allow more per device before rate limiting
+                rate_limit_window=60,   # Per minute
+                max_retries=3
+            )
+            logger.info(f"✓ Violation queue initialized (max_size=100)")
+        
+        # Start queue worker thread if not running
+        if not queue_worker_running:
+            logger.info("Starting violation queue worker thread...")
+            start_queue_worker()
             
         logger.info("[OK] All pipeline components initialized")
         return True
@@ -146,6 +214,436 @@ def initialize_pipeline_components():
         import traceback
         traceback.print_exc()
         return False
+
+
+def start_queue_worker():
+    """Start the background worker thread for processing queued violations."""
+    global queue_worker_thread, queue_worker_running
+    
+    if queue_worker_running:
+        logger.warning("Queue worker already running")
+        return
+    
+    queue_worker_running = True
+    queue_worker_thread = Thread(
+        target=queue_worker_loop,
+        name="ViolationQueueWorker",
+        daemon=True
+    )
+    queue_worker_thread.start()
+    logger.info(f"✓ Queue worker thread started (Thread ID: {queue_worker_thread.ident})")
+
+
+def stop_queue_worker():
+    """Stop the background queue worker thread."""
+    global queue_worker_running
+    queue_worker_running = False
+    logger.info("Queue worker stop requested")
+
+
+def queue_worker_loop():
+    """
+    Main loop for the queue worker thread.
+    Processes violations from the queue one at a time.
+    """
+    global queue_worker_running
+    
+    logger.info("Queue worker loop started - waiting for violations...")
+    
+    while queue_worker_running:
+        try:
+            if violation_queue is None:
+                time.sleep(1)
+                continue
+            
+            # Try to get next violation from queue (with timeout)
+            queued_violation = violation_queue.dequeue(timeout=2.0)
+            
+            if queued_violation is None:
+                # No violation in queue, continue waiting
+                continue
+            
+            logger.info(f"📥 Dequeued violation {queued_violation.report_id} for processing")
+            
+            try:
+                # Process the violation
+                process_queued_violation(queued_violation)
+                violation_queue.mark_processed(queued_violation)
+                logger.info(f"✅ Completed processing {queued_violation.report_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing {queued_violation.report_id}: {e}")
+                # Requeue for retry
+                if not violation_queue.requeue(queued_violation):
+                    logger.error(f"Max retries exceeded for {queued_violation.report_id}")
+                    # Update status to failed
+                    if db_manager:
+                        try:
+                            db_manager.update_detection_status(
+                                queued_violation.report_id, 
+                                'failed', 
+                                f"Max retries exceeded: {str(e)}"
+                            )
+                        except Exception as e2:
+                            logger.warning(f"Could not update status: {e2}")
+                            
+        except Exception as e:
+            logger.error(f"Queue worker error: {e}")
+            time.sleep(1)
+    
+    logger.info("Queue worker loop stopped")
+
+
+def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
+    """
+    Capture a violation and add it to the processing queue.
+    This is a FAST operation that saves images immediately and queues for report generation.
+    
+    Args:
+        frame: The video frame with the violation
+        detections: List of YOLO detections
+    
+    Returns:
+        report_id if successfully queued, None otherwise
+    """
+    global last_violation_time
+    
+    logger.info("=" * 80)
+    logger.info("ENQUEUE_VIOLATION CALLED (Fast capture + queue)")
+    logger.info("=" * 80)
+    
+    try:
+        # Check capture cooldown (shorter than processing time)
+        current_time = time.time()
+        if current_time - last_violation_time < VIOLATION_COOLDOWN:
+            remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
+            logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
+            return None
+        
+        last_violation_time = current_time
+        
+        # Check for violations
+        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 
+                             'no-mask', 'no-goggles']
+        
+        violation_detections = [d for d in detections 
+                               if any(keyword in d['class_name'].lower() 
+                                     for keyword in violation_keywords)]
+        
+        if not violation_detections:
+            logger.warning("No violations found in detections")
+            return None
+        
+        violation_types = [d['class_name'] for d in violation_detections]
+        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
+        
+        # Create violation directory with timestamp
+        timestamp = datetime.now()
+        report_id = timestamp.strftime('%Y%m%d_%H%M%S')
+        violation_dir = VIOLATIONS_DIR.absolute() / report_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"📁 Created violation directory: {violation_dir}")
+        
+        # === IMMEDIATE: Save images (fast operation) ===
+        # Save original frame
+        original_path = violation_dir / 'original.jpg'
+        cv2.imwrite(str(original_path), frame)
+        logger.info(f"✓ Saved original image: {original_path}")
+        
+        # Save annotated frame
+        _, annotated = predict_image(frame, conf=0.10)
+        annotated_path = violation_dir / 'annotated.jpg'
+        cv2.imwrite(str(annotated_path), annotated)
+        logger.info(f"✓ Saved annotated image: {annotated_path}")
+        
+        # === IMMEDIATE: Insert pending detection event ===
+        if db_manager:
+            try:
+                db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=timestamp,
+                    person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
+                    violation_count=len(violation_detections),
+                    severity='HIGH',
+                    status='pending'
+                )
+                logger.info(f"✓ Inserted PENDING detection event: {report_id}")
+            except Exception as e:
+                logger.error(f"Failed to insert pending event: {e}")
+        
+        # === QUEUE: Add to queue for async processing ===
+        if violation_queue:
+            violation_data = {
+                'report_id': report_id,
+                'timestamp': timestamp,
+                'detections': detections,
+                'violation_types': violation_types,
+                'violation_count': len(violation_detections),
+                'original_image_path': str(original_path),
+                'annotated_image_path': str(annotated_path),
+                'violation_dir': str(violation_dir)
+            }
+            
+            success = violation_queue.enqueue(
+                violation_data=violation_data,
+                device_id='webcam_0',
+                report_id=report_id,
+                severity='HIGH'
+            )
+            
+            if success:
+                logger.info(f"✓ Violation {report_id} added to processing queue")
+                queue_stats = violation_queue.get_stats()
+                logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
+                return report_id
+            else:
+                logger.error("Failed to add violation to queue")
+                return report_id  # Still return ID - images saved, just won't be processed
+        else:
+            # Queue not available - log error but DON'T fallback to direct processing
+            # (avoids concurrent Ollama calls that cause VRAM exhaustion)
+            logger.error("Violation queue not initialized - violation captured but won't be processed")
+            logger.error("Restart the server to initialize the queue worker")
+            return report_id  # Images are saved, can be reprocessed manually
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error enqueuing violation: {e}", exc_info=True)
+        return None
+
+
+def process_queued_violation(queued_violation: 'QueuedViolation'):
+    """
+    Process a violation from the queue.
+    Validates environment first, then generates caption and report.
+    
+    Args:
+        queued_violation: The queued violation object with data
+    """
+    data = queued_violation.data
+    report_id = data['report_id']
+    violation_dir = Path(data['violation_dir'])
+    timestamp = data['timestamp']
+    detections = data['detections']
+    violation_types = data['violation_types']
+    original_path = Path(data['original_image_path'])
+    annotated_path = Path(data['annotated_image_path'])
+    
+    logger.info(f"📄 Processing queued violation: {report_id}")
+    
+    # === ENVIRONMENT VALIDATION (before heavy processing) ===
+    # Uses semaphore to prevent concurrent Ollama calls (VRAM exhaustion)
+    if ENVIRONMENT_VALIDATION_ENABLED:
+        try:
+            from caption_image import validate_work_environment
+            
+            logger.info("🔍 Validating work environment (acquiring Ollama lock)...")
+            with ollama_semaphore:  # Only one Ollama call at a time
+                env_result = validate_work_environment(str(original_path))
+            
+            logger.info(f"   Environment: {env_result['environment_type']} (confidence: {env_result['confidence']})")
+            logger.info(f"   Is valid work environment: {env_result['is_valid']}")
+            
+            # Save environment validation result
+            env_validation_path = violation_dir / 'environment_validation.json'
+            with open(env_validation_path, 'w') as f:
+                json.dump(env_result, f, indent=2)
+            
+            if not env_result['is_valid']:
+                logger.warning(f"⚠️ SKIPPING violation {report_id} - not a valid work environment")
+                logger.warning(f"   Reason: {env_result['reason']}")
+                
+                # Update status to 'skipped' and clean up
+                if db_manager:
+                    try:
+                        db_manager.update_detection_status(
+                            report_id, 
+                            'skipped', 
+                            f"Not a work environment: {env_result['environment_type']}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not update status: {e}")
+                
+                # Create a "skipped" marker file instead of full report
+                skip_report_path = violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt'
+                with open(skip_report_path, 'w') as f:
+                    f.write(f"Violation {report_id} was skipped.\n")
+                    f.write(f"Reason: Scene detected as '{env_result['environment_type']}'\n")
+                    f.write(f"This does not appear to be a construction/industrial environment.\n")
+                    f.write(f"Raw result: {env_result['reason']}\n")
+                
+                return  # Skip processing this violation
+                
+        except ImportError:
+            logger.warning("validate_work_environment not available - skipping environment check")
+        except Exception as e:
+            logger.warning(f"Environment validation failed: {e} - proceeding with processing")
+    
+    # Update status to generating
+    if db_manager:
+        try:
+            db_manager.update_detection_status(report_id, 'generating')
+            logger.info(f"✓ Status updated to GENERATING: {report_id}")
+        except Exception as e:
+            logger.warning(f"Could not update status: {e}")
+    
+    # Generate caption (with semaphore to prevent concurrent Ollama calls)
+    caption = ""
+    env_context = ""
+    if caption_generator:
+        try:
+            logger.info("🎨 Generating image caption with LLaVA (acquiring Ollama lock)...")
+            
+            # Free up GPU memory before heavy captioning operation
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.info("   Cleared CUDA cache before caption generation")
+            except Exception as gpu_e:
+                logger.debug(f"   Could not clear CUDA cache: {gpu_e}")
+            
+            with ollama_semaphore:  # Only one Ollama call at a time
+                caption = caption_generator.generate_caption(str(original_path))
+            if caption:
+                caption_path = violation_dir / 'caption.txt'
+                with open(caption_path, 'w', encoding='utf-8') as f:
+                    f.write(caption)
+                logger.info(f"✓ Caption saved: {caption_path}")
+                
+                # Secondary validation: check caption content for work environment indicators
+                caption_lower = caption.lower()
+                has_work_indicators = any(kw in caption_lower for kw in VALID_ENVIRONMENT_KEYWORDS)
+                has_invalid_indicators = any(kw in caption_lower for kw in INVALID_ENVIRONMENT_KEYWORDS)
+                
+                if has_invalid_indicators and not has_work_indicators:
+                    logger.warning(f"⚠️ Caption suggests non-work environment: {caption[:100]}...")
+                    env_context = " [Warning: Scene may not be a typical work environment]"
+                    
+            else:
+                caption = "Caption generation returned empty"
+        except Exception as e:
+            logger.error(f"❌ Caption generation failed: {e}")
+            caption = "Caption generation failed"
+    else:
+        caption = "Image captioning not available"
+        caption_path = violation_dir / 'caption.txt'
+        with open(caption_path, 'w', encoding='utf-8') as f:
+            f.write(caption)
+    
+    # Generate report
+    report_created = False
+    if report_generator:
+        try:
+            logger.info("📄 Generating NLP report with Llama3...")
+            
+            report_data = {
+                'report_id': report_id,
+                'timestamp': timestamp,
+                'detections': detections,
+                'violation_summary': f"PPE Violation Detected: {', '.join(violation_types)}",
+                'violation_count': len(violation_types),
+                'caption': caption,
+                'image_caption': caption,
+                'original_image_path': str(original_path),
+                'annotated_image_path': str(annotated_path),
+                'location': 'Live Stream Monitor',
+                'severity': 'HIGH',
+                'person_count': len(detections)
+            }
+            
+            result = report_generator.generate_report(report_data)
+            
+            if result and result.get('html'):
+                target_html = violation_dir / 'report.html'
+                if target_html.exists():
+                    logger.info(f"✓ Report generated: {target_html}")
+                    report_created = True
+                    
+                    # Update status to completed
+                    if db_manager:
+                        try:
+                            db_manager.update_detection_status(report_id, 'completed')
+                            logger.info(f"✓ Status updated to COMPLETED: {report_id}")
+                        except Exception as e:
+                            logger.warning(f"Could not update status: {e}")
+                            
+        except Exception as e:
+            logger.error(f"❌ Report generation failed: {e}")
+            if db_manager:
+                try:
+                    db_manager.update_detection_status(report_id, 'failed', str(e))
+                except Exception as e2:
+                    logger.warning(f"Could not update status: {e2}")
+    
+    # Create placeholder if report generation failed
+    if not report_created:
+        create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
+    
+    # Save metadata
+    metadata = {
+        'report_id': report_id,
+        'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
+        'violation_type': violation_types[0] if violation_types else 'PPE Violation',
+        'severity': 'HIGH',
+        'location': 'Live Stream Monitor',
+        'detection_count': len(detections),
+        'has_caption': bool(caption),
+        'has_report': report_created
+    }
+    
+    metadata_path = violation_dir / 'metadata.json'
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    logger.info(f"✅ Queued violation processing complete: {report_id}")
+
+
+def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, detections: List, caption: str):
+    """Create a placeholder HTML report when generation fails."""
+    report_html_path = violation_dir / 'report.html'
+    placeholder_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Violation Report - {report_id}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+        .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #d32f2f; }}
+        .warning {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }}
+        .info {{ background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚨 PPE Violation Report</h1>
+        <p><strong>Report ID:</strong> {report_id}</p>
+        <p><strong>Timestamp:</strong> {timestamp}</p>
+        <p><strong>Severity:</strong> HIGH</p>
+        
+        <div class="warning">
+            <h3>⚠️ Report Generator Not Available</h3>
+            <p>The NLP report generator (Llama3) is not configured or not running.</p>
+        </div>
+        
+        <div class="info">
+            <h3>📋 Detection Summary</h3>
+            <p><strong>Detections:</strong> {len(detections)}</p>
+        </div>
+        
+        <h3>📸 Images</h3>
+        <p>Original: <a href="original.jpg">original.jpg</a></p>
+        <p>Annotated: <a href="annotated.jpg">annotated.jpg</a></p>
+        
+        <h3>📝 Caption</h3>
+        <p>{caption if caption else 'No caption available'}</p>
+    </div>
+</body>
+</html>"""
+    with open(report_html_path, 'w', encoding='utf-8') as f:
+        f.write(placeholder_html)
+    logger.info(f"✓ Placeholder report saved: {report_html_path}")
 
 
 def process_violation(frame: np.ndarray, detections: List[Dict]):
@@ -682,7 +1180,8 @@ def api_report_status(report_id):
             'generating': 'AI is analyzing the violation and generating the report',
             'completed': 'Report is ready to view',
             'failed': f"Report generation failed: {status_info.get('error_message', 'Unknown error')}",
-            'partial': 'Report was partially generated'
+            'partial': 'Report was partially generated',
+            'skipped': f"Skipped - not a work environment: {status_info.get('error_message', 'Invalid scene')}"
         }
         
         return jsonify({
@@ -698,6 +1197,99 @@ def api_report_status(report_id):
     except Exception as e:
         logger.error(f"Error fetching report status: {e}")
         return jsonify({'error': 'Failed to fetch status'}), 500
+
+
+@app.route('/api/queue/status')
+def api_queue_status():
+    """Get the current status of the violation processing queue."""
+    if violation_queue is None:
+        return jsonify({
+            'available': False,
+            'message': 'Violation queue not initialized'
+        })
+    
+    try:
+        stats = violation_queue.get_stats()
+        return jsonify({
+            'available': True,
+            'queue_size': stats.get('current_size', 0),
+            'capacity': stats.get('capacity', 100),
+            'total_enqueued': stats.get('total_enqueued', 0),
+            'total_processed': stats.get('total_processed', 0),
+            'total_failed': stats.get('total_failed', 0),
+            'total_rate_limited': stats.get('total_rate_limited', 0),
+            'worker_running': queue_worker_running,
+            'environment_validation_enabled': ENVIRONMENT_VALIDATION_ENABLED,
+            'by_priority': stats.get('by_priority', {}),
+            'by_device': stats.get('by_device', {})
+        })
+    except Exception as e:
+        logger.error(f"Error getting queue status: {e}")
+        return jsonify({'error': 'Failed to get queue status'}), 500
+
+
+@app.route('/api/settings/environment-validation', methods=['GET', 'POST'])
+def api_environment_validation():
+    """Get or set environment validation setting."""
+    global ENVIRONMENT_VALIDATION_ENABLED
+    
+    if request.method == 'GET':
+        return jsonify({
+            'enabled': ENVIRONMENT_VALIDATION_ENABLED,
+            'valid_keywords': VALID_ENVIRONMENT_KEYWORDS[:10],  # First 10 for display
+            'invalid_keywords': INVALID_ENVIRONMENT_KEYWORDS[:10]
+        })
+    
+    # POST - update setting
+    try:
+        data = request.get_json()
+        if 'enabled' in data:
+            ENVIRONMENT_VALIDATION_ENABLED = bool(data['enabled'])
+            logger.info(f"Environment validation {'enabled' if ENVIRONMENT_VALIDATION_ENABLED else 'disabled'}")
+            return jsonify({
+                'success': True,
+                'enabled': ENVIRONMENT_VALIDATION_ENABLED,
+                'message': f"Environment validation {'enabled' if ENVIRONMENT_VALIDATION_ENABLED else 'disabled'}"
+            })
+        else:
+            return jsonify({'error': 'Missing "enabled" field'}), 400
+    except Exception as e:
+        logger.error(f"Error updating environment validation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/settings/cooldown', methods=['GET', 'POST'])
+def api_cooldown_setting():
+    """Get or set the violation capture cooldown."""
+    global VIOLATION_COOLDOWN
+    
+    if request.method == 'GET':
+        return jsonify({
+            'cooldown_seconds': VIOLATION_COOLDOWN,
+            'description': 'Minimum seconds between capturing violations'
+        })
+    
+    # POST - update cooldown
+    try:
+        data = request.get_json()
+        if 'cooldown_seconds' in data:
+            new_cooldown = int(data['cooldown_seconds'])
+            if new_cooldown < 1:
+                return jsonify({'error': 'Cooldown must be at least 1 second'}), 400
+            if new_cooldown > 300:
+                return jsonify({'error': 'Cooldown cannot exceed 300 seconds'}), 400
+            VIOLATION_COOLDOWN = new_cooldown
+            logger.info(f"Violation cooldown set to {VIOLATION_COOLDOWN} seconds")
+            return jsonify({
+                'success': True,
+                'cooldown_seconds': VIOLATION_COOLDOWN,
+                'message': f"Cooldown set to {VIOLATION_COOLDOWN} seconds"
+            })
+        else:
+            return jsonify({'error': 'Missing "cooldown_seconds" field'}), 400
+    except Exception as e:
+        logger.error(f"Error updating cooldown: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/fix-stuck-reports', methods=['POST'])
@@ -719,7 +1311,6 @@ def api_fix_stuck_reports():
     except Exception as e:
         logger.error(f"Error fixing stuck reports: {e}")
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/reports/pending')
 def api_pending_reports():
@@ -974,19 +1565,20 @@ def generate_frames(conf=0.10):
                         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
                         logger.info(f"Caption generator available: {caption_generator is not None}")
                         logger.info(f"Report generator available: {report_generator is not None}")
-                        logger.info("Starting background thread to process violation...")
+                        logger.info(f"Violation queue available: {violation_queue is not None}")
                         logger.info("=" * 80)
                         
-                        # Process violation in background thread
+                        # Use queue-based approach to prevent missing violations
+                        # enqueue_violation is fast (saves images, adds to queue)
+                        # Queue worker processes reports in background
                         frame_copy = frame.copy()
                         detections_copy = detections.copy()
-                        violation_thread = Thread(
-                            target=process_violation,
-                            args=(frame_copy, detections_copy),
-                            daemon=True
-                        )
-                        violation_thread.start()
-                        logger.info(f"✓ Background thread started (Thread ID: {violation_thread.ident})")
+                        
+                        report_id = enqueue_violation(frame_copy, detections_copy)
+                        if report_id:
+                            logger.info(f"✓ Violation {report_id} queued for processing")
+                        else:
+                            logger.debug("Violation not queued (cooldown or already processing)")
                 
                 # Encode frame as JPEG
                 ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -1097,20 +1689,16 @@ def upload_inference():
                                if any(keyword in d['class_name'].lower() 
                                      for keyword in violation_keywords)]
         
-        # If violations detected, process in background
+        # If violations detected, use queue system (consistent with live camera)
         if violation_detections and FULL_PIPELINE_AVAILABLE:
             violation_types = [d['class_name'] for d in violation_detections]
             logger.info(f"🚨 Uploaded image violation detected: {violation_types}")
             
-            # Process violation in background thread
+            # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            violation_thread = Thread(
-                target=process_violation,
-                args=(frame_copy, detections_copy),
-                daemon=True
-            )
-            violation_thread.start()
+            report_id = enqueue_violation(frame_copy, detections_copy)
+            logger.info(f"📥 Violation queued for processing: {report_id}")
         
         # Encode annotated image to base64
         _, buffer = cv2.imencode('.jpg', annotated)

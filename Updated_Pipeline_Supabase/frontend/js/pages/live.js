@@ -161,6 +161,89 @@ const LivePage = {
                         </div>
                     </div>
                 </div>
+
+                <!-- Processing Settings -->
+                <div class="card" style="margin-top: 1rem;">
+                    <div class="card-header">
+                        <span><i class="fas fa-sliders-h"></i> Processing Settings</span>
+                    </div>
+                    <div class="card-content">
+                        <div class="grid grid-2">
+                            <!-- Environment Validation Toggle -->
+                            <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <h4 style="margin: 0;">
+                                        <i class="fas fa-building" style="color: var(--primary-color);"></i>
+                                        Environment Validation
+                                    </h4>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="envValidationToggle">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.5rem;">
+                                    When <strong>ON</strong>: Only process violations in work environments (construction, factory, warehouse)
+                                </p>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0;">
+                                    When <strong>OFF</strong>: Process ALL detected violations (recommended for testing)
+                                </p>
+                                <div id="envValidationStatus" style="margin-top: 0.75rem; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem;">
+                                    <!-- Status will be updated by JS -->
+                                </div>
+                            </div>
+
+                            <!-- Cooldown Setting -->
+                            <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                <h4 style="margin-bottom: 0.5rem;">
+                                    <i class="fas fa-clock" style="color: var(--warning-color);"></i>
+                                    Capture Cooldown
+                                </h4>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+                                    Minimum time between capturing violations (prevents duplicates)
+                                </p>
+                                <div style="display: flex; align-items: center; gap: 1rem;">
+                                    <input type="range" id="cooldownSlider" min="1" max="30" value="3" 
+                                           style="flex: 1; cursor: pointer;">
+                                    <span id="cooldownValue" style="font-weight: bold; min-width: 60px; text-align: center; 
+                                                                     background: var(--primary-color); color: white; 
+                                                                     padding: 4px 12px; border-radius: 20px;">3s</span>
+                                </div>
+                                <button id="applyCooldownBtn" class="btn btn-primary" style="margin-top: 1rem; width: 100%;">
+                                    <i class="fas fa-save"></i> Apply Cooldown
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Queue Status -->
+                        <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                            <h4 style="margin-bottom: 0.75rem;">
+                                <i class="fas fa-tasks" style="color: var(--success-color);"></i>
+                                Processing Queue Status
+                            </h4>
+                            <div id="queueStatus" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+                                <div style="text-align: center; padding: 0.5rem;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);" id="queueSize">-</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">In Queue</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--success-color);" id="queueProcessed">-</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Processed</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--danger-color);" id="queueFailed">-</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Failed</div>
+                                </div>
+                                <div style="text-align: center; padding: 0.5rem;">
+                                    <div style="font-size: 1.5rem; font-weight: bold;" id="workerStatus">-</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Worker</div>
+                                </div>
+                            </div>
+                            <button id="refreshQueueBtn" class="btn btn-secondary" style="margin-top: 0.75rem;">
+                                <i class="fas fa-sync-alt"></i> Refresh Status
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <style>
@@ -188,6 +271,52 @@ const LivePage = {
                 
                 .mode-tab i {
                     margin-right: 8px;
+                }
+
+                /* Toggle Switch Styles */
+                .toggle-switch {
+                    position: relative;
+                    display: inline-block;
+                    width: 60px;
+                    height: 30px;
+                }
+
+                .toggle-switch input {
+                    opacity: 0;
+                    width: 0;
+                    height: 0;
+                }
+
+                .toggle-slider {
+                    position: absolute;
+                    cursor: pointer;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background-color: #ccc;
+                    transition: 0.3s;
+                    border-radius: 30px;
+                }
+
+                .toggle-slider:before {
+                    position: absolute;
+                    content: "";
+                    height: 22px;
+                    width: 22px;
+                    left: 4px;
+                    bottom: 4px;
+                    background-color: white;
+                    transition: 0.3s;
+                    border-radius: 50%;
+                }
+
+                .toggle-switch input:checked + .toggle-slider {
+                    background-color: var(--success-color, #4CAF50);
+                }
+
+                .toggle-switch input:checked + .toggle-slider:before {
+                    transform: translateX(30px);
                 }
             </style>
         `;
@@ -464,5 +593,184 @@ const LivePage = {
         } catch (error) {
             console.error('Error checking stream status:', error);
         }
+
+        // =========================================
+        // PROCESSING SETTINGS HANDLERS
+        // =========================================
+
+        const envValidationToggle = document.getElementById('envValidationToggle');
+        const envValidationStatus = document.getElementById('envValidationStatus');
+        const cooldownSlider = document.getElementById('cooldownSlider');
+        const cooldownValue = document.getElementById('cooldownValue');
+        const applyCooldownBtn = document.getElementById('applyCooldownBtn');
+        const refreshQueueBtn = document.getElementById('refreshQueueBtn');
+
+        // Function to update environment validation status display
+        function updateEnvValidationStatus(enabled) {
+            if (enabled) {
+                envValidationStatus.innerHTML = `
+                    <i class="fas fa-check-circle" style="color: var(--success-color);"></i>
+                    <strong style="color: var(--success-color);">ENABLED</strong> - 
+                    Only work environments will be processed (construction, factory, warehouse)
+                `;
+                envValidationStatus.style.background = 'rgba(76, 175, 80, 0.1)';
+                envValidationStatus.style.border = '1px solid var(--success-color)';
+            } else {
+                envValidationStatus.innerHTML = `
+                    <i class="fas fa-times-circle" style="color: var(--warning-color);"></i>
+                    <strong style="color: var(--warning-color);">DISABLED</strong> - 
+                    ALL violations will be processed (testing mode)
+                `;
+                envValidationStatus.style.background = 'rgba(255, 152, 0, 0.1)';
+                envValidationStatus.style.border = '1px solid var(--warning-color)';
+            }
+        }
+
+        // Function to fetch and update queue status
+        async function updateQueueStatus() {
+            try {
+                const response = await fetch(`${API_CONFIG.BASE_URL}/api/queue/status`);
+                const data = await response.json();
+                
+                document.getElementById('queueSize').textContent = data.queue_size || 0;
+                document.getElementById('queueProcessed').textContent = data.total_processed || 0;
+                document.getElementById('queueFailed').textContent = data.total_failed || 0;
+                
+                const workerStatus = document.getElementById('workerStatus');
+                if (data.worker_running) {
+                    workerStatus.textContent = 'Running';
+                    workerStatus.style.color = 'var(--success-color)';
+                } else {
+                    workerStatus.textContent = 'Stopped';
+                    workerStatus.style.color = 'var(--danger-color)';
+                }
+
+                // Also update environment validation toggle from server state
+                if (data.environment_validation_enabled !== undefined) {
+                    envValidationToggle.checked = data.environment_validation_enabled;
+                    updateEnvValidationStatus(data.environment_validation_enabled);
+                }
+            } catch (error) {
+                console.error('Error fetching queue status:', error);
+            }
+        }
+
+        // Function to fetch current settings
+        async function loadCurrentSettings() {
+            try {
+                // Get environment validation setting
+                const envResponse = await fetch(`${API_CONFIG.BASE_URL}/api/settings/environment-validation`);
+                const envData = await envResponse.json();
+                envValidationToggle.checked = envData.enabled;
+                updateEnvValidationStatus(envData.enabled);
+
+                // Get cooldown setting
+                const cooldownResponse = await fetch(`${API_CONFIG.BASE_URL}/api/settings/cooldown`);
+                const cooldownData = await cooldownResponse.json();
+                cooldownSlider.value = cooldownData.cooldown_seconds;
+                cooldownValue.textContent = cooldownData.cooldown_seconds + 's';
+            } catch (error) {
+                console.error('Error loading settings:', error);
+            }
+
+            // Also update queue status
+            await updateQueueStatus();
+        }
+
+        // Environment validation toggle handler
+        envValidationToggle.addEventListener('change', async () => {
+            const enabled = envValidationToggle.checked;
+            
+            try {
+                const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/environment-validation`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateEnvValidationStatus(data.enabled);
+                    showNotification(data.message, 'success');
+                } else {
+                    // Revert toggle on failure
+                    envValidationToggle.checked = !enabled;
+                    showNotification('Failed to update setting', 'error');
+                }
+            } catch (error) {
+                console.error('Error updating environment validation:', error);
+                envValidationToggle.checked = !enabled;
+                showNotification('Failed to update setting', 'error');
+            }
+        });
+
+        // Cooldown slider handler
+        cooldownSlider.addEventListener('input', () => {
+            cooldownValue.textContent = cooldownSlider.value + 's';
+        });
+
+        // Apply cooldown button handler
+        applyCooldownBtn.addEventListener('click', async () => {
+            const newCooldown = parseInt(cooldownSlider.value);
+            
+            try {
+                applyCooldownBtn.disabled = true;
+                applyCooldownBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
+                
+                const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/cooldown`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cooldown_seconds: newCooldown })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification(`Cooldown set to ${newCooldown} seconds`, 'success');
+                } else {
+                    showNotification(data.error || 'Failed to update cooldown', 'error');
+                }
+            } catch (error) {
+                console.error('Error updating cooldown:', error);
+                showNotification('Failed to update cooldown', 'error');
+            } finally {
+                applyCooldownBtn.disabled = false;
+                applyCooldownBtn.innerHTML = '<i class="fas fa-save"></i> Apply Cooldown';
+            }
+        });
+
+        // Refresh queue status button handler
+        refreshQueueBtn.addEventListener('click', async () => {
+            refreshQueueBtn.disabled = true;
+            refreshQueueBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+            
+            await updateQueueStatus();
+            
+            refreshQueueBtn.disabled = false;
+            refreshQueueBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Status';
+        });
+
+        // Simple notification function (fallback if not defined globally)
+        function showNotification(message, type = 'info') {
+            if (typeof Notifications !== 'undefined' && Notifications.show) {
+                Notifications.show(message, type);
+            } else {
+                console.log(`[${type.toUpperCase()}] ${message}`);
+                // Simple alert fallback
+                if (type === 'error') {
+                    alert(message);
+                }
+            }
+        }
+
+        // Load settings on mount
+        await loadCurrentSettings();
+
+        // Auto-refresh queue status every 5 seconds when on this page
+        const queueRefreshInterval = setInterval(updateQueueStatus, 5000);
+
+        // Clean up interval when leaving page (store for cleanup)
+        window._livePageQueueInterval = queueRefreshInterval;
     }
 };

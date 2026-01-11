@@ -172,6 +172,72 @@ class SupabaseDatabaseManager:
             logger.warning(f"Could not update detection status (column may not exist): {e}")
             return False
     
+    def update_detection_event(
+        self,
+        report_id: str,
+        person_count: Optional[int] = None,
+        violation_count: Optional[int] = None,
+        severity: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> bool:
+        """
+        Update detection event fields.
+        
+        Args:
+            report_id: Report identifier
+            person_count: Number of persons detected
+            violation_count: Number of violations
+            severity: Severity level
+            status: Detection status
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            updates = []
+            params = []
+            
+            if person_count is not None:
+                updates.append("person_count = %s")
+                params.append(person_count)
+            
+            if violation_count is not None:
+                updates.append("violation_count = %s")
+                params.append(violation_count)
+            
+            if severity is not None:
+                updates.append("severity = %s")
+                params.append(severity)
+            
+            if status is not None:
+                updates.append("status = %s")
+                params.append(status)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = NOW()")
+            params.append(report_id)
+            
+            with self.conn.cursor() as cur:
+                query = f"""
+                    UPDATE public.detection_events
+                    SET {', '.join(updates)}
+                    WHERE report_id = %s
+                """
+                cur.execute(query, params)
+                self.conn.commit()
+                
+                logger.info(f"Updated detection event: {report_id}")
+                return cur.rowcount > 0
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to update detection event: {e}")
+            return False
+    
     def fix_stuck_reports(self) -> int:
         """
         Fix reports stuck in pending/generating status by checking actual data.
@@ -579,6 +645,96 @@ class SupabaseDatabaseManager:
         except Exception as e:
             self.conn.rollback()
             logger.error(f"Failed to update storage keys: {e}")
+            return False
+    
+    def update_violation(
+        self,
+        report_id: str,
+        violation_summary: Optional[str] = None,
+        caption: Optional[str] = None,
+        nlp_analysis: Optional[Dict[str, Any]] = None,
+        detection_data: Optional[Dict[str, Any]] = None,
+        original_image_key: Optional[str] = None,
+        annotated_image_key: Optional[str] = None,
+        report_html_key: Optional[str] = None,
+        report_pdf_key: Optional[str] = None
+    ) -> bool:
+        """
+        Update a violation record with new data.
+        
+        Args:
+            report_id: Report identifier
+            violation_summary: Summary text
+            caption: Image caption from LLaVA
+            nlp_analysis: NLP analysis from Llama3 (stored as JSONB)
+            detection_data: YOLO detection data (stored as JSONB)
+            original_image_key: Storage key for original image
+            annotated_image_key: Storage key for annotated image
+            report_html_key: Storage key for HTML report
+            report_pdf_key: Storage key for PDF report
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        self._ensure_connection()
+        
+        try:
+            updates = []
+            params = []
+            
+            if violation_summary is not None:
+                updates.append("violation_summary = %s")
+                params.append(violation_summary)
+            
+            if caption is not None:
+                updates.append("caption = %s")
+                params.append(caption)
+            
+            if nlp_analysis is not None:
+                updates.append("nlp_analysis = %s")
+                params.append(Json(nlp_analysis))
+            
+            if detection_data is not None:
+                updates.append("detection_data = %s")
+                params.append(Json(detection_data))
+            
+            if original_image_key is not None:
+                updates.append("original_image_key = %s")
+                params.append(original_image_key)
+            
+            if annotated_image_key is not None:
+                updates.append("annotated_image_key = %s")
+                params.append(annotated_image_key)
+            
+            if report_html_key is not None:
+                updates.append("report_html_key = %s")
+                params.append(report_html_key)
+            
+            if report_pdf_key is not None:
+                updates.append("report_pdf_key = %s")
+                params.append(report_pdf_key)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = NOW()")
+            params.append(report_id)
+            
+            with self.conn.cursor() as cur:
+                query = f"""
+                    UPDATE public.violations
+                    SET {', '.join(updates)}
+                    WHERE report_id = %s
+                """
+                cur.execute(query, params)
+                self.conn.commit()
+                
+                logger.info(f"Updated violation: {report_id}")
+                return cur.rowcount > 0
+                
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Failed to update violation: {e}")
             return False
     
     def delete_violation(self, report_id: str) -> bool:

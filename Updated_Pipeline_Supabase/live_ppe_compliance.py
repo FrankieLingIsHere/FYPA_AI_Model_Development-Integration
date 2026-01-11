@@ -80,7 +80,7 @@ while True:
         break
 
     # Run model on the frame
-    results = model.predict(frame, imgsz=640, conf=0.10, iou=0.45)
+    results = model.predict(frame, imgsz=640, conf=0.25, iou=0.45)
     # results is a list; take first element
     if len(results) == 0:
         cv2.imshow('PPE Live', frame)

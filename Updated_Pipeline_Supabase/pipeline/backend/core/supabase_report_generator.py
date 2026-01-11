@@ -156,12 +156,16 @@ class SupabaseReportGenerator(ReportGenerator):
             html_path = result.get('html')
             pdf_path = result.get('pdf') if self.upload_pdf else None
             
+            # Check if this is a reprocessing operation (should overwrite existing files)
+            is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
+            
             upload_results = self.storage_manager.upload_violation_artifacts(
                 report_id=report_id,
                 original_image_path=Path(original_image_path) if original_image_path else None,
                 annotated_image_path=Path(annotated_image_path) if annotated_image_path else None,
                 report_html_path=html_path,
-                report_pdf_path=pdf_path
+                report_pdf_path=pdf_path,
+                upsert=is_reprocessing  # Overwrite if reprocessing
             )
             
             storage_keys = upload_results
@@ -171,66 +175,73 @@ class SupabaseReportGenerator(ReportGenerator):
             logger.error(f"Error uploading artifacts to Supabase: {e}")
             # Continue anyway - local files are still available
         
-        # Step 4: Insert violation record with storage keys and validation
-        try:
-            violation_summary = report_data.get('violation_summary')
-            caption = report_data.get('caption')
-            nlp_analysis = result.get('nlp_analysis')
-            detection_data = report_data.get('detections')
-            
-            # Add validation data to metadata
-            metadata = {
-                'detections': detection_data
-            }
-            if validation_result:
-                metadata['caption_validation'] = {
-                    'is_valid': validation_result['is_valid'],
-                    'confidence': validation_result['confidence'],
-                    'contradictions': validation_result['contradictions'],
-                    'warnings': validation_result['warnings'],
-                    'summary': validation_result['validation_summary']
-                }
-            
-            violation_id = self.db_manager.insert_violation(
-                report_id=report_id,
-                violation_summary=violation_summary,
-                caption=caption,
-                nlp_analysis=nlp_analysis,
-                detection_data=metadata,
-                original_image_key=storage_keys.get('original_image_key'),
-                annotated_image_key=storage_keys.get('annotated_image_key'),
-                report_html_key=storage_keys.get('report_html_key'),
-                report_pdf_key=storage_keys.get('report_pdf_key')
-            )
-            
-            if violation_id:
-                logger.info(f"Inserted violation record: {violation_id}")
-            else:
-                logger.error(f"Failed to insert violation record: {report_id}")
-                
-        except Exception as e:
-            logger.error(f"Error inserting violation record: {e}")
-            # Continue anyway
-        
-        # Step 5: Log event to flood_logs
-        try:
-            self.db_manager.log_event(
-                event_type='report_generated',
-                message=f"Report generated and uploaded: {report_id}",
-                report_id=report_id,
-                metadata={
-                    'person_count': person_count,
-                    'violation_count': violation_count,
-                    'severity': severity,
-                    'storage_keys': storage_keys
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error logging event: {e}")
-            # Continue anyway
-        
-        # Add storage keys to result
+        # Store storage keys in result for reprocessing scenarios
         result['storage_keys'] = storage_keys
+        
+        # Step 4: Insert violation record with storage keys and validation
+        # Skip if this is a reprocessing operation (record already exists)
+        is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
+        
+        if not is_reprocessing:
+            try:
+                violation_summary = report_data.get('violation_summary')
+                caption = report_data.get('caption')
+                nlp_analysis = result.get('nlp_analysis')
+                detection_data = report_data.get('detections')
+                
+                # Add validation data to metadata
+                metadata = {
+                    'detections': detection_data
+                }
+                if validation_result:
+                    metadata['caption_validation'] = {
+                        'is_valid': validation_result['is_valid'],
+                        'confidence': validation_result['confidence'],
+                        'contradictions': validation_result['contradictions'],
+                        'warnings': validation_result['warnings'],
+                        'summary': validation_result['validation_summary']
+                    }
+                
+                violation_id = self.db_manager.insert_violation(
+                    report_id=report_id,
+                    violation_summary=violation_summary,
+                    caption=caption,
+                    nlp_analysis=nlp_analysis,
+                    detection_data=metadata,
+                    original_image_key=storage_keys.get('original_image_key'),
+                    annotated_image_key=storage_keys.get('annotated_image_key'),
+                    report_html_key=storage_keys.get('report_html_key'),
+                    report_pdf_key=storage_keys.get('report_pdf_key')
+                )
+                
+                if violation_id:
+                    logger.info(f"Inserted violation record: {violation_id}")
+                else:
+                    logger.error(f"Failed to insert violation record: {report_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error inserting violation record: {e}")
+                # Continue anyway
+        else:
+            logger.info(f"Skipping database insert for reprocessing: {report_id}")
+        
+        # Step 5: Log event to flood_logs (skip for reprocessing)
+        if not is_reprocessing:
+            try:
+                self.db_manager.log_event(
+                    event_type='report_generated',
+                    message=f"Report generated and uploaded: {report_id}",
+                    report_id=report_id,
+                    metadata={
+                        'person_count': person_count,
+                        'violation_count': violation_count,
+                        'severity': severity,
+                        'storage_keys': storage_keys
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error logging event: {e}")
+                # Continue anyway
         
         logger.info(f"[OK] Supabase-backed report completed: {report_id}")
         return result

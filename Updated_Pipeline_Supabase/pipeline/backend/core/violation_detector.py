@@ -92,14 +92,20 @@ def calculate_iou(boxA: List[int], boxB: List[int]) -> float:
     return iou
 
 
-def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: float = 0.3) -> bool:
+def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: float = 0.3, 
+                      ppe_class: str = None, strict_head_region: bool = False) -> bool:
     """
     Check if PPE bounding box is within or near a person's bounding box.
     
     Uses IoU and also checks if PPE center is within person bbox.
+    ENHANCED: For head PPE (hardhat), applies strict spatial validation to prevent
+    misclassifying nearby objects (lanterns, pillows, decorations) as PPE.
     """
     iou = calculate_iou(ppe_bbox, person_bbox)
     if iou > threshold:
+        # For head PPE, require stricter validation even with good IoU
+        if strict_head_region and ppe_class and 'hardhat' in ppe_class.lower():
+            return is_in_head_region(ppe_bbox, person_bbox)
         return True
     
     # Check if PPE center is within person bbox
@@ -108,9 +114,52 @@ def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: fl
     
     if (person_bbox[0] <= ppe_center_x <= person_bbox[2] and
         person_bbox[1] <= ppe_center_y <= person_bbox[3]):
+        # Additional check for head PPE - must be in upper portion
+        if strict_head_region and ppe_class and 'hardhat' in ppe_class.lower():
+            return is_in_head_region(ppe_bbox, person_bbox)
         return True
     
     return False
+
+
+def is_in_head_region(ppe_bbox: List[int], person_bbox: List[int]) -> bool:
+    """
+    Check if PPE is actually in the head region of a person.
+    
+    Prevents objects that are NEAR the head (lanterns hanging above,
+    pillows beside, etc.) from being classified as hardhats.
+    
+    Logic:
+    - PPE must be in upper 30% of person bounding box (head region)
+    - PPE center must be horizontally aligned with person center (±40% width)
+    - PPE should not extend significantly beyond person width
+    """
+    person_height = person_bbox[3] - person_bbox[1]
+    person_width = person_bbox[2] - person_bbox[0]
+    head_region_bottom = person_bbox[1] + (person_height * 0.30)  # Top 30% is head
+    
+    # Get PPE center
+    ppe_center_x = (ppe_bbox[0] + ppe_bbox[2]) / 2
+    ppe_center_y = (ppe_bbox[1] + ppe_bbox[3]) / 2
+    person_center_x = (person_bbox[0] + person_bbox[2]) / 2
+    
+    # Check 1: PPE center must be in head region (upper 30%)
+    if ppe_center_y > head_region_bottom:
+        return False
+    
+    # Check 2: PPE center must be horizontally aligned with person center
+    # Allow ±40% of person width as tolerance
+    horizontal_tolerance = person_width * 0.40
+    if abs(ppe_center_x - person_center_x) > horizontal_tolerance:
+        return False
+    
+    # Check 3: PPE should not be significantly wider than person
+    # (catches objects beside/behind person)
+    ppe_width = ppe_bbox[2] - ppe_bbox[0]
+    if ppe_width > person_width * 1.3:
+        return False
+    
+    return True
 
 
 def normalize_class_name(name: str) -> str:
@@ -146,6 +195,7 @@ class ViolationDetector:
         # Get thresholds
         self.iou_threshold = violation_rules.get('person_ppe_iou_threshold', 0.3)
         self.person_conf_threshold = violation_rules.get('person_confidence_threshold', 0.25)
+        self.strict_head_region = violation_rules.get('head_region_strict', True)
         
         # Critical violations (like Fall Detection)
         self.critical_violations = violation_rules.get('critical', {})
@@ -292,7 +342,9 @@ class ViolationDetector:
             
             # Find all PPE items associated with this person
             for ppe_item in ppe:
-                if is_within_or_near(ppe_item.bbox, person.bbox, self.iou_threshold):
+                if is_within_or_near(ppe_item.bbox, person.bbox, self.iou_threshold,
+                                   ppe_class=ppe_item.class_name, 
+                                   strict_head_region=self.strict_head_region):
                     class_name = ppe_item.class_name
                     
                     if class_name not in person_obj.ppe_items:

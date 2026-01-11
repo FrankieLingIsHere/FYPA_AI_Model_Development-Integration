@@ -75,8 +75,9 @@ VIOLATION_RULES = {
             'negative_classes': ['NO-Safety Shoes']
         }
     },
-    'person_ppe_iou_threshold': 0.3,
+    'person_ppe_iou_threshold': 0.4,  # Increased from 0.3 to reduce false associations (pillows, lanterns near heads)
     'person_confidence_threshold': 0.25,
+    'head_region_strict': True,  # Enable strict head-region validation for hardhat detection
     'critical': {
         'NO-Hardhat': True,
         'NO-Safety Vest': True

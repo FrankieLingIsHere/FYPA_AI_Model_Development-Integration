@@ -69,7 +69,8 @@ class SupabaseStorageManager:
         self,
         local_path: Path,
         report_id: str,
-        filename: str
+        filename: str,
+        upsert: bool = False
     ) -> Optional[str]:
         """
         Upload an image to the violation-images bucket.
@@ -78,6 +79,7 @@ class SupabaseStorageManager:
             local_path: Path to local image file
             report_id: Report ID (used as folder name)
             filename: Filename (e.g., 'original.jpg', 'annotated.jpg')
+            upsert: If True, overwrite existing files
         
         Returns:
             Storage key (e.g., 'violation-images/20231205_143022/original.jpg')
@@ -97,7 +99,7 @@ class SupabaseStorageManager:
             result = self.client.storage.from_(self.images_bucket).upload(
                 path=storage_key,
                 file=file_data,
-                file_options={"content-type": "image/jpeg"}
+                file_options={"content-type": "image/jpeg", "upsert": str(upsert).lower()}
             )
             
             full_key = f"{self.images_bucket}/{storage_key}"
@@ -113,7 +115,8 @@ class SupabaseStorageManager:
         local_path: Path,
         report_id: str,
         filename: str,
-        content_type: str = 'text/html'
+        content_type: str = 'text/html',
+        upsert: bool = False
     ) -> Optional[str]:
         """
         Upload a report file to the reports bucket.
@@ -123,6 +126,7 @@ class SupabaseStorageManager:
             report_id: Report ID (used as folder name)
             filename: Filename (e.g., 'report.html', 'report.pdf')
             content_type: MIME type ('text/html' or 'application/pdf')
+            upsert: If True, overwrite existing files
         
         Returns:
             Storage key or None if upload failed
@@ -141,7 +145,7 @@ class SupabaseStorageManager:
             result = self.client.storage.from_(self.reports_bucket).upload(
                 path=storage_key,
                 file=file_data,
-                file_options={"content-type": content_type}
+                file_options={"content-type": content_type, "upsert": str(upsert).lower()}
             )
             
             full_key = f"{self.reports_bucket}/{storage_key}"
@@ -274,7 +278,8 @@ class SupabaseStorageManager:
         original_image_path: Optional[Path] = None,
         annotated_image_path: Optional[Path] = None,
         report_html_path: Optional[Path] = None,
-        report_pdf_path: Optional[Path] = None
+        report_pdf_path: Optional[Path] = None,
+        upsert: bool = False
     ) -> Dict[str, Optional[str]]:
         """
         Upload all violation artifacts for a report.
@@ -285,6 +290,7 @@ class SupabaseStorageManager:
             annotated_image_path: Path to annotated image
             report_html_path: Path to HTML report
             report_pdf_path: Path to PDF report (optional)
+            upsert: If True, overwrite existing files
         
         Returns:
             Dictionary with storage keys for each uploaded file
@@ -299,25 +305,25 @@ class SupabaseStorageManager:
         # Upload original image
         if original_image_path:
             results['original_image_key'] = self.upload_image(
-                original_image_path, report_id, 'original.jpg'
+                original_image_path, report_id, 'original.jpg', upsert
             )
         
         # Upload annotated image
         if annotated_image_path:
             results['annotated_image_key'] = self.upload_image(
-                annotated_image_path, report_id, 'annotated.jpg'
+                annotated_image_path, report_id, 'annotated.jpg', upsert
             )
         
         # Upload HTML report
         if report_html_path:
             results['report_html_key'] = self.upload_report(
-                report_html_path, report_id, 'report.html', 'text/html'
+                report_html_path, report_id, 'report.html', 'text/html', upsert
             )
         
         # Upload PDF report (optional)
         if report_pdf_path and report_pdf_path.exists():
             results['report_pdf_key'] = self.upload_report(
-                report_pdf_path, report_id, 'report.pdf', 'application/pdf'
+                report_pdf_path, report_id, 'report.pdf', 'application/pdf', upsert
             )
         
         logger.info(f"Uploaded artifacts for report: {report_id}")

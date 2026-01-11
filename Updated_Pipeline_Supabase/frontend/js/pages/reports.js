@@ -362,8 +362,21 @@ const ReportsPage = {
                     <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">
                         <p style="margin: 0; color: var(--text-color); font-size: 0.9rem;">
                             <i class="fas fa-exclamation-triangle" style="color: var(--error-color);"></i>
-                            <strong>Violation Type:</strong> ${violation.violation_type || 'PPE Violation'}
+                            <strong>${violation.violation_count || 0} Violation${violation.violation_count !== 1 ? 's' : ''}</strong>
                         </p>
+                        ${violation.missing_ppe && violation.missing_ppe.length > 0 ? `
+                            <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                ${violation.missing_ppe.map(ppe => `
+                                    <span class="badge badge-danger" style="font-size: 0.75rem;">
+                                        <i class="fas fa-times-circle"></i> No ${ppe}
+                                    </span>
+                                `).join('')}
+                            </div>
+                        ` : `
+                            <p style="margin: 0.5rem 0 0 0; color: #7f8c8d; font-size: 0.85rem;">
+                                ${violation.violation_summary || 'PPE Violation'}
+                            </p>
+                        `}
                         ${violation.device_id ? `
                             <p style="margin: 0.5rem 0 0 0; color: #95a5a6; font-size: 0.8rem;">
                                 <i class="fas fa-desktop"></i> Device: ${violation.device_id}

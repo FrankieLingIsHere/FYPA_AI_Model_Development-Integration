@@ -2,7 +2,7 @@
 Small helper to run a single-image inference against the project's YOLO model.
 
 Provides:
-- predict_image(input_image, model_path=None, conf=0.10, imgsz=640)
+- predict_image(input_image, model_path=None, conf=0.25, imgsz=640)
 
 Input:
 - input_image: either a file path (str), bytes, or a numpy.ndarray (BGR or RGB).
@@ -59,7 +59,7 @@ def _read_image(input_image: Union[str, bytes, np.ndarray]):
 
 def predict_image(input_image: Union[str, bytes, np.ndarray],
                   model_path: str = None,
-                  conf: float = 0.10,
+                  conf: float = 0.25,
                   imgsz: int = 640) -> Tuple[List[dict], np.ndarray]:
     """Run inference on a single image and return detections + annotated image.
 
@@ -91,6 +91,8 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
         img = img.astype(np.uint8)
 
     # perform prediction with half=False to avoid dtype mismatch
+    # Note: Default conf=0.25 reduces false positives (especially hardhat/hair confusion)
+    # Can be overridden by caller if needed, but 0.25 is recommended for PPE detection
     results = model.predict(img, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
     detections = []
     annotated = img.copy()

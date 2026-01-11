@@ -21,8 +21,9 @@ Usage:
 import os
 import sys
 import logging
+import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Lock, Thread
 from typing import List, Dict
 import json
@@ -351,7 +352,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
         logger.info(f"✓ Saved original image: {original_path}")
         
         # Save annotated frame
-        _, annotated = predict_image(frame, conf=0.10)
+        _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
         logger.info(f"✓ Saved annotated image: {annotated_path}")
@@ -714,7 +715,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         logger.info(f"✓ Saved original image: {original_path}")
         
         # Save annotated frame
-        _, annotated = predict_image(frame, conf=0.10)
+        _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
         logger.info(f"✓ Saved annotated image: {annotated_path}")
@@ -992,16 +993,67 @@ def api_violations():
                 else:
                     status = 'pending'
             
+            # Extract missing PPE details from detection_data or violation_summary
+            missing_ppe = []
+            ppe_tags = []
+            detection_data_parsed = v.get('detection_data')
+            
+            if detection_data_parsed:
+                # Try to parse violation details from stored detection data
+                if isinstance(detection_data_parsed, str):
+                    try:
+                        detection_data_parsed = json.loads(detection_data_parsed)
+                    except:
+                        detection_data_parsed = None
+                
+                if isinstance(detection_data_parsed, dict):
+                    # Extract from violation_summary field in detection data
+                    if 'violation_summary' in detection_data_parsed:
+                        for item in detection_data_parsed['violation_summary']:
+                            if 'Missing' in item:
+                                ppe_item = item.replace('Missing ', '').strip()
+                                missing_ppe.append(ppe_item)
+                                ppe_tags.append(ppe_item.replace(' ', '-').upper())
+            
+            # Fallback: parse from violation_summary string
+            if not missing_ppe and v.get('violation_summary'):
+                summary = v.get('violation_summary', '')
+                
+                # Parse format: "PPE Violation Detected: NO-Hardhat, NO-Safety Vest"
+                if 'PPE Violation Detected:' in summary:
+                    # Extract everything after the colon
+                    violations_part = summary.split('PPE Violation Detected:')[1].strip()
+                    # Split by comma and clean up
+                    violation_items = [item.strip() for item in violations_part.split(',')]
+                    for item in violation_items:
+                        # Convert "NO-Hardhat" to "Hardhat"
+                        if item.startswith('NO-') or item.startswith('No-'):
+                            ppe_item = item[3:]  # Remove "NO-" prefix
+                            missing_ppe.append(ppe_item)
+                            ppe_tags.append(item.upper())  # Keep NO-HARDHAT format for tags
+                        elif 'Missing' in item:
+                            ppe_item = item.replace('Missing ', '').strip()
+                            missing_ppe.append(ppe_item)
+                            ppe_tags.append(ppe_item.replace(' ', '-').upper())
+                
+                # Also try parsing "Missing Hardhat" format
+                elif 'Missing' in summary:
+                    matches = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
+                    missing_ppe.extend(matches)
+                    ppe_tags.extend([m.replace(' ', '-').upper() for m in matches])
+            
             formatted_violations.append({
                 'report_id': v['report_id'],
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
                 'person_count': v.get('person_count', 0),
-                'violation_count': v.get('violation_count', 0),
+                'violation_count': v.get('violation_count') if v.get('violation_count') else len(missing_ppe) if missing_ppe else 1,
                 'severity': v.get('severity', 'UNKNOWN'),
                 'status': status,
                 'device_id': v.get('device_id'),
                 'error_message': v.get('error_message'),
-                'violation_summary': v.get('violation_summary'),
+                'violation_summary': v.get('violation_summary') or (f"Missing: {', '.join(missing_ppe)}" if missing_ppe else 'PPE Violation'),
+                'missing_ppe': missing_ppe,
+                'ppe_tags': ppe_tags,
                 'violation_type': 'PPE Violation',
                 'has_original': bool(v.get('original_image_key')),
                 'has_annotated': bool(v.get('annotated_image_key')),
@@ -1035,8 +1087,10 @@ def api_stats():
         
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = week_start.replace(day=week_start.day - week_start.weekday())
+        # Calculate actual week start (Monday of current week)
+        # weekday() returns 0=Monday, 1=Tuesday, etc.
+        days_since_monday = now.weekday()
+        week_start = today_start - timedelta(days=days_since_monday)
         
         stats = {
             'total': len(violations),
@@ -1056,8 +1110,10 @@ def api_stats():
         
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = week_start.replace(day=week_start.day - week_start.weekday())
+        # Calculate actual week start (Monday of current week)
+        # weekday() returns 0=Monday, 1=Tuesday, etc.
+        days_since_monday = now.weekday()
+        week_start = today_start - timedelta(days=days_since_monday)
         
         # Convert to timezone-aware for comparison if needed
         if violations and violations[0].get('timestamp') and violations[0]['timestamp'].tzinfo:
@@ -1495,7 +1551,7 @@ def get_image(report_id, filename):
 # API ENDPOINTS - LIVE STREAMING
 # =========================================================================
 
-def generate_frames(conf=0.10):
+def generate_frames(conf=0.25):
     """Generate frames from webcam with YOLO detection and violation processing."""
     global active_camera
     

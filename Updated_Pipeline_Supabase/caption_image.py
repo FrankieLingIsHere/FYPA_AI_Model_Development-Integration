@@ -52,29 +52,50 @@ def caption_image_llava(image_path):
         print(f"Error loading image: {e}")
         return None
     
-    # Build prompt for construction site safety analysis
-    prompt = """You are a construction site safety inspector. Describe what you observe at this construction site in a natural narrative style.
+    # Build prompt for workplace safety analysis (NEUTRAL - no construction bias)
+    prompt = """You are a workplace safety observer. Describe EXACTLY what you see in this image using a natural narrative style.
 
-Start directly describing the worker(s) and scene. DO NOT use phrases like "In the image" or "The image shows".
+Start directly describing the person(s) and their actual environment. DO NOT use phrases like "In the image" or "The image shows".
 
-IMPORTANT GUIDELINES:
-- HARDHAT vs HAIR: Be VERY careful distinguishing hardhats from hair! A hardhat is a rigid protective helmet, usually white/yellow/orange. Dark hair, styled hair, or hair accessories are NOT hardhats. Only report "wearing hardhat" if you see an actual rigid safety helmet.
-- SAFETY BOOTS: ONLY mention safety boots if you can clearly see the person's feet/lower legs. If only upper body is visible, do NOT mention boots at all - say "feet not visible" instead.
-- BODY VISIBILITY: Note which parts of body are visible (full body, upper half only, etc.) before commenting on PPE for those areas.
+CRITICAL - ANTI-MISCLASSIFICATION RULES:
+========================================
+1. HARDHAT vs HAIR/CAPS:
+   - A HARDHAT is a RIGID, THICK protective helmet (typically white, yellow, orange, or bright colored)
+   - HAIR (even dark, neat hair) is NOT a hardhat
+   - Baseball caps, beanies, hoodies are NOT hardhats
+   - If unsure, describe what you see: "person has dark hair" NOT "wearing hardhat"
+   - ONLY say "hardhat" if you see a clearly identifiable safety helmet with rigid structure
+
+2. ACTUAL ENVIRONMENT (do not fabricate):
+   - If you see home furniture (sofa, TV stand, decorative items, carpets) → say "residential indoor setting"
+   - If you see office desks, computers, cubicles → say "office environment"
+   - If you see construction equipment, scaffolding, concrete → say "construction area"
+   - DO NOT call a living room a "construction site" or "work zone"
+
+3. VISIBILITY RULES:
+   - SAFETY BOOTS: ONLY mention if feet/ankles are clearly visible. If not visible, say "lower body not visible"
+   - GLOVES: Only if hands are clearly visible
+   - If only head/shoulders visible, do NOT speculate about lower body PPE
+
+4. PPE MUST BE OBVIOUS:
+   - Safety Vest: Bright fluorescent vest with reflective strips
+   - Hardhat: Rigid helmet with chin strap area visible
+   - Safety Boots: Sturdy work boots (steel toe style)
+   - Goggles: Clear protective eyewear
+   - DO NOT report PPE unless it is CLEARLY VISIBLE and IDENTIFIABLE
 
 Describe in order:
-- Worker(s): What are they doing? What body parts are visible?
-- PPE Status: Be EXPLICIT and SPECIFIC:
-  * For HEAD: Is there a rigid safety helmet/hardhat? (NOT hair or hair accessories)
-  * For TORSO: Is there a high-visibility vest/jacket?
-  * For HANDS: Are there work gloves?
-  * For FEET: ONLY if feet are visible - are there safety boots?
-  * For FACE: Are there goggles, mask, or face shield?
-  * DO NOT assume PPE for body parts that are not visible in frame
-- Work Environment: Construction area details, equipment, materials
-- Safety Concerns: Any visible hazards or unsafe conditions
+- Person(s): What are they doing? What body parts are visible (full body / upper half / head only)?
+- Clothing/PPE: Describe ONLY what is actually visible and certain
+  * HEAD: Describe hair/headwear. Only say "hardhat" if you see a rigid safety helmet
+  * TORSO: Describe shirt/jacket. Only say "safety vest" if fluorescent with reflective strips
+  * HANDS: Describe if visible. Only say "gloves" if work gloves are clearly visible
+  * FEET: If visible, describe footwear. If not visible, state "lower body not visible"
+  * FACE: Goggles/mask only if clearly present
+- Actual Environment: Describe the real setting (residential/office/industrial/outdoor/etc.)
+- Safety Context: Any visible hazards IF this is actually a work environment
 
-Treat this as a construction site even if it appears to be indoors or an office area. Write a flowing paragraph, not a numbered list."""
+Be accurate and honest. Do not assume this is a construction site unless you see construction indicators. Write a flowing paragraph, not a numbered list."""
     
     # Call Ollama API
     try:
@@ -204,14 +225,41 @@ def validate_work_environment(image_path):
         print(f"Error loading image: {e}")
         return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Could not load image for validation'}
     
-    # Quick environment classification prompt
-    prompt = """Classify this image in ONE LINE. Is this:
-A) CONSTRUCTION/INDUSTRIAL: construction site, factory, warehouse, workshop, manufacturing plant, work zone, any place with workers doing physical labor
-B) OFFICE/COMMERCIAL: office building, retail store, meeting room, reception area
-C) RESIDENTIAL/CASUAL: home, living room, bedroom, kitchen, park, beach, restaurant, casual setting with no work activity
-D) OTHER: outdoor road, vehicle interior, unclear, or doesn't fit above categories
+    # Quick environment classification prompt - STRICT scene recognition
+    prompt = """Look at this image carefully and classify the ACTUAL environment you see.
 
-Answer with just the letter (A/B/C/D) followed by 2-3 words describing what you see. Example: "A - construction workers on scaffolding" or "C - person in living room" """
+CHECK FOR THESE INDICATORS:
+
+A) CONSTRUCTION/INDUSTRIAL:
+   ✓ Scaffolding, concrete, lumber, construction equipment
+   ✓ Factory machinery, assembly lines, warehouses with industrial shelving
+   ✓ Visible construction materials, work site barriers, heavy machinery
+   ✓ People wearing multiple PPE items in an active work zone
+   → Choose A ONLY if you see CLEAR industrial/construction indicators
+
+B) OFFICE/COMMERCIAL:
+   ✓ Office desks, computers, cubicles, meeting rooms
+   ✓ Retail displays, store shelves, checkout counters
+   ✓ Professional indoor setting with business furniture
+
+C) RESIDENTIAL/CASUAL:
+   ✓ Home furniture: sofas, TV stands, beds, dining tables, home decor
+   ✓ Residential kitchen, living room, bedroom, home interior
+   ✓ Parks, beaches, restaurants, cafes, casual outdoor settings
+   ✓ Person at home (even if wearing safety gear for testing purposes)
+   → Choose C if this looks like someone's HOME or casual setting
+
+D) OTHER:
+   ✓ Vehicle interior, outdoor road/street, unclear background
+   ✓ Cannot determine the setting
+
+IMPORTANT: Do NOT classify a residential living room as construction site just because someone is wearing safety gear! The ENVIRONMENT determines the category, not the person's clothing.
+
+Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
+- "A - construction site with scaffolding"
+- "C - person in living room"
+- "C - home interior with sofa"
+- "B - office desk area" """
 
     try:
         response = requests.post(

@@ -26,6 +26,15 @@ const Router = {
     render(component) {
         const app = document.getElementById('app');
         app.innerHTML = component.render();
+        // Tag the page element with a page-specific class so CSS can target it
+        const pageEl = app.querySelector('.page');
+        if (pageEl) {
+            // remove any existing page-* classes
+            Array.from(pageEl.classList).forEach(c => {
+                if (c.startsWith('page-')) pageEl.classList.remove(c);
+            });
+            pageEl.classList.add('page-' + (APP_STATE.currentPage || 'home'));
+        }
         
         // Call mount lifecycle if exists
         if (component.mount) {
@@ -65,4 +74,17 @@ const Router = {
         const initialPage = window.location.hash.slice(1) || 'home';
         this.navigate(initialPage);
     }
+};
+
+// Add body-level toggles when navigating
+const ORIGINAL_NAVIGATE = Router.navigate.bind(Router);
+Router.navigate = function(path) {
+    ORIGINAL_NAVIGATE(path);
+
+    // Footer only on home
+    document.body.classList.toggle('show-footer', path === 'home');
+
+    // Allow page scroll only for reports and about
+    const allow = (path === 'reports' || path === 'about');
+    document.body.classList.toggle('allow-scroll', allow);
 };

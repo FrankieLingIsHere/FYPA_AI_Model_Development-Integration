@@ -139,7 +139,7 @@ const ReportsPage = {
         }
 
         list.innerHTML = `
-            <div class="grid">
+            <div class="reports-grid">
                 ${filtered.map(v => this.renderReportCard(v)).join('')}
             </div>
         `;

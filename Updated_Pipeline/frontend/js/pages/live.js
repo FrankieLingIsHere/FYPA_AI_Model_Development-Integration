@@ -13,6 +13,7 @@ const LivePage = {
                             <button id="stopLiveBtn" class="btn btn-danger" disabled>
                                 <i class="fas fa-stop"></i> Stop
                             </button>
+
                         </div>
                     </div>
                     <div class="card-content">
@@ -23,6 +24,8 @@ const LivePage = {
                                 <p style="color: #aaa; font-size: 0.9rem; margin-top: 0.5rem;">
                                     Real-time YOLO detection with PPE compliance checking
                                 </p>
+                                
+                                <span id="voiceStatus" class="badge">🔇 Voice OFF</span>
                             </div>
                             <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
                             <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #4CAF50; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: none;">
@@ -38,6 +41,8 @@ const LivePage = {
                             <li>When violations are detected, they will be logged automatically</li>
                             <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
                         </ol>
+
+                
 
                         <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detection Features:</h3>
                         <div class="grid grid-3">
@@ -115,6 +120,74 @@ const LivePage = {
         const streamImg = document.getElementById('liveStream');
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
+        
+
+            // ===== Voice Alert System =====
+        let voiceEnabled = false;
+        let lastReportId = null;
+        let alertedPPE = new Set();
+
+        // ===== Voice Button Toggle =====
+        document.addEventListener('click', (e) => {
+            if (!e.target) return;
+
+            if (e.target.id === "enableVoice") {
+                voiceEnabled = !voiceEnabled;
+
+                const badge = document.getElementById("voiceStatus");
+                if (badge) {
+                    badge.innerText = voiceEnabled ? "🔊 Voice ON" : "🔇 Voice OFF";
+                    badge.style.background = voiceEnabled ? "#2ecc71" : "#555";
+                }
+
+                const msg = voiceEnabled ? "Voice alerts activated" : "Voice alerts deactivated";
+                speechSynthesis.speak(new SpeechSynthesisUtterance(msg));
+                console.log(`🔊 Voice alerts ${voiceEnabled ? "enabled" : "disabled"} by user`);
+            }
+        });
+
+        function autoVoiceAlert(missingPPE) {
+            if (!voiceEnabled || !missingPPE || missingPPE.length === 0) return;
+            const msg = `Warning. ${missingPPE.join(" and ")} missing.`;
+            console.log("🔊 Voice alert triggered:", msg);
+            speechSynthesis.speak(new SpeechSynthesisUtterance(msg));
+        }
+
+        // ===== Poll Backend for Latest Violation =====
+        setInterval(async () => {
+            if (!APP_STATE.liveStreamActive) return;
+
+            try {
+                const res = await fetch(`${API_CONFIG.BASE_URL}/api/violations/latest`);
+                const data = await res.json();
+
+                if (!data.report_id) return;
+
+                // Update badge
+                const badge = document.getElementById("voiceStatus");
+                if (badge) {
+                    badge.innerText = voiceEnabled ? "🔊 Voice ON" : "🔇 Voice OFF";
+                    badge.style.background = voiceEnabled ? "#2ecc71" : "#555";
+                }
+
+                // New report → reset alerted PPE
+                if (data.report_id !== lastReportId) {
+                    lastReportId = data.report_id;
+                    alertedPPE.clear();
+                }
+
+                // Only alert new PPE items
+                const newAlerts = data.missing_ppe.filter(p => !alertedPPE.has(p));
+                if (voiceEnabled && newAlerts.length > 0) {
+                    newAlerts.forEach(p => alertedPPE.add(p));
+                    autoVoiceAlert(newAlerts.map(p => p.replace("NO-", "")));
+                }
+
+            } catch (err) {
+                console.warn("Violation poll failed", err);
+            }
+        }, 3000);
+        
 
         // Start live stream
         startBtn.addEventListener('click', async () => {
@@ -130,6 +203,20 @@ const LivePage = {
 
                 if (!response.ok) {
                     throw new Error('Failed to start monitoring');
+                }
+
+                // Sync latest report id to avoid alerting on existing violations
+                try {
+                    const latestRes = await fetch(`${API_CONFIG.BASE_URL}/api/violations/latest`);
+                    if (latestRes.ok) {
+                        const latestData = await latestRes.json();
+                        if (latestData && latestData.report_id) {
+                            lastReportId = latestData.report_id;
+                            console.log('Synced lastReportId to', lastReportId);
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Failed to sync latest report id', err);
                 }
 
                 // Hide placeholder, show stream
@@ -205,6 +292,19 @@ const LivePage = {
                 stopBtn.disabled = false;
                 startBtn.disabled = true;
                 APP_STATE.liveStreamActive = true;
+                // If stream already active, sync latest report to avoid immediate alert
+                try {
+                    const latestRes = await fetch(`${API_CONFIG.BASE_URL}/api/violations/latest`);
+                    if (latestRes.ok) {
+                        const latestData = await latestRes.json();
+                        if (latestData && latestData.report_id) {
+                            lastReportId = latestData.report_id;
+                            console.log('Synced lastReportId on init to', lastReportId);
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Failed to sync latest report id on init', err);
+                }
             }
         } catch (error) {
             console.error('Error checking stream status:', error);

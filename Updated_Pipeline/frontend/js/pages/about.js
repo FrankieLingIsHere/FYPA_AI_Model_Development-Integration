@@ -8,7 +8,7 @@ const AboutPage = {
                     <div class="card-content text-center">
                         <i class="fas fa-hard-hat" style="font-size: 4rem; color: var(--secondary-color); margin-bottom: 1rem;"></i>
                         <h1 style="font-size: 2.5rem; color: var(--primary-color); margin-bottom: 1rem;">
-                            PPE Safety Monitor
+                            CASM
                         </h1>
                         <p style="font-size: 1.2rem; color: var(--text-color); max-width: 800px; margin: 0 auto 1rem auto;">
                             An AI-powered real-time workplace safety monitoring system that uses advanced computer vision 

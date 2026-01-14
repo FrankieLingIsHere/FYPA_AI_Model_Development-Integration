@@ -393,6 +393,78 @@ def api_violations():
     return jsonify(violations)
 
 
+@app.route('/api/violations/latest')
+def api_violations_latest():
+    """Return the most recent violation (single object) or {} if none."""
+    try:
+        if not VIOLATIONS_DIR.exists():
+            return jsonify({}), 200
+
+        # Find most recent directory by name (timestamp format)
+        dirs = [d for d in VIOLATIONS_DIR.iterdir() if d.is_dir()]
+        if not dirs:
+            return jsonify({}), 200
+
+        # Sort by directory name descending (timestamp formatted names)
+        dirs_sorted = sorted(dirs, reverse=True)
+        latest = dirs_sorted[0]
+        report_id = latest.name
+
+        # Attempt to read metadata.json for details
+        metadata = {}
+        meta_file = latest / 'metadata.json'
+        if meta_file.exists():
+            try:
+                with open(meta_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except Exception:
+                metadata = {}
+
+        # Build missing_ppe list from metadata if present (fallback to violation_type)
+        missing_ppe = []
+        # metadata may contain keys like 'violation_type' or counts like 'no_hardhat_count'
+        if metadata.get('violation_type'):
+            # Could be comma-separated
+            vt = metadata.get('violation_type')
+            if isinstance(vt, str):
+                missing_ppe = [s.strip() for s in vt.split(',') if s.strip()]
+        else:
+            # Detect keys like 'no_hardhat_count' to infer missing items
+            for k in metadata.keys():
+                if k.startswith('no_') and metadata.get(k):
+                    # convert 'no_hardhat_count' -> 'NO-Hardhat'
+                    base = k.replace('no_', '').replace('_count', '')
+                    missing_ppe.append(('NO-' + base).upper())
+
+        # Normalize names: ensure NO- prefix for missing PPE
+        normalized = []
+        for item in missing_ppe:
+            s = item.strip()
+            if not s:
+                continue
+            if s.upper().startswith('NO-'):
+                normalized.append(s.upper())
+            else:
+                normalized.append(('NO-' + s).upper())
+
+        resp = {
+            'report_id': report_id,
+            'timestamp': metadata.get('timestamp'),
+            'missing_ppe': normalized,
+            'severity': metadata.get('severity', 'HIGH'),
+            'location': metadata.get('location', 'Live Stream Monitor'),
+            'has_report': (latest / 'report.html').exists(),
+            'original_image': f"/image/{report_id}/original.jpg",
+            'annotated_image': f"/image/{report_id}/annotated.jpg"
+        }
+
+        return jsonify(resp), 200
+
+    except Exception as e:
+        logger.error(f"Error in /api/violations/latest: {e}")
+        return jsonify({}), 500
+
+
 @app.route('/api/stats')
 def api_stats():
     """Get violation statistics."""

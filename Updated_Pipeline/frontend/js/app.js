@@ -61,3 +61,96 @@ function showBackendWarning() {
         }
     }, 10000);
 }
+
+
+// ===== Voice Alert System =====
+let voiceEnabled = false;          
+const globalAlertedPPE = new Set();  // Tracks PPE already alerted globally
+
+// ===== Enable/Disable Voice Button =====
+document.addEventListener('click', (e) => {
+    if (!e.target) return;
+
+    const badge = document.getElementById("voiceStatus");
+
+    if (e.target.id === "enableVoice") {
+        voiceEnabled = !voiceEnabled;
+
+        if (badge) {
+            badge.innerText = voiceEnabled ? "🔊 Voice ON" : "🔇 Voice OFF";
+            badge.style.background = voiceEnabled ? "#2ecc71" : "#555";
+        }
+
+        const msg = voiceEnabled ? "Voice alerts activated" : "Voice alerts deactivated";
+        speechSynthesis.speak(new SpeechSynthesisUtterance(msg));
+        console.log(`🔊 Voice alerts ${voiceEnabled ? "enabled" : "disabled"} by user`);
+
+        // Clear alerts when toggling OFF so next missing PPE triggers again
+        if (!voiceEnabled) globalAlertedPPE.clear();
+    }
+});
+
+
+// ===== Auto Speak Missing PPE =====
+function autoVoiceAlert(missingPPE) {
+    if (!voiceEnabled || !missingPPE || missingPPE.length === 0) return;
+
+    // Filter out PPE that have already been alerted
+    const newAlerts = missingPPE.filter(p => !globalAlertedPPE.has(p));
+    if (newAlerts.length === 0) return;
+
+    // Mark these PPE as alerted
+    newAlerts.forEach(p => globalAlertedPPE.add(p));
+
+    // Format the message
+    const formatted = newAlerts.map(p => p.replace("NO-", "")).join(" and ");
+    const msg = `Warning. ${formatted} missing.`;
+    console.log("🔊 Voice alert triggered:", msg);
+    speechSynthesis.speak(new SpeechSynthesisUtterance(msg));
+}
+
+// ===== Poll Backend for Latest Violation =====
+setInterval(async () => {
+    if (!APP_STATE.liveStreamActive) return;
+
+    try {
+        const res = await fetch(`${API_CONFIG.BASE_URL}/api/violations/latest`);
+        const data = await res.json();
+
+        if (!data.report_id || !data.missing_ppe) return;
+
+        // Convert all items to uppercase to normalize
+        const missingItems = data.missing_ppe.map(p => p.trim().toUpperCase());
+        autoVoiceAlert(missingItems);
+
+    } catch (err) {
+        console.warn("Violation poll failed", err);
+    }
+}, 3000);
+
+
+// ===== Poll Backend for Latest Violation =====
+setInterval(async () => {
+    if (!APP_STATE.liveStreamActive) return;
+
+    try {
+        const res = await fetch(`${API_CONFIG.BASE_URL}/api/violations/latest`);
+        const data = await res.json();
+
+        if (!data.report_id || !data.missing_ppe) return;
+
+        autoVoiceAlert(data.missing_ppe.map(p => p.replace("NO-", "")));
+    } catch (err) {
+        console.warn("Violation poll failed", err);
+    }
+}, 3000);
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.sidebar-link').forEach(link => {
+        link.addEventListener('click', () => {
+            document.querySelectorAll('.sidebar-link')
+                .forEach(l => l.classList.remove('active'));
+            link.classList.add('active');
+        });
+    });
+});

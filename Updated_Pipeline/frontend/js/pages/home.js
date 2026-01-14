@@ -1,93 +1,118 @@
 // Home Page Component
 const HomePage = {
     render() {
-        return `
-            <div class="page">
-                <!-- Hero Section -->
-                <div class="card mb-4">
-                    <div class="card-content text-center">
-                        <i class="fas fa-hard-hat" style="font-size: 4rem; color: var(--secondary-color); margin-bottom: 1rem;"></i>
-                        <h1 style="font-size: 2.5rem; color: var(--primary-color); margin-bottom: 1rem;">
-                            PPE Safety Monitor
-                        </h1>
-                        <p style="font-size: 1.2rem; color: var(--text-color); max-width: 800px; margin: 0 auto;">
-                            AI-powered real-time workplace safety monitoring system using computer vision 
-                            and natural language processing to detect PPE violations and generate comprehensive safety reports.
+    return `
+        <div class="home-dashboard">
+
+            <!-- Top Bar -->
+            <div class="hero-bar">
+                <i class="fas fa-hard-hat hero-icon"></i>
+                <div class="hero-text">
+                    <h1>CASM</h1>
+                    <p>AI-powered workplace safety monitoring</p>
+                </div>
+            </div>
+
+            <!-- Middle Stats -->
+            <div class="stats-row" id="stats-grid">
+                <div class="spinner"></div>
+            </div>
+
+            <!-- Safety Score -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <span><i class="fas fa-trophy"></i> Safety Compliance Score</span>
+                </div>
+                <div class="card-content">
+                    <div style="text-align: center; padding: 2rem;">
+                        <div id="safety-score" style="font-size: 4rem; font-weight: 700; color: var(--success-color); margin-bottom: 1rem;">
+                            --
+                        </div>
+                        <p style="font-size: 1.2rem; color: var(--text-color); margin-bottom: 1rem;">
+                            Overall Safety Compliance
+                        </p>
+                        <div style="max-width: 600px; height: 20px; background: var(--background-color); border-radius: 10px; margin: 0 auto; overflow: hidden;">
+                            <div id="safety-bar" style="height: 100%; background: linear-gradient(90deg, var(--success-color), var(--secondary-color)); transition: width 0.5s ease; width: 0%;"></div>
+                        </div>
+                        <p style="color: #7f8c8d; margin-top: 1rem; font-size: 0.9rem;">
+                            Based on violation frequency and severity
                         </p>
                     </div>
                 </div>
+            </div>
 
-                <!-- Statistics Dashboard -->
-                <div id="stats-grid" class="grid grid-4 mb-4">
-                    <div class="spinner"></div>
-                </div>
-
-                <!-- Quick Actions -->
-                <div class="card mb-4">
-                    <div class="card-header">
-                        <span><i class="fas fa-bolt"></i> Quick Actions</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="grid grid-3">
-                            <button class="btn btn-primary" onclick="Router.navigate('live')">
-                                <i class="fas fa-video"></i> Start Live Monitoring
-                            </button>
-                            <button class="btn btn-primary" onclick="Router.navigate('reports')">
-                                <i class="fas fa-file-alt"></i> View All Reports
-                            </button>
-                            <button class="btn btn-primary" onclick="Router.navigate('analytics')">
-                                <i class="fas fa-chart-line"></i> View Analytics
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Recent Violations -->
+            <div class="grid grid-2">
+                <!-- Violation Types Breakdown -->
                 <div class="card">
                     <div class="card-header">
-                        <span><i class="fas fa-exclamation-triangle"></i> Recent Violations</span>
-                        <button class="btn btn-secondary" onclick="Router.navigate('reports')" style="padding: 0.5rem 1rem;">
-                            View All
-                        </button>
+                        <span><i class="fas fa-pie-chart"></i> Violation Types</span>
                     </div>
-                    <div class="card-content" id="recent-violations">
+                    <div class="card-content" id="violation-types">
                         <div class="spinner"></div>
                     </div>
                 </div>
 
-                <!-- System Features -->
-                <div class="grid grid-3 mt-4">
-                    <div class="card">
-                        <div class="card-content text-center">
-                            <i class="fas fa-brain" style="font-size: 3rem; color: var(--secondary-color); margin-bottom: 1rem;"></i>
-                            <h3 style="margin-bottom: 0.5rem;">AI Detection</h3>
-                            <p>YOLOv8 custom model trained on 14 PPE classes for accurate real-time detection</p>
-                        </div>
+                <!-- Time Distribution -->
+                <div class="card">
+                    <div class="card-header">
+                        <span><i class="fas fa-clock"></i> Time Distribution</span>
                     </div>
-                    <div class="card">
-                        <div class="card-content text-center">
-                            <i class="fas fa-camera" style="font-size: 3rem; color: var(--success-color); margin-bottom: 1rem;"></i>
-                            <h3 style="margin-bottom: 0.5rem;">High-Res Capture</h3>
-                            <p>1920x1080 Full HD image capture for detailed documentation and AI analysis</p>
-                        </div>
-                    </div>
-                    <div class="card">
-                        <div class="card-content text-center">
-                            <i class="fas fa-file-pdf" style="font-size: 3rem; color: var(--error-color); margin-bottom: 1rem;"></i>
-                            <h3 style="margin-bottom: 0.5rem;">Smart Reports</h3>
-                            <p>AI-generated safety reports with NLP analysis and actionable recommendations</p>
-                        </div>
+                    <div class="card-content" id="time-distribution">
+                        <div class="spinner"></div>
                     </div>
                 </div>
             </div>
-        `;
-    },
+
+            <!-- Main Bottom Layout -->
+            <div class="main-lower">
+
+                <!-- Quick Actions -->
+                <div class="quick-card card">
+                    <h2 class="section-title"><i class="fas fa-bolt"></i> Quick Actions</h2>
+                    <div class="qa-buttons">
+                        <button class="btn btn-primary" onclick="Router.navigate('live')">
+                            <i class="fas fa-video"></i> Live
+                        </button>
+                        <button class="btn btn-primary" onclick="Router.navigate('reports')">
+                            <i class="fas fa-file-alt"></i> Reports
+                        </button>
+                        <button class="btn btn-primary" onclick="Router.navigate('analytics')">
+                            <i class="fas fa-chart-line"></i> Analytics
+                        </button>
+
+                    </div>
+                </div>
+
+                <!-- Recent Violations -->
+                <div class="recent-card card">
+                    <div class="recent-header">
+                        <span><i class="fas fa-exclamation-triangle"></i> Recent Violations</span>
+                        <button class="btn btn-secondary" onclick="Router.navigate('reports')">View All</button>
+                    </div>
+
+                    <!-- scrollable content -->
+                    <div id="recent-violations" class="recent-content">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+
+
+            </div>
+
+        </div>
+    `;
+},
+
+
 
     async mount() {
         // Load statistics
         const stats = await API.getStats();
         this.renderStats(stats);
         this.renderRecentViolations(stats.recentViolations);
+        this.renderViolationTypes(stats);
+        this.renderTimeDistribution(stats);
+        this.calculateSafetyScore(stats);
     },
 
     renderStats(stats) {
@@ -151,5 +176,98 @@ const HomePage = {
                 `).join('')}
             </div>
         `;
+    },
+
+    renderViolationTypes(stats) {
+        const container = document.getElementById('violation-types');
+        
+        // For now, all violations are NO-Hardhat
+        const types = [
+            { name: 'Missing Hardhat', count: stats.total, color: 'var(--error-color)' },
+            { name: 'Missing Safety Vest', count: 0, color: 'var(--warning-color)' },
+            { name: 'Missing Gloves', count: 0, color: 'var(--info-color)' },
+            { name: 'Other PPE', count: 0, color: 'var(--text-color)' }
+        ];
+
+        container.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                ${types.map(type => `
+                    <div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="font-weight: 500;">${type.name}</span>
+                            <span style="font-weight: 600; color: ${type.color};">${type.count}</span>
+                        </div>
+                        <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
+                            <div style="height: 100%; background: ${type.color}; width: ${stats.total > 0 ? (type.count / stats.total * 100) : 0}%; transition: width 0.5s ease;"></div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    renderTimeDistribution(stats) {
+        const container = document.getElementById('time-distribution');
+        
+        // Calculate time distribution
+        const distribution = {
+            'Morning (6AM-12PM)': 0,
+            'Afternoon (12PM-6PM)': 0,
+            'Evening (6PM-12AM)': 0,
+            'Night (12AM-6AM)': 0
+        };
+
+        // Analyze violations (placeholder - would need actual time data)
+        const violations = stats.recentViolations || [];
+        violations.forEach(v => {
+            const hour = new Date(v.timestamp).getHours();
+            if (hour >= 6 && hour < 12) distribution['Morning (6AM-12PM)']++;
+            else if (hour >= 12 && hour < 18) distribution['Afternoon (12PM-6PM)']++;
+            else if (hour >= 18 && hour < 24) distribution['Evening (6PM-12AM)']++;
+            else distribution['Night (12AM-6AM)']++;
+        });
+
+        const maxCount = Math.max(...Object.values(distribution), 1);
+
+        container.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                ${Object.entries(distribution).map(([period, count]) => `
+                    <div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="font-weight: 500;">${period}</span>
+                            <span style="font-weight: 600;">${count}</span>
+                        </div>
+                        <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
+                            <div style="height: 100%; background: var(--secondary-color); width: ${(count / maxCount * 100)}%; transition: width 0.5s ease;"></div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    calculateSafetyScore(stats) {
+        // Simple safety score calculation
+        // 100% - (violations_today * 10)
+        const score = Math.max(0, Math.min(100, 100 - (stats.today * 10)));
+        
+        const scoreElement = document.getElementById('safety-score');
+        const barElement = document.getElementById('safety-bar');
+        
+        scoreElement.textContent = `${score}%`;
+        barElement.style.width = `${score}%`;
+        
+        // Change color based on score
+        if (score >= 80) {
+            scoreElement.style.color = 'var(--success-color)';
+            barElement.style.background = 'linear-gradient(90deg, var(--success-color), #27ae60)';
+        } else if (score >= 60) {
+            scoreElement.style.color = 'var(--warning-color)';
+            barElement.style.background = 'linear-gradient(90deg, var(--warning-color), #e67e22)';
+        } else {
+            scoreElement.style.color = 'var(--error-color)';
+            barElement.style.background = 'linear-gradient(90deg, var(--error-color), #c0392b)';
+        }
     }
+
 };

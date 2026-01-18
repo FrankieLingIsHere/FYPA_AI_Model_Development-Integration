@@ -4,45 +4,49 @@ const HomePage = {
     return `
         <div class="home-dashboard">
 
-            <!-- Top Bar -->
-            <div class="hero-bar">
-                <i class="fas fa-hard-hat hero-icon"></i>
-                <div class="hero-text">
-                    <h1>CASM</h1>
-                    <p>AI-powered workplace safety monitoring</p>
+            <div class="home-grid">
+
+            <!-- Top-left: Violations summary -->
+            <div class="card home-summary-card">
+                <h3>Violations Overview</h3>
+                <div class="summary-grid">
+                    <!-- Today -->
+                    <div class="summary-block">
+                        <span class="label">Today</span>
+                        <span class="value" id="todayCount">0</span>
+                        <span class="delta" id="todayDelta"></span>
+                    </div>
+
+                    <!-- This Week -->
+                    <div class="summary-block">
+                        <span class="label">This Week</span>
+                        <span class="value" id="weekCount">0</span>
+                        <span class="delta" id="weekDelta"></span>
+                    </div>
+
+                    <!-- High Severity (optional third block) -->
+                    <div class="summary-block">
+                        <span class="label">High Severity</span>
+                        <span class="value" id="highSeverityCount">0</span>
+                    </div>
                 </div>
-            </div>
 
-            <!-- Middle Stats -->
-            <div class="stats-row" id="stats-grid">
-                <div class="spinner"></div>
-            </div>
-
-            <!-- Safety Score -->
-            <div class="card mt-4">
                 <div class="card-header">
                     <span><i class="fas fa-trophy"></i> Safety Compliance Score</span>
                 </div>
-                <div class="card-content">
-                    <div style="text-align: center; padding: 2rem;">
-                        <div id="safety-score" style="font-size: 4rem; font-weight: 700; color: var(--success-color); margin-bottom: 1rem;">
-                            --
-                        </div>
-                        <p style="font-size: 1.2rem; color: var(--text-color); margin-bottom: 1rem;">
-                            Overall Safety Compliance
-                        </p>
-                        <div style="max-width: 600px; height: 20px; background: var(--background-color); border-radius: 10px; margin: 0 auto; overflow: hidden;">
-                            <div id="safety-bar" style="height: 100%; background: linear-gradient(90deg, var(--success-color), var(--secondary-color)); transition: width 0.5s ease; width: 0%;"></div>
-                        </div>
-                        <p style="color: #7f8c8d; margin-top: 1rem; font-size: 0.9rem;">
-                            Based on violation frequency and severity
-                        </p>
+                <div class="card-content" style="text-align: center; padding: 2rem;">
+                    <div id="safety-score" style="font-size: 4rem; font-weight: 700; color: var(--success-color); margin-bottom: 1rem;">--</div>
+                    <p style="font-size: 1.2rem; color: var(--text-color); margin-bottom: 1rem;">Overall Safety Compliance</p>
+                    <div style="max-width: 600px; height: 20px; background: var(--background-color); border-radius: 10px; margin: 0 auto; overflow: hidden;">
+                        <div id="safety-bar" style="height: 100%; background: linear-gradient(90deg, var(--success-color), var(--secondary-color)); transition: width 0.5s ease; width: 0%;"></div>
                     </div>
+                    <p style="color: #7f8c8d; margin-top: 1rem; font-size: 0.9rem;">Based on violation frequency and severity</p>
                 </div>
             </div>
 
-            <div class="grid grid-2">
-                <!-- Violation Types Breakdown -->
+
+            <!-- placeholders for later -->
+            <div class="card">
                 <div class="card">
                     <div class="card-header">
                         <span><i class="fas fa-pie-chart"></i> Violation Types</span>
@@ -52,38 +56,12 @@ const HomePage = {
                     </div>
                 </div>
 
-                <!-- Time Distribution -->
-                <div class="card">
-                    <div class="card-header">
-                        <span><i class="fas fa-clock"></i> Time Distribution</span>
-                    </div>
-                    <div class="card-content" id="time-distribution">
-                        <div class="spinner"></div>
-                    </div>
-                </div>
+
             </div>
 
-            <!-- Main Bottom Layout -->
-            <div class="main-lower">
 
-                <!-- Quick Actions -->
-                <div class="quick-card card">
-                    <h2 class="section-title"><i class="fas fa-bolt"></i> Quick Actions</h2>
-                    <div class="qa-buttons">
-                        <button class="btn btn-primary" onclick="Router.navigate('live')">
-                            <i class="fas fa-video"></i> Live
-                        </button>
-                        <button class="btn btn-primary" onclick="Router.navigate('reports')">
-                            <i class="fas fa-file-alt"></i> Reports
-                        </button>
-                        <button class="btn btn-primary" onclick="Router.navigate('analytics')">
-                            <i class="fas fa-chart-line"></i> Analytics
-                        </button>
-
-                    </div>
-                </div>
-
-                <!-- Recent Violations -->
+            <div class="card">
+            <!-- Recent Violations -->
                 <div class="recent-card card">
                     <div class="recent-header">
                         <span><i class="fas fa-exclamation-triangle"></i> Recent Violations</span>
@@ -95,7 +73,7 @@ const HomePage = {
                         <div class="spinner"></div>
                     </div>
                 </div>
-
+            </div>
 
             </div>
 
@@ -105,41 +83,45 @@ const HomePage = {
 
 
 
+
+
     async mount() {
-        // Load statistics
         const stats = await API.getStats();
+
+        this.renderHomeSummary(stats);
         this.renderStats(stats);
-        this.renderRecentViolations(stats.recentViolations);
+        this.renderRecentViolations(stats.recentViolations || []);
         this.renderViolationTypes(stats);
         this.renderTimeDistribution(stats);
         this.calculateSafetyScore(stats);
     },
 
+
     renderStats(stats) {
-        const statsGrid = document.getElementById('stats-grid');
-        statsGrid.innerHTML = `
-            <div class="stat-card">
-                <h3>${stats.total}</h3>
-                <p>Total Violations</p>
-            </div>
-            <div class="stat-card ${stats.today > 0 ? 'danger' : 'success'}">
-                <h3>${stats.today}</h3>
-                <p>Violations Today</p>
-            </div>
-            <div class="stat-card warning">
-                <h3>${stats.thisWeek}</h3>
-                <p>This Week</p>
-            </div>
-            <div class="stat-card danger">
-                <h3>${stats.severity.high}</h3>
-                <p>High Severity</p>
-            </div>
-        `;
+        let statsGrid = document.getElementById('stats-grid');
+        // If the middle stats row was removed, create a safe fallback so rendering doesn't throw
+        if (!statsGrid) {
+            const container = document.querySelector('.home-grid') || document.body;
+            statsGrid = document.createElement('div');
+            statsGrid.className = 'stats-row';
+            statsGrid.id = 'stats-grid';
+            // insert before the safety card if present to keep layout reasonable
+            const safetyCard = document.querySelector('.card.mt-4');
+            if (safetyCard && safetyCard.parentNode) safetyCard.parentNode.insertBefore(statsGrid, safetyCard);
+            else container.appendChild(statsGrid);
+        }
     },
+    
 
     renderRecentViolations(violations) {
-        const container = document.getElementById('recent-violations');
-        
+        let container = document.getElementById('recent-violations');
+        if (!container) {
+            const parent = document.querySelector('.home-grid') || document.body;
+            container = document.createElement('div');
+            container.id = 'recent-violations';
+            parent.appendChild(container);
+        }
+
         if (violations.length === 0) {
             container.innerHTML = `
                 <div class="alert alert-success">
@@ -179,8 +161,14 @@ const HomePage = {
     },
 
     renderViolationTypes(stats) {
-        const container = document.getElementById('violation-types');
-        
+        let container = document.getElementById('violation-types');
+        if (!container) {
+            const parent = document.querySelector('.home-grid') || document.body;
+            container = document.createElement('div');
+            container.id = 'violation-types';
+            parent.appendChild(container);
+        }
+
         // For now, all violations are NO-Hardhat
         const types = [
             { name: 'Missing Hardhat', count: stats.total, color: 'var(--error-color)' },
@@ -206,68 +194,59 @@ const HomePage = {
         `;
     },
 
-    renderTimeDistribution(stats) {
-        const container = document.getElementById('time-distribution');
-        
-        // Calculate time distribution
-        const distribution = {
-            'Morning (6AM-12PM)': 0,
-            'Afternoon (12PM-6PM)': 0,
-            'Evening (6PM-12AM)': 0,
-            'Night (12AM-6AM)': 0
-        };
-
-        // Analyze violations (placeholder - would need actual time data)
-        const violations = stats.recentViolations || [];
-        violations.forEach(v => {
-            const hour = new Date(v.timestamp).getHours();
-            if (hour >= 6 && hour < 12) distribution['Morning (6AM-12PM)']++;
-            else if (hour >= 12 && hour < 18) distribution['Afternoon (12PM-6PM)']++;
-            else if (hour >= 18 && hour < 24) distribution['Evening (6PM-12AM)']++;
-            else distribution['Night (12AM-6AM)']++;
-        });
-
-        const maxCount = Math.max(...Object.values(distribution), 1);
-
-        container.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 1rem;">
-                ${Object.entries(distribution).map(([period, count]) => `
-                    <div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                            <span style="font-weight: 500;">${period}</span>
-                            <span style="font-weight: 600;">${count}</span>
-                        </div>
-                        <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
-                            <div style="height: 100%; background: var(--secondary-color); width: ${(count / maxCount * 100)}%; transition: width 0.5s ease;"></div>
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        `;
-    },
 
     calculateSafetyScore(stats) {
-        // Simple safety score calculation
-        // 100% - (violations_today * 10)
-        const score = Math.max(0, Math.min(100, 100 - (stats.today * 10)));
-        
-        const scoreElement = document.getElementById('safety-score');
-        const barElement = document.getElementById('safety-bar');
-        
-        scoreElement.textContent = `${score}%`;
-        barElement.style.width = `${score}%`;
-        
-        // Change color based on score
-        if (score >= 80) {
-            scoreElement.style.color = 'var(--success-color)';
-            barElement.style.background = 'linear-gradient(90deg, var(--success-color), #27ae60)';
-        } else if (score >= 60) {
-            scoreElement.style.color = 'var(--warning-color)';
-            barElement.style.background = 'linear-gradient(90deg, var(--warning-color), #e67e22)';
-        } else {
-            scoreElement.style.color = 'var(--error-color)';
-            barElement.style.background = 'linear-gradient(90deg, var(--error-color), #c0392b)';
-        }
+    const score = Math.max(0, Math.min(100, 100 - (stats.today * 10)));
+
+    const scoreElement = document.getElementById('safety-score');
+    const barElement = document.getElementById('safety-bar');
+
+    if (!scoreElement || !barElement) return; // safely exit if elements missing
+
+    scoreElement.textContent = `${score}%`;
+    barElement.style.width = `${score}%`;
+
+    if (score >= 80) {
+        scoreElement.style.color = 'var(--success-color)';
+        barElement.style.background = 'linear-gradient(90deg, var(--success-color), #27ae60)';
+    } else if (score >= 60) {
+        scoreElement.style.color = 'var(--warning-color)';
+        barElement.style.background = 'linear-gradient(90deg, var(--warning-color), #e67e22)';
+    } else {
+        scoreElement.style.color = 'var(--error-color)';
+        barElement.style.background = 'linear-gradient(90deg, var(--error-color), #c0392b)';
     }
+},
+
+
+    renderHomeSummary(stats) {
+        // MOCK previous values for now
+        const yesterday = stats.today + 5;
+        const lastWeek = stats.thisWeek - 3;
+
+        const todayDelta = stats.today - yesterday;
+        const weekDelta = stats.thisWeek - lastWeek;
+
+        // Numbers
+        const todayEl = document.getElementById("todayCount"); if (todayEl) todayEl.innerText = stats.today;
+        const weekEl = document.getElementById("weekCount"); if (weekEl) weekEl.innerText = stats.thisWeek;
+
+        // Deltas
+        this.setDelta("todayDelta", todayDelta, "yesterday");
+        this.setDelta("weekDelta", weekDelta, "last week");
+    },
+
+
+    setDelta(id, value, label) {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        const sign = value > 0 ? "+" : "";
+        const arrow = value > 0 ? "▲" : "▼";
+
+        el.innerText = `${arrow} ${sign}${value} vs ${label}`;
+        el.className = "delta " + (value > 0 ? "positive" : "negative");
+    },
+
 
 };

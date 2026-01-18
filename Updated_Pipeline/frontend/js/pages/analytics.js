@@ -36,7 +36,7 @@ const AnalyticsPage = {
                         <div class="card-header">
                             <span><i class="fas fa-pie-chart"></i> Violation Types</span>
                         </div>
-                        <div class="card-content" id="violation-types">
+                        <div class="card-content" id="violation-types-analytics">
                             <div class="spinner"></div>
                         </div>
                     </div>
@@ -109,7 +109,7 @@ const AnalyticsPage = {
     },
 
     renderViolationTypes(stats) {
-        const container = document.getElementById('violation-types');
+        const container = document.getElementById('violation-types-analytics');
         
         // For now, all violations are NO-Hardhat
         const types = [

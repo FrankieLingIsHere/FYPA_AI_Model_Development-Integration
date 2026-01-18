@@ -148,6 +148,7 @@
     margin-top: .5rem;
     overflow-y: auto;        /* internal scroll */
     padding-right: 4px;      /* for scrollbar spacing */
+    height: 600px;
 }
 
 /* Features */
@@ -719,6 +720,46 @@ body {
     border-radius: 8px;
 }
 
+#liveStreamContainer.live-active {
+    max-height: 75vh;
+}
+
+#liveStreamContainer.live-active img {
+    max-height: 75vh;
+}
+
+
+.live-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.live-tab {
+    background: none;
+    border: none;
+    padding: 0.6rem 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #777;
+    border-bottom: 3px solid transparent;
+}
+
+.live-tab.active {
+    color: var(--secondary-color);
+    border-bottom-color: var(--secondary-color);
+}
+
+.live-section {
+    display: none;
+}
+
+.live-section.active {
+    display: block;
+}
+
+
 #liveStream {
     max-height: 500px;
     width: auto !important;
@@ -738,4 +779,58 @@ body {
     background: #000;
     border-radius: 8px;
     width: 100%;
+}
+
+
+.home-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+
+.home-summary-card {
+    padding: 1rem;
+}
+
+.summary-grid {
+    display: flex;
+    justify-content: space-between;  /* side by side */
+    gap: 1rem;                        /* spacing between blocks */
+    margin-top: 1rem;
+}
+
+.summary-block {
+    background: var(--background-color);
+    flex: 1;                           /* all blocks same width */
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    text-align: center;
+}
+
+.summary-block .label {
+    display: block;
+    font-weight: 500;
+    color: #7f8c8d;
+    margin-bottom: 0.5rem;
+}
+
+.summary-block .value {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.summary-block .delta {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.delta.positive {
+    color: var(--error-color);   /* red for increase */
+}
+
+.delta.negative {
+    color: var(--success-color); /* green for decrease */
 }

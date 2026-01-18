@@ -33,69 +33,74 @@ const LivePage = {
                             </div>
                         </div>
 
-                        <h3 style="margin-bottom: 1rem;">Instructions:</h3>
-                        <ol style="margin-left: 1.5rem; line-height: 2;">
-                            <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
-                            <li>Your webcam will activate and show the live feed</li>
-                            <li>YOLO will detect PPE in real-time with bounding boxes</li>
-                            <li>When violations are detected, they will be logged automatically</li>
-                            <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
-                        </ol>
+                        <div class="live-tabs">
+                            <button class="live-tab active" data-tab="instructions">Instructions</button>
+                            <button class="live-tab" data-tab="features">Features</button>
+                            <button class="live-tab" data-tab="settings">Settings</button>
+                        </div>
 
-                
 
-                        <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detection Features:</h3>
-                        <div class="grid grid-3">
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-bolt" style="font-size: 2rem; color: var(--warning-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">Real-Time</h4>
-                                    <p>Instant PPE detection at 30 FPS</p>
+                        <div class="live-section active" id="tab-instructions">
+                            <h3 style="margin-bottom: 1rem;">Instructions:</h3>
+                            <ol style="margin-left: 1.5rem; line-height: 2;">
+                                <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
+                                <li>Your webcam will activate and show the live feed</li>
+                                <li>YOLO will detect PPE in real-time with bounding boxes</li>
+                                <li>When violations are detected, they will be logged automatically</li>
+                                <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
+                            </ol>
+                        </div>
+
+
+                        <div class="live-section" id="tab-features">
+                            <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detection Features:</h3>
+                            <div class="grid grid-3">
+                                <div class="card" style="background: var(--background-color);">
+                                    <div class="card-content text-center">
+                                        <i class="fas fa-bolt" style="font-size: 2rem; color: var(--warning-color);"></i>
+                                        <h4 style="margin-top: 0.5rem;">Real-Time</h4>
+                                        <p>Instant PPE detection at 30 FPS</p>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-brain" style="font-size: 2rem; color: var(--primary-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">AI-Powered</h4>
-                                    <p>YOLOv8 trained on 14 PPE classes</p>
+                                <div class="card" style="background: var(--background-color);">
+                                    <div class="card-content text-center">
+                                        <i class="fas fa-brain" style="font-size: 2rem; color: var(--primary-color);"></i>
+                                        <h4 style="margin-top: 0.5rem;">AI-Powered</h4>
+                                        <p>YOLOv8 trained on 14 PPE classes</p>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-check-circle" style="font-size: 2rem; color: var(--success-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">Accurate</h4>
-                                    <p>95%+ detection accuracy</p>
+                                <div class="card" style="background: var(--background-color);">
+                                    <div class="card-content text-center">
+                                        <i class="fas fa-check-circle" style="font-size: 2rem; color: var(--success-color);"></i>
+                                        <h4 style="margin-top: 0.5rem;">Accurate</h4>
+                                        <p>95%+ detection accuracy</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                <!-- Detection Settings -->
-                <div class="card">
-                    <div class="card-header">
-                        <span><i class="fas fa-cog"></i> Detection Settings</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="grid grid-2">
-                            <div>
-                                <h4 style="margin-bottom: 0.5rem;">Active PPE Classes (14 total):</h4>
-                                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
-                                    <span class="badge badge-info">Hardhat</span>
-                                    <span class="badge badge-info">Safety Vest</span>
-                                    <span class="badge badge-info">Mask</span>
-                                    <span class="badge badge-info">Gloves</span>
-                                    <span class="badge badge-info">Safety Shoes</span>
-                                    <span class="badge badge-info">Goggles</span>
-                                    <span class="badge badge-info">NO-Hardhat</span>
-                                    <span class="badge badge-info">NO-Safety Vest</span>
-                                    <span class="badge badge-info">NO-Mask</span>
-                                    <span class="badge badge-info">NO-Gloves</span>
-                                    <span class="badge badge-info">NO-Safety Shoes</span>
-                                    <span class="badge badge-info">NO-Goggles</span>
-                                    <span class="badge badge-info">Person</span>
-                                    <span class="badge badge-info">Machinery</span>
-                                </div>
+                        <div class="live-section" id="tab-settings">
+                    <h3 style="margin-bottom: 1rem;">Detection Settings</h3>
+
+                    <div class="grid grid-2">
+                        <div>
+                            <h4 style="margin-bottom: 0.5rem;">Active PPE Classes (14 total):</h4>
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+                                <span class="badge badge-info">Hardhat</span>
+                                <span class="badge badge-info">Safety Vest</span>
+                                <span class="badge badge-info">Mask</span>
+                                <span class="badge badge-info">Gloves</span>
+                                <span class="badge badge-info">Safety Shoes</span>
+                                <span class="badge badge-info">Goggles</span>
+                                <span class="badge badge-info">NO-Hardhat</span>
+                                <span class="badge badge-info">NO-Safety Vest</span>
+                                <span class="badge badge-info">NO-Mask</span>
+                                <span class="badge badge-info">NO-Gloves</span>
+                                <span class="badge badge-info">NO-Safety Shoes</span>
+                                <span class="badge badge-info">NO-Goggles</span>
+                                <span class="badge badge-info">Person</span>
+                                <span class="badge badge-info">Machinery</span>
+                            </div>
                             </div>
                             <div>
                                 <h4 style="margin-bottom: 0.5rem;">Current Violation Rules:</h4>
@@ -108,7 +113,10 @@ const LivePage = {
                             </div>
                         </div>
                     </div>
+
+                    </div>
                 </div>
+
             </div>
         `;
     },
@@ -120,13 +128,30 @@ const LivePage = {
         const streamImg = document.getElementById('liveStream');
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
-        
+        const tabs = document.querySelectorAll('.live-tab');
+        const sections = document.querySelectorAll('.live-section');
 
             // ===== Voice Alert System =====
         let voiceEnabled = false;
         let lastReportId = null;
         let alertedPPE = new Set();
 
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                const target = tab.dataset.tab;
+                sections.forEach(sec => {
+                    sec.classList.toggle(
+                        'active',
+                        sec.id === `tab-${target}`
+                    );
+                });
+            });
+        });
+
+        
         // ===== Voice Button Toggle =====
         document.addEventListener('click', (e) => {
             if (!e.target) return;

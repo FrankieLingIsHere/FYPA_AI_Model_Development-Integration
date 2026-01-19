@@ -1,0 +1,29 @@
+# Supabase Configuration
+# ======================
+YOUR-PASSWORD = FYP2025-2026
+# Supabase Project URL (from Settings → API)
+SUPABASE_URL=https://tgysittnsjuiuaycixta.supabase.co
+
+# Supabase Service Role Key (from Settings → API)
+# WARNING: Keep this secret! Never commit to version control
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRneXNpdHRuc2p1aXVheWNpeHRhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTgzODg0NCwiZXhwIjoyMDgxNDE0ODQ0fQ.2I9IemrKBSlXA0s8Ql95WHclG91UOXKggU90WtWSFQY
+
+# Supabase Database URL (from Settings → Database → Connection string → URI)
+# Format: postgresql://postgres.[project]:[password]@aws-X-region.pooler.supabase.com:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres.tgysittnsjuiuaycixta:FYP2025-2026@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
+
+# Storage Bucket Names (optional - defaults shown)
+SUPABASE_IMAGES_BUCKET=violation-images
+SUPABASE_REPORTS_BUCKET=reports
+
+# Signed URL Configuration (optional)
+# How long signed URLs remain valid (in seconds)
+SUPABASE_SIGNED_URL_TTL_SECONDS=3600
+
+# Upload Options (optional)
+# Set to 'true' to enable PDF generation and upload
+UPLOAD_PDF=false
+
+# Flask Configuration (optional)
+# Set to 'true' ONLY for local development - NEVER in production
+FLASK_DEBUG=false

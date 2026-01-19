@@ -9,31 +9,58 @@
 </head>
 <body>
     <!-- Navigation -->
-    <nav class="navbar">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <i class="fas fa-hard-hat"></i>
-                <span>PPE Safety Monitor</span>
-            </div>
-            <ul class="nav-menu">
-                <li><a href="#home" class="nav-link active" data-page="home">
-                    <i class="fas fa-home"></i> Home
-                </a></li>
-                <li><a href="#live" class="nav-link" data-page="live">
-                    <i class="fas fa-video"></i> Live Monitor
-                </a></li>
-                <li><a href="#reports" class="nav-link" data-page="reports">
-                    <i class="fas fa-file-alt"></i> Reports
-                </a></li>
-                <li><a href="#analytics" class="nav-link" data-page="analytics">
-                    <i class="fas fa-chart-line"></i> Analytics
-                </a></li>
-                <li><a href="#about" class="nav-link" data-page="about">
-                    <i class="fas fa-info-circle"></i> About
-                </a></li>
-            </ul>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+
+        <!-- Header -->
+        <div class="sidebar-header">
+            <i class="fas fa-hard-hat sidebar-logo"></i>
+            <span class="sidebar-title">CASM</span>
         </div>
+
+        <!-- Main navigation -->
+        <ul class="sidebar-menu sidebar-main">
+            <li>
+                <a href="#home" class="sidebar-link active" data-page="home">
+                    <i class="fas fa-home"></i>
+                    <span>Home</span>
+                </a>
+            </li>
+            <li>
+                <a href="#live" class="sidebar-link" data-page="live">
+                    <i class="fas fa-video"></i>
+                    <span>Live Monitor</span>
+                </a>
+            </li>
+            <li>
+                <a href="#reports" class="sidebar-link" data-page="reports">
+                    <i class="fas fa-file-alt"></i>
+                    <span>Reports</span>
+                </a>
+            </li>
+            <li>
+                <a href="#analytics" class="sidebar-link" data-page="analytics">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Analytics</span>
+                </a>
+            </li>
+        </ul>
+
+        <!-- Bottom section -->
+        <div class="sidebar-bottom">
+            <a href="#about" class="sidebar-link" data-page="about">
+                <i class="fas fa-info-circle"></i>
+                <span>About</span>
+            </a>
+
+            <button id="enableVoice" class="btn btn-danger sidebar-voice-btn">
+                🔊 <span>Voice Alerts</span>
+            </button>
+        </div>
+
     </nav>
+
+
 
     <!-- Main Content Area -->
     <main id="app" class="main-content">
@@ -53,6 +80,7 @@
     <!-- Scripts -->
     <script src="/static/js/config.js"></script>
     <script src="/static/js/notifications.js"></script>
+    <script src="/static/js/audioAlert.js"></script>
     <script src="/static/js/violation-monitor.js"></script>
     <script src="/static/js/api.js"></script>
     <script src="/static/js/router.js"></script>
@@ -62,6 +90,7 @@
     <script src="/static/js/pages/analytics.js"></script>
     <script src="/static/js/pages/about.js"></script>
     <script src="/static/js/app.js"></script>
+
 </body>
 </html>
 

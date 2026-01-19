@@ -87,6 +87,14 @@ const LivePage = {
                             </div>
                         </div>
 
+                        <div class="live-tabs">
+                            <button class="live-tab active" data-tab="instructions">Instructions</button>
+                            <button class="live-tab" data-tab="features">Features</button>
+                            <button class="live-tab" data-tab="Dsettings">Detection Settings</button>
+                            <button class="live-tab" data-tab="Psettings">Processing Settings</button>
+                        </div>
+                        
+                        <div class="live-section active" id="tab-instructions">
                         <h3 style="margin-bottom: 1rem;">Instructions:</h3>
                         <ol id="instructionsList" style="margin-left: 1.5rem; line-height: 2;">
                             <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
@@ -95,7 +103,9 @@ const LivePage = {
                             <li>When violations are detected, they will be logged automatically</li>
                             <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
                         </ol>
+                        </div>
 
+                        <div class="live-section" id="tab-features">
                         <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detection Features:</h3>
                         <div class="grid grid-3">
                             <div class="card" style="background: var(--background-color);">
@@ -120,130 +130,124 @@ const LivePage = {
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <!-- Detection Settings -->
-                <div class="card">
-                    <div class="card-header">
-                        <span><i class="fas fa-cog"></i> Detection Settings</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="grid grid-2">
-                            <div>
-                                <h4 style="margin-bottom: 0.5rem;">Active PPE Classes (14 total):</h4>
-                                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
-                                    <span class="badge badge-info">Hardhat</span>
-                                    <span class="badge badge-info">Safety Vest</span>
-                                    <span class="badge badge-info">Mask</span>
-                                    <span class="badge badge-info">Gloves</span>
-                                    <span class="badge badge-info">Safety Shoes</span>
-                                    <span class="badge badge-info">Goggles</span>
-                                    <span class="badge badge-info">NO-Hardhat</span>
-                                    <span class="badge badge-info">NO-Safety Vest</span>
-                                    <span class="badge badge-info">NO-Mask</span>
-                                    <span class="badge badge-info">NO-Gloves</span>
-                                    <span class="badge badge-info">NO-Safety Shoes</span>
-                                    <span class="badge badge-info">NO-Goggles</span>
-                                    <span class="badge badge-info">Person</span>
-                                    <span class="badge badge-info">Machinery</span>
+                        </div>
+                        <!-- Detection Settings Tab -->
+                        <div class="live-section" id="tab-Dsettings">
+                            <h3 style="margin-bottom: 1rem;">Detection Settings</h3>
+                            <div class="grid grid-2">
+                                <div>
+                                    <h4 style="margin-bottom: 0.5rem;">Active PPE Classes (14 total):</h4>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+                                        <span class="badge badge-info">Hardhat</span>
+                                        <span class="badge badge-info">Safety Vest</span>
+                                        <span class="badge badge-info">Mask</span>
+                                        <span class="badge badge-info">Gloves</span>
+                                        <span class="badge badge-info">Safety Shoes</span>
+                                        <span class="badge badge-info">Goggles</span>
+                                        <span class="badge badge-info">NO-Hardhat</span>
+                                        <span class="badge badge-info">NO-Safety Vest</span>
+                                        <span class="badge badge-info">NO-Mask</span>
+                                        <span class="badge badge-info">NO-Gloves</span>
+                                        <span class="badge badge-info">NO-Safety Shoes</span>
+                                        <span class="badge badge-info">NO-Goggles</span>
+                                        <span class="badge badge-info">Person</span>
+                                        <span class="badge badge-info">Machinery</span>
+                                    </div>
                                 </div>
-                            </div>
-                            <div>
-                                <h4 style="margin-bottom: 0.5rem;">Current Violation Rules:</h4>
-                                <ul style="margin-left: 1.5rem; margin-top: 1rem; line-height: 2;">
-                                    <li><strong>NO-Hardhat detection</strong> → Triggers violation immediately</li>
-                                    <li>Confidence threshold: 10%</li>
-                                    <li>Detection quality: High-resolution frames</li>
-                                    <li>Processing: GPU-accelerated inference</li>
-                                </ul>
+                                <div>
+                                    <h4 style="margin-bottom: 0.5rem;">Current Violation Rules:</h4>
+                                    <ul style="margin-left: 1.5rem; margin-top: 1rem; line-height: 2;">
+                                        <li><strong>NO-Hardhat detection</strong> → Triggers violation immediately</li>
+                                        <li>Confidence threshold: 10%</li>
+                                        <li>Detection quality: High-resolution frames</li>
+                                        <li>Processing: GPU-accelerated inference</li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                <!-- Processing Settings -->
-                <div class="card" style="margin-top: 1rem;">
-                    <div class="card-header">
-                        <span><i class="fas fa-sliders-h"></i> Processing Settings</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="grid grid-2">
-                            <!-- Environment Validation Toggle -->
-                            <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                                    <h4 style="margin: 0;">
-                                        <i class="fas fa-building" style="color: var(--primary-color);"></i>
-                                        Environment Validation
-                                    </h4>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="envValidationToggle">
-                                        <span class="toggle-slider"></span>
-                                    </label>
+                        <!-- Processing Settings Tab -->
+                        <div class="live-section" id="tab-Psettings">  
+                            <h3 style="margin-bottom: 1rem;">Processing Settings</h3>
+                            <div class="grid grid-2">
+                                <!-- Environment Validation Toggle -->
+                                <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                        <h4 style="margin: 0;">
+                                            <i class="fas fa-building" style="color: var(--primary-color);"></i>
+                                            Environment Validation
+                                        </h4>
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="envValidationToggle">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.5rem;">
+                                        When <strong>ON</strong>: Only process violations in work environments (construction, factory, warehouse)
+                                    </p>
+                                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0;">
+                                        When <strong>OFF</strong>: Process ALL detected violations (recommended for testing)
+                                    </p>
+                                    <div id="envValidationStatus" style="margin-top: 0.75rem; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem;">
+                                        <!-- Status will be updated by JS -->
+                                    </div>
                                 </div>
-                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.5rem;">
-                                    When <strong>ON</strong>: Only process violations in work environments (construction, factory, warehouse)
-                                </p>
-                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0;">
-                                    When <strong>OFF</strong>: Process ALL detected violations (recommended for testing)
-                                </p>
-                                <div id="envValidationStatus" style="margin-top: 0.75rem; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem;">
-                                    <!-- Status will be updated by JS -->
+
+                                <!-- Cooldown Setting -->
+                                <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                    <h4 style="margin-bottom: 0.5rem;">
+                                        <i class="fas fa-clock" style="color: var(--warning-color);"></i>
+                                        Capture Cooldown
+                                    </h4>
+                                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+                                        Minimum time between capturing violations (prevents duplicates)
+                                    </p>
+                                    <div style="display: flex; align-items: center; gap: 1rem;">
+                                        <input type="range" id="cooldownSlider" min="1" max="30" value="3" 
+                                            style="flex: 1; cursor: pointer;">
+                                        <span id="cooldownValue" style="font-weight: bold; min-width: 60px; text-align: center; 
+                                                                        background: var(--primary-color); color: white; 
+                                                                        padding: 4px 12px; border-radius: 20px;">3s</span>
+                                    </div>
+                                    <button id="applyCooldownBtn" class="btn btn-primary" style="margin-top: 1rem; width: 100%;">
+                                        <i class="fas fa-save"></i> Apply Cooldown
+                                    </button>
                                 </div>
                             </div>
 
-                            <!-- Cooldown Setting -->
-                            <div style="padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                                <h4 style="margin-bottom: 0.5rem;">
-                                    <i class="fas fa-clock" style="color: var(--warning-color);"></i>
-                                    Capture Cooldown
+                            <!-- Queue Status -->
+                            <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                <h4 style="margin-bottom: 0.75rem;">
+                                    <i class="fas fa-tasks" style="color: var(--success-color);"></i>
+                                    Processing Queue Status
                                 </h4>
-                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
-                                    Minimum time between capturing violations (prevents duplicates)
-                                </p>
-                                <div style="display: flex; align-items: center; gap: 1rem;">
-                                    <input type="range" id="cooldownSlider" min="1" max="30" value="3" 
-                                           style="flex: 1; cursor: pointer;">
-                                    <span id="cooldownValue" style="font-weight: bold; min-width: 60px; text-align: center; 
-                                                                     background: var(--primary-color); color: white; 
-                                                                     padding: 4px 12px; border-radius: 20px;">3s</span>
+                                <div id="queueStatus" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
+                                    <div style="text-align: center; padding: 0.5rem;">
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);" id="queueSize">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">In Queue</div>
+                                    </div>
+                                    <div style="text-align: center; padding: 0.5rem;">
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--success-color);" id="queueProcessed">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Processed</div>
+                                    </div>
+                                    <div style="text-align: center; padding: 0.5rem;">
+                                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--error-color);" id="queueFailed">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Failed</div>
+                                    </div>
+                                    <div style="text-align: center; padding: 0.5rem;">
+                                        <div style="font-size: 1.5rem; font-weight: bold;" id="workerStatus">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Worker</div>
+                                    </div>
                                 </div>
-                                <button id="applyCooldownBtn" class="btn btn-primary" style="margin-top: 1rem; width: 100%;">
-                                    <i class="fas fa-save"></i> Apply Cooldown
+                                <button id="refreshQueueBtn" class="btn btn-secondary" style="margin-top: 0.75rem;">
+                                    <i class="fas fa-sync-alt"></i> Refresh Status
                                 </button>
                             </div>
                         </div>
 
-                        <!-- Queue Status -->
-                        <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                            <h4 style="margin-bottom: 0.75rem;">
-                                <i class="fas fa-tasks" style="color: var(--success-color);"></i>
-                                Processing Queue Status
-                            </h4>
-                            <div id="queueStatus" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
-                                <div style="text-align: center; padding: 0.5rem;">
-                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary-color);" id="queueSize">-</div>
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">In Queue</div>
-                                </div>
-                                <div style="text-align: center; padding: 0.5rem;">
-                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--success-color);" id="queueProcessed">-</div>
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Processed</div>
-                                </div>
-                                <div style="text-align: center; padding: 0.5rem;">
-                                    <div style="font-size: 1.5rem; font-weight: bold; color: var(--danger-color);" id="queueFailed">-</div>
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Failed</div>
-                                </div>
-                                <div style="text-align: center; padding: 0.5rem;">
-                                    <div style="font-size: 1.5rem; font-weight: bold;" id="workerStatus">-</div>
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary);">Worker</div>
-                                </div>
-                            </div>
-                            <button id="refreshQueueBtn" class="btn btn-secondary" style="margin-top: 0.75rem;">
-                                <i class="fas fa-sync-alt"></i> Refresh Status
-                            </button>
-                        </div>
                     </div>
                 </div>
+
             </div>
             
             <style>
@@ -346,9 +350,26 @@ const LivePage = {
         const uploadResults = document.getElementById('uploadResults');
         const uploadResultsContent = document.getElementById('uploadResultsContent');
         const annotatedResult = document.getElementById('annotatedResult');
+        const tabs = document.querySelectorAll('.live-tab');
+        const sections = document.querySelectorAll('.live-section');
         
         let currentMode = 'live';
         let selectedFile = null;
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                const target = tab.dataset.tab;
+                sections.forEach(sec => {
+                    sec.classList.toggle(
+                        'active',
+                        sec.id === `tab-${target}`
+                    );
+                });
+            });
+        });
         
         // Mode switching functions
         function switchToLiveMode() {

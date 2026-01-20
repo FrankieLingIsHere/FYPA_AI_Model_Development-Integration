@@ -234,16 +234,42 @@ const ViolationMonitor = {
     _notifyViolationDetected(violation) {
         const notifKey = `detected_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
-        
+
         this.notifiedEvents.add(notifKey);
-        
-        const violationType = violation.violation_type || 'PPE Violation';
+
         const severity = violation.severity || 'HIGH';
         const timestamp = new Date(violation.timestamp).toLocaleTimeString();
         const reportId = violation.report_id;
-        
+
+        // Derive a human-friendly type string: prefer explicit type, else missing PPE, else try parsing summary
+        let derivedType = null;
+        if (violation.violation_type && violation.violation_type !== 'PPE Violation') {
+            derivedType = violation.violation_type;
+        }
+
+        if (!derivedType) {
+            if (Array.isArray(violation.missing_ppe) && violation.missing_ppe.length > 0) {
+                if (violation.missing_ppe.length === 1) derivedType = `Missing ${violation.missing_ppe[0]}`;
+                else if (violation.missing_ppe.length === 2) derivedType = `Missing ${violation.missing_ppe[0]} and ${violation.missing_ppe[1]}`;
+                else derivedType = `Missing ${violation.missing_ppe.slice(0,5).join(', ')}`;
+            }
+        }
+
+        if (!derivedType && violation.violation_summary) {
+            const s = violation.violation_summary;
+            const m = s.match(/Missing:?\s*([^\.\n]+)/i) || s.match(/PPE Violation Detected:\s*(.+)/i);
+            if (m && m[1]) {
+                const parts = m[1].split(',').map(x => x.trim()).filter(Boolean);
+                if (parts.length === 1) derivedType = `Missing ${parts[0]}`;
+                else if (parts.length === 2) derivedType = `Missing ${parts[0]} and ${parts[1]}`;
+                else derivedType = `Missing ${parts.slice(0,5).join(', ')}`;
+            }
+        }
+
+        if (!derivedType) derivedType = 'PPE Violation';
+
         NotificationManager.show(
-            `${violationType} at ${timestamp} - Severity: ${severity}`,
+            `${derivedType} at ${timestamp} - Severity: ${severity}`,
             'violation',
             0,  // Persist until dismissed
             {
@@ -254,8 +280,19 @@ const ViolationMonitor = {
                 }
             }
         );
-        
-        console.log(`[ViolationMonitor] 🚨 VIOLATION: ${violation.report_id}`);
+
+        console.log(`[ViolationMonitor] 🚨 VIOLATION: ${violation.report_id} (${derivedType})`);
+        // Trigger audio alert (if available) for immediate real-time detections
+        try {
+            if (window.AudioAlert && typeof window.AudioAlert.speakViolation === 'function') {
+                console.log('[ViolationMonitor] Calling AudioAlert.speakViolation for', violation.report_id);
+                AudioAlert.speakViolation(violation);
+            } else {
+                console.log('[ViolationMonitor] AudioAlert not available to speak violation');
+            }
+        } catch (e) {
+            console.error('[ViolationMonitor] Error calling AudioAlert:', e);
+        }
     },
 
     // Real-time notification: Report generating

@@ -61,3 +61,47 @@ function showBackendWarning() {
         }
     }, 10000);
 }
+
+
+document.addEventListener('DOMContentLoaded', () => {
+    const modal = document.getElementById('handbookModal');
+    const openBtn = document.getElementById('openHandbook');
+    const closeBtn = document.getElementById('closeHandbook');
+
+    if (!modal || !openBtn || !closeBtn) return;
+
+    openBtn.addEventListener('click', () => {
+        modal.classList.remove('hidden');
+    });
+
+    closeBtn.addEventListener('click', () => {
+        modal.classList.add('hidden');
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.classList.add('hidden');
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+    const question = e.target.closest('.faq-question');
+        if (!question) return;
+
+        const item = question.parentElement;
+        item.classList.toggle('active');
+    });
+
+
+    document.querySelectorAll('.handbook-link').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.handbook-link').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.handbook-page').forEach(p => p.classList.remove('active'));
+
+            btn.classList.add('active');
+            document
+                .getElementById('handbook-' + btn.dataset.page)
+                .classList.add('active');
+        });
+    });
+});

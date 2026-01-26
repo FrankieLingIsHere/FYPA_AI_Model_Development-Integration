@@ -113,8 +113,13 @@ def caption_image_llava(image_path):
         print(f"Error loading image: {e}")
         return None
     
-    # Build prompt for workplace safety analysis (DETAILED and STRUCTURED with VISIBILITY LOCKS)
-    prompt = """You are a workplace safety observer. Analyze this image and provide a DETAILED, STRUCTURED description.
+    # Build prompt based on model capability
+    if 'moondream' in str(model):
+        # Moondream is small and struggles with complex formatting instructions
+        prompt = """Describe this workplace scene in detail. Start with "A worker...". Mention activities, safety gear (hardhats, vests), and environment."""
+    else:
+        # LLaVA/Phi3 can handle structured output better
+        prompt = """You are a workplace safety observer. Analyze this image and provide a DETAILED, STRUCTURED description.
 
 REQUIRED OUTPUT FORMAT:
 =======================
@@ -148,7 +153,7 @@ CRITICAL ANTI-HALLUCINATION RULES:
    - Office desk/Computer = "office".
    - ONLY say "construction site" if you see heavy machinery/scaffolding/raw materials.
 
-EXAMPLE (Partial Visibility):
+1. EXAMPLE (Partial Visibility):
 "SCENE: 1 person(s) detected. Person 1 is in center foreground, head and shoulders only. Facing camera. Has short dark hair, no hardhat. Torso is partially visible wearing a grey t-shirt, no safety vest. Hands not visible. Feet not visible. Face is clear, no mask. ENVIRONMENT: residential room with couch."
 
 Analyze now:"""
@@ -163,7 +168,7 @@ Analyze now:"""
             OLLAMA_API_URL,
             json={
                 'model': model,
-                'prompt': f"{prompt}\n[Request ID: {timestamp_seed}]", # Salt the prompt to prevent caching
+                'prompt': prompt, # Salt removed to improve model compatibility
                 'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
                 'images': [image_base64],
                 'stream': False,

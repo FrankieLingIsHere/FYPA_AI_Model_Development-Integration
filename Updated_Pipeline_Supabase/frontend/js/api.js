@@ -52,7 +52,7 @@ const API = {
     async getStats() {
         try {
             // Try fetching pre-calculated stats from backend first (includes breakdown & deltas)
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/dashboard/stats`);
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/stats`);
             if (response.ok) {
                 const data = await response.json();
 

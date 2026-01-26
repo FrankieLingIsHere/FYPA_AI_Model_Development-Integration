@@ -215,7 +215,7 @@ const HomePage = {
             <div class="recent-list" style="display:flex; flex-direction:column; gap:0.5rem;">
                 ${violations.map(v => `
                     <div class="recent-item" 
-                         onclick="window.open('${API.getReportUrl(v.report_id)}','_blank')"
+                         onclick="window.location.href = API.getReportUrl('${v.report_id}')"
                          style="
                             display:flex; 
                             justify-content:space-between; 

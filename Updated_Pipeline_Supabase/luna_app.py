@@ -122,6 +122,8 @@ app = Flask(__name__,
             static_folder='frontend',
             static_url_path='/static')
 
+
+
 # Directories
 VIOLATIONS_DIR = Path('pipeline/violations')
 VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -137,6 +139,20 @@ report_generator = None
 db_manager = None
 storage_manager = None
 last_violation_time = 0
+
+# Initialize Supabase components eagerly at startup for API access
+if FULL_PIPELINE_AVAILABLE:
+    try:
+        logger.info("🔌 Initializing Supabase components...")
+        # Note: referencing the global variables defined just above
+        db_manager = create_db_manager_from_env()
+        logger.info(f"✓ DB Manager initialized: {db_manager is not None}")
+        
+        storage_manager = create_storage_manager_from_env()
+        logger.info(f"✓ Storage Manager initialized: {storage_manager is not None}")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Supabase components: {e}")
 VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
 
 # =========================================================================
@@ -1558,6 +1574,7 @@ def api_violations():
 
 
 @app.route('/api/stats')
+@app.route('/api/dashboard/stats')
 def api_stats():
     """Get violation statistics from Supabase."""
     if db_manager is None:
@@ -1642,6 +1659,7 @@ def api_stats():
                     last_week_count += 1
             
             # Parse detection data for breakdown
+            parsed_from_detection = False
             detection_data = v.get('detection_data')
             if detection_data:
                 # Handle both List (direct) and Dict (wrapper) formats
@@ -1657,14 +1675,36 @@ def api_stats():
                     # Case-insensitive matching
                     matched = False
                     for key in violation_counts.keys():
-                        if key.lower() == class_name.lower():
+                        key_lower = key.lower().replace('no-', '').replace('safety ', '')
+                        class_lower = class_name.lower().replace('no-', '').replace('safety ', '')
+                        
+                        if key_lower in class_lower or class_lower in key_lower:
                             violation_counts[key] += 1
                             matched = True
+                            parsed_from_detection = True
                             break
                     
                     if not matched and class_name.upper().startswith('NO-'):
                         # Map unknown NO- classes to Other or count specifically if needed
                         violation_counts['Other'] += 1
+                        parsed_from_detection = True
+            
+            # Fallback: If detection parsing failed (or no data), try parsing violation_summary
+            if not parsed_from_detection and v.get('violation_summary'):
+                summary = v['violation_summary'].lower()
+                
+                # Robust keyword matching: Check if violation type name appears in summary
+                # e.g. "hardhat" in "Missing hardhat"
+                for key in violation_counts.keys():
+                    # key is "NO-Hardhat", key_simple is "hardhat"
+                    key_simple = key.lower().replace('no-', '').replace('safety ', '')
+                    
+                    # Avoid matching "mask" in "unmasked" if unrelated, but generally safe
+                    # Specific checks for common phrases
+                    if key_simple in summary:
+                        violation_counts[key] += 1
+                    elif 'no-' + key_simple in summary or 'missing ' + key_simple in summary:
+                        violation_counts[key] += 1
 
         stats = {
             'total': len(violations),

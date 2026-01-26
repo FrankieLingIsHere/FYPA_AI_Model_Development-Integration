@@ -73,7 +73,7 @@ const ReportsPage = {
     startAutoRefresh() {
         // Check for pending reports every 10 seconds
         this.refreshInterval = setInterval(async () => {
-            const hasPending = this.violations.some(v => 
+            const hasPending = this.violations.some(v =>
                 v.status === 'pending' || v.status === 'generating' || !v.has_report
             );
             if (hasPending) {
@@ -116,7 +116,7 @@ const ReportsPage = {
 
         // Search filter
         if (this.filters.search) {
-            filtered = filtered.filter(v => 
+            filtered = filtered.filter(v =>
                 v.report_id.toLowerCase().includes(this.filters.search) ||
                 v.timestamp.toLowerCase().includes(this.filters.search) ||
                 (v.device_id && v.device_id.toLowerCase().includes(this.filters.search))
@@ -135,11 +135,11 @@ const ReportsPage = {
         if (this.filters.dateRange !== 'all') {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            
+
             filtered = filtered.filter(v => {
                 const vDate = new Date(v.timestamp);
-                
-                switch(this.filters.dateRange) {
+
+                switch (this.filters.dateRange) {
                     case 'today':
                         return vDate >= today;
                     case 'week':
@@ -183,16 +183,26 @@ const ReportsPage = {
 
     // Check if report is ready to view
     isReportReady(violation) {
+        // Check if we have actual report data
+        const hasActualReport = violation.report_html_key ||
+            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
+
+        // If we have the actual report content, it's definitely ready
+        if (hasActualReport) return true;
+
+        // Fallback: check status (some old reports may not have report_html_key populated)
         const status = violation.status || 'unknown';
-        return violation.has_report && 
-               (status === 'completed' || status === 'partial' || status === 'unknown');
+        return (status === 'completed' || status === 'partial');
     },
 
     // Get status display info
     getStatusInfo(violation) {
-        const status = violation.status || (violation.has_report ? 'completed' : 'pending');
-        
-        switch(status) {
+        // Check for actual HTML report or NLP analysis, not just images
+        const hasActualReport = violation.report_html_key ||
+            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
+        const status = violation.status || (hasActualReport ? 'completed' : 'pending');
+
+        switch (status) {
             case 'completed':
                 return { icon: 'fa-check-circle', color: 'success', text: 'Ready' };
             case 'generating':
@@ -204,7 +214,7 @@ const ReportsPage = {
             case 'partial':
                 return { icon: 'fa-exclamation-circle', color: 'warning', text: 'Partial' };
             default:
-                return violation.has_report 
+                return hasActualReport
                     ? { icon: 'fa-check-circle', color: 'success', text: 'Ready' }
                     : { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Processing' };
         }
@@ -222,7 +232,7 @@ const ReportsPage = {
     // Show modal for reports still generating
     showGeneratingModal(violation) {
         const statusInfo = this.getStatusInfo(violation);
-        
+
         // Create modal overlay
         const modal = document.createElement('div');
         modal.id = 'report-status-modal';
@@ -231,7 +241,7 @@ const ReportsPage = {
             background: rgba(0,0,0,0.5); display: flex; align-items: center;
             justify-content: center; z-index: 1000;
         `;
-        
+
         modal.innerHTML = `
             <div style="background: white; padding: 2rem; border-radius: 12px; max-width: 500px; width: 90%; text-align: center;">
                 <div style="font-size: 4rem; color: var(--${statusInfo.color}-color); margin-bottom: 1rem;">
@@ -259,18 +269,26 @@ const ReportsPage = {
                 </div>
             </div>
         `;
-        
+
         modal.onclick = (e) => {
             if (e.target === modal) this.closeModal();
         };
-        
+
         document.body.appendChild(modal);
     },
 
     getStatusMessage(violation) {
         const status = violation.status || 'pending';
-        
-        switch(status) {
+
+        // Check if we actually have the report
+        const hasActualReport = violation.report_html_key ||
+            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
+
+        if (hasActualReport || status === 'completed') {
+            return 'The report is ready. Click below to open it.';
+        }
+
+        switch (status) {
             case 'generating':
                 return 'The AI is analyzing the violation and generating a detailed report. This usually takes 30-60 seconds.';
             case 'pending':
@@ -290,7 +308,7 @@ const ReportsPage = {
     async checkAndRefresh(reportId) {
         this.closeModal();
         await this.refreshReports();
-        
+
         // Find the updated violation
         const violation = this.violations.find(v => v.report_id === reportId);
         if (violation && this.isReportReady(violation)) {
@@ -307,24 +325,23 @@ const ReportsPage = {
     },
 
     renderReportCard(violation) {
-        const date = new Date(violation.timestamp);
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
         const isReady = this.isReportReady(violation);
-        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
-                             (violation.severity === 'MEDIUM' ? 'warning' : 'info');
-        
+        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' :
+            (violation.severity === 'MEDIUM' ? 'warning' : 'info');
+
         return `
             <div class="card" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
-                    ${violation.has_annotated ? 
-                        `<img src="${imageUrl}" alt="Violation" style="width: 100%; height: 100%; object-fit: cover;">` :
-                        `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
+                    ${violation.has_annotated ?
+                `<img src="${imageUrl}" alt="Violation" style="width: 100%; height: 100%; object-fit: cover;">` :
+                `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
                          </div>`
-                    }
+            }
                     ${!isReady ? `
                         <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; 
                                     background: rgba(0,0,0,0.4); display: flex; align-items: center; 
@@ -343,7 +360,7 @@ const ReportsPage = {
                                 Report #${violation.report_id}
                             </h3>
                             <p style="color: #7f8c8d; font-size: 0.9rem; margin: 0;">
-                                <i class="fas fa-clock"></i> ${date.toLocaleString()}
+                                <i class="fas fa-clock"></i> ${typeof TimezoneManager !== 'undefined' ? TimezoneManager.formatDateTime(violation.timestamp) : new Date(violation.timestamp).toLocaleString()}
                             </p>
                         </div>
                         <span class="badge badge-${severityClass}">

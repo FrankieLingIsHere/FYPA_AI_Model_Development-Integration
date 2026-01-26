@@ -221,6 +221,46 @@ class PipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"Callback error for {event_type}: {e}")
     
+    
+    def _save_metadata(self, report_id: str, data: Dict[str, Any]):
+        """
+        Save metadata to JSON for recovery/debugging.
+        
+        Args:
+            report_id: Report identifier
+            data: Metadata dictionary to save/update
+        """
+        try:
+            violation_dir = self.config['VIOLATIONS_DIR'] / report_id
+            violation_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = violation_dir / "metadata.json"
+            
+            # Load existing if present to merge
+            current_data = {}
+            if meta_path.exists():
+                try:
+                    with open(meta_path, 'r') as f:
+                        current_data = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Could not read existing metadata: {e}")
+            
+            # Update
+            current_data.update(data)
+            
+            # Serialize datetime objects
+            def json_serial(obj):
+                if isinstance(obj, (datetime, datetime.date)):
+                    return obj.isoformat()
+                raise TypeError (f"Type {type(obj)} not serializable")
+
+            with open(meta_path, 'w') as f:
+                json.dump(current_data, f, indent=2, default=json_serial)
+                
+            logger.debug(f"Saved metadata to {meta_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save metadata for {report_id}: {e}")
+
     # =========================================================================
     # MAIN PIPELINE CONTROL
     # =========================================================================
@@ -322,8 +362,11 @@ class PipelineOrchestrator:
         # Update cooldown
         self.last_violation_time = datetime.now()
         
-        # Generate report ID
-        report_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Generate report ID in MYT timezone for consistency
+        from zoneinfo import ZoneInfo
+        myt = ZoneInfo('Asia/Kuala_Lumpur')
+        now_myt = datetime.now(myt)
+        report_id = now_myt.strftime('%Y%m%d_%H%M%S')
         
         # Create annotated frame (if image processor available)
         frame_annotated = frame.copy()
@@ -441,12 +484,32 @@ class PipelineOrchestrator:
             
             logger.debug(f"Images saved: {violation_dir}")
             
+            # Save initial metadata
+            self._save_metadata(event.report_id, {
+                'report_id': event.report_id,
+                'timestamp': event.timestamp,
+                'violation_summary': event.violation_summary,
+                'person_count': event.person_count,
+                'violation_count': event.violation_count,
+                'severity': event.severity,
+                'detections': event.detections,
+                'original_image_path': str(original_path),
+                'annotated_image_path': str(annotated_path),
+                'status': 'processing'
+            })
+            
             # Step 2: Generate caption
             caption = ""
             if self.caption_generator:
                 self.set_state(PipelineState.GENERATING_REPORT)
                 caption = self.caption_generator.generate_caption(event.frame_original)
                 logger.info(f"Caption generated: {caption[:100]}...")
+                
+                # Update metadata with caption
+                self._save_metadata(event.report_id, {
+                    'caption': caption,
+                    'status': 'captioned'
+                })
             
             # Step 3: Generate NLP report
             nlp_analysis = {}
@@ -474,6 +537,14 @@ class PipelineOrchestrator:
                 nlp_analysis = report_paths.get('nlp_analysis', {})
                 
                 logger.info(f"Report generated: {report_html_path}")
+                
+                # Update metadata with NLP results
+                self._save_metadata(event.report_id, {
+                    'nlp_analysis': nlp_analysis,
+                    'report_html_path': str(report_html_path),
+                    'report_pdf_path': str(report_pdf_path),
+                    'status': 'generated'
+                })
             
             # Step 4: Save to database
             if self.db_manager:

@@ -1,39 +1,91 @@
 // Notification System for LUNA PPE Monitor
 // ==========================================
 // Toast notifications for violation detection and report generation
+// Enhanced: Bottom-right positioning, grouped notifications, max 3 visible
 
 const NotificationManager = {
     container: null,
     notifications: [],
+    maxVisible: 3,  // Maximum notifications shown at once
+    groupedCount: 0,  // Count of hidden notifications
 
     init() {
         if (this.container) return;
 
-        // Create notification container
+        // Create notification container - BOTTOM RIGHT to avoid blocking controls
         this.container = document.createElement('div');
         this.container.id = 'notification-container';
         this.container.style.cssText = `
             position: fixed;
-            top: 20px;
+            bottom: 20px;
             right: 20px;
             z-index: 10000;
             display: flex;
-            flex-direction: column;
+            flex-direction: column-reverse;
             gap: 10px;
-            max-width: 400px;
+            max-width: 380px;
+            max-height: calc(100vh - 100px);
+            pointer-events: none;
         `;
         document.body.appendChild(this.container);
+
+        // Create summary badge for grouped notifications
+        this.summaryBadge = document.createElement('div');
+        this.summaryBadge.id = 'notification-summary';
+        this.summaryBadge.style.cssText = `
+            display: none;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            pointer-events: auto;
+            text-align: center;
+        `;
+        this.summaryBadge.innerHTML = `
+            <i class="fas fa-bell"></i>
+            <span id="grouped-count">0</span> more notifications
+            <span style="display: block; font-size: 12px; opacity: 0.8; margin-top: 4px;">
+                Click to dismiss all
+            </span>
+        `;
+        this.summaryBadge.addEventListener('click', () => this.dismissAll());
+        this.container.appendChild(this.summaryBadge);
+    },
+
+    updateSummaryBadge() {
+        const visibleCount = this.notifications.length;
+        const hiddenCount = Math.max(0, visibleCount - this.maxVisible);
+
+        if (hiddenCount > 0) {
+            this.summaryBadge.style.display = 'block';
+            document.getElementById('grouped-count').textContent = hiddenCount;
+        } else {
+            this.summaryBadge.style.display = 'none';
+        }
+
+        // Hide older notifications when over limit
+        this.notifications.forEach((notif, index) => {
+            if (index < visibleCount - this.maxVisible) {
+                notif.element.style.display = 'none';
+            } else {
+                notif.element.style.display = 'flex';
+            }
+        });
     },
 
     show(message, type = 'info', duration = 5000, options = {}) {
         this.init();
 
         const id = Date.now() + Math.random();
-        
+
         const notification = document.createElement('div');
         notification.id = `notif-${id}`;
         notification.className = `notification notification-${type}`;
-        
+
         const icons = {
             'success': 'fa-check-circle',
             'error': 'fa-exclamation-circle',
@@ -56,59 +108,68 @@ const NotificationManager = {
             background: white;
             border-left: 4px solid ${colors[type] || colors.info};
             border-radius: 8px;
-            padding: 16px;
+            padding: 14px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             display: flex;
             align-items: start;
-            gap: 12px;
-            min-width: 300px;
-            animation: slideInRight 0.3s ease-out;
+            gap: 10px;
+            min-width: 280px;
+            max-width: 100%;
+            animation: slideInUp 0.3s ease-out;
             cursor: pointer;
+            pointer-events: auto;
         `;
 
+        // Simplified content for cleaner look
+        const titleHtml = options.title ?
+            `<div style="font-weight: 600; margin-bottom: 2px; color: #2c3e50; font-size: 13px;">${options.title}</div>` : '';
+
         notification.innerHTML = `
-            <div style="flex-shrink: 0; font-size: 24px; color: ${colors[type]};">
+            <div style="flex-shrink: 0; font-size: 20px; color: ${colors[type]};">
                 <i class="fas ${icons[type] || icons.info}"></i>
             </div>
             <div style="flex: 1; min-width: 0;">
-                ${options.title ? `<div style="font-weight: 600; margin-bottom: 4px; color: #2c3e50;">${options.title}</div>` : ''}
-                <div style="color: #7f8c8d; font-size: 14px; word-wrap: break-word;">${message}</div>
+                ${titleHtml}
+                <div style="color: #7f8c8d; font-size: 13px; word-wrap: break-word; line-height: 1.4;">${message}</div>
                 ${options.action ? `
-                    <button onclick="${options.action.onClick}" style="
+                    <button onclick="${options.action.onClick}; event.stopPropagation();" style="
                         margin-top: 8px;
-                        padding: 6px 12px;
+                        padding: 5px 10px;
                         background: ${colors[type]};
                         color: white;
                         border: none;
                         border-radius: 4px;
                         cursor: pointer;
-                        font-size: 13px;
+                        font-size: 12px;
                     ">
                         ${options.action.text}
                     </button>
                 ` : ''}
             </div>
-            <button onclick="NotificationManager.dismiss('${id}')" style="
+            <button onclick="event.stopPropagation(); NotificationManager.dismiss('${id}')" style="
                 background: none;
                 border: none;
-                color: #95a5a6;
+                color: #bdc3c7;
                 cursor: pointer;
-                font-size: 18px;
+                font-size: 14px;
                 flex-shrink: 0;
+                padding: 0;
             ">
                 <i class="fas fa-times"></i>
             </button>
         `;
 
-        // Click to dismiss
+        // Click anywhere to dismiss
         notification.addEventListener('click', (e) => {
             if (e.target.tagName !== 'BUTTON') {
                 this.dismiss(id);
             }
         });
 
-        this.container.appendChild(notification);
-        this.notifications.push({ id, element: notification });
+        this.container.insertBefore(notification, this.summaryBadge);
+        this.notifications.push({ id, element: notification, type, timestamp: Date.now() });
+
+        this.updateSummaryBadge();
 
         // Auto dismiss
         if (duration > 0) {
@@ -119,18 +180,21 @@ const NotificationManager = {
     },
 
     dismiss(id) {
-        const notif = this.notifications.find(n => n.id == id);
-        if (notif) {
-            notif.element.style.animation = 'slideOutRight 0.3s ease-out';
+        const index = this.notifications.findIndex(n => n.id == id);
+        if (index !== -1) {
+            const notif = this.notifications[index];
+            notif.element.style.animation = 'slideOutDown 0.3s ease-out';
             setTimeout(() => {
                 notif.element.remove();
-                this.notifications = this.notifications.filter(n => n.id !== id);
+                this.notifications.splice(index, 1);
+                this.updateSummaryBadge();
             }, 300);
         }
     },
 
     dismissAll() {
-        this.notifications.forEach(n => this.dismiss(n.id));
+        const ids = this.notifications.map(n => n.id);
+        ids.forEach(id => this.dismiss(id));
     },
 
     // Convenience methods
@@ -151,11 +215,11 @@ const NotificationManager = {
     },
 
     violation(message, reportId, options = {}) {
-        return this.show(message, 'violation', 0, {
-            title: '🚨 PPE Violation Detected',
+        return this.show(message, 'violation', 8000, {
+            title: '🚨 Violation Detected',
             action: {
-                text: 'View Report',
-                onClick: `window.location.hash = '#/reports'; NotificationManager.dismiss('${reportId}')`
+                text: 'View Reports',
+                onClick: `window.location.hash = '#/reports'`
             },
             ...options
         });
@@ -163,15 +227,11 @@ const NotificationManager = {
 
     reportGenerating(reportId, options = {}) {
         return this.show(
-            'AI is analyzing the violation and generating a detailed safety report...',
+            'Generating safety report...',
             'report',
-            10000,
+            8000,
             {
-                title: '📝 Generating Report',
-                action: {
-                    text: 'View Progress',
-                    onClick: `window.location.hash = '#/reports'; NotificationManager.dismiss('${reportId}')`
-                },
+                title: '📝 Processing',
                 ...options
             }
         );
@@ -179,14 +239,14 @@ const NotificationManager = {
 
     reportReady(reportId, options = {}) {
         return this.show(
-            'Safety report is ready for review',
+            'Report ready for review',
             'success',
-            8000,
+            6000,
             {
-                title: '✅ Report Complete',
+                title: '✅ Complete',
                 action: {
-                    text: 'Open Report',
-                    onClick: `window.open('${API_CONFIG.BASE_URL}/report/${reportId}', '_blank'); NotificationManager.dismiss('${reportId}')`
+                    text: 'Open',
+                    onClick: `window.open('${API_CONFIG.BASE_URL}/report/${reportId}', '_blank')`
                 },
                 ...options
             }
@@ -194,27 +254,27 @@ const NotificationManager = {
     }
 };
 
-// Add CSS animation
+// Add CSS animations
 const style = document.createElement('style');
 style.textContent = `
-    @keyframes slideInRight {
+    @keyframes slideInUp {
         from {
-            transform: translateX(400px);
+            transform: translateY(100px);
             opacity: 0;
         }
         to {
-            transform: translateX(0);
+            transform: translateY(0);
             opacity: 1;
         }
     }
 
-    @keyframes slideOutRight {
+    @keyframes slideOutDown {
         from {
-            transform: translateX(0);
+            transform: translateY(0);
             opacity: 1;
         }
         to {
-            transform: translateX(400px);
+            transform: translateY(100px);
             opacity: 0;
         }
     }
@@ -222,6 +282,12 @@ style.textContent = `
     .notification:hover {
         box-shadow: 0 6px 16px rgba(0,0,0,0.2);
         transform: translateY(-2px);
+        transition: all 0.2s ease;
+    }
+    
+    #notification-summary:hover {
+        background: linear-gradient(135deg, #2980b9, #1a5276);
+        transform: scale(1.02);
         transition: all 0.2s ease;
     }
 `;
@@ -233,3 +299,4 @@ if (document.readyState === 'loading') {
 } else {
     NotificationManager.init();
 }
+

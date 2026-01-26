@@ -78,7 +78,9 @@ VIOLATION_RULES = {
     'person_ppe_iou_threshold': 0.4,  # Increased from 0.3 to reduce false associations (pillows, lanterns near heads)
     'person_confidence_threshold': 0.25,
     'head_region_strict': True,  # Enable strict head-region validation for hardhat detection
+    'head_region_strict': True,  # Enable strict head-region validation for hardhat detection
     'critical': {
+        # These are now treated as HIGH severity but tracked as critical violations
         'NO-Hardhat': True,
         'NO-Safety Vest': True
     },
@@ -107,7 +109,7 @@ YOLO_CONFIG = {
 LLAVA_CONFIG = {
     'model_id': 'llava-hf/llava-1.5-7b-hf',
     'load_in_4bit': True,
-    'max_new_tokens': 150,
+    'max_new_tokens': 75,
     'prompt_template': "USER: <image>\nDescribe this workplace safety scene in detail, focusing on workers and safety equipment."
 }
 
@@ -121,7 +123,7 @@ OLLAMA_CONFIG = {
     'timeout': 600,  # 10 minutes for detailed NLP analysis
     'use_local_model': False,
     'temperature': 0.7,
-    'max_tokens': 2000
+    'max_tokens': 800
 }
 
 # =========================================================================
@@ -230,7 +232,7 @@ def generate_report_id(device_id: str = None) -> str:
     """
     Generate a unique report ID that prevents collisions from multiple devices.
     
-    Format: YYYYMMDD_HHMMSS_<device_hash>_<counter>
+    Format: YYYYMMDD_HHMMSS_<device_hash>_<counter> (in MYT/UTC+8)
     
     Args:
         device_id: Optional device identifier
@@ -238,7 +240,12 @@ def generate_report_id(device_id: str = None) -> str:
     Returns:
         Unique report ID string
     """
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    from zoneinfo import ZoneInfo
+    
+    # Use Malaysian Time (UTC+8) consistently for report IDs
+    myt = ZoneInfo('Asia/Kuala_Lumpur')
+    now_myt = datetime.now(myt)
+    timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
     
     if device_id:
         # Create short hash of device_id
@@ -247,7 +254,7 @@ def generate_report_id(device_id: str = None) -> str:
         device_hash = 'local'
     
     # Add microseconds for uniqueness
-    micro = datetime.now().strftime('%f')[:4]
+    micro = now_myt.strftime('%f')[:4]
     
     return f"{timestamp}_{device_hash}_{micro}"
 

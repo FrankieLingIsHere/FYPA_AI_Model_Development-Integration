@@ -12,8 +12,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize router
     Router.init();
 
+    // Initialize timezone selector (Malaysian Time as default)
+    if (typeof TimezoneManager !== 'undefined') {
+        TimezoneManager.initSelector('timezoneSelector');
+        console.log('🌏 Timezone set to:', TimezoneManager.getTimezoneLabel());
+    }
+
     console.log('✅ Application ready!');
-    
+
     // Check backend connection
     checkBackendConnection();
 });
@@ -35,7 +41,7 @@ async function checkBackendConnection() {
 // Show warning if backend is not running
 function showBackendWarning() {
     console.warn('⚠️ Backend server not detected');
-    
+
     // Add warning banner
     const banner = document.createElement('div');
     banner.className = 'alert alert-warning';
@@ -51,9 +57,9 @@ function showBackendWarning() {
     banner.style.display = 'flex';
     banner.style.alignItems = 'center';
     banner.style.gap = '1rem';
-    
+
     document.body.appendChild(banner);
-    
+
     // Auto-dismiss after 10 seconds
     setTimeout(() => {
         if (banner.parentElement) {
@@ -85,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('click', (e) => {
-    const question = e.target.closest('.faq-question');
+        const question = e.target.closest('.faq-question');
         if (!question) return;
 
         const item = question.parentElement;

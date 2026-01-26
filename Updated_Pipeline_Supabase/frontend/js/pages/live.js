@@ -653,21 +653,28 @@ const LivePage = {
                 const response = await fetch(`${API_CONFIG.BASE_URL}/api/queue/status`);
                 const data = await response.json();
                 
-                document.getElementById('queueSize').textContent = data.queue_size || 0;
-                document.getElementById('queueProcessed').textContent = data.total_processed || 0;
-                document.getElementById('queueFailed').textContent = data.total_failed || 0;
+                // Safely update elements with null checks
+                const queueSizeEl = document.getElementById('queueSize');
+                const queueProcessedEl = document.getElementById('queueProcessed');
+                const queueFailedEl = document.getElementById('queueFailed');
+                const workerStatusEl = document.getElementById('workerStatus');
                 
-                const workerStatus = document.getElementById('workerStatus');
-                if (data.worker_running) {
-                    workerStatus.textContent = 'Running';
-                    workerStatus.style.color = 'var(--success-color)';
-                } else {
-                    workerStatus.textContent = 'Stopped';
-                    workerStatus.style.color = 'var(--danger-color)';
+                if (queueSizeEl) queueSizeEl.textContent = data.queue_size || 0;
+                if (queueProcessedEl) queueProcessedEl.textContent = data.total_processed || 0;
+                if (queueFailedEl) queueFailedEl.textContent = data.total_failed || 0;
+                
+                if (workerStatusEl) {
+                    if (data.worker_running) {
+                        workerStatusEl.textContent = 'Running';
+                        workerStatusEl.style.color = 'var(--success-color)';
+                    } else {
+                        workerStatusEl.textContent = 'Stopped';
+                        workerStatusEl.style.color = 'var(--danger-color)';
+                    }
                 }
 
                 // Also update environment validation toggle from server state
-                if (data.environment_validation_enabled !== undefined) {
+                if (data.environment_validation_enabled !== undefined && envValidationToggle) {
                     envValidationToggle.checked = data.environment_validation_enabled;
                     updateEnvValidationStatus(data.environment_validation_enabled);
                 }

@@ -14,18 +14,74 @@ from pathlib import Path
 
 # --- OLLAMA CONFIGURATION ---
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
+OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
-# Model options (in order of memory usage, lowest to highest):
-# - "moondream:1.8b"  - Smallest, needs ~1.5GB RAM (for low RAM systems)
-# - "llava-phi3:3.8b" - Medium, needs ~3.6GB RAM
-# - "llava:7b"        - Large, needs ~4.3GB RAM
-# - "llava:13b"       - Best quality, needs ~8GB+ RAM
+# Model fallback order (will try in order until one works)
+# Prioritize CPU-friendly models first for broader compatibility
+OLLAMA_MODELS = [
+    {"name": "moondream:1.8b", "description": "CPU-friendly, ~1.5GB RAM - recommended", "min_ram_gb": 2},
+    {"name": "llava-phi3:3.8b", "description": "Higher quality, ~3.6GB RAM - needs more resources", "min_ram_gb": 4},
+]
 
-# NOTE: Only ONE Ollama call can run at a time (controlled by semaphore in luna_app.py)
-# This prevents VRAM exhaustion from concurrent calls
-OLLAMA_MODEL = "llava-phi3:3.8b"  # Original model
+# Cache the working model to avoid repeated checks
+_working_model = None
+_model_check_done = False
+
 TIMEOUT = 120  # 2 minutes timeout
 # ---------------------------
+
+def check_ollama_running():
+    """Check if Ollama is running and accessible."""
+    try:
+        response = requests.get(OLLAMA_TAGS_URL, timeout=5)
+        return response.ok
+    except:
+        return False
+
+def get_installed_models():
+    """Get list of installed Ollama models."""
+    try:
+        response = requests.get(OLLAMA_TAGS_URL, timeout=10)
+        if response.ok:
+            data = response.json()
+            return [m.get('name', '') for m in data.get('models', [])]
+    except:
+        pass
+    return []
+
+def find_working_model():
+    """Find the first available VLM model from the fallback list."""
+    global _working_model, _model_check_done
+    
+    if _model_check_done and _working_model:
+        return _working_model
+    
+    if not check_ollama_running():
+        print("❌ Ollama is not running!")
+        print("   Start Ollama with: ollama serve")
+        print("   Download from: https://ollama.ai")
+        return None
+    
+    installed = get_installed_models()
+    print(f"Installed Ollama models: {installed}")
+    
+    for model in OLLAMA_MODELS:
+        model_name = model["name"]
+        # Check if model (or partial match) is installed
+        if any(model_name.split(':')[0] in m for m in installed):
+            print(f"✓ Found VLM model: {model_name}")
+            _working_model = model_name
+            _model_check_done = True
+            return model_name
+    
+    # No models found - provide helpful message
+    print("❌ No VLM models installed!")
+    print("   Install a model with one of these commands:")
+    print("   ollama pull moondream:1.8b   (lighter, ~1.5GB, good for CPU)")
+    print("   ollama pull llava-phi3:3.8b  (better quality, ~3.6GB)")
+    
+    _model_check_done = True
+    return None
 
 def caption_image_llava(image_path):
     """
@@ -37,7 +93,12 @@ def caption_image_llava(image_path):
     Returns:
         Caption string or None if failed
     """
-    print(f"Using Ollama LLaVA model: {OLLAMA_MODEL}")
+    # Find available VLM model with automatic fallback
+    model = find_working_model()
+    if not model:
+        return "Image captioning not available - No VLM model installed. Run: ollama pull moondream:1.8b"
+    
+    print(f"Using Ollama VLM model: {model}")
     
     # Load and encode image to base64
     try:
@@ -52,50 +113,53 @@ def caption_image_llava(image_path):
         print(f"Error loading image: {e}")
         return None
     
-    # Build prompt for workplace safety analysis (NEUTRAL - no construction bias)
-    prompt = """You are a workplace safety observer. Describe EXACTLY what you see in this image using a natural narrative style.
+    # Build prompt for workplace safety analysis (DETAILED and STRUCTURED)
+    prompt = """You are a workplace safety observer. Analyze this image and provide a DETAILED, STRUCTURED description.
 
-Start directly describing the person(s) and their actual environment. DO NOT use phrases like "In the image" or "The image shows".
+REQUIRED OUTPUT FORMAT:
+=======================
+Start with: "SCENE: [number] person(s) detected."
 
-CRITICAL - ANTI-MISCLASSIFICATION RULES:
-========================================
-1. HARDHAT vs HAIR/CAPS:
-   - A HARDHAT is a RIGID, THICK protective helmet (typically white, yellow, orange, or bright colored)
-   - HAIR (even dark, neat hair) is NOT a hardhat
+Then for EACH person, describe in this order:
+1. POSITION: Where are they in the frame? (left/center/right, foreground/background)
+2. BODY VISIBILITY: What body parts are visible? (full body / upper half only / head and shoulders only)
+3. ACTIVITY: What are they doing? (standing, walking, working, sitting, etc.)
+4. HEAD: Hair color/style, headwear. ONLY say "hardhat" if you see a RIGID safety helmet
+5. TORSO: Clothing color and type. ONLY say "safety vest" if fluorescent with reflective strips
+6. HANDS: If visible, describe. ONLY say "gloves" if work gloves are clearly visible
+7. FEET: If visible, describe footwear. If NOT visible, say "feet not visible"
+8. FACE: Any face covering, goggles, mask (only if clearly visible)
+
+End with: "ENVIRONMENT: [brief 2-4 word description of setting]"
+
+CRITICAL RULES:
+===============
+1. HARDHAT IDENTIFICATION:
+   - HARDHAT = RIGID, THICK protective helmet (white, yellow, orange, bright colors)
+   - Dark hair is NOT a hardhat
    - Baseball caps, beanies, hoodies are NOT hardhats
-   - If unsure, describe what you see: "person has dark hair" NOT "wearing hardhat"
-   - ONLY say "hardhat" if you see a clearly identifiable safety helmet with rigid structure
+   - If uncertain, describe actual appearance: "dark hair" NOT "wearing hardhat"
 
-2. ACTUAL ENVIRONMENT (do not fabricate):
-   - If you see home furniture (sofa, TV stand, decorative items, carpets) → say "residential indoor setting"
-   - If you see office desks, computers, cubicles → say "office environment"
-   - If you see construction equipment, scaffolding, concrete → say "construction area"
-   - DO NOT call a living room a "construction site" or "work zone"
+2. COUNT ACCURACY:
+   - Count EVERY person visible in the image
+   - If partially visible persons exist, include them with "(partially visible)"
 
-3. VISIBILITY RULES:
-   - SAFETY BOOTS: ONLY mention if feet/ankles are clearly visible. If not visible, say "lower body not visible"
-   - GLOVES: Only if hands are clearly visible
-   - If only head/shoulders visible, do NOT speculate about lower body PPE
+3. ENVIRONMENT ACCURACY:
+   - Home furniture (sofa, TV, carpets) → "residential indoor"
+   - Office desks, computers → "office environment"
+   - Scaffolding, construction materials → "construction site"
+   - Factory equipment → "industrial facility"
 
-4. PPE MUST BE OBVIOUS:
-   - Safety Vest: Bright fluorescent vest with reflective strips
-   - Hardhat: Rigid helmet with chin strap area visible
-   - Safety Boots: Sturdy work boots (steel toe style)
-   - Goggles: Clear protective eyewear
-   - DO NOT report PPE unless it is CLEARLY VISIBLE and IDENTIFIABLE
+4. DO NOT FABRICATE:
+   - Only describe what you can clearly see
+   - If something is unclear or not visible, say so explicitly
+   - Never guess or assume PPE that isn't clearly visible
 
-Describe in order:
-- Person(s): What are they doing? What body parts are visible (full body / upper half / head only)?
-- Clothing/PPE: Describe ONLY what is actually visible and certain
-  * HEAD: Describe hair/headwear. Only say "hardhat" if you see a rigid safety helmet
-  * TORSO: Describe shirt/jacket. Only say "safety vest" if fluorescent with reflective strips
-  * HANDS: Describe if visible. Only say "gloves" if work gloves are clearly visible
-  * FEET: If visible, describe footwear. If not visible, state "lower body not visible"
-  * FACE: Goggles/mask only if clearly present
-- Actual Environment: Describe the real setting (residential/office/industrial/outdoor/etc.)
-- Safety Context: Any visible hazards IF this is actually a work environment
+EXAMPLE OUTPUT:
+===============
+"SCENE: 2 person(s) detected. Person 1 is positioned at center-left foreground, full body visible. Standing and appears to be working. Has short dark hair with no headwear. Wearing a blue work shirt, no safety vest visible. Hands are visible holding tools, wearing yellow work gloves. Feet visible with brown work boots. No face protection. Person 2 is positioned at right background, upper half visible only. Standing and observing. Wearing a white hardhat clearly visible. Orange safety vest with reflective strips. Hands not visible, feet not visible. ENVIRONMENT: construction site outdoors."
 
-Be accurate and honest. Do not assume this is a construction site unless you see construction indicators. Write a flowing paragraph, not a numbered list."""
+Now analyze the image and provide your structured description:"""
     
     # Call Ollama API
     try:
@@ -103,13 +167,13 @@ Be accurate and honest. Do not assume this is a construction site unless you see
         response = requests.post(
             OLLAMA_API_URL,
             json={
-                'model': OLLAMA_MODEL,
+                'model': model,
                 'prompt': prompt,
                 'images': [image_base64],
                 'stream': False,
                 'options': {
-                    'temperature': 0.6,
-                    'num_predict': 250,  # Increased for complete sentences
+                    'temperature': 0.4,  # Lower temperature for more accurate output
+                    'num_predict': 200,  # Shorter, more focused output
                     'stop': ['\n\n\n']  # Stop at triple newlines to avoid mid-sentence cuts
                 }
             },
@@ -125,6 +189,24 @@ Be accurate and honest. Do not assume this is a construction site unless you see
         caption = data.get('response', '').strip()
         
         if caption:
+            # Clean up brackets and raw formatting
+            import re
+            
+            # Remove leading/trailing brackets
+            caption = caption.strip('[]{}')
+            caption = caption.strip()
+            
+            # Remove quotes
+            caption = caption.replace('"', '').replace("'", "")
+            
+            # Remove any remaining bracket patterns like [text] or {text}
+            caption = re.sub(r'\[([^\]]*)\]', r'\1', caption)
+            caption = re.sub(r'\{([^\}]*)\}', r'\1', caption)
+            
+            # Remove bullet points and list markers
+            caption = re.sub(r'^[\-\*\•]\s*', '', caption, flags=re.MULTILINE)
+            caption = re.sub(r'\n[\-\*\•]\s*', ' ', caption)
+            
             # Clean up common prefixes
             prefixes_to_remove = [
                 "In the image, ",
@@ -134,16 +216,21 @@ Be accurate and honest. Do not assume this is a construction site unless you see
                 "This image shows ",
                 "This image depicts ",
                 "In this image, ",
-                "In this image "
+                "In this image ",
+                "Here is ",
+                "Here's ",
             ]
             
             for prefix in prefixes_to_remove:
-                if caption.startswith(prefix):
+                if caption.lower().startswith(prefix.lower()):
                     caption = caption[len(prefix):]
                     # Capitalize first letter after removal
                     if caption:
                         caption = caption[0].upper() + caption[1:]
                     break
+            
+            # Merge multiple spaces and newlines
+            caption = re.sub(r'\s+', ' ', caption).strip()
             
             # Ensure complete sentence - truncate to last period if incomplete
             if caption and not caption.endswith(('.', '!', '?')):
@@ -216,6 +303,12 @@ def validate_work_environment(image_path):
     """
     print(f"Validating work environment...")
     
+    # Find available VLM model with automatic fallback
+    model = find_working_model()
+    if not model:
+        # No model available - default to valid to allow processing
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'VLM not available - defaulting to valid'}
+    
     # Load and encode image to base64
     try:
         with open(image_path, 'rb') as f:
@@ -225,53 +318,72 @@ def validate_work_environment(image_path):
         print(f"Error loading image: {e}")
         return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Could not load image for validation'}
     
-    # Quick environment classification prompt - STRICT scene recognition
-    prompt = """Look at this image carefully and classify the ACTUAL environment you see.
+    # Quick environment classification prompt - STRICT scene recognition with tie-breakers
+    prompt = """Classify the ENVIRONMENT/BACKGROUND in this image. IGNORE what the person is wearing - focus ONLY on the surroundings.
 
-CHECK FOR THESE INDICATORS:
+PRIORITY CLASSIFICATION RULES (check in order):
 
-A) CONSTRUCTION/INDUSTRIAL:
-   ✓ Scaffolding, concrete, lumber, construction equipment
-   ✓ Factory machinery, assembly lines, warehouses with industrial shelving
-   ✓ Visible construction materials, work site barriers, heavy machinery
-   ✓ People wearing multiple PPE items in an active work zone
-   → Choose A ONLY if you see CLEAR industrial/construction indicators
+1. LOOK AT THE BACKGROUND FIRST:
+   - What furniture or objects are visible?
+   - What does the floor/walls look like?
+   - Any equipment, machinery, or work materials?
 
-B) OFFICE/COMMERCIAL:
-   ✓ Office desks, computers, cubicles, meeting rooms
-   ✓ Retail displays, store shelves, checkout counters
-   ✓ Professional indoor setting with business furniture
+2. CLASSIFICATION HIERARCHY (if multiple match, use FIRST match):
 
-C) RESIDENTIAL/CASUAL:
-   ✓ Home furniture: sofas, TV stands, beds, dining tables, home decor
-   ✓ Residential kitchen, living room, bedroom, home interior
-   ✓ Parks, beaches, restaurants, cafes, casual outdoor settings
-   ✓ Person at home (even if wearing safety gear for testing purposes)
-   → Choose C if this looks like someone's HOME or casual setting
+   C - RESIDENTIAL (check FIRST):
+   If you see ANY of these, answer C immediately:
+   - Sofa, couch, armchair, coffee table
+   - TV, TV stand, home entertainment
+   - Bed, bedroom furniture, wardrobe
+   - Home kitchen cabinets, refrigerator, home appliances
+   - Carpet, home curtains, family photos, home decor
+   - Dining table in home setting
+   → Even if person wears safety gear, C if background is HOME
 
-D) OTHER:
-   ✓ Vehicle interior, outdoor road/street, unclear background
-   ✓ Cannot determine the setting
+   B - OFFICE/COMMERCIAL:
+   - Office desks, computer monitors, cubicles
+   - Conference tables, meeting rooms
+   - Retail store shelves, checkout counters
+   - Professional workspace furniture
 
-IMPORTANT: Do NOT classify a residential living room as construction site just because someone is wearing safety gear! The ENVIRONMENT determines the category, not the person's clothing.
+   A - CONSTRUCTION/INDUSTRIAL:
+   - Scaffolding, concrete, bare walls under construction
+   - Heavy machinery, cranes, forklifts
+   - Lumber, bricks, construction materials
+   - Factory equipment, assembly lines
+   - Warehouse with industrial racking
+   → ONLY choose A if you see ACTUAL construction/industrial materials
 
-Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
-- "A - construction site with scaffolding"
-- "C - person in living room"
-- "C - home interior with sofa"
-- "B - office desk area" """
+   D - OTHER/UNCLEAR:
+   - Vehicle interior, outdoor street/road
+   - Cannot determine the background setting
+
+TIE-BREAKER RULES:
+- If scene has BOTH home furniture AND some work tools → C (home workshop)
+- If scene looks like home but person wears PPE → C (testing at home)
+- If uncertain between multiple options → Choose the LESS industrial option
+
+ANSWER FORMAT: Just the letter and 3-5 words describing what you see in the BACKGROUND.
+Examples:
+"C - living room with sofa"
+"C - home interior with TV"
+"A - construction site scaffolding"
+"B - office with computer desks"
+"D - outdoor street scene"
+
+Your classification:"""
 
     try:
         response = requests.post(
             OLLAMA_API_URL,
             json={
-                'model': OLLAMA_MODEL,
+                'model': model,
                 'prompt': prompt,
                 'images': [image_base64],
                 'stream': False,
                 'options': {
-                    'temperature': 0.3,  # Lower temperature for more consistent classification
-                    'num_predict': 30,   # Short response
+                    'temperature': 0.1,  # Very low temperature for consistent classification
+                    'num_predict': 25,   # Short response
                 }
             },
             timeout=30  # Shorter timeout for quick check

@@ -85,6 +85,24 @@ if %errorlevel% neq 0 (
     start "Ollama Server" /min cmd /c "ollama serve"
     timeout /t 3
     echo Ollama server started
+    
+    REM Check if llama3 model is available
+    echo Checking for required models...
+    ollama list 2>nul | findstr /i "llama3" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo llama3 model not found. Pulling now...
+        echo This may take several minutes on first run...
+        ollama pull llama3
+        if %errorlevel% neq 0 (
+            echo Warning: Failed to pull llama3 model.
+            echo Reports will use fallback analysis.
+            timeout /t 3
+        ) else (
+            echo llama3 model ready!
+        )
+    ) else (
+        echo llama3 model ready!
+    )
 )
 
 echo.

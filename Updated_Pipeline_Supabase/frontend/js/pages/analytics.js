@@ -20,12 +20,8 @@ const AnalyticsPage = {
                         <span><i class="fas fa-chart-bar"></i> Violation Trends</span>
                     </div>
                     <div class="card-content">
-                        <div id="trends-chart" style="min-height: 300px; display: flex; align-items: center; justify-content: center; background: var(--background-color); border-radius: 8px; padding: 2rem;">
-                            <div style="text-align: center;">
-                                <i class="fas fa-chart-line" style="font-size: 3rem; color: var(--border-color); margin-bottom: 1rem;"></i>
-                                <p style="color: #7f8c8d;">Interactive charts coming soon</p>
-                                <p style="color: #95a5a6; font-size: 0.9rem;">Will show violation trends over time</p>
-                            </div>
+                        <div style="height: 300px; position: relative;">
+                            <canvas id="trendChart"></canvas>
                         </div>
                     </div>
                 </div>
@@ -79,11 +75,20 @@ const AnalyticsPage = {
     },
 
     async mount() {
-        const stats = await API.getStats();
-        this.renderStats(stats);
-        this.renderViolationTypes(stats);
-        this.renderTimeDistribution(stats);
-        this.calculateSafetyScore(stats);
+        try {
+            const [stats, trendData] = await Promise.all([
+                API.getStats(),
+                fetch('/api/analytics/trend').then(r => r.json())
+            ]);
+
+            this.renderStats(stats);
+            this.renderTrendsChart(trendData);
+            this.renderViolationTypes(stats);
+            this.renderTimeDistribution(stats);
+            this.calculateSafetyScore(stats);
+        } catch (e) {
+            console.error('Error loading analytics:', e);
+        }
     },
 
     renderStats(stats) {
@@ -108,9 +113,57 @@ const AnalyticsPage = {
         `;
     },
 
+    renderTrendsChart(data) {
+        const ctx = document.getElementById('trendChart').getContext('2d');
+
+        // Destroy existing chart if any
+        if (window.analyticsChart) {
+            window.analyticsChart.destroy();
+        }
+
+        const labels = data.map(d => {
+            const date = new Date(d.date);
+            return `${date.getDate()}/${date.getMonth() + 1}`;
+        });
+        const counts = data.map(d => d.count);
+
+        window.analyticsChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Daily Violations',
+                    data: counts,
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0
+                        }
+                    }
+                }
+            }
+        });
+    },
+
     renderViolationTypes(stats) {
         const container = document.getElementById('violation-types');
-        
+
         // For now, all violations are NO-Hardhat
         const types = [
             { name: 'Missing Hardhat', count: stats.total, color: 'var(--error-color)' },
@@ -138,7 +191,7 @@ const AnalyticsPage = {
 
     renderTimeDistribution(stats) {
         const container = document.getElementById('time-distribution');
-        
+
         // Calculate time distribution
         const distribution = {
             'Morning (6AM-12PM)': 0,
@@ -180,13 +233,13 @@ const AnalyticsPage = {
         // Simple safety score calculation
         // 100% - (violations_today * 10)
         const score = Math.max(0, Math.min(100, 100 - (stats.today * 10)));
-        
+
         const scoreElement = document.getElementById('safety-score');
         const barElement = document.getElementById('safety-bar');
-        
+
         scoreElement.textContent = `${score}%`;
         barElement.style.width = `${score}%`;
-        
+
         // Change color based on score
         if (score >= 80) {
             scoreElement.style.color = 'var(--success-color)';

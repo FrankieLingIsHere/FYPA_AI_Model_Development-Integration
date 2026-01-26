@@ -108,11 +108,9 @@ const HomePage = {
     /* ================= SUMMARY ================= */
 
     renderHomeSummary(stats) {
-        const yesterday = stats.today + 5;     // mock
-        const lastWeek = stats.thisWeek - 3;   // mock
-
-        const todayDelta = stats.today - yesterday;
-        const weekDelta = stats.thisWeek - lastWeek;
+        // Use real deltas from backend (defaults to 0 if undefined)
+        const todayDelta = stats.todayDelta !== undefined ? stats.todayDelta : 0;
+        const weekDelta = stats.weekDelta !== undefined ? stats.weekDelta : 0;
 
         document.getElementById("todayCount").textContent = stats.today;
         document.getElementById("weekCount").textContent = stats.thisWeek;
@@ -216,7 +214,7 @@ const HomePage = {
                         <div class="card-content">
                             <h4>Report #${v.report_id}</h4>
                             <p style="font-size:0.85rem;color:#7f8c8d;">
-                                ${new Date(v.timestamp).toLocaleString()}
+                                ${typeof TimezoneManager !== 'undefined' ? TimezoneManager.formatDateTime(v.timestamp) : new Date(v.timestamp).toLocaleString()}
                             </p>
                         </div>
                     </div>

@@ -672,7 +672,7 @@ def queue_worker_loop():
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
+def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = False, annotated_frame: np.ndarray = None) -> str:
     """
     Capture a violation and add it to the processing queue.
     Uses SMART DETECTION to only capture when:
@@ -680,10 +680,13 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
     - New PERSON enters the frame
     - Significant POSITION change detected
     - Periodic refresh timeout reached
+    - force=True (e.g., manual upload)
     
     Args:
         frame: The video frame with the violation
         detections: List of YOLO detections
+        force: If True, bypass smart detection and cooldown checks
+        annotated_frame: Optional pre-annotated frame to use (avoids re-inference mismatches)
     
     Returns:
         report_id if successfully queued, None otherwise
@@ -691,7 +694,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
     global last_violation_time
     
     logger.info("=" * 80)
-    logger.info("ENQUEUE_VIOLATION CALLED (Smart Detection)")
+    logger.info(f"ENQUEUE_VIOLATION CALLED (Smart Detection{' - FORCED' if force else ''})")
     logger.info("=" * 80)
     
     try:
@@ -711,14 +714,17 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
             return None
         
         # === SMART DETECTION CHECK ===
-        # Determine if we should capture based on scene changes
-        should_capture, reason = should_capture_violation(detections, frame_width, frame_height)
-        
-        if not should_capture:
-            logger.info(f"⏭️ Skipping capture: {reason}")
-            return None
-        
-        logger.info(f"✅ Capture triggered: {reason}")
+        if not force:
+            # Determine if we should capture based on scene changes
+            should_capture, reason = should_capture_violation(detections, frame_width, frame_height)
+            
+            if not should_capture:
+                logger.info(f"⏭️ Skipping capture: {reason}")
+                return None
+            
+            logger.info(f"✅ Capture triggered: {reason}")
+        else:
+            logger.info("✅ Capture forced (manual upload)")
         
         violation_types = [d['class_name'] for d in violation_detections]
         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
@@ -736,11 +742,16 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
         cv2.imwrite(str(original_path), frame)
         logger.info(f"✓ Saved original image: {original_path}")
         
-        # Save annotated frame
-        _, annotated = predict_image(frame, conf=0.25)
+        # Save annotated frame (Use provided one or regenerate)
         annotated_path = violation_dir / 'annotated.jpg'
-        cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"✓ Saved annotated image: {annotated_path}")
+        if annotated_frame is not None:
+             cv2.imwrite(str(annotated_path), annotated_frame)
+             logger.info(f"✓ Saved PROVIDED annotated image: {annotated_path}")
+        else:
+            logger.info("   Regenerating annotated image (no pre-annotated frame provided)...")
+            _, annotated = predict_image(frame, conf=0.25)
+            cv2.imwrite(str(annotated_path), annotated)
+            logger.info(f"✓ Saved generated annotated image: {annotated_path}")
         
         # === IMMEDIATE: Insert pending detection event ===
         if db_manager:
@@ -944,7 +955,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'person_count': len(detections)
             }
             
-            result = report_generator.generate_report(report_data)
+            logger.info("📄 Generating NLP report with Llama3 (acquiring Ollama lock)...")
+            with ollama_semaphore:
+                result = report_generator.generate_report(report_data)
             
             if result and result.get('html'):
                 target_html = violation_dir / 'report.html'
@@ -1561,8 +1574,6 @@ def api_stats():
         
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        # Calculate actual week start (Monday of current week)
-        # weekday() returns 0=Monday, 1=Tuesday, etc.
         days_since_monday = now.weekday()
         week_start = today_start - timedelta(days=days_since_monday)
         
@@ -1570,11 +1581,8 @@ def api_stats():
             'total': len(violations),
             'today': sum(1 for v in violations if v >= today_start),
             'thisWeek': sum(1 for v in violations if v >= week_start),
-            'severity': {
-                'high': 0,
-                'medium': len(violations),
-                'low': 0
-            }
+            'severity': {'high': 0, 'medium': len(violations), 'low': 0},
+            'breakdown': {}  # Local fallback doesn't support breakdown easily
         }
         return jsonify(stats)
     
@@ -1582,18 +1590,19 @@ def api_stats():
     try:
         violations = db_manager.get_recent_violations(limit=2000)
         
+        # Calculate Date Ranges
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday_start = today_start - timedelta(days=1)
         yesterday_end = today_start
         
-        # Calculate actual week start (Monday of current week)
+        # Week ranges (Monday start)
         days_since_monday = now.weekday()
         week_start = today_start - timedelta(days=days_since_monday)
         last_week_start = week_start - timedelta(days=7)
         last_week_end = week_start
         
-        # Convert to timezone-aware for comparison if needed
+        # Handle timezone info in violations if present
         if violations and violations[0].get('timestamp') and violations[0]['timestamp'].tzinfo:
             from datetime import timezone
             today_start = today_start.replace(tzinfo=timezone.utc)
@@ -1602,14 +1611,61 @@ def api_stats():
             week_start = week_start.replace(tzinfo=timezone.utc)
             last_week_start = last_week_start.replace(tzinfo=timezone.utc)
             last_week_end = last_week_end.replace(tzinfo=timezone.utc)
+            
+        # 1. Calculate Summary Stats
+        today_count = 0
+        yesterday_count = 0
+        week_count = 0
+        last_week_count = 0
         
-        # Calculate counts
-        today_count = sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= today_start)
-        yesterday_count = sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= yesterday_start and v['timestamp'] < yesterday_end)
+        # 2. Calculate Breakdown
+        violation_counts = {
+            'NO-Hardhat': 0,
+            'NO-Safety Vest': 0,
+            'NO-Gloves': 0,
+            'NO-Mask': 0,
+            'NO-Goggles': 0,
+            'NO-Safety Shoes': 0,
+            'Other': 0
+        }
         
-        week_count = sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= week_start)
-        last_week_count = sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= last_week_start and v['timestamp'] < last_week_end)
-        
+        for v in violations:
+            ts = v.get('timestamp')
+            if ts:
+                if ts >= today_start:
+                    today_count += 1
+                if ts >= yesterday_start and ts < yesterday_end:
+                    yesterday_count += 1
+                if ts >= week_start:
+                    week_count += 1
+                if ts >= last_week_start and ts < last_week_end:
+                    last_week_count += 1
+            
+            # Parse detection data for breakdown
+            detection_data = v.get('detection_data')
+            if detection_data:
+                # Handle both List (direct) and Dict (wrapper) formats
+                if isinstance(detection_data, dict):
+                    detections = detection_data.get('detections', [])
+                elif isinstance(detection_data, list):
+                    detections = detection_data
+                else:
+                    detections = []
+                    
+                for d in detections:
+                    class_name = d.get('class_name', '')
+                    # Case-insensitive matching
+                    matched = False
+                    for key in violation_counts.keys():
+                        if key.lower() == class_name.lower():
+                            violation_counts[key] += 1
+                            matched = True
+                            break
+                    
+                    if not matched and class_name.upper().startswith('NO-'):
+                        # Map unknown NO- classes to Other or count specifically if needed
+                        violation_counts['Other'] += 1
+
         stats = {
             'total': len(violations),
             'today': today_count,
@@ -1617,10 +1673,11 @@ def api_stats():
             'thisWeek': week_count,
             'weekDelta': week_count - last_week_count,
             'severity': {
-                'high': sum(1 for v in violations if v.get('severity', '').upper() == 'HIGH'),
-                'medium': sum(1 for v in violations if v.get('severity', '').upper() == 'MEDIUM'),
-                'low': sum(1 for v in violations if v.get('severity', '').upper() == 'LOW')
-            }
+                'high': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'HIGH'),
+                'medium': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'MEDIUM'),
+                'low': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'LOW')
+            },
+            'breakdown': violation_counts
         }
         
         return jsonify(stats)
@@ -2305,7 +2362,9 @@ def upload_inference():
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            report_id = enqueue_violation(frame_copy, detections_copy)
+            # FORCE capture for manual uploads to bypass smart detection checks
+            # PASS THE ANNOTATED IMAGE to ensure consistency with what user sees
+            report_id = enqueue_violation(frame_copy, detections_copy, force=True, annotated_frame=annotated)
             logger.info(f"📥 Violation queued for processing: {report_id}")
         
         # Encode annotated image to base64

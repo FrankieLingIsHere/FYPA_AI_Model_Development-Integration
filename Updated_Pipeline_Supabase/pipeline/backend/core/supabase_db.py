@@ -368,6 +368,45 @@ class SupabaseDatabaseManager:
             logger.error(f"Failed to get stuck report IDs: {e}")
             return []
 
+    def get_pending_reports(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Retrieve reports that are pending, generating, or uploading.
+        Used for the queue status UI.
+        
+        Args:
+            limit: Maximum number of reports to retrieve
+            
+        Returns:
+            List of pending report dictionaries
+        """
+        self._ensure_connection()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        report_id,
+                        timestamp,
+                        person_count,
+                        violation_count,
+                        severity,
+                        status,
+                        device_id,
+                        error_message
+                    FROM public.detection_events
+                    WHERE status IN ('pending', 'generating') 
+                       OR status LIKE 'analyzing_%%' 
+                       OR status LIKE 'uploading_%%'
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """, (limit,))
+                
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+                
+        except Exception as e:
+            logger.error(f"Failed to get pending reports: {e}")
+            return []
+
     def fix_timestamp_issues(self):
         """
         Fix historical timestamp issues where some reports show -4 hours (offset mismatch).

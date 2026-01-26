@@ -265,316 +265,330 @@
                             <li>Click <strong>Stop</strong> when monitoring is complete</li>
                         </ol>
 
-                        <div class="grid grid-3" style="gap: 0.75rem; margin-bottom: 1rem;">
-                            <div
-                                style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                                <div style="font-size: 1.5rem; color: var(--primary-color); font-weight: bold;">30+ FPS
-                                </div>
-                                <div style="font-size: 0.85rem; color: #7f8c8d;">Processing Speed</div>
-                            </div>
-                            <div
-                                style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                                <div style="font-size: 1.5rem; color: var(--success-color); font-weight: bold;">95%+
-                                </div>
-                                <div style="font-size: 0.85rem; color: #7f8c8d;">Detection Accuracy</div>
-                            </div>
-                            <div
-                                style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                                <div style="font-size: 1.5rem; color: var(--secondary-color); font-weight: bold;">3s
-                                </div>
-                                <div style="font-size: 0.85rem; color: #7f8c8d;">Default Cooldown</div>
-                            </div>
-                        </div>
-
                         <div
-                            style="background: #e8f4fd; padding: 1rem; border-radius: 8px; border-left: 4px solid var(--info-color);">
-                            <h4 style="margin: 0 0 0.5rem 0; color: var(--info-color);"><i
-                                    class="fas fa-info-circle"></i> Pro Tip</h4>
-                            <p style="margin: 0; font-size: 0.95rem;">
-                                Adjust the <strong>Capture Cooldown</strong> in Processing Settings to control how
-                                frequently violations are captured. Lower values capture more, higher values reduce
-                                duplicates.
-                            </p>
+                            style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                            <div style="font-size: 1.5rem; color: var(--primary-color); font-weight: bold;">Smart</div>
+                            <div style="font-size: 0.85rem; color: #7f8c8d;">Detection Logic</div>
+                        </div>
+                        <div
+                            style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                            <div style="font-size: 1.5rem; color: var(--success-color); font-weight: bold;">95%+
+                            </div>
+                            <div style="font-size: 0.85rem; color: #7f8c8d;">Detection Accuracy</div>
+                        </div>
+                        <div
+                            style="text-align: center; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                            <div style="font-size: 1.5rem; color: var(--secondary-color); font-weight: bold;">Auto</div>
+                            <div style="font-size: 0.85rem; color: #7f8c8d;">Scene Refresh</div>
                         </div>
                     </div>
 
-                    <!-- Image Analysis Page -->
-                    <div class="handbook-page" id="handbook-upload">
-                        <h3><i class="fas fa-upload" style="color: var(--primary-color);"></i> Image Analysis</h3>
-                        <p style="margin-bottom: 1rem;">Upload photos for PPE compliance analysis without using a live
-                            camera feed.</p>
-
-                        <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list-ol"
-                                style="color: var(--secondary-color);"></i> How to Use</h4>
-                        <ol style="margin-left: 1.25rem; line-height: 2; margin-bottom: 1rem;">
-                            <li>Go to <strong>Live Monitor</strong> → Click <strong>Analyze Image</strong> tab</li>
-                            <li>Drag and drop an image or click to browse files</li>
-                            <li>Supported formats: <strong>JPG, PNG</strong> (max 10MB)</li>
-                            <li>Click <strong>Analyze for PPE Violations</strong></li>
-                            <li>View detection results with annotated bounding boxes</li>
-                            <li>If violations are found, a report is generated automatically</li>
-                        </ol>
-
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                            <div
-                                style="background: rgba(46, 204, 113, 0.1); padding: 1rem; border-radius: 8px; border: 1px solid var(--success-color);">
-                                <h5 style="margin: 0 0 0.5rem 0; color: var(--success-color);"><i
-                                        class="fas fa-check"></i> Best Practices</h5>
-                                <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.8;">
-                                    <li>Use well-lit, clear images</li>
-                                    <li>Include full body shots of workers</li>
-                                    <li>Avoid blurry or distorted photos</li>
-                                </ul>
-                            </div>
-                            <div
-                                style="background: rgba(231, 76, 60, 0.1); padding: 1rem; border-radius: 8px; border: 1px solid var(--error-color);">
-                                <h5 style="margin: 0 0 0.5rem 0; color: var(--error-color);"><i
-                                        class="fas fa-times"></i> Avoid</h5>
-                                <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.8;">
-                                    <li>Very low resolution images</li>
-                                    <li>Heavily cropped photos</li>
-                                    <li>Images with extreme angles</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Reports Page -->
-                    <div class="handbook-page" id="handbook-reports">
-                        <h3><i class="fas fa-file-alt" style="color: var(--primary-color);"></i> Understanding Reports
-                        </h3>
-                        <p style="margin-bottom: 1rem;">Each violation generates a comprehensive safety report with
-                            AI-powered analysis.</p>
-
-                        <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-cogs"
-                                style="color: var(--secondary-color);"></i> Report Generation Pipeline</h4>
-                        <div
-                            style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-                            <div class="pipeline-step">
-                                <i class="fas fa-camera"></i>
-                                <span>Capture</span>
-                            </div>
-                            <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
-                            <div class="pipeline-step">
-                                <i class="fas fa-search"></i>
-                                <span>YOLO Detection</span>
-                            </div>
-                            <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
-                            <div class="pipeline-step">
-                                <i class="fas fa-image"></i>
-                                <span>LLaVA Caption</span>
-                            </div>
-                            <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
-                            <div class="pipeline-step">
-                                <i class="fas fa-robot"></i>
-                                <span>Llama3 Report</span>
-                            </div>
-                            <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
-                            <div class="pipeline-step">
-                                <i class="fas fa-cloud-upload-alt"></i>
-                                <span>Supabase Storage</span>
-                            </div>
-                        </div>
-
-                        <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list"
-                                style="color: var(--secondary-color);"></i> Report Contents</h4>
-                        <ul style="margin-left: 1.25rem; line-height: 2; margin-bottom: 1rem;">
-                            <li><strong>Original Image</strong> - The captured frame at the time of violation</li>
-                            <li><strong>Annotated Image</strong> - Bounding boxes showing all detected objects</li>
-                            <li><strong>AI Caption</strong> - LLaVA-generated description of the scene</li>
-                            <li><strong>NLP Analysis</strong> - Llama3-generated safety assessment and recommendations
-                            </li>
-                            <li><strong>Metadata</strong> - Timestamp, severity, location, detection counts</li>
+                    <div
+                        style="background: #e8f4fd; padding: 1rem; border-radius: 8px; border-left: 4px solid var(--info-color); margin-bottom: 1rem;">
+                        <h4 style="margin: 0 0 0.5rem 0; color: var(--info-color);"><i class="fas fa-brain"></i> Smart
+                            Detection</h4>
+                        <p style="margin: 0; font-size: 0.95rem; line-height: 1.6;">
+                            The system uses <strong>Smart Detection</strong> to avoid duplicate reports. It only
+                            captures a new violation when:
+                        <ul style="margin: 0.5rem 0 0 1.25rem;">
+                            <li>A <strong>new violation type</strong> is detected</li>
+                            <li>A <strong>new person</strong> enters the frame</li>
+                            <li>There is significant <strong>movement</strong> (>15%)</li>
+                            <li>The scene automatically refreshes every 30 seconds</li>
                         </ul>
+                        </p>
+                    </div>
+                </div>
 
-                        <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-traffic-light"
-                                style="color: var(--secondary-color);"></i> Report Status</h4>
-                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-                            <span class="badge badge-warning" style="padding: 0.5rem 1rem;"><i class="fas fa-clock"></i>
-                                Pending</span>
-                            <span class="badge badge-info" style="padding: 0.5rem 1rem;"><i class="fas fa-spinner"></i>
-                                Generating</span>
-                            <span class="badge badge-success" style="padding: 0.5rem 1rem;"><i class="fas fa-check"></i>
-                                Completed</span>
-                            <span class="badge badge-danger" style="padding: 0.5rem 1rem;"><i class="fas fa-times"></i>
-                                Failed</span>
-                        </div>
+                <!-- Image Analysis Page -->
+                <div class="handbook-page" id="handbook-upload">
+                    <h3><i class="fas fa-upload" style="color: var(--primary-color);"></i> Image Analysis</h3>
+                    <p style="margin-bottom: 1rem;">Upload photos for PPE compliance analysis without using a live
+                        camera feed.</p>
+
+                    <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list-ol"
+                            style="color: var(--secondary-color);"></i> How to Use</h4>
+                    <ol style="margin-left: 1.25rem; line-height: 2; margin-bottom: 1rem;">
+                        <li>Go to <strong>Live Monitor</strong> → Click <strong>Analyze Image</strong> tab</li>
+                        <li>Drag and drop an image or click to browse files</li>
+                        <li>Supported formats: <strong>JPG, PNG</strong> (max 10MB)</li>
+                        <li>Click <strong>Analyze for PPE Violations</strong></li>
+                        <li>View detection results with annotated bounding boxes</li>
+                        <li>If violations are found, a report is generated automatically</li>
+                    </ol>
+
+                    <div
+                        style="background: #e8f4fd; padding: 1rem; border-radius: 8px; border-left: 4px solid var(--primary-color); margin-bottom: 1.5rem;">
+                        <h5 style="margin: 0 0 0.5rem 0; color: var(--primary-color);"><i class="fas fa-lightbulb"></i>
+                            Why Use This Feature?</h5>
+                        <p style="margin: 0; font-size: 0.95rem; line-height: 1.6;">
+                            The Image Analysis tool is essential for <strong>auditing historical data</strong> or
+                            testing photos taken from other devices (e.g., phone cameras, drones) without needing a live
+                            camera feed. This allows safety managers to process evidence collected off-site or
+                            retroactively.
+                        </p>
                     </div>
 
-                    <!-- Voice Alerts Page -->
-                    <div class="handbook-page" id="handbook-alerts">
-                        <h3><i class="fas fa-bell" style="color: var(--primary-color);"></i> Voice Alerts</h3>
-                        <p style="margin-bottom: 1rem;">Audio notifications provide immediate awareness of PPE
-                            violations.</p>
-
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                         <div
-                            style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
-                            <div
-                                style="width: 60px; height: 60px; background: var(--primary-color); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
-                                <i class="fas fa-volume-up" style="font-size: 1.5rem; color: white;"></i>
-                            </div>
-                            <div>
-                                <h4 style="margin: 0 0 0.25rem 0;">Enable Voice Alerts</h4>
-                                <p style="margin: 0; font-size: 0.9rem; color: #7f8c8d;">
-                                    Click the <strong>🔊 Voice Alerts</strong> button in the sidebar to toggle audio
-                                    notifications on/off.
-                                </p>
-                            </div>
+                            style="background: rgba(46, 204, 113, 0.1); padding: 1rem; border-radius: 8px; border: 1px solid var(--success-color);">
+                            <h5 style="margin: 0 0 0.5rem 0; color: var(--success-color);"><i class="fas fa-check"></i>
+                                Best Practices</h5>
+                            <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.8;">
+                                <li>Use well-lit, clear images</li>
+                                <li>Include full body shots of workers</li>
+                                <li><strong>Note:</strong> Uploads bypass "Smart Detection" checks to ensure immediate
+                                    analysis.</li>
+                            </ul>
                         </div>
-
-                        <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list"
-                                style="color: var(--secondary-color);"></i> Alert Types</h4>
-                        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;">
-                            <div
-                                style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: rgba(231, 76, 60, 0.1); border-radius: 8px; border-left: 4px solid var(--error-color);">
-                                <i class="fas fa-exclamation-circle"
-                                    style="font-size: 1.25rem; color: var(--error-color);"></i>
-                                <div>
-                                    <strong style="color: var(--error-color);">Violation Alert</strong>
-                                    <p style="margin: 0; font-size: 0.9rem;">Plays when a PPE violation is detected
-                                        (e.g., "Warning! Hardhat violation detected")</p>
-                                </div>
-                            </div>
-                            <div
-                                style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: rgba(46, 204, 113, 0.1); border-radius: 8px; border-left: 4px solid var(--success-color);">
-                                <i class="fas fa-check-circle"
-                                    style="font-size: 1.25rem; color: var(--success-color);"></i>
-                                <div>
-                                    <strong style="color: var(--success-color);">Compliance Confirmation</strong>
-                                    <p style="margin: 0; font-size: 0.9rem;">Confirms when all workers are properly
-                                        equipped (optional)</p>
-                                </div>
-                            </div>
-                        </div>
-
                         <div
-                            style="background: #fff3cd; padding: 1rem; border-radius: 8px; border-left: 4px solid var(--warning-color);">
-                            <h4 style="margin: 0 0 0.5rem 0; color: #856404;"><i class="fas fa-volume-mute"></i> Note
-                            </h4>
-                            <p style="margin: 0; font-size: 0.95rem; color: #856404;">
-                                Voice alerts require browser audio permissions. If you don't hear alerts, check your
-                                browser settings and ensure the system volume is turned up.
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- FAQ Page -->
-                    <div class="handbook-page" id="handbook-faq">
-                        <h3><i class="fas fa-question-circle" style="color: var(--primary-color);"></i> Frequently Asked
-                            Questions</h3>
-                        <p style="margin-bottom: 1rem;">Click on a question to expand the answer.</p>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>What PPE does the system detect?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">The system detects 14 classes: Hardhat, Safety Vest,
-                                    Mask, Gloves, Goggles, Safety Shoes, and their corresponding "NO-" violation classes
-                                    (e.g., NO-Hardhat). It also detects Person and Machinery for context.</p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>How accurate is the detection?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">The YOLOv8 model achieves 95%+ accuracy on our test
-                                    dataset. Real-world accuracy may vary based on lighting conditions, camera quality,
-                                    and distance from subjects. The default confidence threshold is 10% to maximize
-                                    detection sensitivity.</p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>Can I disable voice alerts?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">Yes! Click the <strong>🔊 Voice Alerts</strong> button
-                                    in the sidebar to toggle audio notifications on/off. The button will change color to
-                                    indicate the current state.</p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>Why are some reports showing "Generating..."?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">Report generation involves multiple AI models (LLaVA
-                                    for image captioning, Llama3 for NLP analysis) and can take 30-60 seconds per
-                                    report. Violations are queued and processed one at a time to prevent GPU memory
-                                    exhaustion. Check the Processing Queue Status on the Live Monitor page.</p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>What is Environment Validation?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">When enabled, the system uses AI to verify that
-                                    violations occur in valid work environments (construction sites, factories,
-                                    warehouses). Non-work environments (homes, offices, parks) are skipped to reduce
-                                    false positives. Disable this for testing purposes.</p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>How do I adjust the capture cooldown?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">Go to <strong>Live Monitor</strong> →
-                                    <strong>Processing Settings</strong> tab. Use the slider to adjust the cooldown
-                                    between 1-30 seconds. Lower values capture more violations, higher values prevent
-                                    duplicate captures of the same scene.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>Where are reports stored?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">Reports are stored in two places: locally in the
-                                    <code>pipeline/violations/</code> directory, and in the cloud via Supabase. The
-                                    Supabase backend ensures reports are accessible from anywhere and provides secure
-                                    storage for images and HTML reports.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="faq-item">
-                            <div class="faq-question">
-                                <span>The camera isn't working. What should I do?</span>
-                                <i class="fas fa-chevron-down"></i>
-                            </div>
-                            <div class="faq-answer">
-                                <p style="padding-top: 0.75rem;">Check the following:</p>
-                                <ul style="margin-top: 0.5rem; padding-left: 1.25rem; line-height: 1.8;">
-                                    <li>Ensure your browser has camera permissions for localhost:5000</li>
-                                    <li>Close other applications that may be using the camera</li>
-                                    <li>Try refreshing the page or restarting the server</li>
-                                    <li>Check that your webcam is properly connected</li>
-                                </ul>
-                            </div>
+                            style="background: rgba(231, 76, 60, 0.1); padding: 1rem; border-radius: 8px; border: 1px solid var(--error-color);">
+                            <h5 style="margin: 0 0 0.5rem 0; color: var(--error-color);"><i class="fas fa-times"></i>
+                                Avoid</h5>
+                            <ul style="margin: 0; padding-left: 1.25rem; font-size: 0.9rem; line-height: 1.8;">
+                                <li>Very low resolution images</li>
+                                <li>Heavily cropped photos</li>
+                                <li>Images with extreme angles</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
 
+                <!-- Reports Page -->
+                <div class="handbook-page" id="handbook-reports">
+                    <h3><i class="fas fa-file-alt" style="color: var(--primary-color);"></i> Understanding Reports
+                    </h3>
+                    <p style="margin-bottom: 1rem;">Each violation generates a comprehensive safety report with
+                        AI-powered analysis.</p>
+
+                    <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-cogs"
+                            style="color: var(--secondary-color);"></i> Report Generation Pipeline</h4>
+                    <div
+                        style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                        <div class="pipeline-step">
+                            <i class="fas fa-camera"></i>
+                            <span>Capture</span>
+                        </div>
+                        <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
+                        <div class="pipeline-step">
+                            <i class="fas fa-search"></i>
+                            <span>YOLO Detection</span>
+                        </div>
+                        <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
+                        <div class="pipeline-step">
+                            <i class="fas fa-image"></i>
+                            <span>LLaVA Caption</span>
+                        </div>
+                        <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
+                        <div class="pipeline-step">
+                            <i class="fas fa-robot"></i>
+                            <span>Llama3 Report</span>
+                        </div>
+                        <i class="fas fa-arrow-right" style="color: #bdc3c7;"></i>
+                        <div class="pipeline-step">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <span>Supabase Storage</span>
+                        </div>
+                    </div>
+
+                    <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list"
+                            style="color: var(--secondary-color);"></i> Report Contents</h4>
+                    <ul style="margin-left: 1.25rem; line-height: 2; margin-bottom: 1rem;">
+                        <li><strong>Original Image</strong> - The captured frame at the time of violation</li>
+                        <li><strong>Annotated Image</strong> - Bounding boxes showing all detected objects</li>
+                        <li><strong>AI Caption</strong> - LLaVA-generated description of the scene</li>
+                        <li><strong>NLP Analysis</strong> - Llama3-generated safety assessment and recommendations
+                        </li>
+                        <li><strong>Metadata</strong> - Timestamp, severity, location, detection counts</li>
+                    </ul>
+
+                    <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-traffic-light"
+                            style="color: var(--secondary-color);"></i> Report Status</h4>
+                    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                        <span class="badge badge-warning" style="padding: 0.5rem 1rem;"><i class="fas fa-clock"></i>
+                            Pending</span>
+                        <span class="badge badge-info" style="padding: 0.5rem 1rem;"><i class="fas fa-spinner"></i>
+                            Generating</span>
+                        <span class="badge badge-success" style="padding: 0.5rem 1rem;"><i class="fas fa-check"></i>
+                            Completed</span>
+                        <span class="badge badge-danger" style="padding: 0.5rem 1rem;"><i class="fas fa-times"></i>
+                            Failed</span>
+                    </div>
+                </div>
+
+                <!-- Voice Alerts Page -->
+                <div class="handbook-page" id="handbook-alerts">
+                    <h3><i class="fas fa-bell" style="color: var(--primary-color);"></i> Voice Alerts</h3>
+                    <p style="margin-bottom: 1rem;">Audio notifications provide immediate awareness of PPE
+                        violations.</p>
+
+                    <div
+                        style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                        <div
+                            style="width: 60px; height: 60px; background: var(--primary-color); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-volume-up" style="font-size: 1.5rem; color: white;"></i>
+                        </div>
+                        <div>
+                            <h4 style="margin: 0 0 0.25rem 0;">Enable Voice Alerts</h4>
+                            <p style="margin: 0; font-size: 0.9rem; color: #7f8c8d;">
+                                Click the <strong>🔊 Voice Alerts</strong> button in the sidebar to toggle audio
+                                notifications on/off.
+                            </p>
+                        </div>
+                    </div>
+
+                    <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list"
+                            style="color: var(--secondary-color);"></i> Alert Types</h4>
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem;">
+                        <div
+                            style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: rgba(231, 76, 60, 0.1); border-radius: 8px; border-left: 4px solid var(--error-color);">
+                            <i class="fas fa-exclamation-circle"
+                                style="font-size: 1.25rem; color: var(--error-color);"></i>
+                            <div>
+                                <strong style="color: var(--error-color);">Violation Alert</strong>
+                                <p style="margin: 0; font-size: 0.9rem;">Plays when a PPE violation is detected
+                                    (e.g., "Warning! Hardhat violation detected")</p>
+                            </div>
+                        </div>
+                        <div
+                            style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: rgba(46, 204, 113, 0.1); border-radius: 8px; border-left: 4px solid var(--success-color);">
+                            <i class="fas fa-check-circle" style="font-size: 1.25rem; color: var(--success-color);"></i>
+                            <div>
+                                <strong style="color: var(--success-color);">Compliance Confirmation</strong>
+                                <p style="margin: 0; font-size: 0.9rem;">Confirms when all workers are properly
+                                    equipped (optional)</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        style="background: #fff3cd; padding: 1rem; border-radius: 8px; border-left: 4px solid var(--warning-color);">
+                        <h4 style="margin: 0 0 0.5rem 0; color: #856404;"><i class="fas fa-volume-mute"></i> Note
+                        </h4>
+                        <p style="margin: 0; font-size: 0.95rem; color: #856404;">
+                            Voice alerts require browser audio permissions. If you don't hear alerts, check your
+                            browser settings and ensure the system volume is turned up.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- FAQ Page -->
+                <div class="handbook-page" id="handbook-faq">
+                    <h3><i class="fas fa-question-circle" style="color: var(--primary-color);"></i> Frequently Asked
+                        Questions</h3>
+                    <p style="margin-bottom: 1rem;">Click on a question to expand the answer.</p>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>What PPE does the system detect?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">The system detects 14 classes: Hardhat, Safety Vest,
+                                Mask, Gloves, Goggles, Safety Shoes, and their corresponding "NO-" violation classes
+                                (e.g., NO-Hardhat). It also detects Person and Machinery for context.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>How accurate is the detection?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">The YOLOv8 model achieves 95%+ accuracy on our test
+                                dataset. Real-world accuracy may vary based on lighting conditions, camera quality,
+                                and distance from subjects. The default confidence threshold is 10% to maximize
+                                detection sensitivity.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>Can I disable voice alerts?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">Yes! Click the <strong>🔊 Voice Alerts</strong> button
+                                in the sidebar to toggle audio notifications on/off. The button will change color to
+                                indicate the current state.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>Why are some reports showing "Generating..."?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">Report generation involves multiple AI models (LLaVA
+                                for image captioning, Llama3 for NLP analysis) and can take 30-60 seconds per
+                                report. Violations are queued and processed one at a time to prevent GPU memory
+                                exhaustion. Check the Processing Queue Status on the Live Monitor page.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>What is Environment Validation?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">When enabled, the system uses AI to verify that
+                                violations occur in valid work environments (construction sites, factories,
+                                warehouses). Non-work environments (homes, offices, parks) are skipped to reduce
+                                false positives. Disable this for testing purposes.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>How do I adjust the capture cooldown?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">Go to <strong>Live Monitor</strong> →
+                                <strong>Processing Settings</strong> tab. Use the slider to adjust the cooldown
+                                between 1-30 seconds. Lower values capture more violations, higher values prevent
+                                duplicate captures of the same scene.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>Where are reports stored?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">Reports are stored in two places: locally in the
+                                <code>pipeline/violations/</code> directory, and in the cloud via Supabase. The
+                                Supabase backend ensures reports are accessible from anywhere and provides secure
+                                storage for images and HTML reports.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <div class="faq-question">
+                            <span>The camera isn't working. What should I do?</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="faq-answer">
+                            <p style="padding-top: 0.75rem;">Check the following:</p>
+                            <ul style="margin-top: 0.5rem; padding-left: 1.25rem; line-height: 1.8;">
+                                <li>Ensure your browser has camera permissions for localhost:5000</li>
+                                <li>Close other applications that may be using the camera</li>
+                                <li>Try refreshing the page or restarting the server</li>
+                                <li>Check that your webcam is properly connected</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
             </div>
+
         </div>
+    </div>
     </div>
 
 

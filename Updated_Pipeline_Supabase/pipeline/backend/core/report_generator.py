@@ -437,8 +437,9 @@ CRITICAL INSTRUCTIONS FOR PROFESSIONAL SAFETY ANALYSIS:
 JSON structure:
 {{
   "summary": "Brief summary with environment and main concerns",
-  "environment_type": "Construction Site|Office|Warehouse|Manufacturing|Laboratory|Other",
-  "environment_assessment": "Why this environment type and what standards apply",
+  "environment_type": "Construction Site|Residential Area|Office|Warehouse|Manufacturing|Laboratory|Public Road|Other",
+  "environment_assessment": "Why this environment type? SELECT ONE FROM LIST ABOVE. DO NOT INVENT NEW TYPES.",
+
   "dosh_regulations_cited": [
     {{
       "regulation": "DOSH Section [number] - [brief description of regulation]",
@@ -448,7 +449,7 @@ JSON structure:
   "persons": [
     {{
       "id": 1,
-      "description": "Professional detailed description of person's role, activity, and positioning",
+      "description": "Describe ACTIONS (activity: welding, walking, etc.) and POSITIONING (on ladder, near edge). Be specific.",
       "ppe": {{
         "hardhat": "Missing|Mentioned|Not Mentioned|Not Required",
         "safety_vest": "Missing|Mentioned|Not Mentioned|Not Required",
@@ -520,6 +521,7 @@ Respond with JSON only:"""
                 json={
                     'model': self.model,
                     'prompt': prompt,
+                    'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
                     'stream': False,
                     'format': 'json',
                     'options': {
@@ -1463,6 +1465,20 @@ Respond with JSON only:"""
                         parts.append(f"Regulation: {r['regulation_citation']}")
                     if 'legal_regulatory_consequences' in r:
                         parts.append(f"Legal consequences: {r['legal_regulatory_consequences']}")
+                    # Try to extract text from common keys if specific ones fail
+                    if not parts:
+                        for key in ['description', 'risk', 'text', 'content', 'details', 'summary']:
+                            if key in r:
+                                parts.append(str(r[key]))
+                                break
+                    
+                    # Fallback: if still empty, use values or string representation
+                    if not parts:
+                        parts = [str(v) for v in r.values() if isinstance(v, (str, int, float))]
+                        
+                    if not parts:
+                        parts.append(str(r))
+                        
                     risks_formatted.append(' | '.join(parts))
                 else:
                     risks_formatted.append(str(r))

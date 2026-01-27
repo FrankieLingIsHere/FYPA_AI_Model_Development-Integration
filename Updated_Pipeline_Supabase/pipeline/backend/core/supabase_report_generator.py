@@ -144,6 +144,9 @@ class SupabaseReportGenerator(ReportGenerator):
             else:
                 logger.info(f"Inserted detection event: {report_id}")
                 
+            # --- START PROGRESS TRACKING ---
+            self.db_manager.update_progress(report_id, 'analyzing_scene')
+
         except Exception as e:
             logger.error(f"Error inserting detection event: {e}")
             # Continue anyway
@@ -151,6 +154,8 @@ class SupabaseReportGenerator(ReportGenerator):
         # Step 3: Upload artifacts to Supabase Storage
         storage_keys = {}
         try:
+            self.db_manager.update_progress(report_id, 'uploading_images')
+            
             original_image_path = report_data.get('original_image_path')
             annotated_image_path = report_data.get('annotated_image_path')
             html_path = result.get('html')
@@ -159,16 +164,41 @@ class SupabaseReportGenerator(ReportGenerator):
             # Check if this is a reprocessing operation (should overwrite existing files)
             is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
             
+            # Upload Images first to avail for report
             upload_results = self.storage_manager.upload_violation_artifacts(
                 report_id=report_id,
                 original_image_path=Path(original_image_path) if original_image_path else None,
                 annotated_image_path=Path(annotated_image_path) if annotated_image_path else None,
+                report_html_path=None, # Defer HTML/PDF upload until final
+                report_pdf_path=None,
+                upsert=is_reprocessing
+            )
+            storage_keys.update(upload_results)
+            
+            self.db_manager.update_progress(report_id, 'generating_report')
+
+            # --- Now generate report content (NLP/HTML) ---
+            # NOTE: parent generate_report is already called at Step 1, 
+            # so we're just retrofitting the progress here for the NEXT steps 
+            # if we were to split it up differently. 
+            # Since local gen is fast, we focus on the "Upload/DB" stages as 'processing'.
+            
+            # Since HTML is already generated locally, we upload it now
+            upload_results_docs = self.storage_manager.upload_violation_artifacts(
+                report_id=report_id,
+                original_image_path=None,
+                annotated_image_path=None,
                 report_html_path=html_path,
                 report_pdf_path=pdf_path,
-                upsert=is_reprocessing  # Overwrite if reprocessing
+                upsert=is_reprocessing
             )
+            # Only update keys that have actual values (not None)
+            # This prevents overwriting image keys from first upload with None
+            for key, value in upload_results_docs.items():
+                if value is not None:
+                    storage_keys[key] = value
             
-            storage_keys = upload_results
+            self.db_manager.update_progress(report_id, 'finalizing')
             logger.info(f"Uploaded artifacts to Supabase Storage: {report_id}")
             
         except Exception as e:

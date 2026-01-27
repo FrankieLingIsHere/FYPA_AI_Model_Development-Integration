@@ -51,17 +51,39 @@ const API = {
     // Get violation statistics with status breakdown
     async getStats() {
         try {
+            // Try fetching pre-calculated stats from backend first (includes breakdown & deltas)
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/stats`);
+            if (response.ok) {
+                const data = await response.json();
+
+                // Ensure recent violations are attached if not present
+                if (!data.recentViolations) {
+                    const violations = await this.getViolations();
+                    data.recentViolations = violations.slice(0, 5);
+                }
+                return data;
+            }
+        } catch (e) {
+            console.warn('Backend stats endpoint failed, falling back to client-side calc:', e);
+        }
+
+        try {
             const violations = await this.getViolations();
-            
+
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
             const weekAgo = new Date(today);
             weekAgo.setDate(weekAgo.getDate() - 7);
 
+            // Client-side fallback (Delta will be 0 as we don't have historical snapshots)
             const stats = {
                 total: violations.length,
                 today: 0,
+                todayDelta: 0,
                 thisWeek: 0,
+                weekDelta: 0,
                 pending: 0,
                 completed: 0,
                 failed: 0,
@@ -70,21 +92,22 @@ const API = {
                     medium: 0,
                     low: 0
                 },
+                breakdown: {}, // Cannot reliably calc breakdown client-side without deep parsing
                 recentViolations: violations.slice(0, 5)
             };
 
             violations.forEach(v => {
                 const vDate = new Date(v.timestamp);
-                
+
                 if (vDate >= today) stats.today++;
                 if (vDate >= weekAgo) stats.thisWeek++;
-                
+
                 // Count by status
                 const status = v.status || (v.has_report ? 'completed' : 'pending');
                 if (status === 'completed') stats.completed++;
                 else if (status === 'failed') stats.failed++;
                 else stats.pending++;
-                
+
                 // Count by severity
                 const severity = (v.severity || 'HIGH').toLowerCase();
                 if (severity === 'high' || severity === 'critical') stats.severity.high++;
@@ -103,6 +126,7 @@ const API = {
                 completed: 0,
                 failed: 0,
                 severity: { high: 0, medium: 0, low: 0 },
+                breakdown: {},
                 recentViolations: []
             };
         }

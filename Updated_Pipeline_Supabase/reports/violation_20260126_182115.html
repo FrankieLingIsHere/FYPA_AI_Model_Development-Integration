@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safety Violation Report - 20260126_182115</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --danger-color: #e74c3c;
+            --warning-color: #f39c12;
+            --success-color: #2ecc71;
+            --text-color: #34495e;
+            --border-color: #dfe6e9;
+            --background: #ecf0f1;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--background);
+            color: var(--text-color);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, var(--danger-color), #c0392b);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .header .report-id {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 2rem;
+        }
+        
+        .section {
+            margin-bottom: 2rem;
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .card {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 1rem;
+            font-weight: 600;
+        }
+        
+        .card-content {
+            padding: 1rem;
+        }
+        
+        .image-container {
+            width: 100%;
+            max-height: 400px;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        .image-container img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .info-grid {
+            display: grid;
+            gap: 0.75rem;
+        }
+        
+        .info-item {
+            display: flex;
+            padding: 0.75rem;
+            background: var(--background);
+            border-radius: 6px;
+        }
+        
+        .info-label {
+            font-weight: 600;
+            color: var(--primary-color);
+            min-width: 150px;
+        }
+        
+        .info-value {
+            flex: 1;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .badge-danger {
+            background: rgba(231,76,60,0.1);
+            color: var(--danger-color);
+        }
+        
+        .badge-warning {
+            background: rgba(243,156,18,0.1);
+            color: var(--warning-color);
+        }
+        
+        .badge-success {
+            background: rgba(46,204,113,0.1);
+            color: var(--success-color);
+        }
+        
+        /* Person Cards */
+        .persons-grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+        
+        .person-card {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            background: white;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .person-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+        
+        .person-header {
+            background: linear-gradient(135deg, var(--primary-color), #34495e);
+            color: white;
+            padding: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .person-header h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .person-header p {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        .person-content {
+            padding: 1.5rem;
+            display: grid;
+            gap: 1.25rem;
+        }
+        
+        .person-section h4 {
+            color: var(--primary-color);
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .ppe-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.75rem;
+        }
+        
+        .ppe-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: var(--background);
+            border-radius: 6px;
+        }
+        
+        .ppe-label {
+            font-weight: 600;
+            color: var(--text-color);
+            font-size: 0.9rem;
+        }
+        
+        .ppe-status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .ppe-status-mentioned {
+            background: rgba(46,204,113,0.1);
+            color: var(--success-color);
+        }
+        
+        .ppe-status-missing {
+            background: rgba(231,76,60,0.1);
+            color: var(--danger-color);
+        }
+        
+        .ppe-status-not-mentioned {
+            background: rgba(149,165,166,0.1);
+            color: #7f8c8d;
+        }
+        
+        .ppe-status-not-required {
+            background: rgba(52,152,219,0.1);
+            color: var(--secondary-color);
+        }
+        
+        .list-compact {
+            list-style: none;
+            padding: 0;
+        }
+        
+
+        
+        /* Environment Badge */
+        .environment-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.25rem;
+            background: linear-gradient(135deg, var(--secondary-color), #2980b9);
+            color: white;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        
+        .confidence-indicator {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: var(--background);
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+        
+        .confidence-bar {
+            flex: 1;
+            height: 12px;
+            background: #dfe6e9;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--success-color), var(--warning-color), var(--danger-color));
+            transition: width 0.3s ease;
+        }
+        
+        .list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .list li {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--background);
+            border-left: 3px solid var(--secondary-color);
+            border-radius: 4px;
+        }
+        
+        .footer {
+            background: var(--primary-color);
+            color: white;
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        /* Chips and Badges */
+        .hazard-chip, .action-chip {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            margin: 0.25rem 0.5rem 0.25rem 0;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+
+        .hazard-chip {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        .action-chip {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        /* Likelihood Badge */
+        .likelihood-badge {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            min-width: 120px;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        .likelihood-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.8;
+            margin-bottom: 0.25rem;
+        }
+        
+        .likelihood-value {
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .likelihood-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        
+        .bar-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+        
+        .likelihood-high {
+            background-color: #f8d7da;
+            color: #721c24;
+            border-color: #f5c6cb;
+        }
+        
+        .likelihood-high .bar-fill {
+            background-color: #dc3545;
+        }
+
+        .likelihood-medium {
+             background-color: #fff3cd;
+             color: #856404;
+             border-color: #ffeeba;
+        }
+        .likelihood-medium .bar-fill {
+            background-color: #ffc107;
+        }
+        
+        .risk-grid, .action-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚠️ PPE Safety Violation Report</h1>
+            <p class="report-id">Report ID: 20260126_182115</p>
+            <p>Generated: 2026-01-26 18:21:15</p>
+        </div>
+        
+        <div class="content">
+            <!-- Images Section -->
+            <div class="section">
+                <h2 class="section-title">📸 Visual Evidence</h2>
+                <div class="grid">
+                    <div class="card">
+                        <div class="card-header">Original Image (1920x1080)</div>
+                        <div class="image-container">
+                            <img src="/image/20260126_182115/original.jpg" alt="Original Image">
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">Annotated Image (Detections)</div>
+                        <div class="image-container">
+                            <img src="/image/20260126_182115/annotated.jpg" alt="Annotated Image">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Violation Details -->
+            <div class="section">
+                <h2 class="section-title">📋 Violation Details</h2>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="info-label">Report ID:</span>
+                        <span class="info-value">20260126_182115</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Timestamp:</span>
+                        <span class="info-value">2026-01-26 18:21:15</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Violation Type:</span>
+                        <span class="info-value">PPE Violation Detected: NO-Mask, NO-Hardhat</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Severity:</span>
+                        <span class="info-value"><span class="badge badge-danger">HIGH</span></span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Violation Count:</span>
+                        <span class="info-value">2</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- AI Caption -->
+            <div class="section">
+                <h2 class="section-title">🤖 AI Scene Description</h2>
+                <div class="card">
+                    <div class="card-content">
+                        <p>The image shows a man sitting on a couch wearing a brown shirt. He is looking directly at the camera, giving off an expression of annoyance or frustration. The room has white walls and a staircase in the background, suggesting it could be a warehouse or industrial setting. There are several pieces of equipment scattered around the area, indicating that this might be a workplace where various tasks are being performed.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- NLP Analysis -->
+            <div class="section">
+                <h2 class="section-title">📊 Safety Analysis</h2>
+                
+                <!-- Environment Type -->
+                <div class="environment-badge">
+                    <span>🏗️</span>
+                    <span>Environment: Warehouse</span>
+                </div>
+                
+                <!-- Summary -->
+                <div class="card">
+                    <div class="card-header">Summary</div>
+                    <div class="card-content">
+                        <p>Worker is not wearing required PPE on a potential warehouse or industrial setting.</p>
+                        <p style='margin-top: 1rem; font-style: italic; color: #7f8c8d;'>The white walls and staircase in the background suggest an industrial or storage environment, potentially with equipment operation and manual handling tasks.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- DOSH Regulations -->
+            
+            <div class="section">
+                <h2 class="section-title">📚 Applicable DOSH Regulations</h2>
+                <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <p style="margin: 0; color: #e67e22; font-weight: 600;">
+                        <i class="fas fa-info-circle"></i> The following DOSH (Department of Occupational Safety and Health) regulations apply to this violation:
+                    </p>
+                </div>
+                
+                <div class="card" style="margin-bottom: 1rem;">
+                    <div class="card-header" style="background: linear-gradient(135deg, #e67e22, #d35400); color: white;">
+                        <i class="fas fa-book-open"></i> DOSH Section 21.5.1 - Safety helmet of approved type must be worn at all times on construction sites
+                    </div>
+                    <div class="card-content">
+                        <p style="margin-bottom: 0;"><strong>Requirement:</strong> Provide appropriate PPE for workers, including hard hats and safety glasses</p>
+                    </div>
+                </div>
+            
+            </div>
+        
+            
+            <!-- Individual Person Analysis -->
+            
+            <div class="section">
+                <h2 class="section-title">👥 Individual Analysis (1 Person)</h2>
+                <div class="persons-grid">
+                    
+                <div class="person-card">
+                    <div class="person-header">
+                        <div>
+                            <h3>👤 Person 1</h3>
+                            <p>The worker is sitting on a couch, potentially indicating a break or rest period. However, this does not excuse the lack of required PPE.</p>
+                        </div>
+                        <span class="badge badge-danger">✗ Non-Compliant</span>
+                    </div>
+                    <div class="person-content">
+                        <div class="person-section">
+                            <h4>🦺 PPE Status</h4>
+                            <div class="ppe-grid">
+                                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Hardhat:</span>
+                        <span class="ppe-status ppe-status-missing">Missing</span>
+                    </div>
+                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Safety Vest:</span>
+                        <span class="ppe-status ppe-status-not-mentioned">Not Mentioned</span>
+                    </div>
+                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Gloves:</span>
+                        <span class="ppe-status ppe-status-not-mentioned">Not Mentioned</span>
+                    </div>
+                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Goggles:</span>
+                        <span class="ppe-status ppe-status-missing">Missing</span>
+                    </div>
+                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Footwear:</span>
+                        <span class="ppe-status ppe-status-not-mentioned">Not Mentioned</span>
+                    </div>
+                
+                    <div class="ppe-item">
+                        <span class="ppe-label">Mask:</span>
+                        <span class="ppe-status ppe-status-not-mentioned">Not Mentioned</span>
+                    </div>
+                
+                            </div>
+                        </div>
+                        
+                        <div class="person-section">
+                            <h4>⚠️ Hazards Faced</h4>
+                            <div class="risk-grid">
+                                <div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> The lack of head protection poses a serious risk of traumatic brain injury or skull fracture from falling objects, equipment failure, or other environmental hazards. This hazard is exacerbated by the worker's proximity to potentially hazardous equipment and materials.</div><div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> Potential exposure to chemical or physical agents due to the presence of various equipment and materials in the environment.</div>
+                            </div>
+                        </div>
+
+                        <div class="person-section">
+                            <h4>⚕️ Potential Risks & Likelihood</h4>
+                            <div class="risk-list">
+                                
+            <div class="risk-item">
+                <div class="risk-content">Risk of Head Injury: Without proper head protection, impacts to the cranium can cause concussion, intracranial hemorrhage, or skull fracture.</div>
+                <div class="likelihood-badge likelihood-high">
+                    <span class="likelihood-label">Likelihood</span>
+                    <span class="likelihood-value">High</span>
+                    <div class="likelihood-bar">
+                        <div class="bar-fill" style="width: 100%"></div>
+                    </div>
+                </div>
+            </div>
+        
+            <div class="risk-item">
+                <div class="risk-content">Risk of Chemical Exposure: The worker may be exposed to harmful chemicals or physical agents due to the equipment and materials present in the environment.</div>
+                <div class="likelihood-badge likelihood-medium">
+                    <span class="likelihood-label">Likelihood</span>
+                    <span class="likelihood-value">Medium</span>
+                    <div class="likelihood-bar">
+                        <div class="bar-fill" style="width: 60%"></div>
+                    </div>
+                </div>
+            </div>
+        
+                            </div>
+                        </div>
+
+                        <div class="person-section">
+                            <h4>🏃 Recommended Actions</h4>
+                            <div class="action-grid">
+                                <div class="action-chip"><i class="fas fa-check"></i> Immediately provide the worker with a suitable hard hat and require its use at all times in this environment.</div><div class="action-chip"><i class="fas fa-check"></i> Ensure all workers on site are properly fitted with required PPE before commencing work tasks.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            
+                </div>
+            </div>
+        
+        </div>
+        
+        <div class="footer">
+            <p>PPE Safety Monitor - AI-Powered Workplace Safety System</p>
+            <p style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">
+                Powered by YOLOv8 • LLaVA • Llama3 • Computer Vision
+            </p>
+        </div>
+    </div>
+</body>
+</html>

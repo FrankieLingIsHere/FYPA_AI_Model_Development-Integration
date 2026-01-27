@@ -14,7 +14,7 @@ const Router = {
             APP_STATE.currentPage = path;
             this.render(component);
             this.updateActiveNav(path);
-            
+
             // Update URL hash
             window.location.hash = path;
         } else {
@@ -26,7 +26,7 @@ const Router = {
     render(component) {
         const app = document.getElementById('app');
         app.innerHTML = component.render();
-        
+
         // Call mount lifecycle if exists
         if (component.mount) {
             component.mount();
@@ -35,7 +35,7 @@ const Router = {
 
     // Update active navigation link
     updateActiveNav(path) {
-        document.querySelectorAll('.nav-link').forEach(link => {
+        document.querySelectorAll('.sidebar-link').forEach(link => {
             link.classList.remove('active');
             if (link.dataset.page === path) {
                 link.classList.add('active');
@@ -47,9 +47,16 @@ const Router = {
     init() {
         // Handle navigation clicks
         document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('nav-link') || e.target.closest('.nav-link')) {
+            if (e.target.classList.contains('sidebar-link') || e.target.closest('.sidebar-link')) {
+                const link = e.target.classList.contains('sidebar-link') ? e.target : e.target.closest('.sidebar-link');
+
+                // Ignore hash links that shouldn't trigger routing (like #)
+                if (link.getAttribute('href') === '#' && !link.dataset.page) return;
+
+                // Allow default for non-routed links
+                if (!link.dataset.page) return;
+
                 e.preventDefault();
-                const link = e.target.classList.contains('nav-link') ? e.target : e.target.closest('.nav-link');
                 const page = link.dataset.page;
                 this.navigate(page);
             }

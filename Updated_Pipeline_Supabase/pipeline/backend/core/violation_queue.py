@@ -173,9 +173,12 @@ class ViolationQueueManager:
         
         # Generate report_id if not provided
         if not report_id:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            from zoneinfo import ZoneInfo
+            myt = ZoneInfo('Asia/Kuala_Lumpur')
+            now_myt = datetime.now(myt)
+            timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
             device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
-            micro = datetime.now().strftime('%f')[:4]
+            micro = now_myt.strftime('%f')[:4]
             report_id = f"{timestamp}_{device_hash}_{micro}"
         
         priority = self._get_priority(severity)
@@ -454,9 +457,12 @@ class MultiDeviceViolationHandler:
         """
         # Generate report_id if not provided
         if not report_id:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            from zoneinfo import ZoneInfo
+            myt = ZoneInfo('Asia/Kuala_Lumpur')
+            now_myt = datetime.now(myt)
+            timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
             device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
-            micro = datetime.now().strftime('%f')[:4]
+            micro = now_myt.strftime('%f')[:4]
             report_id = f"{timestamp}_{device_hash}_{micro}"
         
         # Add to database with pending status

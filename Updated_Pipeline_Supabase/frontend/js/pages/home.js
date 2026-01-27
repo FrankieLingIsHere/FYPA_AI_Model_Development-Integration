@@ -108,11 +108,9 @@ const HomePage = {
     /* ================= SUMMARY ================= */
 
     renderHomeSummary(stats) {
-        const yesterday = stats.today + 5;     // mock
-        const lastWeek = stats.thisWeek - 3;   // mock
-
-        const todayDelta = stats.today - yesterday;
-        const weekDelta = stats.thisWeek - lastWeek;
+        // Use real deltas from backend (defaults to 0 if undefined)
+        const todayDelta = stats.todayDelta !== undefined ? stats.todayDelta : 0;
+        const weekDelta = stats.weekDelta !== undefined ? stats.weekDelta : 0;
 
         document.getElementById("todayCount").textContent = stats.today;
         document.getElementById("weekCount").textContent = stats.thisWeek;
@@ -163,26 +161,32 @@ const HomePage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById("violation-types");
+        const breakdown = stats.breakdown || {};
 
+        // Data mapping
         const types = [
-            { name: "Missing Hardhat", count: stats.total, color: "var(--error-color)" },
-            { name: "Missing Vest", count: 0, color: "var(--warning-color)" },
-            { name: "Missing Gloves", count: 0, color: "var(--info-color)" },
-            { name: "Other PPE", count: 0, color: "var(--text-color)" }
+            { name: "Missing Hardhat", count: breakdown['NO-Hardhat'] || 0, color: "var(--error-color)" },
+            { name: "Missing Vest", count: breakdown['NO-Safety Vest'] || 0, color: "var(--warning-color)" },
+            { name: "Missing Gloves", count: breakdown['NO-Gloves'] || 0, color: "var(--info-color)" },
+            { name: "Missing Mask", count: breakdown['NO-Mask'] || 0, color: "#9b59b6" }, // Added Mask styling
+            { name: "Missing Goggles", count: breakdown['NO-Goggles'] || 0, color: "#e67e22" }
         ];
+
+        // Calculate total for percentages
+        const totalViolations = types.reduce((sum, t) => sum + t.count, 0);
 
         container.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:1rem;">
                 ${types.map(t => `
-                    <div>
-                        <div style="display:flex;justify-content:space-between;">
-                            <span>${t.name}</span>
+                    <div class="violation-stat-row">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:0.25rem;">
+                            <span style="font-size:0.9rem;">${t.name}</span>
                             <strong style="color:${t.color}">${t.count}</strong>
                         </div>
-                        <div style="height:8px;background:var(--background-color);border-radius:4px;">
+                        <div style="height:8px;background:var(--background-color);border-radius:4px;overflow:hidden;">
                             <div style="
                                 height:100%;
-                                width:${stats.total ? (t.count / stats.total * 100) : 0}%;
+                                width:${totalViolations ? (t.count / totalViolations * 100) : 0}%;
                                 background:${t.color};
                                 transition:width 0.5s ease;">
                             </div>
@@ -200,24 +204,44 @@ const HomePage = {
 
         if (!violations.length) {
             container.innerHTML = `
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i>
-                    No violations detected
+                <div class="alert alert-success" style="padding:1.5rem;text-align:center;">
+                    <i class="fas fa-check-circle" style="font-size:2rem;display:block;margin-bottom:0.5rem;"></i>
+                    No recent violations detected
                 </div>`;
             return;
         }
 
         container.innerHTML = `
-            <div class="grid">
+            <div class="recent-list" style="display:flex; flex-direction:column; gap:0.5rem;">
                 ${violations.map(v => `
-                    <div class="card"
-                         onclick="window.open('${API.getReportUrl(v.report_id)}','_blank')"
-                         style="cursor:pointer;">
-                        <div class="card-content">
-                            <h4>Report #${v.report_id}</h4>
-                            <p style="font-size:0.85rem;color:#7f8c8d;">
-                                ${new Date(v.timestamp).toLocaleString()}
-                            </p>
+                    <div class="recent-item" 
+                         onclick="window.location.href = API.getReportUrl('${v.report_id}')"
+                         style="
+                            display:flex; 
+                            justify-content:space-between; 
+                            align-items:center;
+                            padding:1rem;
+                            background:var(--background-color);
+                            border-radius:8px;
+                            cursor:pointer;
+                            border-left: 4px solid ${v.severity === 'HIGH' ? 'var(--error-color)' : 'var(--warning-color)'};
+                            transition: transform 0.2s;
+                         "
+                         onmouseover="this.style.transform='translateX(4px)'"
+                         onmouseout="this.style.transform='translateX(0)'">
+                        
+                        <div>
+                            <h5 style="margin:0 0 0.25rem 0;color:var(--text-color);">#${v.report_id}</h5>
+                            <span style="font-size:0.8rem;color:#7f8c8d;">
+                                ${typeof TimezoneManager !== 'undefined' ? TimezoneManager.formatDateTime(v.timestamp) : new Date(v.timestamp).toLocaleString()}
+                            </span>
+                        </div>
+                        
+                        <div style="text-align:right;">
+                            <span class="badge ${v.severity === 'HIGH' ? 'badge-danger' : 'badge-warning'}" 
+                                  style="font-size:0.75rem;padding:0.25rem 0.5rem;">
+                                ${v.severity || 'MEDIUM'}
+                            </span>
                         </div>
                     </div>
                 `).join("")}

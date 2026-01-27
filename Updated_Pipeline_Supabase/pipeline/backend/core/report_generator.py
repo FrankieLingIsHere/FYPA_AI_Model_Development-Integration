@@ -425,6 +425,8 @@ CRITICAL INSTRUCTIONS FOR PROFESSIONAL SAFETY ANALYSIS:
    - Mechanism: describe how injury would occur and contributing factors
    - Regulatory: cite specific DOSH section numbers from provided context, legal consequences, regulatory penalties
    - Include likelihood assessment (low/medium/high/very high) with justification
+   - END each risk with exact string: "Likelihood: High", "Likelihood: Medium", or "Likelihood: Low"
+   - Example: "Risk of Traumatic Brain Injury (TBI) due to potential falling objects or head impact in construction environment. Without proper head protection, impacts to the cranium can cause concussion, intracranial hemorrhage, or skull fracture. This constitutes a serious violation of DOSH safety helmet requirements. Likelihood: High"
 
 5. DOSH CITATIONS:
    - Extract specific regulation section numbers from the DOSH context provided (e.g., Section 21.5.1, Section 15.3)
@@ -435,8 +437,9 @@ CRITICAL INSTRUCTIONS FOR PROFESSIONAL SAFETY ANALYSIS:
 JSON structure:
 {{
   "summary": "Brief summary with environment and main concerns",
-  "environment_type": "Construction Site|Office|Warehouse|Manufacturing|Laboratory|Other",
-  "environment_assessment": "Why this environment type and what standards apply",
+  "environment_type": "Construction Site|Residential Area|Office|Warehouse|Manufacturing|Laboratory|Public Road|Other",
+  "environment_assessment": "Why this environment type? SELECT ONE FROM LIST ABOVE. DO NOT INVENT NEW TYPES.",
+
   "dosh_regulations_cited": [
     {{
       "regulation": "DOSH Section [number] - [brief description of regulation]",
@@ -446,7 +449,7 @@ JSON structure:
   "persons": [
     {{
       "id": 1,
-      "description": "Professional detailed description of person's role, activity, and positioning",
+      "description": "Describe ACTIONS (activity: welding, walking, etc.) and POSITIONING (on ladder, near edge). Be specific.",
       "ppe": {{
         "hardhat": "Missing|Mentioned|Not Mentioned|Not Required",
         "safety_vest": "Missing|Mentioned|Not Mentioned|Not Required",
@@ -518,6 +521,7 @@ Respond with JSON only:"""
                 json={
                     'model': self.model,
                     'prompt': prompt,
+                    'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
                     'stream': False,
                     'format': 'json',
                     'options': {
@@ -624,19 +628,96 @@ Respond with JSON only:"""
         }
     
     def _generate_fallback_analysis(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate basic fallback analysis if NLP fails."""
+        """
+        Generate comprehensive fallback analysis from YOLO detections when NLP fails.
+        Creates person entries with PPE status, hazards, and recommendations.
+        Note: Without VLM/NLP, we cannot determine actual environment type.
+        """
+        detections = report_data.get('detections', [])
+        
+        # Hazards and recommendations by violation type (with full acronym expansions)
+        VIOLATION_DATA = {
+            'hardhat': {
+                'hazard': 'Head injury risk from falling objects or overhead impact',
+                'risk': 'Potential traumatic brain injury or skull fractures',
+                'action': 'Provide appropriate safety helmet. Enforce head protection in designated areas.',
+                'regulation': 'OSHA 1994 (Occupational Safety and Health Act) Section 15 - Employer Duties',
+                'regulation_full': 'OSHA 1994 Section 15 requires employers to ensure the safety and health of employees at work'
+            },
+            'mask': {
+                'hazard': 'Respiratory hazard from dust, fumes, or airborne particles',
+                'risk': 'Respiratory diseases such as silicosis or occupational asthma',
+                'action': 'Provide appropriate respiratory protective equipment. Conduct exposure assessment.',
+                'regulation': 'USECHH Regulations 2000 (Use and Standards of Exposure of Chemicals Hazardous to Health)',
+                'regulation_full': 'USECHH 2000 requires employers to assess and control exposure to hazardous chemicals'
+            },
+            'safety vest': {
+                'hazard': 'Visibility hazard in areas with moving vehicles or equipment',
+                'risk': 'Struck-by incidents that could cause serious injury',
+                'action': 'Issue high-visibility vest for areas with vehicle or equipment movement.',
+                'regulation': 'Construction Industry Safety Guidelines',
+                'regulation_full': 'High-visibility clothing required in areas where vehicles or mobile equipment operate'
+            },
+            'gloves': {
+                'hazard': 'Hand injury risk from sharp edges or hazardous materials',
+                'risk': 'Lacerations, chemical burns, or crush injuries to hands',
+                'action': 'Provide appropriate hand protection based on hazard assessment.',
+                'regulation': 'OSHA 1994 Section 15 - Personal Protective Equipment',
+                'regulation_full': 'Employers must provide suitable protective equipment for identified hazards'
+            },
+            'goggles': {
+                'hazard': 'Eye injury risk from flying particles or splashes',
+                'risk': 'Corneal abrasion or permanent vision impairment',
+                'action': 'Provide safety eyewear appropriate for the identified hazards.',
+                'regulation': 'OSHA 1994 Section 15 - Eye Protection',
+                'regulation_full': 'Eye protection required where there is risk of injury from flying particles or liquids'
+            }
+        }
+        
+        # Extract violations from detections
+        violations = [d.get('class_name', '') for d in detections if d.get('class_name', '').startswith('NO-')]
+        person_count = max(1, sum(1 for d in detections if 'person' in d.get('class_name', '').lower()))
+        
+        # Build PPE status and collect data
+        ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
+        hazards, risks, actions, regulations = [], [], [], []
+        
+        for v in violations:
+            v_lower = v.lower().replace('no-', '')
+            for key in VIOLATION_DATA:
+                if key.replace(' ', '') in v_lower.replace(' ', '') or key in v_lower:
+                    ppe_field = key.replace(' ', '_')
+                    ppe_status[ppe_field] = 'Missing'
+                    data = VIOLATION_DATA[key]
+                    hazards.append(data['hazard'])
+                    risks.append(data['risk'])
+                    actions.append(data['action'])
+                    regulations.append({'regulation': data['regulation'], 'requirement': data['regulation_full']})
+                    break
+        
+        # Create person entries
+        persons = [{
+            'id': i + 1,
+            'description': 'Individual detected with PPE status as shown below',
+            'ppe': ppe_status.copy(),
+            'actions': actions or ['Ensure appropriate PPE is available and worn when required'],
+            'hazards_faced': hazards or ['Potential hazards identified based on missing PPE'],
+            'risks': risks or ['Risk level depends on environment and activities performed'],
+            'compliance_status': 'Non-Compliant' if violations else 'Unknown'
+        } for i in range(person_count)]
+        
+        violation_types = [v.replace('NO-', '') for v in violations]
+        summary = f"PPE issue detected: {', '.join(violation_types)} not worn." if violation_types else "Safety observation recorded."
+        
         return {
-            'summary': report_data.get('violation_summary', 'Safety violation detected'),
-            'environment_type': 'Unknown',
-            'environment_assessment': 'Unable to determine environment type from available data',
-            'persons': [],
-            'hazards_detected': ['Violation detected by automated system'],
-            'suggested_actions': [
-                'Review the annotated image for specific violations',
-                'Ensure all workers are wearing required PPE',
-                'Investigate the cause of the violation'
-            ],
-            'severity_level': report_data.get('severity', 'HIGH')
+            'summary': summary,
+            'environment_type': 'Detected Location',
+            'environment_assessment': 'Environment type could not be determined automatically. PPE requirements depend on actual location and activities.',
+            'dosh_regulations_cited': regulations or [{'regulation': 'General Safety Guidelines', 'requirement': 'PPE should be worn as appropriate for the environment and activities'}],
+            'persons': persons,
+            'hazards_detected': hazards or ['PPE status recorded for reference'],
+            'suggested_actions': actions or ['Assess environment to determine PPE requirements'],
+            'severity_level': 'HIGH' if violations else 'MEDIUM'
         }
     
     def _generate_html_report(
@@ -922,14 +1003,7 @@ Respond with JSON only:"""
             padding: 0;
         }}
         
-        .list-compact li {{
-            padding: 0.5rem;
-            margin-bottom: 0.35rem;
-            background: rgba(52,152,219,0.05);
-            border-left: 3px solid var(--secondary-color);
-            border-radius: 4px;
-            font-size: 0.9rem;
-        }}
+
         
         /* Environment Badge */
         .environment-badge {{
@@ -988,6 +1062,91 @@ Respond with JSON only:"""
             text-align: center;
         }}
         
+        /* Chips and Badges */
+        .hazard-chip, .action-chip {{
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            margin: 0.25rem 0.5rem 0.25rem 0;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }}
+
+        .hazard-chip {{
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }}
+
+        .action-chip {{
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }}
+        
+        /* Likelihood Badge */
+        .likelihood-badge {{
+            display: inline-flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            min-width: 120px;
+            border: 1px solid rgba(0,0,0,0.1);
+        }}
+        
+        .likelihood-label {{
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.8;
+            margin-bottom: 0.25rem;
+        }}
+        
+        .likelihood-value {{
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }}
+        
+        .likelihood-bar {{
+            width: 100%;
+            height: 6px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }}
+        
+        .bar-fill {{
+            height: 100%;
+            border-radius: 3px;
+        }}
+        
+        .likelihood-high {{
+            background-color: #f8d7da;
+            color: #721c24;
+            border-color: #f5c6cb;
+        }}
+        
+        .likelihood-high .bar-fill {{
+            background-color: #dc3545;
+        }}
+
+        .likelihood-medium {{
+             background-color: #fff3cd;
+             color: #856404;
+             border-color: #ffeeba;
+        }}
+        .likelihood-medium .bar-fill {{
+            background-color: #ffc107;
+        }}
+        
+        .risk-grid, .action-grid {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }}
+
         @media (max-width: 768px) {{
             .grid {{
                 grid-template-columns: 1fr;
@@ -1116,9 +1275,27 @@ Respond with JSON only:"""
         
         return html_path
     
+    def _ensure_list_of_strings(self, data: Any) -> List[str]:
+        """Helper to ensure data is a list of strings, handling parsing of limiters."""
+        if not data:
+            return []
+        
+        if isinstance(data, list):
+            return data
+            
+        if isinstance(data, str):
+            # Try splitting by common delimiters
+            if ';' in data:
+                return [item.strip() for item in data.split(';') if item.strip()]
+            if '\n' in data:
+                return [item.strip() for item in data.split('\n') if item.strip()]
+            return [data]
+            
+        return [str(data)]
+
     def _generate_hazards_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate hazards HTML section."""
-        hazards = nlp_analysis.get('hazards_detected', [])
+        hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
         if not hazards:
             return ""
         
@@ -1244,11 +1421,11 @@ Respond with JSON only:"""
                 """)
             
             # Actions list
-            actions = person.get('actions', [])
+            actions = self._ensure_list_of_strings(person.get('actions', []))
             actions_html = ''.join([f"<li>{a}</li>" for a in actions]) if actions else '<li>No actions specified</li>'
             
             # Hazards list - handle both string and dict formats
-            hazards = person.get('hazards_faced', [])
+            hazards = self._ensure_list_of_strings(person.get('hazards_faced', []))
             hazards_formatted = []
             for h in hazards:
                 if isinstance(h, dict):
@@ -1270,7 +1447,7 @@ Respond with JSON only:"""
             hazards_html = ''.join([f"<li>{h}</li>" for h in hazards_formatted]) if hazards_formatted else '<li>No hazards identified</li>'
             
             # Risks list - handle both string and dict formats
-            risks = person.get('risks', [])
+            risks = self._ensure_list_of_strings(person.get('risks', []))
             risks_formatted = []
             for r in risks:
                 if isinstance(r, dict):
@@ -1288,6 +1465,20 @@ Respond with JSON only:"""
                         parts.append(f"Regulation: {r['regulation_citation']}")
                     if 'legal_regulatory_consequences' in r:
                         parts.append(f"Legal consequences: {r['legal_regulatory_consequences']}")
+                    # Try to extract text from common keys if specific ones fail
+                    if not parts:
+                        for key in ['description', 'risk', 'text', 'content', 'details', 'summary']:
+                            if key in r:
+                                parts.append(str(r[key]))
+                                break
+                    
+                    # Fallback: if still empty, use values or string representation
+                    if not parts:
+                        parts = [str(v) for v in r.values() if isinstance(v, (str, int, float))]
+                        
+                    if not parts:
+                        parts.append(str(r))
+                        
                     risks_formatted.append(' | '.join(parts))
                 else:
                     risks_formatted.append(str(r))
@@ -1318,17 +1509,26 @@ Respond with JSON only:"""
                                 {''.join(ppe_items)}
                             </div>
                         </div>
-                        <div class="person-section">
-                            <h4>🏃 Actions</h4>
-                            <ul class="list-compact">{actions_html}</ul>
-                        </div>
+                        
                         <div class="person-section">
                             <h4>⚠️ Hazards Faced</h4>
-                            <ul class="list-compact">{hazards_html}</ul>
+                            <div class="risk-grid">
+                                {''.join([f'<div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> {h}</div>' for h in hazards_formatted]) if hazards_formatted else '<div class="text-muted">No hazards identified</div>'}
+                            </div>
                         </div>
+
                         <div class="person-section">
-                            <h4>⚕️ Potential Risks</h4>
-                            <ul class="list-compact">{risks_html}</ul>
+                            <h4>⚕️ Potential Risks & Likelihood</h4>
+                            <div class="risk-list">
+                                {''.join([self._format_risk_item(r) for r in risks_formatted]) if risks_formatted else '<div class="text-muted">No risks identified</div>'}
+                            </div>
+                        </div>
+
+                        <div class="person-section">
+                            <h4>🏃 Recommended Actions</h4>
+                            <div class="action-grid">
+                                {''.join([f'<div class="action-chip"><i class="fas fa-check"></i> {a}</div>' for a in actions]) if actions else '<div class="text-muted">No actions specified</div>'}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1345,7 +1545,7 @@ Respond with JSON only:"""
     
     def _generate_recommendations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate recommendations HTML section."""
-        recommendations = nlp_analysis.get('suggested_actions', [])
+        recommendations = self._ensure_list_of_strings(nlp_analysis.get('suggested_actions', []))
         if not recommendations:
             return ""
         
@@ -1359,6 +1559,48 @@ Respond with JSON only:"""
             </div>
         """
     
+    def _format_risk_item(self, risk_text: str) -> str:
+        """
+        Format a risk item with visual likelihood badge.
+        Parses 'Likelihood: High/Medium/Low' from the text.
+        """
+        likelihood = 'Unknown'
+        risk_desc = risk_text
+        
+        # Parse likelihood
+        # Parse likelihood
+        import re
+        # Match 'Likelihood: High', '(Likelihood: High)', 'Likelihood - High', etc.
+        match = re.search(r'Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?', risk_text, re.IGNORECASE)
+        if match:
+            likelihood = match.group(1).title()
+            # Remove the likelihood text from description
+            risk_desc = re.sub(r'\(?Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?\)?[\.]?', '', risk_text, flags=re.IGNORECASE).strip()
+            # Clean up trailing punctuation
+            if risk_desc.endswith(','): risk_desc = risk_desc[:-1]
+            
+        # Determine badge class
+        badge_class = 'bg-gray-200 text-gray-800'
+        if 'High' in likelihood:
+            badge_class = 'likelihood-high'
+        elif 'Medium' in likelihood:
+            badge_class = 'likelihood-medium'
+        elif 'Low' in likelihood:
+            badge_class = 'likelihood-low'
+            
+        return f"""
+            <div class="risk-item">
+                <div class="risk-content">{risk_desc}</div>
+                <div class="likelihood-badge {badge_class}">
+                    <span class="likelihood-label">Likelihood</span>
+                    <span class="likelihood-value">{likelihood}</span>
+                    <div class="likelihood-bar">
+                        <div class="bar-fill" style="width: {'100%' if 'High' in likelihood else '60%' if 'Medium' in likelihood else '30%'}"></div>
+                    </div>
+                </div>
+            </div>
+        """
+
     def _generate_pdf_report(self, html_path: Path, report_id: str) -> Optional[Path]:
         """
         Generate PDF from HTML report (to be implemented).

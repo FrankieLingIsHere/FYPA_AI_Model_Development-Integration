@@ -130,7 +130,22 @@ VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Thread-safe camera access
 camera_lock = Lock()
-active_camera = None
+active_camera = None  # Now can be RealSenseCamera or cv2.VideoCapture
+
+# Import RealSense camera module
+try:
+    from realsense_camera import RealSenseCamera, create_combined_view, REALSENSE_AVAILABLE
+    logger.info(f"RealSense module loaded. SDK available: {REALSENSE_AVAILABLE}")
+except ImportError as e:
+    REALSENSE_AVAILABLE = False
+    RealSenseCamera = None
+    create_combined_view = None
+    logger.warning(f"RealSense module not available - will use standard webcam: {e}")
+except Exception as e:
+    REALSENSE_AVAILABLE = False
+    RealSenseCamera = None
+    create_combined_view = None
+    logger.error(f"Error loading RealSense module: {e}")
 
 # Violation detection state
 violation_detector = None
@@ -2200,23 +2215,43 @@ def get_image(report_id, filename):
 # API ENDPOINTS - LIVE STREAMING
 # =========================================================================
 
-def generate_frames(conf=0.25):
-    """Generate frames from webcam with YOLO detection and violation processing."""
+def generate_frames(conf=0.25, include_depth=False):
+    """Generate frames from RealSense camera (or webcam fallback) with YOLO detection and violation processing."""
     global active_camera
     
     with camera_lock:
         if active_camera is None:
-            active_camera = cv2.VideoCapture(0)
-            if not active_camera.isOpened():
-                logger.error("Failed to open webcam")
-                return
+            # Try RealSense first, fallback to webcam
+            if REALSENSE_AVAILABLE:
+                logger.info("Attempting to open RealSense camera...")
+                active_camera = RealSenseCamera(width=640, height=480, fps=30, enable_depth=True)
+                if not active_camera.open():
+                    logger.warning("RealSense failed, falling back to webcam")
+                    active_camera = None
+            
+            if active_camera is None:
+                # Fallback to webcam with DirectShow
+                logger.info("Opening standard webcam...")
+                active_camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                if not active_camera.isOpened():
+                    logger.error("Failed to open any camera")
+                    return
+                active_camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                active_camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                active_camera.set(cv2.CAP_PROP_FPS, 30)
         
-        cap = active_camera
+        cam = active_camera
     
-    logger.info("Starting live frame generation...")
+    # Check camera type
+    is_realsense = isinstance(cam, RealSenseCamera) if REALSENSE_AVAILABLE else False
+    camera_type = "RealSense D435i" if is_realsense else "Webcam"
+    
+    logger.info(f"Starting live frame generation with {camera_type}...")
     logger.info("=" * 80)
     logger.info("INITIALIZING PIPELINE COMPONENTS")
     logger.info(f"FULL_PIPELINE_AVAILABLE: {FULL_PIPELINE_AVAILABLE}")
+    logger.info(f"Camera Type: {camera_type}")
+    logger.info(f"Include Depth: {include_depth}")
     logger.info("=" * 80)
     
     # Initialize pipeline components if available
@@ -2233,15 +2268,22 @@ def generate_frames(conf=0.25):
     try:
         while True:
             with camera_lock:
-                if cap is None or not cap.isOpened():
+                if cam is None or not cam.isOpened():
                     break
                 
-                ret, frame = cap.read()
-                if not ret:
+                # Read frame based on camera type
+                if is_realsense:
+                    ret, color_frame, depth_raw, depth_colormap = cam.read()
+                    frame = color_frame
+                else:
+                    ret, frame = cam.read()
+                    depth_colormap = None
+                    
+                if not ret or frame is None:
                     logger.warning("Failed to read frame")
                     break
             
-            # Run YOLO detection
+            # Run YOLO detection on color frame
             try:
                 detections, annotated = predict_image(frame, conf=conf)
                 
@@ -2285,8 +2327,14 @@ def generate_frames(conf=0.25):
                         else:
                             logger.debug("Violation not queued (cooldown or already processing)")
                 
+                # Create output frame - combine with depth if requested
+                if include_depth and depth_colormap is not None and REALSENSE_AVAILABLE:
+                    output_frame = create_combined_view(frame, depth_colormap, annotated)
+                else:
+                    output_frame = annotated
+                
                 # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                ret, buffer = cv2.imencode('.jpg', output_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if not ret:
                     continue
                 
@@ -2310,26 +2358,117 @@ def generate_frames(conf=0.25):
 
 @app.route('/api/live/stream')
 def live_stream():
-    """Live webcam stream with YOLO detection."""
+    """Live camera stream with YOLO detection. Supports RealSense D435i with depth visualization."""
     conf = float(request.args.get('conf', 0.10))
+    include_depth = request.args.get('depth', 'false').lower() == 'true'
     return Response(
-        generate_frames(conf=conf),
+        generate_frames(conf=conf, include_depth=include_depth),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 
 
-@app.route('/api/live/start', methods=['POST'])
-def start_live():
-    """Start live monitoring."""
+@app.route('/api/live/realsense-check')
+def realsense_check():
+    """Debug endpoint to check RealSense availability."""
+    import sys
+    result = {
+        'realsense_available': REALSENSE_AVAILABLE,
+        'python_executable': sys.executable,
+        'python_version': sys.version,
+    }
+    
+    # Try to import pyrealsense2 directly
+    try:
+        import pyrealsense2 as rs
+        result['pyrealsense2_version'] = rs.__version__ if hasattr(rs, '__version__') else 'unknown'
+        result['pyrealsense2_import'] = True
+        
+        # Try to detect devices
+        ctx = rs.context()
+        devices = ctx.query_devices()
+        result['devices_found'] = len(devices)
+        if len(devices) > 0:
+            result['device_name'] = devices[0].get_info(rs.camera_info.name)
+    except ImportError as e:
+        result['pyrealsense2_import'] = False
+        result['pyrealsense2_error'] = str(e)
+    except Exception as e:
+        result['pyrealsense2_error'] = str(e)
+    
+    return jsonify(result)
+
+
+@app.route('/api/live/camera-info')
+def camera_info():
+    """Get information about the active camera."""
     global active_camera
     
     with camera_lock:
         if active_camera is None:
-            active_camera = cv2.VideoCapture(0)
-            if not active_camera.isOpened():
-                return jsonify({'success': False, 'error': 'Failed to open webcam'}), 500
+            return jsonify({
+                'active': False,
+                'type': None,
+                'info': None
+            })
+        
+        if REALSENSE_AVAILABLE and isinstance(active_camera, RealSenseCamera):
+            info = active_camera.get_camera_info()
+            return jsonify({
+                'active': True,
+                'type': 'realsense',
+                'info': info
+            })
+        else:
+            return jsonify({
+                'active': True,
+                'type': 'webcam',
+                'info': {
+                    'type': 'Webcam',
+                    'name': 'Standard Webcam (DirectShow)',
+                    'depth_enabled': False
+                }
+            })
+
+
+@app.route('/api/live/start', methods=['POST'])
+def start_live():
+    """Start live monitoring with RealSense D435i (primary) or webcam (fallback)."""
+    global active_camera
     
-    return jsonify({'success': True, 'message': 'Live monitoring started'})
+    with camera_lock:
+        if active_camera is None:
+            # Try RealSense first
+            if REALSENSE_AVAILABLE:
+                logger.info("Attempting to open RealSense camera...")
+                active_camera = RealSenseCamera(width=640, height=480, fps=30, enable_depth=True)
+                if not active_camera.open():
+                    logger.warning("RealSense failed, falling back to webcam")
+                    active_camera = None
+            
+            # Fallback to webcam
+            if active_camera is None:
+                logger.info("Opening standard webcam...")
+                active_camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                if not active_camera.isOpened():
+                    return jsonify({'success': False, 'error': 'Failed to open any camera'}), 500
+                active_camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                active_camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                active_camera.set(cv2.CAP_PROP_FPS, 30)
+    
+    # Get camera type for response
+    if REALSENSE_AVAILABLE and isinstance(active_camera, RealSenseCamera):
+        camera_type = "RealSense D435i"
+        depth_enabled = True
+    else:
+        camera_type = "Webcam"
+        depth_enabled = False
+    
+    return jsonify({
+        'success': True, 
+        'message': 'Live monitoring started',
+        'camera_type': camera_type,
+        'depth_enabled': depth_enabled
+    })
 
 
 @app.route('/api/live/stop', methods=['POST'])
@@ -2347,13 +2486,30 @@ def stop_live():
 
 @app.route('/api/live/status')
 def live_status():
-    """Get live monitoring status."""
+    """Get live monitoring status with camera information."""
     with camera_lock:
         is_active = active_camera is not None and active_camera.isOpened()
+        
+        if is_active:
+            if REALSENSE_AVAILABLE and isinstance(active_camera, RealSenseCamera):
+                camera_type = "RealSense D435i"
+                depth_enabled = True
+                camera_info_data = active_camera.get_camera_info()
+            else:
+                camera_type = "Webcam"
+                depth_enabled = False
+                camera_info_data = {'type': 'Webcam', 'name': 'Standard Webcam'}
+        else:
+            camera_type = None
+            depth_enabled = False
+            camera_info_data = None
     
     return jsonify({
         'active': is_active,
-        'camera_index': 0 if is_active else None
+        'camera_type': camera_type,
+        'depth_enabled': depth_enabled,
+        'camera_info': camera_info_data,
+        'realsense_available': REALSENSE_AVAILABLE
     })
 
 

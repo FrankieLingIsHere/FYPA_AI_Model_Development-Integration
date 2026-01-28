@@ -1,6 +1,22 @@
+"""
+Live PPE Compliance Detection with Intel RealSense D435i
+========================================================
+Real-time PPE detection using YOLOv8 with RealSense camera support.
+Displays RGB detection feed alongside 2D depth visualization.
+Falls back to standard webcam if RealSense is not available.
+"""
+
 from ultralytics import YOLO
 import cv2
 import numpy as np
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import RealSense camera module
+from realsense_camera import RealSenseCamera, create_combined_view
 
 # Load your best model
 model = YOLO('Results/ppe_yolov86/weights/best.pt')
@@ -28,11 +44,20 @@ PROJECT_CLASSES = [
     'Person'
 ]
 
-# Run real-time inference on the webcam
-# Start webcam capture and run per-frame inference + drawing
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    raise RuntimeError('Could not open webcam (device 0)')
+# Initialize RealSense camera (with webcam fallback)
+# RealSense D435i is primary, standard webcam is fallback
+camera = RealSenseCamera(width=640, height=480, fps=30, enable_depth=True)
+if not camera.open():
+    raise RuntimeError('Could not open camera (RealSense or webcam)')
+
+# Display camera info
+camera_info = camera.get_camera_info()
+print("\n" + "=" * 60)
+print("CAMERA CONFIGURATION")
+print("=" * 60)
+for key, value in camera_info.items():
+    print(f"  {key}: {value}")
+print("=" * 60 + "\n")
 
 # Helper to normalize class names for robust matching
 def _norm(name: str) -> str:
@@ -72,18 +97,28 @@ if DEBUG:
     print('Model class list:')
     for i, n in enumerate(names_list):
         print(f'  id={i} name="{n}" norm="{_norm(n)}"')
-    print('Starting live inference. Press q to quit.')
+    print('\nStarting live inference with RealSense D435i.')
+    print('Press Q to quit.')
+    print('=' * 60)
+
+frame_count = 0
 while True:
-    ret, frame = cap.read()
-    if not ret:
+    # Read from RealSense camera (or webcam fallback)
+    ret, color_frame, depth_raw, depth_colormap = camera.read()
+    if not ret or color_frame is None:
         print('Frame read failed, exiting')
         break
+    
+    frame_count += 1
+    frame = color_frame.copy()
 
-    # Run model on the frame
-    results = model.predict(frame, imgsz=640, conf=0.25, iou=0.45)
+    # Run model on the color frame
+    results = model.predict(frame, imgsz=640, conf=0.25, iou=0.45, verbose=False)
     # results is a list; take first element
     if len(results) == 0:
-        cv2.imshow('PPE Live', frame)
+        # Create combined view even with no detections
+        combined = create_combined_view(color_frame, depth_colormap, frame)
+        cv2.imshow('PPE Live - RealSense D435i', combined)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         continue
@@ -107,15 +142,8 @@ while True:
             if mapped is None:
                 # fallback to original src_name if nothing matches
                 target_name = src_name
-                if DEBUG:
-                    print(f"[DEBUG] No project mapping for '{src_name}' (norm='{norm}'), using source name")
             else:
                 target_name = mapped
-                if DEBUG and _norm(target_name) != norm:
-                    print(f"[DEBUG] Mapped '{src_name}' (norm={norm}) -> '{target_name}'")
-
-            if DEBUG:
-                print(f"[DETECT] cls={cls} src='{src_name}' norm='{norm}' mapped='{target_name}' conf={conf:.2f}")
 
             # store boxes for later logic
             if target_name == 'Person' or _norm(target_name) == _norm('Person'):
@@ -131,15 +159,18 @@ while True:
             cv2.rectangle(frame, (x1, y1 - t_size[1] - 6), (x1 + t_size[0] + 6, y1), color, -1)
             cv2.putText(frame, label, (x1 + 3, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
 
-    # Optional: print counts per frame
-    print('--- New Frame ---')
-    print(f'Found {len(person_boxes)} persons.')
-    for ppe_item, items in ppe_boxes.items():
-        print(f'Found {len(items)} of {ppe_item}')
+    # Add status info to detection frame
+    status_text = f"Frame: {frame_count} | Persons: {len(person_boxes)}"
+    cv2.putText(frame, status_text, (10, frame.shape[0] - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-    cv2.imshow('PPE Live', frame)
+    # Create combined view with RGB detections and depth map side by side
+    combined = create_combined_view(color_frame, depth_colormap, frame)
+    
+    cv2.imshow('PPE Live - RealSense D435i', combined)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-cap.release()
+camera.release()
 cv2.destroyAllWindows()
+print(f"\nSession ended. Total frames processed: {frame_count}")

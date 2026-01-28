@@ -18,7 +18,19 @@ const LivePage = {
                 <div class="card mb-4">
                     <div class="card-header">
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
-                        <div id="liveControls" style="float: right;">
+                        <div id="liveControls" style="float: right; display: flex; align-items: center; gap: 15px;">
+                            <div id="depthToggleContainer" style="display: flex; align-items: center; gap: 8px;">
+                                <label for="depthToggle" style="font-size: 0.85rem; color: var(--text-secondary); cursor: pointer;">
+                                    <i class="fas fa-cube"></i> Depth View
+                                </label>
+                                <label class="toggle-switch" style="width: 50px; height: 24px;">
+                                    <input type="checkbox" id="depthToggle">
+                                    <span class="toggle-slider" style="border-radius: 24px;"></span>
+                                </label>
+                            </div>
+                            <div id="cameraInfo" style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 8px; background: var(--background-color); border-radius: 4px; display: none;">
+                                <i class="fas fa-camera"></i> <span id="cameraType">Webcam</span>
+                            </div>
                             <button id="startLiveBtn" class="btn btn-success" style="margin-right: 10px;">
                                 <i class="fas fa-play"></i> Start
                             </button>
@@ -35,6 +47,9 @@ const LivePage = {
                                 <p style="color: #fff; margin: 0;">Click "Start" to begin live monitoring</p>
                                 <p style="color: #aaa; font-size: 0.9rem; margin-top: 0.5rem;">
                                     Real-time YOLO detection with PPE compliance checking
+                                </p>
+                                <p style="color: #888; font-size: 0.8rem; margin-top: 0.5rem;">
+                                    <i class="fas fa-cube"></i> Intel RealSense D435i with depth visualization supported
                                 </p>
                             </div>
                             <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
@@ -98,7 +113,8 @@ const LivePage = {
                         <h3 style="margin-bottom: 1rem;">Instructions:</h3>
                         <ol id="instructionsList" style="margin-left: 1.5rem; line-height: 2;">
                             <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
-                            <li>Your webcam will activate and show the live feed</li>
+                            <li>Your camera will activate and show the live feed (RealSense D435i or webcam)</li>
+                            <li>Toggle <strong>"Depth View"</strong> to see RGB + Depth side-by-side (RealSense only)</li>
                             <li>YOLO will detect PPE in real-time with bounding boxes</li>
                             <li>When violations are detected, they will be logged automatically</li>
                             <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
@@ -124,9 +140,9 @@ const LivePage = {
                             </div>
                             <div class="card" style="background: var(--background-color);">
                                 <div class="card-content text-center">
-                                    <i class="fas fa-check-circle" style="font-size: 2rem; color: var(--success-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">Accurate</h4>
-                                    <p>95%+ detection accuracy</p>
+                                    <i class="fas fa-cube" style="font-size: 2rem; color: #00bcd4;"></i>
+                                    <h4 style="margin-top: 0.5rem;">Depth Sensing</h4>
+                                    <p>Intel RealSense D435i support</p>
                                 </div>
                             </div>
                         </div>
@@ -322,6 +338,23 @@ const LivePage = {
                 .toggle-switch input:checked + .toggle-slider:before {
                     transform: translateX(30px);
                 }
+                
+                .toggle-switch input:disabled + .toggle-slider {
+                    background-color: #999;
+                    cursor: not-allowed;
+                }
+                
+                #depthToggleContainer {
+                    transition: opacity 0.3s;
+                }
+                
+                #cameraInfo {
+                    transition: all 0.3s;
+                }
+                
+                #cameraInfo i {
+                    color: var(--primary-color);
+                }
             </style>
         `;
     },
@@ -340,6 +373,10 @@ const LivePage = {
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
         const instructionsList = document.getElementById('instructionsList');
+        const depthToggle = document.getElementById('depthToggle');
+        const depthToggleContainer = document.getElementById('depthToggleContainer');
+        const cameraInfo = document.getElementById('cameraInfo');
+        const cameraType = document.getElementById('cameraType');
         
         // Upload elements
         const imageUpload = document.getElementById('imageUpload');
@@ -535,6 +572,7 @@ const LivePage = {
                 streamImg.style.display = 'none';
                 placeholder.style.display = 'block';
                 statusIndicator.style.display = 'none';
+                cameraInfo.style.display = 'none';
                 stopBtn.disabled = true;
                 startBtn.disabled = false;
                 APP_STATE.liveStreamActive = false;
@@ -542,6 +580,20 @@ const LivePage = {
                 console.error('Error stopping live stream:', error);
             }
         }
+        
+        // Function to update stream with current settings
+        function updateStreamSource() {
+            const includeDepth = depthToggle.checked;
+            const streamUrl = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?depth=${includeDepth}&t=${Date.now()}`;
+            streamImg.src = streamUrl;
+        }
+        
+        // Depth toggle change handler
+        depthToggle.addEventListener('change', () => {
+            if (APP_STATE.liveStreamActive) {
+                updateStreamSource();
+            }
+        });
         
         // Attach event listeners
         // Start live stream
@@ -559,14 +611,33 @@ const LivePage = {
                 if (!response.ok) {
                     throw new Error('Failed to start monitoring');
                 }
+                
+                // Get camera info from response
+                const result = await response.json();
+                if (result.camera_type) {
+                    cameraType.textContent = result.camera_type;
+                    cameraInfo.style.display = 'inline-block';
+                    
+                    // Enable/disable depth toggle based on camera type
+                    if (result.depth_enabled) {
+                        depthToggleContainer.style.opacity = '1';
+                        depthToggle.disabled = false;
+                        depthToggleContainer.title = 'Toggle depth visualization (RealSense D435i)';
+                    } else {
+                        depthToggleContainer.style.opacity = '0.5';
+                        depthToggle.disabled = true;
+                        depthToggle.checked = false;
+                        depthToggleContainer.title = 'Depth not available (requires RealSense camera)';
+                    }
+                }
 
                 // Hide placeholder, show stream
                 placeholder.style.display = 'none';
                 streamImg.style.display = 'block';
                 statusIndicator.style.display = 'block';
 
-                // Set stream source
-                streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
+                // Set stream source with depth parameter
+                updateStreamSource();
 
                 // Enable stop button
                 stopBtn.disabled = false;
@@ -606,10 +677,33 @@ const LivePage = {
                 placeholder.style.display = 'none';
                 streamImg.style.display = 'block';
                 statusIndicator.style.display = 'block';
-                streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
+                updateStreamSource();
                 stopBtn.disabled = false;
                 startBtn.disabled = true;
                 APP_STATE.liveStreamActive = true;
+                
+                // Update camera info
+                if (status.camera_type) {
+                    cameraType.textContent = status.camera_type;
+                    cameraInfo.style.display = 'inline-block';
+                    
+                    if (status.depth_enabled) {
+                        depthToggleContainer.style.opacity = '1';
+                        depthToggle.disabled = false;
+                    } else {
+                        depthToggleContainer.style.opacity = '0.5';
+                        depthToggle.disabled = true;
+                    }
+                }
+            } else {
+                // Check if RealSense is available
+                if (status.realsense_available) {
+                    depthToggleContainer.title = 'Enable depth visualization (RealSense D435i available)';
+                } else {
+                    depthToggleContainer.style.opacity = '0.5';
+                    depthToggle.disabled = true;
+                    depthToggleContainer.title = 'Depth not available (RealSense camera not detected)';
+                }
             }
         } catch (error) {
             console.error('Error checking stream status:', error);

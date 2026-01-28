@@ -21,6 +21,7 @@ OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 OLLAMA_MODELS = [
     {"name": "moondream:1.8b", "description": "CPU-friendly, ~1.5GB RAM - recommended", "min_ram_gb": 2},
     {"name": "llava-phi3:3.8b", "description": "Higher quality, ~3.6GB RAM - needs more resources", "min_ram_gb": 4},
+    {"name": "llava:7b", "description": "Full LLaVA model, ~4GB RAM", "min_ram_gb": 4},
 ]
 
 # Cache the working model to avoid repeated checks
@@ -28,6 +29,8 @@ _working_model = None
 _model_check_done = False
 
 TIMEOUT = 120  # 2 minutes timeout
+MAX_RETRIES = 3  # Number of retries for empty responses
+RETRY_DELAY = 2  # Seconds between retries
 # ---------------------------
 
 def check_ollama_running():
@@ -161,79 +164,100 @@ Analyze now:"""
     import time
     timestamp_seed = int(time.time() * 1000)
     
-    # Call Ollama API
-    try:
-        print(f"Generating caption with Ollama (Image size: {len(image_base64)} chars)...")
-        response = requests.post(
-            OLLAMA_API_URL,
-            json={
-                'model': model,
-                'prompt': prompt, # Salt removed to improve model compatibility
-                'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
-                'images': [image_base64],
-                'stream': False,
-                'options': {
-                    'temperature': 0.3,  # Increased for more variety in descriptions
-                    'num_predict': 250,
-                    'stop': ['\n\n\n']
-                }
-            },
-            timeout=TIMEOUT
-        )
-        
-        if not response.ok:
-            print(f"Error: Ollama API returned {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
-        
-        data = response.json()
-        caption = data.get('response', '').strip()
-        
-        if caption:
-            # Clean up brackets and raw formatting
-            import re
+    # Call Ollama API with retry logic
+    for attempt in range(MAX_RETRIES):
+        try:
+            print(f"Generating caption with Ollama (Image size: {len(image_base64)} chars)... Attempt {attempt + 1}/{MAX_RETRIES}")
+            response = requests.post(
+                OLLAMA_API_URL,
+                json={
+                    'model': model,
+                    'prompt': prompt, # Salt removed to improve model compatibility
+                    'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
+                    'images': [image_base64],
+                    'stream': False,
+                    'options': {
+                        'temperature': 0.3,  # Increased for more variety in descriptions
+                        'num_predict': 250,
+                        'stop': ['\n\n\n']
+                    }
+                },
+                timeout=TIMEOUT
+            )
             
-            # Remove leading/trailing brackets
-            caption = caption.strip('[]{}')
-            caption = caption.strip()
+            if not response.ok:
+                print(f"Error: Ollama API returned {response.status_code}")
+                print(f"Response: {response.text}")
+                if attempt < MAX_RETRIES - 1:
+                    print(f"Retrying in {RETRY_DELAY} seconds...")
+                    time.sleep(RETRY_DELAY)
+                    continue
+                return "Caption generation failed - API error."
             
-            # Remove quotes
-            caption = caption.replace('"', '').replace("'", "")
+            data = response.json()
+            caption = data.get('response', '').strip()
             
-            # Remove any remaining bracket patterns like [text] or {text}
-            caption = re.sub(r'\[([^\]]*)\]', r'\1', caption)
-            caption = re.sub(r'\{([^\}]*)\}', r'\1', caption)
-            
-            # Remove bullet points and list markers (preserve structure)
-            # caption = re.sub(r'^[\-\*\•]\s*', '', caption, flags=re.MULTILINE) 
-            
-            # Merge multiple spaces and newlines
-            caption = re.sub(r'\s+', ' ', caption).strip()
-            
-            # Ensure complete sentence - truncate to last period if incomplete
-            if caption and not caption.endswith(('.', '!', '?')):
-                last_period = caption.rfind('.')
-                if last_period > 0:
-                    caption = caption[:last_period + 1]
+            if caption:
+                # Clean up brackets and raw formatting
+                import re
+                
+                # Remove leading/trailing brackets
+                caption = caption.strip('[]{}')
+                caption = caption.strip()
+                
+                # Remove quotes
+                caption = caption.replace('"', '').replace("'", "")
+                
+                # Remove any remaining bracket patterns like [text] or {text}
+                caption = re.sub(r'\[([^\]]*)\]', r'\1', caption)
+                caption = re.sub(r'\{([^\}]*)\}', r'\1', caption)
+                
+                # Remove bullet points and list markers (preserve structure)
+                # caption = re.sub(r'^[\-\*\•]\s*', '', caption, flags=re.MULTILINE) 
+                
+                # Merge multiple spaces and newlines
+                caption = re.sub(r'\s+', ' ', caption).strip()
+                
+                # Ensure complete sentence - truncate to last period if incomplete
+                if caption and not caption.endswith(('.', '!', '?')):
+                    last_period = caption.rfind('.')
+                    if last_period > 0:
+                        caption = caption[:last_period + 1]
+                    else:
+                        caption = caption + '.'
+                
+                print("Caption generation complete!")
+                return caption
+            else:
+                print(f"Warning: Empty response from Ollama (attempt {attempt + 1}/{MAX_RETRIES})")
+                if attempt < MAX_RETRIES - 1:
+                    print(f"Retrying in {RETRY_DELAY} seconds...")
+                    time.sleep(RETRY_DELAY)
+                    continue
                 else:
-                    caption = caption + '.'
-            
-            print("Caption generation complete!")
-            return caption
-        else:
-            print("Error: Empty response from Ollama")
-            return None
-            
-    except requests.exceptions.Timeout:
-        print(f"Error: Request timed out after {TIMEOUT} seconds")
-        return None
-    except requests.exceptions.ConnectionError:
-        print("Error: Could not connect to Ollama. Make sure Ollama is running.")
-        print("Start Ollama with: ollama serve")
-        return None
-    except Exception as e:
-        print(f"Error calling Ollama API: {e}")
-        return None
+                    print("Error: Empty response from Ollama after all retries")
+                    return "Caption generation failed - model returned empty response. Please try again."
+                
+        except requests.exceptions.Timeout:
+            print(f"Error: Request timed out after {TIMEOUT} seconds")
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+                continue
+            return "Caption generation timed out. Please try again."
+        except requests.exceptions.ConnectionError:
+            print("Error: Could not connect to Ollama. Make sure Ollama is running.")
+            print("Start Ollama with: ollama serve")
+            return "Could not connect to Ollama - please ensure it is running."
+        except Exception as e:
+            print(f"Error calling Ollama API: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+                continue
+            return f"Caption generation error: {str(e)[:100]}"
+
+    # If we get here, all retries failed
+    return "Caption generation failed after multiple attempts."
 
 
 def validate_work_environment(image_path):

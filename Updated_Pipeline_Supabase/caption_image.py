@@ -115,48 +115,84 @@ def caption_image_llava(image_path):
     
     # Build prompt based on model capability
     if 'moondream' in str(model):
-        # Moondream is small and struggles with complex formatting instructions
-        prompt = """Describe this workplace scene in detail. Start with "A worker...". Mention activities, safety gear (hardhats, vests), and environment."""
+        # HYPER-SPECIFIC SAFETY ASSESSMENT PROMPT
+        # Designed to capture unique physical geometry and inter-object relationships
+        prompt = """You are a JKR-certified Safety Officer conducting a STRICT site inspection. Analyze this image and write a HYPER-SPECIFIC safety assessment.
+
+Your response MUST capture UNIQUE SCENE DETAILS, not generic observations:
+
+1. SCENE GEOMETRY:
+   - Environment type (construction site, roadside, industrial, excavation, etc.)
+   - Ground condition: Is it level/sloped/unstable? Estimate incline angle if visible.
+   - Key objects and their SPATIAL RELATIONSHIPS (distances, proximity to workers)
+
+2. PERSONNEL ANALYSIS (for EACH person):
+   - Exact position: Near edge? On slope? In traffic path? Under suspended load?
+   - Specific activity: Working? Supervising? ON MOBILE PHONE? (distraction = behavioral violation)
+   - Clothing description (colors, type)
+   - PPE STATUS (STRICT CHECK):
+     * HEAD: Rigid MS 183 helmet with chin strap? (Sun hats/caps = NON-COMPLIANT)
+     * VEST: Neon MS 1731 high-viz as OUTERMOST layer?
+     * FEET: Safety boots visible?
+     * Other: Gloves, goggles, harness if at height
+
+3. MATERIAL HAZARDS:
+   - Are materials (logs, pipes, bricks) properly stacked or UNSECURED?
+   - On level ground or INCLINE/SLOPE (gravity roll risk)?
+   - Stop-blocks or restraints present?
+
+4. TRAFFIC & EXCLUSION ZONES:
+   - Are workers separated from vehicle paths?
+   - Any TRAFFIC CONES, barriers, or "Men at Work" signs?
+   - Is there an EXCLUSION ZONE around heavy materials or equipment?
+
+5. HOUSEKEEPING (BOWEC Reg. 26):
+   - Debris, scattered materials, trip hazards?
+   - Tool storage condition
+   - Are walkways clear?
+
+6. VEHICLE STATUS:
+   - Any trucks/equipment: Parked? Active loading/unloading?
+   - Engine running? Chocked wheels if on slope?
+
+Write as ONE DETAILED PARAGRAPH. Describe EXACTLY what you see with specific details about distances, angles, positions, and inter-object relationships. Avoid generic phrases like "near edge" - instead say "within 2 meters of unsecured log pile"."""
     else:
         # LLaVA/Phi3 can handle structured output better
-        prompt = """You are a workplace safety observer. Analyze this image and provide a DETAILED, STRUCTURED description.
+        prompt = """You are a JKR-certified Safety Officer. Analyze this image for strict OSHA 1994 and BOWEC 1986 compliance. Provide a DETAILED, STRUCTURED description.
 
 REQUIRED OUTPUT FORMAT:
 =======================
 Start with: "SCENE: [number] person(s) detected."
 
 Then for EACH person, describe in this order:
-1. ACTIVITY: What are they doing? (CRITICAL - BE SPECIFIC. Avoid just "standing". Say "Welding a pipe", "Climbing a ladder", "Holding a blueprint", "Hammering a nail".)
-2. POSITION: Where are they in the frame? (left/center/right)
-3. BODY VISIBILITY: What body parts are visible? (full body / upper half / head only)
-4. HEAD: Hair/headwear. ONLY say "hardhat" if you see a RIGID safety helmet.
-5. TORSO: Clothing. ONLY say "safety vest" if fluorescent with reflective strips. **If torso not visible, say "Not visible".**
-6. HANDS: **If hands NOT visible, say "Not visible".** ONLY say "gloves" if clearly seen.
-7. FEET: **If feet NOT visible, say "Not visible".** DO NOT halluciante boots if feet aren't there.
-8. FACE: Masks/goggles (only if clearly visible)
+1. ACTIVITY: What are they doing? (e.g., "Welding", "Working at height >2m", "Excavating trench >1.5m").
+2. POSITION: Where are they? (e.g., "On scaffold", "Near open edge", "Under suspended load").
+3. BODY VISIBILITY: (full body / upper half / head only).
+4. HEAD PROTECTION (MS 183):
+   - Helmet present? (Yes/No)
+   - Chin strap visible/fastened? (CRITICAL for JKR)
+   - Color? (White=Supervisor/Yellow=Worker)
+5. HI-VIZ VEST (MS 1731):
+   - Present? (Yes/No)
+   - Color? (Neon Yellow/Orange/Green)
+   - Retroreflective strips visible?
+6. FALL PROTECTION (MS 2311) [If >2m height]:
+   - Full-body harness present?
+   - Lanyard anchored? (Safe/Unsafe tie-off)
+7. HANDS/FEET: Gloves? Safety boots (reinforced toe)?
+8. FACE: Masks/goggles?
 
-End with: "ENVIRONMENT: [brief 2-4 word description]"
+End with: "ENVIRONMENT: [Brief description - note Hazards like 'Unshored trench', 'Loose scaffolding', 'Trip hazards', 'Poor housekeeping']"
 
-CRITICAL ANTI-HALLUCINATION RULES:
-==================================
-1. VISIBILITY COMPLIANCE:
-   - If BODY VISIBILITY is "Head only" -> TORSO, HANDS, FEET must be "Not visible".
-   - If BODY VISIBILITY is "Upper half" -> FEET must be "Not visible".
-   - DO NOT describe clothing/PPE for missing body parts.
+CRITICAL JKR MONITORING RULES:
+==============================
+1. HEAD: Rigid helmet required. Caps/Hats = NON-COMPLIANCE. Chin strap check is mandatory.
+2. VEST: Must be outermost layer. Must be high-visibility neon.
+3. HEIGHT: If feet >2m off ground, look for HARNESS + ANCHOR.
+4. EXCAVATION: If trench >1.5m, look for SHORING. Spoil heap >0.6m from edge?
+5. HOUSEKEEPING: Cables, debris, oil spills?
 
-2. HARDHAT vs HAIR:
-   - Rigid helmet = Hardhat.
-   - Hair/Cap/Beanie = NOT Hardhat.
-
-3. ENVIRONMENT TRUTH:
-   - Sofa/Couch/TV/Bed = "residential indoor".
-   - Office desk/Computer = "office".
-   - ONLY say "construction site" if you see heavy machinery/scaffolding/raw materials.
-
-1. EXAMPLE (Partial Visibility):
-"SCENE: 1 person(s) detected. Person 1 is in center foreground, head and shoulders only. Facing camera. Has short dark hair, no hardhat. Torso is partially visible wearing a grey t-shirt, no safety vest. Hands not visible. Feet not visible. Face is clear, no mask. ENVIRONMENT: residential room with couch."
-
-Analyze now:"""
+Analyze now using strict JKR/OSHA standards:"""
 
     import time
     timestamp_seed = int(time.time() * 1000)
@@ -174,7 +210,7 @@ Analyze now:"""
                 'stream': False,
                 'options': {
                     'temperature': 0.3,  # Increased for more variety in descriptions
-                    'num_predict': 250,
+                    'num_predict': 500,
                     'stop': ['\n\n\n']
                 }
             },

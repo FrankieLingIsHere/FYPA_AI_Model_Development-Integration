@@ -61,3 +61,5 @@ Results/
 tmp/
 temp/
 *.tmp
+*.md
+*.txt

@@ -13,7 +13,7 @@ const ViolationMonitor = {
     sessionStartTime: null,           // When this session started
     isInitialLoad: true,              // First load flag - shows summary only
     lastVisitTime: null,              // From localStorage
-    
+
     // LocalStorage key for tracking last visit
     STORAGE_KEY: 'luna_last_visit_time',
 
@@ -25,10 +25,10 @@ const ViolationMonitor = {
         this.sessionStartTime = new Date();
         this.knownViolations = new Map();
         this.notifiedEvents = new Set();
-        
+
         // Get last visit time from localStorage
         this.lastVisitTime = this._getLastVisitTime();
-        
+
         // Initial check - will show summary notification only
         this.checkForNewViolations();
 
@@ -39,7 +39,7 @@ const ViolationMonitor = {
 
         // Save visit time when user leaves
         window.addEventListener('beforeunload', () => this._saveVisitTime());
-        
+
         console.log('[ViolationMonitor] Started monitoring');
         console.log(`[ViolationMonitor] Last visit: ${this.lastVisitTime ? this.lastVisitTime.toLocaleString() : 'First visit'}`);
         console.log(`[ViolationMonitor] Session start: ${this.sessionStartTime.toLocaleString()}`);
@@ -50,7 +50,7 @@ const ViolationMonitor = {
 
         this.isMonitoring = false;
         this._saveVisitTime();
-        
+
         if (this.checkInterval) {
             clearInterval(this.checkInterval);
             this.checkInterval = null;
@@ -58,7 +58,7 @@ const ViolationMonitor = {
 
         console.log('[ViolationMonitor] Stopped monitoring');
     },
-    
+
     _getLastVisitTime() {
         try {
             const stored = localStorage.getItem(this.STORAGE_KEY);
@@ -68,7 +68,7 @@ const ViolationMonitor = {
             return null;
         }
     },
-    
+
     _saveVisitTime() {
         try {
             localStorage.setItem(this.STORAGE_KEY, new Date().toISOString());
@@ -80,63 +80,60 @@ const ViolationMonitor = {
     async checkForNewViolations() {
         try {
             const violations = await API.getViolations();
-            
+
             if (this.isInitialLoad) {
                 // INITIAL LOAD: Show summary notification, not individual ones
                 this._handleInitialLoad(violations);
                 this.isInitialLoad = false;
                 return;
             }
-            
+
             // REAL-TIME MODE: Only notify for violations detected AFTER session started
             for (const violation of violations) {
                 const reportId = violation.report_id;
                 const status = violation.status || (violation.has_report ? 'completed' : 'pending');
                 const violationTime = new Date(violation.timestamp);
                 const previousData = this.knownViolations.get(reportId);
-                
+
                 // Check if this is a NEW violation (not seen before)
                 if (!previousData) {
                     // Only show real-time notifications for violations created AFTER session started
                     const isNewDuringSession = violationTime > this.sessionStartTime;
-                    
+
                     if (isNewDuringSession) {
                         console.log(`[ViolationMonitor] 🆕 NEW real-time violation: ${reportId}`);
                         this._notifyViolationDetected(violation);
-                        
+
                         if (status === 'generating') {
                             setTimeout(() => this._notifyReportGenerating(violation), 1500);
                         } else if (status === 'completed') {
                             setTimeout(() => this._notifyReportReady(violation), 1500);
                         }
                     }
-                    
+
                     // Track this violation
                     this.knownViolations.set(reportId, { status, timestamp: violationTime });
-                } 
+                }
                 // Check for STATUS CHANGES on violations we're tracking
                 else if (previousData.status !== status) {
                     console.log(`[ViolationMonitor] Status change: ${reportId} ${previousData.status} -> ${status}`);
-                    
-                    // Only notify status changes for real-time violations (detected during session)
-                    const wasRealtime = previousData.timestamp > this.sessionStartTime;
-                    
-                    if (wasRealtime) {
-                        if (status === 'generating' && previousData.status === 'pending') {
-                            this._notifyReportGenerating(violation);
-                        }
-                        else if (status === 'completed') {
-                            this._notifyReportReady(violation);
-                        }
-                        else if (status === 'failed') {
-                            this._notifyReportFailed(violation);
-                        }
+
+                    // Notify for ANY status change (even for old violations being reprocessed)
+                    // We removed the 'wasRealtime' check to ensure reprocessed reports trigger notifications
+                    if (status === 'generating' && previousData.status === 'pending') {
+                        this._notifyReportGenerating(violation);
                     }
-                    
+                    else if (status === 'completed') {
+                        this._notifyReportReady(violation);
+                    }
+                    else if (status === 'failed') {
+                        this._notifyReportFailed(violation);
+                    }
+
                     // Update tracked status
                     this.knownViolations.set(reportId, { status, timestamp: previousData.timestamp });
                 }
-                
+
                 // Check for validation warnings (only for real-time violations)
                 const isRealtime = this.knownViolations.get(reportId)?.timestamp > this.sessionStartTime;
                 if (isRealtime) {
@@ -147,39 +144,39 @@ const ViolationMonitor = {
             console.error('[ViolationMonitor] Error checking violations:', error);
         }
     },
-    
+
     _handleInitialLoad(violations) {
         if (!violations || violations.length === 0) {
             console.log('[ViolationMonitor] No violations in database');
             return;
         }
-        
+
         // Count violations and status
         let newSinceLastVisit = 0;
         let pendingCount = 0;
         let generatingCount = 0;
         let failedCount = 0;
-        
+
         for (const v of violations) {
             const violationTime = new Date(v.timestamp);
             const status = v.status || (v.has_report ? 'completed' : 'pending');
-            
+
             // Track all violations
             this.knownViolations.set(v.report_id, { status, timestamp: violationTime });
-            
+
             // Count new violations since last visit
             if (this.lastVisitTime && violationTime > this.lastVisitTime) {
                 newSinceLastVisit++;
             }
-            
+
             // Count by status
             if (status === 'pending') pendingCount++;
             if (status === 'generating') generatingCount++;
             if (status === 'failed') failedCount++;
         }
-        
+
         console.log(`[ViolationMonitor] Initial load: ${violations.length} total, ${newSinceLastVisit} new since last visit`);
-        
+
         // Show ONE summary notification if there are new violations since last visit
         if (newSinceLastVisit > 0) {
             NotificationManager.show(
@@ -195,7 +192,7 @@ const ViolationMonitor = {
                 }
             );
         }
-        
+
         // Show pending/generating summary if any (combined into one)
         const inProgress = pendingCount + generatingCount;
         if (inProgress > 0) {
@@ -210,7 +207,7 @@ const ViolationMonitor = {
                 );
             }, 1500);
         }
-        
+
         // Show failed summary if any
         if (failedCount > 0) {
             setTimeout(() => {
@@ -251,7 +248,7 @@ const ViolationMonitor = {
             if (Array.isArray(violation.missing_ppe) && violation.missing_ppe.length > 0) {
                 if (violation.missing_ppe.length === 1) derivedType = `Missing ${violation.missing_ppe[0]}`;
                 else if (violation.missing_ppe.length === 2) derivedType = `Missing ${violation.missing_ppe[0]} and ${violation.missing_ppe[1]}`;
-                else derivedType = `Missing ${violation.missing_ppe.slice(0,5).join(', ')}`;
+                else derivedType = `Missing ${violation.missing_ppe.slice(0, 5).join(', ')}`;
             }
         }
 
@@ -262,7 +259,7 @@ const ViolationMonitor = {
                 const parts = m[1].split(',').map(x => x.trim()).filter(Boolean);
                 if (parts.length === 1) derivedType = `Missing ${parts[0]}`;
                 else if (parts.length === 2) derivedType = `Missing ${parts[0]} and ${parts[1]}`;
-                else derivedType = `Missing ${parts.slice(0,5).join(', ')}`;
+                else derivedType = `Missing ${parts.slice(0, 5).join(', ')}`;
             }
         }
 
@@ -271,7 +268,7 @@ const ViolationMonitor = {
         NotificationManager.show(
             `${derivedType} at ${timestamp} - Severity: ${severity}`,
             'violation',
-            0,  // Persist until dismissed
+            10000,  // Auto-dismiss after 10 seconds
             {
                 title: '🚨 PPE Violation Detected!',
                 action: {
@@ -299,10 +296,10 @@ const ViolationMonitor = {
     _notifyReportGenerating(violation) {
         const notifKey = `generating_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
-        
+
         this.notifiedEvents.add(notifKey);
         const reportId = violation.report_id;
-        
+
         NotificationManager.show(
             `Analyzing violation and generating safety report...`,
             'report',
@@ -315,7 +312,7 @@ const ViolationMonitor = {
                 }
             }
         );
-        
+
         console.log(`[ViolationMonitor] 📝 GENERATING: ${violation.report_id}`);
     },
 
@@ -323,9 +320,9 @@ const ViolationMonitor = {
     _notifyReportReady(violation) {
         const notifKey = `ready_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
-        
+
         this.notifiedEvents.add(notifKey);
-        
+
         NotificationManager.show(
             `Safety report is ready for review`,
             'success',
@@ -338,7 +335,7 @@ const ViolationMonitor = {
                 }
             }
         );
-        
+
         console.log(`[ViolationMonitor] ✅ READY: ${violation.report_id}`);
     },
 
@@ -346,11 +343,11 @@ const ViolationMonitor = {
     _notifyReportFailed(violation) {
         const notifKey = `failed_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
-        
+
         this.notifiedEvents.add(notifKey);
         const reportId = violation.report_id;
         const errorMsg = violation.error_message || 'Unknown error';
-        
+
         NotificationManager.show(
             `Report generation failed: ${errorMsg.slice(0, 80)}`,
             'error',
@@ -363,7 +360,7 @@ const ViolationMonitor = {
                 }
             }
         );
-        
+
         console.log(`[ViolationMonitor] ❌ FAILED: ${violation.report_id}`);
     },
 
@@ -371,13 +368,13 @@ const ViolationMonitor = {
     _checkValidationWarnings(violation) {
         const validation = violation.detection_data?.caption_validation;
         if (!validation || validation.is_valid !== false) return;
-        
+
         const notifKey = `validation_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
-        
+
         this.notifiedEvents.add(notifKey);
         const reportId = violation.report_id;
-        
+
         const contradictions = validation.contradictions || [];
         let message = 'Caption validation issues detected';
         if (contradictions.length > 0) {
@@ -386,7 +383,7 @@ const ViolationMonitor = {
                 .replace('⚠️ PPE Mismatch: ', '')
                 .slice(0, 100);
         }
-        
+
         NotificationManager.show(
             message,
             'warning',
@@ -399,17 +396,17 @@ const ViolationMonitor = {
                 }
             }
         );
-        
+
         console.warn(`[ViolationMonitor] ⚠️ VALIDATION: ${violation.report_id}`);
     },
 
     // Navigate to reports page and scroll to specific report
     navigateToReport(reportId) {
         console.log(`[ViolationMonitor] Navigating to report: ${reportId}`);
-        
+
         // Navigate to reports page
         Router.navigate('reports');
-        
+
         // Wait for page to render, then scroll to specific report
         setTimeout(() => {
             const reportCard = document.getElementById(`report-${reportId}`);
@@ -428,7 +425,7 @@ const ViolationMonitor = {
     // Manual trigger for testing
     testNotifications() {
         console.log('[ViolationMonitor] Testing notifications...');
-        
+
         NotificationManager.info('Info notification test');
         setTimeout(() => NotificationManager.success('Success notification test'), 1000);
         setTimeout(() => NotificationManager.warning('Warning notification test'), 2000);
@@ -439,13 +436,13 @@ const ViolationMonitor = {
             });
         }, 4000);
     },
-    
+
     // Clear last visit time (for testing - shows all as new)
     resetLastVisit() {
         localStorage.removeItem(this.STORAGE_KEY);
         console.log('[ViolationMonitor] Last visit time cleared - refresh to test');
     },
-    
+
     // Force show summary (for testing)
     showSummary() {
         this.isInitialLoad = true;

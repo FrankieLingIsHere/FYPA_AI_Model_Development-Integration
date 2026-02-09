@@ -156,7 +156,6 @@ const API = {
         }
     },
 
-    // Get device statistics
     async getDeviceStats(deviceId) {
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/device/${deviceId}/stats`);
@@ -165,6 +164,21 @@ const API = {
         } catch (error) {
             console.error('Error fetching device stats:', error);
             return {};
+        }
+    },
+
+    // Reprocess a single report
+    async reprocessReport(reportId) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/reprocess`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (!response.ok) throw new Error('Failed to trigger reprocess');
+            return await response.json();
+        } catch (error) {
+            console.error('Error reprocessing report:', error);
+            return { success: false, error: error.message };
         }
     }
 };

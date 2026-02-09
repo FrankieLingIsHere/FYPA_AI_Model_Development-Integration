@@ -55,7 +55,7 @@ try:
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     FULL_PIPELINE_AVAILABLE = False
-    logging.warning(f"Full pipeline components not available - violations will be detected but reports won't be generated: {e}")
+    logging.warning(f"Full pipeline components not available - violations will be detected but reports will not be generated: {e}")
 
 # Setup logging
 logging.basicConfig(
@@ -141,18 +141,9 @@ storage_manager = None
 last_violation_time = 0
 
 # Initialize Supabase components eagerly at startup for API access
-if FULL_PIPELINE_AVAILABLE:
-    try:
-        logger.info("🔌 Initializing Supabase components...")
-        # Note: referencing the global variables defined just above
-        db_manager = create_db_manager_from_env()
-        logger.info(f"✓ DB Manager initialized: {db_manager is not None}")
-        
-        storage_manager = create_storage_manager_from_env()
-        logger.info(f"✓ Storage Manager initialized: {storage_manager is not None}")
-            
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize Supabase components: {e}")
+# Initialize Supabase components lazily in initialize_pipeline_components()
+# This avoids NameError issues at module level
+pass
 VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
 
 # =========================================================================
@@ -514,7 +505,8 @@ def reprocess_stuck_reports(report_ids: List[str]):
             violation_dir = VIOLATIONS_DIR.absolute() / report_id
             if not violation_dir.exists():
                 logger.warning(f"❌ Cannot reprocess {report_id}: Directory not found on disk")
-                db_manager.update_detection_status(report_id, 'failed', "Data lost: Directory missing")
+                if db_manager:
+                    db_manager.update_detection_status(report_id, 'failed', "Data lost: Directory missing")
                 continue
                 
             original_path = violation_dir / 'original.jpg'
@@ -555,7 +547,8 @@ def reprocess_stuck_reports(report_ids: List[str]):
             
             if not detections:
                  logger.error(f"❌ Failed to recover data for {report_id}")
-                 db_manager.update_detection_status(report_id, 'failed', "Data recovery failed")
+                 if db_manager:
+                     db_manager.update_detection_status(report_id, 'failed', "Data recovery failed")
                  continue
             
             # Construct violation types and tags correctly
@@ -579,9 +572,10 @@ def reprocess_stuck_reports(report_ids: List[str]):
             logger.info(f"   Queuing {report_id} for processing...")
             
             # Retrieve timestamp from DB if possible to keep original time
-            event = db_manager.get_detection_event(report_id)
-            if event and event.get('timestamp'):
-                timestamp = event['timestamp']
+            if db_manager:
+                event = db_manager.get_detection_event(report_id)
+                if event and event.get('timestamp'):
+                    timestamp = event['timestamp']
             
             violation_data = {
                 'report_id': report_id,
@@ -609,6 +603,31 @@ def reprocess_stuck_reports(report_ids: List[str]):
             
     logger.info(f"🔄 Reprocessing triggered for {count} reports")
 
+
+# =========================================================================
+# API ENDPOINT: Reprocess Single Report
+# =========================================================================
+@app.route('/api/report/<report_id>/reprocess', methods=['POST'])
+def api_reprocess_report(report_id):
+    """API endpoint to reprocess a single report."""
+    try:
+        logger.info(f"🔄 API request to reprocess report: {report_id}")
+        
+        # Use a background thread to avoid blocking the response
+        Thread(target=reprocess_stuck_reports, args=([report_id],), daemon=True).start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Report {report_id} queued for reprocessing',
+            'report_id': report_id
+        }), 202  # 202 Accepted - processing started
+        
+    except Exception as e:
+        logger.error(f"Error triggering reprocess for {report_id}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 def start_queue_worker():
     """Start the background worker thread for processing queued violations."""
@@ -688,7 +707,7 @@ def queue_worker_loop():
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = False, annotated_frame: np.ndarray = None) -> str:
+def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = False, annotated_frame: np.ndarray = None, severity: str = 'HIGH', device_id: str = 'webcam_0') -> str:
     """
     Capture a violation and add it to the processing queue.
     Uses SMART DETECTION to only capture when:
@@ -799,9 +818,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
             
             success = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id='webcam_0',
+                device_id=device_id,
                 report_id=report_id,
-                severity='HIGH'
+                severity=severity
             )
             
             if success:
@@ -2404,7 +2423,7 @@ def upload_inference():
             detections_copy = detections.copy()
             # FORCE capture for manual uploads to bypass smart detection checks
             # PASS THE ANNOTATED IMAGE to ensure consistency with what user sees
-            report_id = enqueue_violation(frame_copy, detections_copy, force=True, annotated_frame=annotated)
+            report_id = enqueue_violation(frame_copy, detections_copy, force=True, annotated_frame=annotated, severity='CRITICAL', device_id='manual_upload')
             logger.info(f"📥 Violation queued for processing: {report_id}")
         
         # Encode annotated image to base64
@@ -2541,6 +2560,21 @@ if __name__ == '__main__':
     if debug_mode:
         logger.warning("⚠️  Flask debug mode is ENABLED - This should ONLY be used for local development!")
         logger.warning("⚠️  NEVER enable debug mode in production as it allows arbitrary code execution!")
+
+    # Initialize the pipeline (starts the queue worker thread)
+    try:
+        if FULL_PIPELINE_AVAILABLE:
+            logger.info("🚀 Initializing pipeline components and queue worker...")
+            success = initialize_pipeline_components()
+            if success:
+                logger.info("✅ Pipeline initialized successfully")
+            else:
+                logger.error("❌ Failed to initialize pipeline")
+        else:
+            logger.warning("⚠️ Full pipeline not available (imports failed)")
+    except Exception as e:
+        logger.error(f"❌ Error during pipeline initialization: {e}")
+
     
     app.run(
         host='0.0.0.0',

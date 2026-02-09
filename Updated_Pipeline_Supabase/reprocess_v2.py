@@ -116,47 +116,6 @@ def initialize_managers():
         return False
 
 
-
-DOCS_HISTORY_PATH = Path('docs/VLM_VERSION_HISTORY.md')
-
-def update_version_history(report_id, caption_history: list):
-    """Update the markdown history file for the golden sample report."""
-    if report_id != "20251223_170058":
-        return
-        
-    try:
-        if not DOCS_HISTORY_PATH.exists():
-            logger.warning("History file not found, skipping update.")
-            return
-
-        # Get latest entry
-        if not caption_history:
-            return
-            
-        latest = caption_history[-1]
-        version = latest.get('version')
-        model = latest.get('model')
-        timestamp = latest.get('timestamp')
-        text = latest.get('caption', '').replace('\n', ' ')
-        
-        # Determine explanation
-        explanation = "Automated update via reprocess_reports.py"
-        if 'moondream' in str(model).lower():
-            explanation += " - Narrative output (Model limitation)"
-        elif 'llava' in str(model).lower():
-            explanation += " - Structured output"
-            
-        # Append to table
-        row = f"| **v{version}** | `{model}` | {timestamp} | {text[:100]}... | {explanation} |\n"
-        
-        with open(DOCS_HISTORY_PATH, 'a', encoding='utf-8') as f:
-            f.write(row)
-            
-        logger.info(f"📝 Updated version history in {DOCS_HISTORY_PATH}")
-        
-    except Exception as e:
-        logger.error(f"Failed to update version history: {e}")
-
 def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     """
     Reprocess a single violation report.
@@ -337,10 +296,6 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             )
             
             logger.info(f"✅ Report {report_id} reprocessed successfully")
-            
-            # Update documentation if this is the benchmark report
-            update_version_history(report_id, caption_history)
-            
             return True
         else:
             logger.error("Failed to generate report")

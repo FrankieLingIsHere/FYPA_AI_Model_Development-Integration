@@ -407,6 +407,20 @@ A migration script is provided: `migrate_to_supabase.py`
 
 ---
 
+## 🛡️ Safety Monitoring Guidelines (JKR/OSHA)
+
+LUNA is designed to support **JKR Safety Officers** in maintaining rigorous compliance with Malaysian construction standards:
+
+- **OSHA 1994 (Act 514)** - General Duty of Care
+- **BOWEC 1986** - Building Operations & Works of Engineering Construction
+- **JKR Standard Specifications 2025** - Section A (Safety, Health & Welfare)
+
+For a detailed guide on how the AI interprets scenes, PPE compliance (MS 183/MS 1731), and HIRARC integration, please refer to:
+
+📖 **[Professional Safety Officer’s Guide to CCTV Scene Description](docs/JKR_SAFETY_GUIDELINES.md)**
+
+---
+
 ## 🙏 Credits
 
 - **Original LUNA System** - FYP Team A

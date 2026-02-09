@@ -148,10 +148,11 @@ class CaptionGenerator:
         """
         safety_prompt = (
             "USER: <image>\n"
-            "Analyze this construction site image for workplace safety. "
-            "Describe: 1) What workers are doing, 2) What safety equipment they are wearing, "
-            "3) What potential hazards are visible, 4) The overall work environment. "
-            "Be specific and detailed."
+            "Describe this scene in a natural, fluid paragraph. "
+            "Focus on: 1) The environment (indoor/outdoor/construction/residential), "
+            "2) The people present and their actions, 3) Safety gear worn (or missing), "
+            "and 4) Any visible hazards. "
+            "Do not use a numbered list. Be descriptive and objective."
         )
         
         return self.generate_caption(image, prompt=safety_prompt)

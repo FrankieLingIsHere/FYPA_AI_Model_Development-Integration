@@ -262,8 +262,11 @@ const ReportsPage = {
                             <i class="fas fa-sync"></i> Check Status
                         </button>
                     ` : `
-                        <button onclick="ReportsPage.viewPartialReport('${violation.report_id}')" class="btn btn-warning">
-                            <i class="fas fa-eye"></i> View Available Data
+                        <button onclick="ReportsPage.reprocessReport('${violation.report_id}')" class="btn btn-warning" style="background: linear-gradient(135deg, #f39c12, #e67e22);">
+                            <i class="fas fa-redo"></i> Reprocess Report
+                        </button>
+                        <button onclick="ReportsPage.viewPartialReport('${violation.report_id}')" class="btn" style="background: #95a5a6;">
+                            <i class="fas fa-eye"></i> View Data
                         </button>
                     `}
                 </div>
@@ -322,6 +325,64 @@ const ReportsPage = {
         this.closeModal();
         // Navigate to violation detail page with available images
         window.location.hash = `#/violation/${reportId}`;
+    },
+
+    // Reprocess a failed or stuck report
+    async reprocessReport(reportId) {
+        this.closeModal();
+
+        // Show processing indicator
+        const card = document.getElementById(`report-${reportId}`);
+        if (card) {
+            card.style.opacity = '0.6';
+            card.style.pointerEvents = 'none';
+        }
+
+        try {
+            const result = await API.reprocessReport(reportId);
+            if (result.success) {
+                // Show success notification
+                this.showNotification(`Report ${reportId} queued for reprocessing`, 'success');
+                // Refresh after a short delay
+                setTimeout(() => this.refreshReports(), 2000);
+            } else {
+                this.showNotification(`Failed to reprocess: ${result.error}`, 'error');
+                if (card) {
+                    card.style.opacity = '1';
+                    card.style.pointerEvents = 'auto';
+                }
+            }
+        } catch (error) {
+            console.error('Reprocess error:', error);
+            this.showNotification('Error triggering reprocess', 'error');
+            if (card) {
+                card.style.opacity = '1';
+                card.style.pointerEvents = 'auto';
+            }
+        }
+    },
+
+    // Simple notification display
+    showNotification(message, type = 'info') {
+        const notif = document.createElement('div');
+        notif.className = `notification notification-${type}`;
+        notif.style.cssText = `
+            position: fixed; top: 20px; right: 20px; z-index: 9999;
+            padding: 1rem 1.5rem; border-radius: 8px; color: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            background: ${type === 'success' ? 'linear-gradient(135deg, #27ae60, #2ecc71)' :
+                type === 'error' ? 'linear-gradient(135deg, #c0392b, #e74c3c)' :
+                    'linear-gradient(135deg, #2980b9, #3498db)'};
+            animation: slideIn 0.3s ease;
+        `;
+        notif.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i> ${message}`;
+        document.body.appendChild(notif);
+
+        setTimeout(() => {
+            notif.style.opacity = '0';
+            notif.style.transform = 'translateX(100px)';
+            setTimeout(() => notif.remove(), 300);
+        }, 3000);
     },
 
     renderReportCard(violation) {
@@ -398,6 +459,17 @@ const ReportsPage = {
                             <p style="margin: 0.5rem 0 0 0; color: #95a5a6; font-size: 0.8rem;">
                                 <i class="fas fa-desktop"></i> Device: ${violation.device_id}
                             </p>
+                        ` : ''}
+                        ${(isReady || violation.status === 'failed') ? `
+                            <div style="display: flex; justify-content: flex-end; width: 100%; margin-top: 0.5rem;">
+                                <button class="btn btn-sm" 
+                                        onclick="event.stopPropagation(); ReportsPage.reprocessReport('${violation.report_id}')" 
+                                        style="background: linear-gradient(135deg, #f39c12, #e67e22); 
+                                            color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; 
+                                            font-size: 0.8rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;">
+                                    <i class="fas fa-redo"></i> Reprocess
+                                </button>
+                            </div>
                         ` : ''}
                     </div>
                 </div>

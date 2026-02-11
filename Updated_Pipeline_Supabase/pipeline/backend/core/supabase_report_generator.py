@@ -219,6 +219,20 @@ class SupabaseReportGenerator(ReportGenerator):
                 nlp_analysis = result.get('nlp_analysis')
                 detection_data = report_data.get('detections')
                 
+                # FORCE Environment Override based on Caption Keywords (Fixes "Roadside" hallucination)
+                caption = report_data.get('caption', '')
+                detected_env = self._extract_environment_from_caption(caption)
+                
+                # Trust VLM keywords over NLP for specific environments
+                if detected_env != 'General Workspace':
+                    logger.info(f"Overriding NLP environment '{nlp_analysis.get('environment_type')}' with VLM-detected '{detected_env}'")
+                    nlp_analysis['environment_type'] = detected_env
+                    
+                    # Rebuild visual_evidence using professional scene description
+                    nlp_analysis['visual_evidence'] = self._build_scene_description(
+                        caption, detected_env, report_data.get('detections', [])
+                    )
+                
                 # Add validation data to metadata
                 metadata = {
                     'detections': detection_data

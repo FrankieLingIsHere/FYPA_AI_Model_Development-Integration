@@ -241,6 +241,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             'detections': detections,
             'violation_summary': f"PPE Violation Detected: {', '.join(violation_types)}" if violation_types else "No violations detected",
             'violation_count': len(violation_types),
+            'person_count':  sum(1 for d in detections if d['class_name'].lower() == 'person'), # Add explicit person count
             'caption': caption,
             'image_caption': caption,
             'caption_history': caption_history, # Added history here

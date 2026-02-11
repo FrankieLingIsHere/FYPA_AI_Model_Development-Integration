@@ -301,45 +301,147 @@ class ReportGenerator:
         """
         caption_lower = caption.lower()
         
-        # Environment keywords mapped to standard types
-        # Order matters - more specific matches first
+        # =====================================================================
+        # Industry-standard environment categories aligned with:
+        #   - DOSH Malaysia (Dept. of Occupational Safety & Health)
+        #   - JKR (Jabatan Kerja Raya) classifications
+        #   - OSHA 29 CFR 1926 (construction) / 1910 (general industry)
+        #   - ISO 45001 hazard identification categories
+        # Order: most specific → least specific (first match wins)
+        # =====================================================================
         ENVIRONMENT_KEYWORDS = {
+            # --- High-specificity outdoor work zones ---
+            'Roadside Work Zone': [
+                'roadside', 'road construction', 'roadwork', 'road work',
+                'highway', 'traffic cone', 'traffic control', 'flagman',
+                'lane closure', 'road barrier', 'moving traffic',
+                'public road', 'road shoulder', 'median'
+            ],
             'Construction Site': [
                 'construction site', 'construction area', 'building site',
                 'construction zone', 'construction project', 'construction work',
-                'scaffolding', 'excavation', 'foundation work', 'concrete pour',
-                'demolition', 'roadwork', 'road construction', 'building under construction'
+                'scaffolding', 'foundation work', 'concrete pour', 'concrete mixing',
+                'demolition', 'building under construction', 'crane', 'rebar',
+                'formwork', 'piling', 'site hoarding', 'tower crane',
+                'backhoe', 'excavator on site', 'cement mixer'
             ],
-            'Industrial Warehouse': [
+            'Work at Height': [
+                'scaffolding', 'scaffold', 'roof', 'rooftop', 'roofing',
+                'elevated platform', 'ladder', 'aerial lift', 'cherry picker',
+                'elevated walkway', 'suspended platform', 'edge of building',
+                'high rise', 'working at height', 'fall protection'
+            ],
+            'Excavation / Trenching': [
+                'excavation', 'trench', 'trenching', 'pit', 'earthworks',
+                'digging', 'underground', 'shoring', 'deep hole',
+                'foundation pit', 'pipe laying', 'utility trench'
+            ],
+            'Confined Space': [
+                'confined space', 'tank', 'manhole', 'sewer', 'tunnel',
+                'boiler', 'silo', 'vessel', 'pipeline interior', 'duct'
+            ],
+            # --- Indoor / facilities ---
+            'Industrial / Warehouse': [
                 'warehouse', 'factory', 'manufacturing', 'industrial',
                 'production line', 'assembly line', 'storage facility',
-                'loading dock', 'forklift', 'pallet'
-            ],
-            'Indoor Office': [
-                'office', 'desk', 'cubicle', 'meeting room', 'conference room',
-                'indoor', 'workplace', 'computer', 'workstation'
-            ],
-            'Public Street': [
-                'street', 'road', 'highway', 'sidewalk', 'pavement',
-                'traffic', 'intersection', 'crosswalk', 'public area'
+                'loading dock', 'forklift', 'pallet', 'workshop',
+                'machine shop', 'fabrication', 'welding bay', 'paint shop'
             ],
             'Residential': [
-                'home', 'house', 'apartment', 'residential', 'living room',
-                'bedroom', 'kitchen', 'bathroom', 'backyard', 'garden'
+                'living room', 'bedroom', 'kitchen', 'bathroom',
+                'backyard', 'garden', 'couch', 'sofa', 'dining',
+                'home', 'house', 'apartment', 'residential',
+                'bed', 'television', 'staircase', 'stairs', 'pillow',
+                'curtain', 'carpet', 'relaxing'
+            ],
+            'Indoor / Office': [
+                'office', 'desk', 'cubicle', 'meeting room', 'conference room',
+                'workplace', 'computer', 'workstation', 'lobby',
+                'corridor', 'hallway', 'reception', 'indoor', 'indoors',
+                'room', 'interior', 'inside', 'ceiling', 'posing'
+            ],
+            # --- Public / open areas ---
+            'Public Area': [
+                'street', 'road', 'sidewalk', 'pavement',
+                'intersection', 'crosswalk', 'public area',
+                'parking lot', 'car park', 'open yard', 'material yard',
+                'storage yard', 'staging area'
             ]
         }
         
-        # Check for environment keywords
+        # Check for environment keywords (first match wins — order above matters)
         for env_type, keywords in ENVIRONMENT_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in caption_lower:
                     logger.info(f"Environment detected from caption: '{env_type}' (matched keyword: '{keyword}')")
                     return env_type
         
-        # Default fallback - if we have PPE violations, assume construction site
-        # (most common use case for this system)
-        logger.info("No specific environment detected from caption - defaulting to 'General Workspace'")
+        # Default fallback
+        logger.info("No specific environment detected from caption — defaulting to 'General Workspace'")
         return 'General Workspace'
+    
+    def _build_scene_description(
+        self,
+        caption: str,
+        environment_type: str,
+        detections: list
+    ) -> str:
+        """
+        Build a professional, industry-standard AI scene description from the
+        VLM caption, detected environment, and YOLO detections.
+        
+        This replaces the NLP's hallucinated visual_evidence when the environment
+        override is triggered, producing an objective, factual description.
+        
+        Args:
+            caption: VLM-generated image caption
+            environment_type: Detected environment type from keyword matching
+            detections: YOLO detection results
+            
+        Returns:
+            Professional scene description string
+        """
+        # 1. Opening statement with environment classification
+        description = f"The scene depicts a {environment_type.lower()} setting. "
+        
+        # 2. Append the VLM caption content (cleaned up)
+        # Remove redundant "The image shows" prefix if present to avoid repetition
+        caption_clean = caption.strip()
+        for prefix in ['The image shows ', 'The image depicts ', 'The scene shows ', 'This image shows ']:
+            if caption_clean.startswith(prefix):
+                caption_clean = caption_clean[len(prefix):]
+                # Capitalize the remaining text
+                caption_clean = caption_clean[0].upper() + caption_clean[1:] if caption_clean else caption_clean
+                break
+        
+        description += caption_clean
+        
+        # Ensure it ends with a period
+        if description and not description.endswith('.'):
+            description += '.'
+        
+        # 3. Append PPE violation summary
+        violation_types = [
+            d.get('class_name', '').replace('NO-', '')
+            for d in detections
+            if d.get('class_name', '').startswith('NO-')
+        ]
+        
+        if violation_types:
+            unique_violations = list(dict.fromkeys(violation_types))  # preserve order, remove dupes
+            violation_text = ', '.join(unique_violations)
+            # Count persons: explicit Person detections + infer from violations
+            explicit_persons = sum(1 for d in detections if d.get('class_name', '') == 'Person')
+            # Each group of violations may imply a person even if not explicitly detected
+            person_count = max(explicit_persons, 1)  # At least 1 person if violations exist
+            
+            description += (
+                f" YOLO detection identified {person_count} person(s) in the frame "
+                f"with the following PPE deficiencies: {violation_text}."
+            )
+        
+        logger.info(f"Built scene description ({len(description)} chars) for environment '{environment_type}'")
+        return description
     
     # =========================================================================
     # NLP - OLLAMA INTEGRATION
@@ -443,53 +545,67 @@ class ReportGenerator:
             context_text += "=== END HISTORICAL INCIDENTS ===\n\n"
         
         # Build enhanced prompt with Context-Aware Logic (Architecture 2.0)
+        # Inject VLM caption into prompt so Llama 3 has visual context
+        vlm_caption = report_data.get('caption', 'No visual caption available')
+        
         prompt = f"""You are a JKR-certified AI Safety Officer. 
         
 CONTEXT: Strict adherence to Malaysian Safety Standards (JKR/DOSH/CIDB).
 
-*** TIER 1: SCENE CLASSIFICATION (CRITICAL) ***
-Analyze the visual evidence and CLASSIFY the scene into ONE of these categories:
-1. "ROADSIDE": Highway, traffic lanes, cones, asphalt, vehicles present. (Risk: Struck-by)
-2. "HEIGHT": Scaffolding, roof, edge of building, suspended platform. (Risk: Fall)
-3. "EXCAVATION": Trench, pit, hole, earthworks. (Risk: Collapse)
-4. "GENERAL": Ground level, storage yard, open site. (Risk: General)
+*** VLM VISUAL CAPTION (Primary Visual Evidence) ***
+"{vlm_caption}"
 
-*** TIER 2: DYNAMIC RULESET SELECTION ***
+*** INSTRUCTION 1: SCENE CLASSIFICATION ***
+Analyze the VLM visual caption above. Based ONLY on the contents described in the caption, classify the scene into ONE of these categories:
+1. "Construction Site": Active building/infrastructure construction with heavy equipment.
+2. "Roadside Work Zone": Active public highway/road with MOVING traffic. (Parked vehicles alone do NOT count.)
+3. "Work at Height": Scaffolding, roof, edge of building, suspended platform (>2m elevation).
+4. "Excavation / Trenching": Trench, pit, hole, earthworks (>1.5m depth).
+5. "Industrial / Warehouse": Factory floor, warehouse, loading dock, workshop.
+6. "Indoor / Office": Office, meeting room, indoor space, residential room.
+7. "Residential": Home, apartment, living room, bedroom, kitchen.
+8. "Public Area": Sidewalk, parking lot, open yard, material staging area.
+9. "General Workspace": Catch-all for ground-level work that doesn't fit above.
+
+IMPORTANT: Your classification MUST be consistent with the VLM caption. 
+If the caption describes a couch, living room, bedroom, or indoor setting, the scene is NOT Construction/Roadside.
+
+*** INSTRUCTION 2: DYNAMIC RULESET SELECTION ***
 Based on classification, APPLY these specific standards:
-- IF ROADSIDE: Apply **JKR Arahan Teknik (Jalan) 2C/85**. High Visibility Vest is MANDATORY. No Vest = CRITICAL RISK.
-- IF HEIGHT: Apply **BOWEC 1986 (Scaffolds)**. Safety Harness/Helmet is MANDATORY. No Harness = CRITICAL RISK.
-- IF EXCAVATION: Apply **DOSH Guidelines on Trenching**. Shoring/Barriers required.
-- IF GENERAL: Apply **BOWEC 1986 (General)**.
+- IF Roadside Work Zone: Apply **JKR Arahan Teknik (Jalan) 2C/85**. High Visibility Vest is MANDATORY.
+- IF Work at Height: Apply **BOWEC 1986 (Scaffolds)**. Safety Harness/Helmet is MANDATORY.
+- IF Excavation: Apply **DOSH Guidelines on Trenching**. Shoring/Barriers required.
+- OTHERWISE: Apply **BOWEC 1986 (General)** and relevant OSHA 1994 provisions.
 
-*** TIER 3: WITNESS COUNT (ZERO TOLERANCE) ***
+*** INSTRUCTION 3: WITNESS COUNT (ZERO TOLERANCE) ***
 - You MUST analyze exactly {person_count} people.
 - WARNING: Do NOT count detected PPE tags (e.g. 'NO-Hardhat') as people. Only count class 'Person'.
 
-*** TIER 4: REPORT GENERATION ***
+*** INSTRUCTION 4: REPORT GENERATION ***
 Generate a JSON report following this logic:
 
-1. **SCENE DESCRIPTION**: Start directly with "The scene shows [Scene Class]...". Describe hazards specific to the scene (e.g. traffic speed, trench depth, unsecured scaffolding).
+1. **SCENE DESCRIPTION (visual_evidence field)**: Start with "The scene depicts a [environment type] setting." 
+   Then describe what the VLM caption shows. Be objective and factual. DO NOT REPEAT THE LIST OF CATEGORIES.
 2. **INDIVIDUAL ANALYSIS**:
    - "Person N (Action) + No PPE + [Scene Hazard] = Specific Risk"
-   - Example: "Person 1 (Flagman) on Roadside + No Vest = Critical Struck-by Risk (JKR ATJ 2C/85 Violation)"
 3. **WEIGHTED SEVERITY**:
-   - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene (e.g. No Vest on Road).
+   - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
 4. **NEGATIVE CONSTRAINTS**:
    - NO vague terms ("scattered", "some").
    - NO "Chemical masks" unless chemicals visible.
-   - NO "1." prefixes.
+   - NO "1." numbering prefixes in the description text.
 
 {dosh_text if dosh_text else ""}{context_text if context_text else ""}
 
 RESPONSE FORMAT (JSON):
 {{
-    "environment_type": "ROADSIDE / HEIGHT / EXCAVATION / GENERAL",
-    "visual_evidence": "The scene shows a ROADSIDE work zone with active traffic...",
+    "environment_type": "[One of the 9 categories above]",
+    "visual_evidence": "The scene depicts a [environment] setting. [Detailed factual description from VLM caption]...",
     "persons": [
         {{
             "id": "Person 1",
-            "description": "Person 1 (Flagging) on Roadside...",
-            "actions": ["Stop Work", "Issue Vest"],
+            "description": "Person 1 observed standing in potential fall zone without fall protection.",
+            "actions": ["Stop Work", "Issue PPE"],
             "ppe": {{
                 "hardhat": "Mentioned/Missing/Not Required",
                 "safety_vest": "Mentioned/Missing/Not Required",
@@ -499,21 +615,21 @@ RESPONSE FORMAT (JSON):
                 "goggles": "Mentioned/Missing/Not Required"
             }},
             "hazards_faced": [
-                 {{ "type": "Struck-By Vehicle", "source": "Roadside Traffic", "severity": "HIGH" }}
+                 {{ "type": "Hazard type", "source": "Source", "severity": "HIGH/MEDIUM/LOW" }}
             ],
             "risks": [
                  {{ 
-                    "risk": "Fatal Impact", 
-                    "likelihood": "HIGH", 
-                    "regulation_citation": "JKR ATJ 2C/85", 
-                    "legal_regulatory_consequences": "Stop Work Order" 
+                    "risk": "Risk description", 
+                    "likelihood": "HIGH/MEDIUM/LOW", 
+                    "regulation_citation": "Regulation", 
+                    "legal_regulatory_consequences": "Consequence" 
                  }}
             ]
         }}
     ],
-    "summary": "• **SCENE CLASS**: ROADSIDE...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
+    "summary": "• **SCENE CLASS**: [Environment Type]...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
     "dosh_regulations_cited": [
-        {{ "regulation": "JKR ATJ 2C/85", "requirement": "High Visibility Apparel" }}
+        {{ "regulation": "Regulation Name", "requirement": "Requirement" }}
     ]
 }}
 """
@@ -665,11 +781,32 @@ RESPONSE FORMAT (JSON):
                 logger.info("Using fallback DOSH regulations for specific JKR/BOWEC/OSHA citations")
                 nlp_analysis['dosh_regulations_cited'] = fallback.get('dosh_regulations_cited', [])
                 
-                # Fix environment type using caption-based extraction (ROOT CAUSE FIX)
+                # ALWAYS extract environment from VLM caption and override NLP (ROOT CAUSE FIX)
+                # Llama 3 hallucinates "ROADSIDE" for indoor scenes because NO-Safety Vest
+                # triggers its "roadside" bias. VLM caption keywords are more reliable.
                 caption = report_data.get('caption', '')
-                if nlp_analysis.get('environment_type', 'Unknown').lower() == 'unknown':
-                    detected_env = self._extract_environment_from_caption(caption)
-                    logger.info(f"Environment type was 'Unknown' - extracted '{detected_env}' from caption")
+                detected_env = self._extract_environment_from_caption(caption)
+                nlp_env = nlp_analysis.get('environment_type', 'Unknown')
+                
+                if detected_env != 'General Workspace':
+                    # VLM found a specific environment match - trust it over NLP
+                    if detected_env.lower() != nlp_env.lower():
+                        logger.warning(f"Environment OVERRIDE: NLP said '{nlp_env}' but VLM caption matched '{detected_env}'. Using VLM.")
+                        
+                        # Build professional scene description from VLM caption + environment
+                        nlp_analysis['visual_evidence'] = self._build_scene_description(
+                            caption, detected_env, report_data.get('detections', [])
+                        )
+                        
+                        # Patch summary to replace wrong scene class
+                        summary = nlp_analysis.get('summary', '')
+                        if summary and nlp_env.upper() in summary.upper():
+                            nlp_analysis['summary'] = summary.replace(nlp_env, detected_env).replace(nlp_env.upper(), detected_env)
+                    
+                    nlp_analysis['environment_type'] = detected_env
+                elif nlp_env.lower() == 'unknown':
+                    # NLP returned Unknown and VLM had no specific match either
+                    logger.info(f"Environment type was 'Unknown' - using fallback '{detected_env}'")
                     nlp_analysis['environment_type'] = detected_env
                 
                 # Get per-person actions based on their specific PPE violations
@@ -1319,6 +1456,10 @@ RESPONSE FORMAT (JSON):
         .person-header p {{
             font-size: 0.9rem;
             opacity: 0.9;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: unset;
+            word-wrap: break-word;
         }}
         
         .person-content {{
@@ -1605,9 +1746,8 @@ RESPONSE FORMAT (JSON):
                 </div>
             </div>
             
-            <!-- Caption History -->
-            {self._generate_caption_history_section(report_data)}
             
+
             <!-- NLP Analysis -->
             <div class="section">
                 <h2 class="section-title">📊 Safety Analysis</h2>
@@ -1880,6 +2020,29 @@ RESPONSE FORMAT (JSON):
         if report_data:
             person_count = report_data.get('person_count', 0)
             violation_count = report_data.get('violation_count', 0)
+            
+            # User Preference: Strict Person Count. 
+            # Do NOT force count to 1 even if violations exist. 
+            # Person count must rely ONLY on 'person' class detections.
+            
+            # CRITICAL LOGIC FIX: 'violation_count' in report_data is ITEMS (e.g. 3 items missing).
+            # But the summary display needs PEOPLE count.
+            # If we have violations, at least 1 person is non-compliant.
+            # We assume worst case: All violations belong to as few people as possible?
+            # Actually, usually 1 person = 1 violation in the summary sense?
+            # Let's use logic: If violations > 0, then non_compliant_people must be at least 1.
+            # We bound it by person_count.
+            
+            violation_refers_to_people = violation_count
+            if violation_count > 0:
+                 # If we have violations, we have at least 1 non-compliant person.
+                 # If we have 1 person total, then 1 person is non-compliant.
+                 violation_refers_to_people = min(person_count, violation_count)
+                 # Ensure at least 1 if violations exist
+                 if violation_refers_to_people == 0 and violation_count > 0:
+                      violation_refers_to_people = 1
+            
+            violation_count = violation_refers_to_people
         else:
             persons = nlp_analysis.get('persons', [])
             person_count = len(persons)
@@ -2219,32 +2382,72 @@ RESPONSE FORMAT (JSON):
         #         # `            person_id = person.get('id', 'Unknown')`
         #         # `            description = person.get('description', 'No description')`
         # ```
-        # Extract missing PPE from YOLO detections (NO-Hardhat, NO-Mask, etc.)
+        # Extract missing PPE from YOLO detections using GEOMETRIC MATCHING
+        # This fixes the issue where one person's violation was applied to everyone.
         detections = report_data.get('detections', [])
-        yolo_missing_ppe = set()
-        for det in detections:
-            class_name = det.get('class_name', det.get('class', ''))
-            if class_name.startswith('NO-'):
-                ppe_item = class_name.replace('NO-', '').lower()
-                # Map YOLO class names to PPE field names
-                mapping = {
-                    'hardhat': 'hardhat',
-                    'mask': 'mask',
-                    'safety vest': 'safety_vest',
-                    'vest': 'safety_vest',
-                    'gloves': 'gloves',
-                    'safety shoes': 'footwear',
-                    'shoes': 'footwear',
-                    'goggles': 'goggles'
-                }
-                for key, value in mapping.items():
-                    if key in ppe_item:
-                        yolo_missing_ppe.add(value)
-                        break
         
+        # 1. Separate Persons and Violations
+        yolo_persons = []
+        yolo_items = []
+        for det in detections:
+            if det.get('class_name', '').lower() == 'person':
+                yolo_persons.append(det)
+            elif 'no-' in det.get('class_name', '').lower():
+                yolo_items.append(det)
+        
+        # 2. Sort persons left-to-right (x1 coordinate) to match NLP reading order heuristic
+        yolo_persons.sort(key=lambda x: x.get('bbox', [0])[0] if x.get('bbox') else 0)
+        
+        # 3. Map violations to persons
+        person_violations = {} # Index -> Set of missing PPE
+        
+        for p_idx, person_det in enumerate(yolo_persons):
+            person_violations[p_idx] = set()
+            p_box = person_det.get('bbox') # [x1, y1, x2, y2]
+            if not p_box: continue
+            
+            px1, py1, px2, py2 = p_box
+            
+            for item in yolo_items:
+                i_box = item.get('bbox')
+                if not i_box: continue
+                
+                # Check overlap or containment
+                ix1, iy1, ix2, iy2 = i_box
+                icx = (ix1 + ix2) / 2
+                icy = (iy1 + iy2) / 2
+                
+                # Logic 1: Center of item is inside person box
+                center_inside = (px1 <= icx <= px2) and (py1 <= icy <= py2)
+                
+                # Logic 2: Intersection over Union (IoU) > 0 (Overlap)
+                # Simple overlap check:
+                overlap = not (ix2 < px1 or ix1 > px2 or iy2 < py1 or iy1 > py2)
+                
+                if center_inside or overlap:
+                    # Map class name to standard PPE key
+                    class_name = item.get('class_name', '').lower()
+                    item_name = class_name.replace('no-', '')
+                    
+                    mapping = {
+                        'hardhat': 'hardhat',
+                        'mask': 'mask',
+                        'safety vest': 'safety_vest',
+                        'vest': 'safety_vest',
+                        'gloves': 'gloves',
+                        'safety shoes': 'footwear',
+                        'shoes': 'footwear',
+                        'goggles': 'goggles'
+                    }
+                    
+                    for k, v in mapping.items():
+                        if k in item_name:
+                            person_violations[p_idx].add(v)
+                            break
+
         # Generate card for each person
         person_cards = []
-        for person in persons:
+        for i, person in enumerate(persons):
             person_id = str(person.get('id', 'Unknown')).replace('Person ', '').replace('Personnel ', '').strip()
             description = person.get('description', 'No description')
             compliance = person.get('compliance_status', 'Unknown')
@@ -2254,12 +2457,15 @@ RESPONSE FORMAT (JSON):
             ppe_items = []
             has_missing_ppe = False
             
+            # Get geometric violations for this specific person (by index)
+            # If NLP has more persons than YOLO, the extras get no auto-violations (safe default)
+            specific_missing = person_violations.get(i, set())
+            
             # Define standard PPE items
             standard_ppe = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
             for ppe_type in standard_ppe:
-                # Override status if YOLO detected missing PPE
-                # Note: This assigns global violations to all persons since we lack geometric matching
-                if ppe_type in yolo_missing_ppe:
+                # Override status if YOLO detected missing PPE for THIS person
+                if ppe_type in specific_missing:
                     status = 'Missing'
                     has_missing_ppe = True
                 else:
@@ -2316,15 +2522,27 @@ RESPONSE FORMAT (JSON):
                 for r in risks:
                     if isinstance(r, dict):
                         risk_desc = r.get('risk', r.get('description', 'Unknown Risk'))
-                        likelihood = r.get('likelihood', 'Medium')
+                        # Improved robustness: Try to parse likelihood from description if missing in dict
+                        likelihood = r.get('likelihood')
+                        if not likelihood:
+                            # Try to find it in the description
+                            import re
+                            match = re.search(r'Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?', risk_desc, re.IGNORECASE)
+                            if match:
+                                likelihood = match.group(1).title()
+                                # Clean description
+                                risk_desc = re.sub(r'\(?Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?\)?[\.]?', '', risk_desc, flags=re.IGNORECASE).strip()
+                            else:
+                                likelihood = 'High' # Default
                         
-                        # Determine likelihood class and bar width
+                        # Determine likelihood class and bar width (case-insensitive)
+                        lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
                         bar_width = '60%'
-                        if 'High' in likelihood:
+                        if 'high' in lik_lower:
                             lik_class = 'likelihood-high'
                             bar_width = '100%'
-                        elif 'Low' in likelihood:
+                        elif 'low' in lik_lower:
                             lik_class = 'likelihood-low'
                             bar_width = '30%'
                         
@@ -2341,7 +2559,8 @@ RESPONSE FORMAT (JSON):
             </div>
         """
                     else:
-                        risks_html += f'<div class="risk-item"><div class="risk-content">{str(r)}</div></div>'
+                        # Use _format_risk_item to always show likelihood badge
+                        risks_html += self._format_risk_item(str(r))
             else:
                 risks_html = '<div class="risk-item"><div class="risk-content">No specific risks identified</div></div>'
 
@@ -2437,7 +2656,7 @@ RESPONSE FORMAT (JSON):
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
-        likelihood = 'Unknown'
+        likelihood = 'High'  # Default to High for safety violation risks
         risk_desc = risk_text
         
         # Parse likelihood
@@ -2452,13 +2671,14 @@ RESPONSE FORMAT (JSON):
             # Clean up trailing punctuation
             if risk_desc.endswith(','): risk_desc = risk_desc[:-1]
             
-        # Determine badge class
-        badge_class = 'bg-gray-200 text-gray-800'
-        if 'High' in likelihood:
+        # Determine badge class (case-insensitive)
+        lik_lower = likelihood.lower()
+        badge_class = 'likelihood-high'  # Default for safety risks
+        if 'high' in lik_lower:
             badge_class = 'likelihood-high'
-        elif 'Medium' in likelihood:
+        elif 'medium' in lik_lower:
             badge_class = 'likelihood-medium'
-        elif 'Low' in likelihood:
+        elif 'low' in lik_lower:
             badge_class = 'likelihood-low'
             
         return f"""
@@ -2468,7 +2688,7 @@ RESPONSE FORMAT (JSON):
                     <span class="likelihood-label">Likelihood</span>
                     <span class="likelihood-value">{likelihood}</span>
                     <div class="likelihood-bar">
-                        <div class="bar-fill" style="width: {'100%' if 'High' in likelihood else '60%' if 'Medium' in likelihood else '30%'}"></div>
+                        <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%'}"></div>
                     </div>
                 </div>
             </div>

@@ -57,7 +57,7 @@ def find_working_model():
         return _working_model
     
     if not check_ollama_running():
-        print("❌ Ollama is not running!")
+        print("[X] Ollama is not running!")
         print("   Start Ollama with: ollama serve")
         print("   Download from: https://ollama.ai")
         return None
@@ -69,13 +69,13 @@ def find_working_model():
         model_name = model["name"]
         # Check if model (or partial match) is installed
         if any(model_name.split(':')[0] in m for m in installed):
-            print(f"✓ Found VLM model: {model_name}")
+            print(f"[OK] Found VLM model: {model_name}")
             _working_model = model_name
             _model_check_done = True
             return model_name
     
     # No models found - provide helpful message
-    print("❌ No VLM models installed!")
+    print("[X] No VLM models installed!")
     print("   Install a model with one of these commands:")
     print("   ollama pull moondream:1.8b   (lighter, ~1.5GB, good for CPU)")
     print("   ollama pull llava-phi3:3.8b  (better quality, ~3.6GB)")
@@ -115,47 +115,15 @@ def caption_image_llava(image_path):
     
     # Build prompt based on model capability
     if 'moondream' in str(model):
-        # HYPER-SPECIFIC SAFETY ASSESSMENT PROMPT
-        # Designed to capture unique physical geometry and inter-object relationships
-        prompt = """You are a JKR-certified Safety Officer conducting a STRICT site inspection. Analyze this image and write a HYPER-SPECIFIC safety assessment.
-
-Your response MUST capture UNIQUE SCENE DETAILS, not generic observations:
-
-1. SCENE GEOMETRY:
-   - Environment type (construction site, roadside, industrial, excavation, etc.)
-   - Ground condition: Is it level/sloped/unstable? Estimate incline angle if visible.
-   - Key objects and their SPATIAL RELATIONSHIPS (distances, proximity to workers)
-
-2. PERSONNEL ANALYSIS (for EACH person):
-   - Exact position: Near edge? On slope? In traffic path? Under suspended load?
-   - Specific activity: Working? Supervising? ON MOBILE PHONE? (distraction = behavioral violation)
-   - Clothing description (colors, type)
-   - PPE STATUS (STRICT CHECK):
-     * HEAD: Rigid MS 183 helmet with chin strap? (Sun hats/caps = NON-COMPLIANT)
-     * VEST: Neon MS 1731 high-viz as OUTERMOST layer?
-     * FEET: Safety boots visible?
-     * Other: Gloves, goggles, harness if at height
-
-3. MATERIAL HAZARDS:
-   - Are materials (logs, pipes, bricks) properly stacked or UNSECURED?
-   - On level ground or INCLINE/SLOPE (gravity roll risk)?
-   - Stop-blocks or restraints present?
-
-4. TRAFFIC & EXCLUSION ZONES:
-   - Are workers separated from vehicle paths?
-   - Any TRAFFIC CONES, barriers, or "Men at Work" signs?
-   - Is there an EXCLUSION ZONE around heavy materials or equipment?
-
-5. HOUSEKEEPING (BOWEC Reg. 26):
-   - Debris, scattered materials, trip hazards?
-   - Tool storage condition
-   - Are walkways clear?
-
-6. VEHICLE STATUS:
-   - Any trucks/equipment: Parked? Active loading/unloading?
-   - Engine running? Chocked wheels if on slope?
-
-Write as ONE DETAILED PARAGRAPH. Describe EXACTLY what you see with specific details about distances, angles, positions, and inter-object relationships. Avoid generic phrases like "near edge" - instead say "within 2 meters of unsecured log pile"."""
+        # HYPER-SPECIFIC SAFETY ASSESSMENT PROMPT FOR MOONDREAM
+        # Moondream needs explicit grounding. Questionnaire caused hallucinations.
+        # We use a defined persona and specific targets.
+        prompt = (
+            "Analyze this construction site image. "
+            "Describe the lighting (day/night), any heavy machinery (excavators, trucks), "
+            "the workers (number, actions), and their safety gear. "
+            "Be factual and detailed."
+        )
     else:
         # LLaVA/Phi3 can handle structured output better
         prompt = """You are a JKR-certified Safety Officer. Analyze this image for strict OSHA 1994 and BOWEC 1986 compliance. Provide a DETAILED, STRUCTURED description.
@@ -211,7 +179,7 @@ Analyze now using strict JKR/OSHA standards:"""
                 'options': {
                     'temperature': 0.3,  # Increased for more variety in descriptions
                     'num_predict': 500,
-                    'stop': ['\n\n\n']
+                    'stop': ['\\n\\n\\n']
                 }
             },
             timeout=TIMEOUT
@@ -223,6 +191,8 @@ Analyze now using strict JKR/OSHA standards:"""
             return None
         
         data = response.json()
+        print(f"DEBUG: Raw Ollama response keys: {data.keys()}")
+        print(f"DEBUG: Raw response content: {data.get('response', 'MISSING')[:200]}")
         caption = data.get('response', '').strip()
         
         if caption:
@@ -237,8 +207,8 @@ Analyze now using strict JKR/OSHA standards:"""
             caption = caption.replace('"', '').replace("'", "")
             
             # Remove any remaining bracket patterns like [text] or {text}
-            caption = re.sub(r'\[([^\]]*)\]', r'\1', caption)
-            caption = re.sub(r'\{([^\}]*)\}', r'\1', caption)
+            caption = re.sub(r'\[([^\]]*)\]', r'\\1', caption)
+            caption = re.sub(r'\{([^\}]*)\}', r'\\1', caption)
             
             # Remove bullet points and list markers (preserve structure)
             # caption = re.sub(r'^[\-\*\•]\s*', '', caption, flags=re.MULTILINE) 
@@ -388,23 +358,23 @@ if __name__ == "__main__":
     try:
         # First validate environment
         env_result = validate_work_environment(image_path)
-        print(f"\nEnvironment Validation:")
+        print(f"\\nEnvironment Validation:")
         print(f"  Valid work environment: {env_result['is_valid']}")
         print(f"  Confidence: {env_result['confidence']}")
         print(f"  Type: {env_result['environment_type']}")
         print(f"  Reason: {env_result['reason']}")
         
         if env_result['is_valid']:
-            print("\n--- Generating full caption ---")
+            print("\\n--- Generating full caption ---")
             caption = caption_image_llava(image_path)
             if caption:
                 print("Caption:", caption)
         else:
-            print("\n⚠️ Skipping caption - not a valid work environment")
+            print("\\n[!] Skipping caption - not a valid work environment")
             
     except ImportError as e:
-        print(f"\nImportError: {e}")
+        print(f"\\nImportError: {e}")
         print("Please ensure you have installed all required libraries:")
         print("pip install --upgrade transformers accelerate bitsandbytes torch pillow")
     except Exception as e:
-        print(f"\nAn error occurred: {e}")
+        print(f"\\nAn error occurred: {e}")

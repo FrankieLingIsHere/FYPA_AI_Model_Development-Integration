@@ -14,10 +14,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     procps \
-    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://ollama.com/install.sh | sh
+    && curl -L https://ollama.com/download/ollama-linux-amd64 -o /usr/bin/ollama \
+    && chmod +x /usr/bin/ollama
 
 # Copy requirements and install Python dependencies
 COPY Updated_Pipeline_Supabase/requirements.txt .

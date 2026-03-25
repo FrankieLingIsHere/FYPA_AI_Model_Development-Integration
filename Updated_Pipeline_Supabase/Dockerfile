@@ -32,7 +32,8 @@ COPY Updated_Pipeline_Supabase/ .
 RUN /usr/local/bin/ollama serve > /dev/null 2>&1 & \
     sleep 5 \
     && /usr/local/bin/ollama pull llama3 \
-    && /usr/local/bin/ollama pull nomic-embed-text
+    && /usr/local/bin/ollama pull nomic-embed-text \
+    && pkill ollama
 
 # Make the entrypoint executable
 RUN chmod +x docker-entrypoint.sh

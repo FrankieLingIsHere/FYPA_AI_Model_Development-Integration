@@ -75,6 +75,20 @@ def api_violations():
         # Format violations for API response
         formatted_violations = []
         for v in violations:
+            # Extract missing PPE from detection data
+            missing_ppe = []
+            detection_data = v.get('detection_data', {})
+            detections = detection_data.get('detections', [])
+            
+            # Parse detections for NO-X classes
+            for det in detections:
+                class_name = det.get('class_name', det.get('class', ''))
+                if class_name.startswith('NO-'):
+                    # Extract PPE item name
+                    ppe_item = class_name.replace('NO-', '')
+                    if ppe_item not in missing_ppe:
+                        missing_ppe.append(ppe_item)
+            
             formatted_violations.append({
                 'report_id': v['report_id'],
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
@@ -82,6 +96,7 @@ def api_violations():
                 'violation_count': v.get('violation_count', 0),
                 'severity': v.get('severity', 'UNKNOWN'),
                 'violation_summary': v.get('violation_summary'),
+                'missing_ppe': missing_ppe,  # Add parsed missing PPE
                 'has_original': bool(v.get('original_image_key')),
                 'has_annotated': bool(v.get('annotated_image_key')),
                 'has_report': bool(v.get('report_html_key'))

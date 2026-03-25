@@ -127,16 +127,32 @@ OLLAMA_CONFIG = {
 }
 
 # =========================================================================
+# GEMINI CONFIGURATION (Primary AI Provider — replaces Ollama)
+# =========================================================================
+
+GEMINI_CONFIG = {
+    'api_key': os.getenv('GEMINI_API_KEY', ''),
+    'model': 'gemini-2.0-flash',
+    'temperature': 0.4,
+    'max_tokens': 2000,
+    'timeout': 120,
+    'max_retries': 3,
+    'min_interval': 4.0,  # Seconds between API calls (free tier: 15 RPM)
+    'enabled': True,  # Set to False to fall back to Ollama
+}
+
+# =========================================================================
 # RAG CONFIGURATION
 # =========================================================================
 
 RAG_CONFIG = {
-    'enabled': True,  # Enable RAG with Chroma DB
-    'use_chroma': True,  # Use Chroma DB for DOSH documentation
+    'enabled': True,  # Enable RAG with regulation data
+    'use_chroma': False,  # Disabled — Gemini uses direct regulation injection instead of ChromaDB
     'chroma_path': BASE_DIR / 'pipeline' / 'backend' / 'chroma_db',
     'collection_name': 'dosh_guidelines',  # Actual collection name
-    'embedding_model': 'nomic-embed-text',  # Ollama embedding model
+    'embedding_model': 'nomic-embed-text',  # Ollama embedding model (only used if use_chroma=True)
     'data_source': BASE_DIR / 'pipeline' / 'backend' / 'integration' / 'safety_knowledge.txt',  # Fallback CSV
+    'regulations_file': BASE_DIR / 'pipeline' / 'backend' / 'data' / 'malaysian_regulations.json',
     'num_similar_incidents': 2,
     'chunk_size': 500,
     'top_k': 3  # Number of relevant DOSH chunks to retrieve

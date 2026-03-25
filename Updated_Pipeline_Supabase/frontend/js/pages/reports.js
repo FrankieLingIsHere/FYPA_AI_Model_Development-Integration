@@ -73,7 +73,7 @@ const ReportsPage = {
     startAutoRefresh() {
         // Check for pending reports every 10 seconds
         this.refreshInterval = setInterval(async () => {
-            const hasPending = this.violations.some(v =>
+            const hasPending = this.violations.some(v => 
                 v.status === 'pending' || v.status === 'generating' || !v.has_report
             );
             if (hasPending) {
@@ -116,7 +116,7 @@ const ReportsPage = {
 
         // Search filter
         if (this.filters.search) {
-            filtered = filtered.filter(v =>
+            filtered = filtered.filter(v => 
                 v.report_id.toLowerCase().includes(this.filters.search) ||
                 v.timestamp.toLowerCase().includes(this.filters.search) ||
                 (v.device_id && v.device_id.toLowerCase().includes(this.filters.search))
@@ -135,11 +135,11 @@ const ReportsPage = {
         if (this.filters.dateRange !== 'all') {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
+            
             filtered = filtered.filter(v => {
                 const vDate = new Date(v.timestamp);
-
-                switch (this.filters.dateRange) {
+                
+                switch(this.filters.dateRange) {
                     case 'today':
                         return vDate >= today;
                     case 'week':
@@ -183,26 +183,16 @@ const ReportsPage = {
 
     // Check if report is ready to view
     isReportReady(violation) {
-        // Check if we have actual report data
-        const hasActualReport = violation.report_html_key ||
-            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
-
-        // If we have the actual report content, it's definitely ready
-        if (hasActualReport) return true;
-
-        // Fallback: check status (some old reports may not have report_html_key populated)
         const status = violation.status || 'unknown';
-        return (status === 'completed' || status === 'partial');
+        return violation.has_report && 
+               (status === 'completed' || status === 'partial' || status === 'unknown');
     },
 
     // Get status display info
     getStatusInfo(violation) {
-        // Check for actual HTML report or NLP analysis, not just images
-        const hasActualReport = violation.report_html_key ||
-            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
-        const status = violation.status || (hasActualReport ? 'completed' : 'pending');
-
-        switch (status) {
+        const status = violation.status || (violation.has_report ? 'completed' : 'pending');
+        
+        switch(status) {
             case 'completed':
                 return { icon: 'fa-check-circle', color: 'success', text: 'Ready' };
             case 'generating':
@@ -214,7 +204,7 @@ const ReportsPage = {
             case 'partial':
                 return { icon: 'fa-exclamation-circle', color: 'warning', text: 'Partial' };
             default:
-                return hasActualReport
+                return violation.has_report 
                     ? { icon: 'fa-check-circle', color: 'success', text: 'Ready' }
                     : { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Processing' };
         }
@@ -230,9 +220,23 @@ const ReportsPage = {
     },
 
     // Show modal for reports still generating
-    showGeneratingModal(violation) {
+    async showGeneratingModal(violation) {
         const statusInfo = this.getStatusInfo(violation);
-
+        
+        // Fetch detailed status from API if failed
+        let detailedError = violation.error_message;
+        if (violation.status === 'failed') {
+            try {
+                const response = await fetch(`/api/report-status/${violation.report_id}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    detailedError = data.error_message || detailedError;
+                }
+            } catch (e) {
+                console.error('Failed to fetch detailed error:', e);
+            }
+        }
+        
         // Create modal overlay
         const modal = document.createElement('div');
         modal.id = 'report-status-modal';
@@ -241,9 +245,16 @@ const ReportsPage = {
             background: rgba(0,0,0,0.5); display: flex; align-items: center;
             justify-content: center; z-index: 1000;
         `;
-
+        
+        const errorDetails = violation.status === 'failed' && detailedError ? `
+            <div style="margin-top: 1rem; padding: 1rem; background: #fee; border-left: 3px solid #e74c3c; border-radius: 4px; text-align: left; max-height: 200px; overflow-y: auto;">
+                <strong style="color: #c0392b; display: block; margin-bottom: 0.5rem;">Error Details:</strong>
+                <pre style="margin: 0; font-size: 0.85rem; color: #7f8c8d; white-space: pre-wrap; word-wrap: break-word;">${detailedError}</pre>
+            </div>
+        ` : '';
+        
         modal.innerHTML = `
-            <div style="background: white; padding: 2rem; border-radius: 12px; max-width: 500px; width: 90%; text-align: center;">
+            <div style="background: white; padding: 2rem; border-radius: 12px; max-width: 600px; width: 90%; text-align: center;">
                 <div style="font-size: 4rem; color: var(--${statusInfo.color}-color); margin-bottom: 1rem;">
                     <i class="fas ${statusInfo.icon}"></i>
                 </div>
@@ -253,7 +264,8 @@ const ReportsPage = {
                 <p style="color: #7f8c8d; margin-bottom: 1.5rem;">
                     ${this.getStatusMessage(violation)}
                 </p>
-                <div style="display: flex; gap: 1rem; justify-content: center;">
+                ${errorDetails}
+                <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1.5rem;">
                     <button onclick="ReportsPage.closeModal()" class="btn" style="background: #95a5a6;">
                         <i class="fas fa-times"></i> Close
                     </button>
@@ -262,36 +274,25 @@ const ReportsPage = {
                             <i class="fas fa-sync"></i> Check Status
                         </button>
                     ` : `
-                        <button onclick="ReportsPage.reprocessReport('${violation.report_id}')" class="btn btn-warning" style="background: linear-gradient(135deg, #f39c12, #e67e22);">
-                            <i class="fas fa-redo"></i> Reprocess Report
-                        </button>
-                        <button onclick="ReportsPage.viewPartialReport('${violation.report_id}')" class="btn" style="background: #95a5a6;">
-                            <i class="fas fa-eye"></i> View Data
+                        <button onclick="ReportsPage.viewPartialReport('${violation.report_id}')" class="btn btn-warning">
+                            <i class="fas fa-eye"></i> View Available Data
                         </button>
                     `}
                 </div>
             </div>
         `;
-
+        
         modal.onclick = (e) => {
             if (e.target === modal) this.closeModal();
         };
-
+        
         document.body.appendChild(modal);
     },
 
     getStatusMessage(violation) {
         const status = violation.status || 'pending';
-
-        // Check if we actually have the report
-        const hasActualReport = violation.report_html_key ||
-            (violation.nlp_analysis && Object.keys(violation.nlp_analysis).length > 0);
-
-        if (hasActualReport || status === 'completed') {
-            return 'The report is ready. Click below to open it.';
-        }
-
-        switch (status) {
+        
+        switch(status) {
             case 'generating':
                 return 'The AI is analyzing the violation and generating a detailed report. This usually takes 30-60 seconds.';
             case 'pending':
@@ -311,7 +312,7 @@ const ReportsPage = {
     async checkAndRefresh(reportId) {
         this.closeModal();
         await this.refreshReports();
-
+        
         // Find the updated violation
         const violation = this.violations.find(v => v.report_id === reportId);
         if (violation && this.isReportReady(violation)) {
@@ -327,82 +328,25 @@ const ReportsPage = {
         window.location.hash = `#/violation/${reportId}`;
     },
 
-    // Reprocess a failed or stuck report
-    async reprocessReport(reportId) {
-        this.closeModal();
-
-        // Show processing indicator
-        const card = document.getElementById(`report-${reportId}`);
-        if (card) {
-            card.style.opacity = '0.6';
-            card.style.pointerEvents = 'none';
-        }
-
-        try {
-            const result = await API.reprocessReport(reportId);
-            if (result.success) {
-                // Show success notification
-                this.showNotification(`Report ${reportId} queued for reprocessing`, 'success');
-                // Refresh after a short delay
-                setTimeout(() => this.refreshReports(), 2000);
-            } else {
-                this.showNotification(`Failed to reprocess: ${result.error}`, 'error');
-                if (card) {
-                    card.style.opacity = '1';
-                    card.style.pointerEvents = 'auto';
-                }
-            }
-        } catch (error) {
-            console.error('Reprocess error:', error);
-            this.showNotification('Error triggering reprocess', 'error');
-            if (card) {
-                card.style.opacity = '1';
-                card.style.pointerEvents = 'auto';
-            }
-        }
-    },
-
-    // Simple notification display
-    showNotification(message, type = 'info') {
-        const notif = document.createElement('div');
-        notif.className = `notification notification-${type}`;
-        notif.style.cssText = `
-            position: fixed; top: 20px; right: 20px; z-index: 9999;
-            padding: 1rem 1.5rem; border-radius: 8px; color: white;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            background: ${type === 'success' ? 'linear-gradient(135deg, #27ae60, #2ecc71)' :
-                type === 'error' ? 'linear-gradient(135deg, #c0392b, #e74c3c)' :
-                    'linear-gradient(135deg, #2980b9, #3498db)'};
-            animation: slideIn 0.3s ease;
-        `;
-        notif.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i> ${message}`;
-        document.body.appendChild(notif);
-
-        setTimeout(() => {
-            notif.style.opacity = '0';
-            notif.style.transform = 'translateX(100px)';
-            setTimeout(() => notif.remove(), 300);
-        }, 3000);
-    },
-
     renderReportCard(violation) {
+        const date = new Date(violation.timestamp);
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
         const isReady = this.isReportReady(violation);
-        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' :
-            (violation.severity === 'MEDIUM' ? 'warning' : 'info');
-
+        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
+                             (violation.severity === 'MEDIUM' ? 'warning' : 'info');
+        
         return `
             <div class="card" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
-                    ${violation.has_annotated ?
-                `<img src="${imageUrl}" alt="Violation" style="width: 100%; height: 100%; object-fit: cover;">` :
-                `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
+                    ${violation.has_annotated ? 
+                        `<img src="${imageUrl}" alt="Violation" style="width: 100%; height: 100%; object-fit: cover;">` :
+                        `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
                          </div>`
-            }
+                    }
                     ${!isReady ? `
                         <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; 
                                     background: rgba(0,0,0,0.4); display: flex; align-items: center; 
@@ -421,7 +365,7 @@ const ReportsPage = {
                                 Report #${violation.report_id}
                             </h3>
                             <p style="color: #7f8c8d; font-size: 0.9rem; margin: 0;">
-                                <i class="fas fa-clock"></i> ${typeof TimezoneManager !== 'undefined' ? TimezoneManager.formatDateTime(violation.timestamp) : new Date(violation.timestamp).toLocaleString()}
+                                <i class="fas fa-clock"></i> ${date.toLocaleString()}
                             </p>
                         </div>
                         <span class="badge badge-${severityClass}">
@@ -459,17 +403,6 @@ const ReportsPage = {
                             <p style="margin: 0.5rem 0 0 0; color: #95a5a6; font-size: 0.8rem;">
                                 <i class="fas fa-desktop"></i> Device: ${violation.device_id}
                             </p>
-                        ` : ''}
-                        ${(isReady || violation.status === 'failed') ? `
-                            <div style="display: flex; justify-content: flex-end; width: 100%; margin-top: 0.5rem;">
-                                <button class="btn btn-sm" 
-                                        onclick="event.stopPropagation(); ReportsPage.reprocessReport('${violation.report_id}')" 
-                                        style="background: linear-gradient(135deg, #f39c12, #e67e22); 
-                                            color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; 
-                                            font-size: 0.8rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;">
-                                    <i class="fas fa-redo"></i> Reprocess
-                                </button>
-                            </div>
                         ` : ''}
                     </div>
                 </div>

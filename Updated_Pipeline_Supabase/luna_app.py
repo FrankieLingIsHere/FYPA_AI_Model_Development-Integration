@@ -23,13 +23,21 @@ import sys
 import logging
 import re
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
 from typing import List, Dict
 import json
 import time
 
+# Import timezone utility (configurable via .env)
+from timezone_utils import get_local_time, to_local_time, get_timezone_info
+
 from flask import Flask, render_template, send_from_directory, jsonify, abort, Response, request, redirect
+try:
+    from flask_cors import CORS
+    CORS_AVAILABLE = True
+except ImportError:
+    CORS_AVAILABLE = False
 import cv2
 import numpy as np
 from PIL import Image
@@ -43,6 +51,17 @@ load_dotenv()
 # Import project modules
 from infer_image import predict_image
 
+# Global progress tracking for report generation
+report_progress = {
+    'current': None,
+    'total': 0,
+    'completed': 0,
+    'status': 'idle',  # idle, processing, completed, error
+    'current_step': '',
+    'error_message': None
+}
+report_progress_lock = Lock()
+
 # Import pipeline components for violation handling
 try:
     from pipeline.backend.core.violation_detector import ViolationDetector
@@ -51,11 +70,11 @@ try:
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
     from pipeline.backend.core.violation_queue import ViolationQueueManager, QueuedViolation
-    from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG, get_severity_priority
+    from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     FULL_PIPELINE_AVAILABLE = False
-    logging.warning(f"Full pipeline components not available - violations will be detected but reports will not be generated: {e}")
+    logging.warning(f"Full pipeline components not available - violations will be detected but reports won't be generated: {e}")
 
 # Setup logging
 logging.basicConfig(
@@ -63,55 +82,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Malaysian Timezone (MYT = UTC+8)
-from datetime import timezone
-MYT_TIMEZONE = timezone(timedelta(hours=8))
-
-def format_timestamp_myt(ts):
-    """
-    Format a timestamp for API response with correct MYT (+08:00) timezone.
-    Handles: datetime objects, strings, None
-    Returns: ISO format string with +08:00 suffix
-    """
-    if ts is None:
-        return None
-    
-    try:
-        if isinstance(ts, str):
-            # Parse string to datetime
-            if 'T' in ts:
-                # ISO format
-                if '+' in ts:
-                    # Has timezone, remove for parsing then make aware
-                    dt = datetime.fromisoformat(ts)
-                elif ts.endswith('Z'):
-                    dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                else:
-                    # Naive ISO
-                    dt = datetime.fromisoformat(ts)
-            else:
-                # Basic YYYY-MM-DD HH:MM:SS
-                dt = datetime.strptime(ts.split('.')[0], '%Y-%m-%d %H:%M:%S')
-        else:
-            # Already datetime
-            dt = ts
-            
-        # Standardize to MYT
-        if dt.tzinfo is None:
-            # Assume local system time (MYT) if naive
-            # DO NOT just attach TZ if it might be UTC naive. 
-            # But here we assume system is generating naive local times.
-            dt = dt.replace(tzinfo=MYT_TIMEZONE)
-        else:
-            # Convert to MYT
-            dt = dt.astimezone(MYT_TIMEZONE)
-            
-        return dt.strftime('%Y-%m-%dT%H:%M:%S+08:00')
-        
-    except Exception as e:
-        logger.warning(f"Timestamp formatting error for {ts}: {e}")
-        return str(ts)
 
 # =========================================================================
 # APPLICATION SETUP
@@ -122,7 +92,12 @@ app = Flask(__name__,
             static_folder='frontend',
             static_url_path='/static')
 
-
+# Enable CORS for cross-origin requests (needed when frontend is deployed on Vercel)
+if CORS_AVAILABLE:
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    logger.info("CORS enabled for /api/* endpoints")
+else:
+    logger.warning("flask-cors not installed - CORS not enabled. Install with: pip install flask-cors")
 
 # Directories
 VIOLATIONS_DIR = Path('pipeline/violations')
@@ -139,30 +114,7 @@ report_generator = None
 db_manager = None
 storage_manager = None
 last_violation_time = 0
-
-# Initialize Supabase components eagerly at startup for API access
-# Initialize Supabase components lazily in initialize_pipeline_components()
-# This avoids NameError issues at module level
-pass
 VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
-
-# =========================================================================
-# SMART VIOLATION DETECTION - Scene State Tracking
-# =========================================================================
-# Track the current scene to avoid duplicate captures for same person/violation
-current_scene_state = {
-    'person_count': 0,
-    'violation_types': set(),      # e.g., {'NO-Hardhat', 'NO-Mask'}
-    'person_positions': [],         # List of (x_center, y_center) normalized positions
-    'last_capture_time': 0,
-    'last_frame_hash': None         # Simple hash to detect significant frame changes
-}
-
-# Smart detection settings
-SMART_DETECTION_ENABLED = True      # Set to False to use simple cooldown only
-SCENE_REFRESH_INTERVAL = 30         # Seconds before re-capturing same scene (periodic refresh)
-POSITION_CHANGE_THRESHOLD = 0.15    # 15% of frame = significant movement (new person entered)
-MIN_COOLDOWN_BETWEEN_CAPTURES = 3   # Absolute minimum seconds between ANY captures
 
 # Queue-based violation handling (to prevent missing violations)
 violation_queue = None  # ViolationQueueManager instance
@@ -215,197 +167,64 @@ INVALID_ENVIRONMENT_KEYWORDS = [
 ]
 
 # =========================================================================
-# SMART VIOLATION DETECTION - Helper Functions
+# REPORT PROGRESS TRACKING
 # =========================================================================
 
-def extract_violation_types(detections):
-    """
-    Extract set of violation type class names from detections.
-    
-    Args:
-        detections: List of detection dictionaries with 'class_name' key
-    
-    Returns:
-        Set of violation type strings (e.g., {'NO-Hardhat', 'NO-Mask'})
-    """
-    violation_types = set()
-    for det in detections:
-        class_name = det.get('class_name', '')
-        # Only include actual violations (NO-* classes)
-        if class_name.startswith('NO-'):
-            violation_types.add(class_name)
-    return violation_types
+def update_report_progress(step='', current=None, total=None, status='processing', error=None):
+    """Update the global report generation progress."""
+    global report_progress
+    with report_progress_lock:
+        if current is not None:
+            report_progress['current'] = current
+        if total is not None:
+            report_progress['total'] = total
+        if step:
+            report_progress['current_step'] = step
+        report_progress['status'] = status
+        if error:
+            report_progress['error_message'] = error
+        if status == 'completed':
+            report_progress['completed'] = report_progress.get('total', 0)
 
+def get_report_progress():
+    """Get current report generation progress."""
+    with report_progress_lock:
+        return report_progress.copy()
 
-def extract_person_positions(detections, frame_width=1, frame_height=1):
-    """
-    Extract normalized center positions of persons from detections.
-    
-    Args:
-        detections: List of detection dictionaries with bbox info
-        frame_width: Frame width for normalization
-        frame_height: Frame height for normalization
-    
-    Returns:
-        List of (x_center, y_center) tuples normalized to 0-1 range
-    """
-    positions = []
-    for det in detections:
-        # Look for person-related detections (ones that have violations attached)
-        bbox = det.get('bbox', det.get('box', None))
-        if bbox and len(bbox) >= 4:
-            # Normalize to 0-1 range
-            x_center = (bbox[0] + bbox[2]) / 2 / frame_width if frame_width > 1 else (bbox[0] + bbox[2]) / 2
-            y_center = (bbox[1] + bbox[3]) / 2 / frame_height if frame_height > 1 else (bbox[1] + bbox[3]) / 2
-            positions.append((x_center, y_center))
-    return positions
+def reset_report_progress():
+    """Reset report progress tracking."""
+    global report_progress
+    with report_progress_lock:
+        report_progress = {
+            'current': None,
+            'total': 0,
+            'completed': 0,
+            'status': 'idle',
+            'current_step': '',
+            'error_message': None
+        }
 
-
-def count_violation_persons(detections):
+def format_violation_type(class_name: str) -> str:
     """
-    Count number of unique persons with violations (based on distinct bounding boxes).
+    Format violation class name for display.
     
-    Args:
-        detections: List of detection dictionaries
-    
-    Returns:
-        Approximate count of persons with violations
+    Examples:
+        'NO-Hardhat' -> 'Missing Hard Hat'
+        'NO-Safety Vest' -> 'Missing Safety Vest'
+        'no-hardhat' -> 'Missing Hard Hat'
     """
-    # Group by approximate position to count unique persons
-    positions = extract_person_positions(detections)
-    if not positions:
-        return len([d for d in detections if d.get('class_name', '').startswith('NO-')])
-    
-    # Simple deduplication based on position proximity
-    unique_count = 0
-    used_positions = []
-    for pos in positions:
-        is_new = True
-        for used_pos in used_positions:
-            distance = ((pos[0] - used_pos[0])**2 + (pos[1] - used_pos[1])**2)**0.5
-            if distance < 0.1:  # Within 10% = same person
-                is_new = False
-                break
-        if is_new:
-            unique_count += 1
-            used_positions.append(pos)
-    
-    return max(unique_count, 1) if positions else 1
-
-
-def significant_position_change(new_positions, old_positions, threshold=None):
-    """
-    Check if there's a significant position change (person left/entered).
-    
-    Args:
-        new_positions: Current frame positions
-        old_positions: Previous capture positions
-        threshold: Distance threshold (default: POSITION_CHANGE_THRESHOLD)
-    
-    Returns:
-        True if significant change detected
-    """
-    if threshold is None:
-        threshold = POSITION_CHANGE_THRESHOLD
-    
-    if not old_positions:
-        return True  # First detection
-    
-    if not new_positions:
-        return False  # No new detections
-    
-    # Check if any new position is far from all old positions (new person entered)
-    for new_pos in new_positions:
-        closest_distance = min(
-            ((new_pos[0] - old_pos[0])**2 + (new_pos[1] - old_pos[1])**2)**0.5
-            for old_pos in old_positions
-        )
-        if closest_distance > threshold:
-            return True  # New person entered at different position
-    
-    return False
-
-
-def should_capture_violation(detections, frame_width=640, frame_height=480):
-    """
-    Determine if we should capture a new violation based on scene changes.
-    
-    Smart detection logic:
-    1. New violation TYPE appeared -> CAPTURE
-    2. Person count INCREASED -> CAPTURE
-    3. Significant position change -> CAPTURE
-    4. Scene refresh timeout -> CAPTURE
-    5. Otherwise -> SKIP (same scene)
-    
-    Args:
-        detections: Current frame detections
-        frame_width: Frame width for position normalization
-        frame_height: Frame height for position normalization
-    
-    Returns:
-        Tuple of (should_capture: bool, reason: str)
-    """
-    global current_scene_state
-    
-    if not SMART_DETECTION_ENABLED:
-        return True, "Smart detection disabled"
-    
-    current_time = time.time()
-    
-    # Always enforce minimum cooldown
-    time_since_last = current_time - current_scene_state['last_capture_time']
-    if time_since_last < MIN_COOLDOWN_BETWEEN_CAPTURES:
-        return False, f"Minimum cooldown ({MIN_COOLDOWN_BETWEEN_CAPTURES - time_since_last:.1f}s remaining)"
-    
-    # Extract current scene info
-    new_violation_types = extract_violation_types(detections)
-    new_person_count = count_violation_persons(detections)
-    new_positions = extract_person_positions(detections, frame_width, frame_height)
-    
-    # Check 1: New violation type appeared
-    if current_scene_state['violation_types']:
-        new_types = new_violation_types - current_scene_state['violation_types']
-        if new_types:
-            logger.info(f"🆕 New violation type(s) detected: {new_types}")
-            return True, f"New violation type: {new_types}"
-    
-    # Check 2: Person count increased
-    if new_person_count > current_scene_state['person_count']:
-        logger.info(f"🆕 Person count increased: {current_scene_state['person_count']} -> {new_person_count}")
-        return True, f"Person count increased: {current_scene_state['person_count']} -> {new_person_count}"
-    
-    # Check 3: Significant position change (new person entered different area)
-    if significant_position_change(new_positions, current_scene_state['person_positions']):
-        logger.info("🆕 Significant position change detected")
-        return True, "New person entered (position change)"
-    
-    # Check 4: Scene refresh timeout (periodic re-capture)
-    if time_since_last >= SCENE_REFRESH_INTERVAL:
-        logger.info(f"🔄 Scene refresh timeout ({SCENE_REFRESH_INTERVAL}s) - re-capturing")
-        return True, f"Periodic refresh after {int(time_since_last)}s"
-    
-    # No significant change - skip capture
-    return False, f"Same scene ({int(SCENE_REFRESH_INTERVAL - time_since_last)}s until refresh)"
-
-
-def update_scene_state(detections, frame_width=640, frame_height=480):
-    """
-    Update the current scene state after a successful capture.
-    
-    Args:
-        detections: Captured frame detections
-        frame_width: Frame width for position normalization
-        frame_height: Frame height for position normalization
-    """
-    global current_scene_state
-    
-    current_scene_state['violation_types'] = extract_violation_types(detections)
-    current_scene_state['person_count'] = count_violation_persons(detections)
-    current_scene_state['person_positions'] = extract_person_positions(detections, frame_width, frame_height)
-    current_scene_state['last_capture_time'] = time.time()
-    
-    logger.debug(f"Scene state updated: {current_scene_state['person_count']} person(s), {current_scene_state['violation_types']}")
-
+    # Handle both 'NO-' prefix and lowercase 'no-' prefix
+    class_name_upper = class_name.upper()
+    if class_name_upper.startswith('NO-'):
+        item = class_name[3:]  # Remove 'NO-' or 'no-'
+        # Format specific items
+        item = item.replace('hardhat', 'Hard Hat').replace('Hardhat', 'Hard Hat')
+        item = item.replace('safety vest', 'Safety Vest').replace('Safety Vest', 'Safety Vest')
+        item = item.replace('gloves', 'Gloves').replace('Gloves', 'Gloves')
+        item = item.replace('mask', 'Mask').replace('Mask', 'Mask')
+        item = item.replace('goggles', 'Goggles').replace('Goggles', 'Goggles')
+        return f"Missing {item}"
+    return class_name
 
 # =========================================================================
 # VIOLATION PROCESSING
@@ -434,20 +253,12 @@ def initialize_pipeline_components():
             logger.info("Initializing Supabase database manager...")
             db_manager = create_db_manager_from_env()
             
-            # Fix historical timestamp issues
-            if db_manager and hasattr(db_manager, 'fix_timestamp_issues'):
-                logger.info("Fixing timestamp issues...")
-                db_manager.fix_timestamp_issues()
-            
             # Fix any stuck reports from previous sessions
-            if db_manager and hasattr(db_manager, 'get_stuck_report_ids'):
+            if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
                 logger.info("Checking for stuck reports...")
-                stuck_ids = db_manager.get_stuck_report_ids(minutes_threshold=1) # 1 min for testing logic
-                if stuck_ids:
-                    logger.info(f"⚠️ Found {len(stuck_ids)} stuck reports. Attempting validation/reprocessing...")
-                    
-                    # Start a background thread to reprocess them so we don't block startup
-                    Thread(target=reprocess_stuck_reports, args=(stuck_ids,), daemon=True).start()
+                fixed = db_manager.fix_stuck_reports()
+                if fixed > 0:
+                    logger.info(f"✓ Fixed {fixed} stuck reports")
         
         if storage_manager is None:
             logger.info("Initializing Supabase storage manager...")
@@ -492,143 +303,6 @@ def initialize_pipeline_components():
         return False
 
 
-def reprocess_stuck_reports(report_ids: List[str]):
-    """
-    Background task to attempting to generate reports for stuck items.
-    Tries to recover data from disk (metadata.json) or re-run inference (original.jpg).
-    """
-    logger.info(f"🔄 Starting reprocessing for {len(report_ids)} stuck reports...")
-    
-    count = 0
-    for report_id in report_ids:
-        try:
-            violation_dir = VIOLATIONS_DIR.absolute() / report_id
-            if not violation_dir.exists():
-                logger.warning(f"❌ Cannot reprocess {report_id}: Directory not found on disk")
-                if db_manager:
-                    db_manager.update_detection_status(report_id, 'failed', "Data lost: Directory missing")
-                continue
-                
-            original_path = violation_dir / 'original.jpg'
-            annotated_path = violation_dir / 'annotated.jpg'
-            metadata_path = violation_dir / 'metadata.json'
-            
-            detections = []
-            timestamp = datetime.now()
-            
-            # Strategy 1: Load from metadata (Best)
-            if metadata_path.exists():
-                logger.info(f"   Recovering {report_id} from metadata...")
-                try:
-                    with open(metadata_path, 'r') as f:
-                        meta = json.load(f)
-                        detections = meta.get('detections', []) # Note: metadata might not have raw detections
-                        # If metadata doesn't have detections, we might fallback to Strategy 2
-                        if not detections and 'person_count' in meta: 
-                             # Partial metadata, fallback to re-inference
-                             pass
-                        else:
-                            # Use metadata timestamp if available
-                            ts_str = meta.get('timestamp')
-                            # parser logic... skip for brevity and use DB timestamp if needed
-                except Exception as e:
-                    logger.warning(f"   Metadata corrupted: {e}")
-            
-            # Strategy 2: Re-run Inference (Fallback)
-            if not detections and original_path.exists():
-                logger.info(f"   Re-running inference for {report_id}...")
-                image = cv2.imread(str(original_path))
-                if image is not None:
-                     # Re-run prediction
-                     res_detections, _ = predict_image(image, conf=0.25)
-                     detections = res_detections
-                else:
-                     logger.warning(f"   Could not read image for {report_id}")
-            
-            if not detections:
-                 logger.error(f"❌ Failed to recover data for {report_id}")
-                 if db_manager:
-                     db_manager.update_detection_status(report_id, 'failed', "Data recovery failed")
-                 continue
-            
-            # Construct violation types and tags correctly
-            violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 'no-mask', 'no-goggles']
-            violation_detections = [d for d in detections 
-                                   if any(keyword in d['class_name'].lower() 
-                                         for keyword in violation_keywords)]
-            
-            violation_types = [d['class_name'] for d in violation_detections]
-            
-            # Extract missing PPE for logic
-            missing_ppe = []
-            for d in detections:
-                cls = d.get('class_name', '')
-                if cls.startswith('NO-'):
-                    ppe = cls.replace('NO-', '')
-                    if ppe not in missing_ppe:
-                        missing_ppe.append(ppe)
-            
-            # Re-queue it!
-            logger.info(f"   Queuing {report_id} for processing...")
-            
-            # Retrieve timestamp from DB if possible to keep original time
-            if db_manager:
-                event = db_manager.get_detection_event(report_id)
-                if event and event.get('timestamp'):
-                    timestamp = event['timestamp']
-            
-            violation_data = {
-                'report_id': report_id,
-                'timestamp': timestamp,
-                'detections': detections,
-                'violation_types': violation_types,
-                'violation_count': len(violation_types),
-                'original_image_path': str(original_path),
-                'annotated_image_path': str(annotated_path),
-                'violation_dir': str(violation_dir)
-            }
-            
-            # Add to queue with recovery device ID
-            if violation_queue:
-                violation_queue.enqueue(
-                    violation_data=violation_data,
-                    device_id='recovery',
-                    report_id=report_id,
-                    severity='HIGH'
-                )
-                count += 1
-                
-        except Exception as e:
-            logger.error(f"Error reprocessing {report_id}: {e}")
-            
-    logger.info(f"🔄 Reprocessing triggered for {count} reports")
-
-
-# =========================================================================
-# API ENDPOINT: Reprocess Single Report
-# =========================================================================
-@app.route('/api/report/<report_id>/reprocess', methods=['POST'])
-def api_reprocess_report(report_id):
-    """API endpoint to reprocess a single report."""
-    try:
-        logger.info(f"🔄 API request to reprocess report: {report_id}")
-        
-        # Use a background thread to avoid blocking the response
-        Thread(target=reprocess_stuck_reports, args=([report_id],), daemon=True).start()
-        
-        return jsonify({
-            'success': True,
-            'message': f'Report {report_id} queued for reprocessing',
-            'report_id': report_id
-        }), 202  # 202 Accepted - processing started
-        
-    except Exception as e:
-        logger.error(f"Error triggering reprocess for {report_id}: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
 def start_queue_worker():
     """Start the background worker thread for processing queued violations."""
     global queue_worker_thread, queue_worker_running
@@ -669,6 +343,17 @@ def queue_worker_loop():
                 time.sleep(1)
                 continue
             
+            # Update progress with queue size
+            queue_size = violation_queue.get_queue_size() if violation_queue else 0
+            if queue_size > 0:
+                update_report_progress(
+                    total=queue_size,
+                    status='waiting',
+                    current_step=f'{queue_size} report(s) in queue'
+                )
+            else:
+                reset_report_progress()
+            
             # Try to get next violation from queue (with timeout)
             queued_violation = violation_queue.dequeue(timeout=2.0)
             
@@ -679,23 +364,51 @@ def queue_worker_loop():
             logger.info(f"📥 Dequeued violation {queued_violation.report_id} for processing")
             
             try:
+                # Update progress: starting processing
+                queue_size = violation_queue.get_queue_size() if violation_queue else 0
+                update_report_progress(
+                    current=queued_violation.report_id,
+                    total=queue_size + 1,
+                    completed=0,
+                    status='processing',
+                    current_step='Starting report generation'
+                )
+                
                 # Process the violation
                 process_queued_violation(queued_violation)
                 violation_queue.mark_processed(queued_violation)
                 logger.info(f"✅ Completed processing {queued_violation.report_id}")
                 
+                # Update progress: completed
+                update_report_progress(
+                    completed=1,
+                    status='completed',
+                    current_step='Report generated successfully'
+                )
+                time.sleep(0.5)  # Brief pause to show completed status
+                
             except Exception as e:
+                # Get full traceback for debugging
+                import traceback
+                error_details = traceback.format_exc()
                 logger.error(f"❌ Error processing {queued_violation.report_id}: {e}")
+                logger.error(f"Full traceback:\n{error_details}")
+                
+                update_report_progress(
+                    status='error',
+                    error_message=str(e)
+                )
+                
                 # Requeue for retry
                 if not violation_queue.requeue(queued_violation):
                     logger.error(f"Max retries exceeded for {queued_violation.report_id}")
-                    # Update status to failed
+                    # Update status to failed with detailed error
                     if db_manager:
                         try:
                             db_manager.update_detection_status(
                                 queued_violation.report_id, 
                                 'failed', 
-                                f"Max retries exceeded: {str(e)}"
+                                f"Error: {str(e)}\n\nFull details:\n{error_details[:500]}"  # Limit to 500 chars
                             )
                         except Exception as e2:
                             logger.warning(f"Could not update status: {e2}")
@@ -707,21 +420,14 @@ def queue_worker_loop():
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = False, annotated_frame: np.ndarray = None, severity: str = 'HIGH', device_id: str = 'webcam_0') -> str:
+def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
     """
     Capture a violation and add it to the processing queue.
-    Uses SMART DETECTION to only capture when:
-    - New violation TYPE appears
-    - New PERSON enters the frame
-    - Significant POSITION change detected
-    - Periodic refresh timeout reached
-    - force=True (e.g., manual upload)
+    This is a FAST operation that saves images immediately and queues for report generation.
     
     Args:
         frame: The video frame with the violation
         detections: List of YOLO detections
-        force: If True, bypass smart detection and cooldown checks
-        annotated_frame: Optional pre-annotated frame to use (avoids re-inference mismatches)
     
     Returns:
         report_id if successfully queued, None otherwise
@@ -729,14 +435,20 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
     global last_violation_time
     
     logger.info("=" * 80)
-    logger.info(f"ENQUEUE_VIOLATION CALLED (Smart Detection{' - FORCED' if force else ''})")
+    logger.info("ENQUEUE_VIOLATION CALLED (Fast capture + queue)")
     logger.info("=" * 80)
     
     try:
-        # Get frame dimensions for position normalization
-        frame_height, frame_width = frame.shape[:2] if frame is not None else (480, 640)
+        # Check capture cooldown (shorter than processing time)
+        current_time = time.time()
+        if current_time - last_violation_time < VIOLATION_COOLDOWN:
+            remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
+            logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
+            return None
         
-        # Check for violations first
+        last_violation_time = current_time
+        
+        # Check for violations
         violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 
                              'no-mask', 'no-goggles']
         
@@ -748,24 +460,12 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
             logger.warning("No violations found in detections")
             return None
         
-        # === SMART DETECTION CHECK ===
-        if not force:
-            # Determine if we should capture based on scene changes
-            should_capture, reason = should_capture_violation(detections, frame_width, frame_height)
-            
-            if not should_capture:
-                logger.info(f"⏭️ Skipping capture: {reason}")
-                return None
-            
-            logger.info(f"✅ Capture triggered: {reason}")
-        else:
-            logger.info("✅ Capture forced (manual upload)")
-        
-        violation_types = [d['class_name'] for d in violation_detections]
+        violation_types_raw = [d['class_name'] for d in violation_detections]
+        violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
         
-        # Create violation directory with timestamp
-        timestamp = datetime.now()
+        # Create violation directory with timestamp (configurable timezone)
+        timestamp = get_local_time()
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
@@ -777,23 +477,18 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
         cv2.imwrite(str(original_path), frame)
         logger.info(f"✓ Saved original image: {original_path}")
         
-        # Save annotated frame (Use provided one or regenerate)
+        # Save annotated frame
+        _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
-        if annotated_frame is not None:
-             cv2.imwrite(str(annotated_path), annotated_frame)
-             logger.info(f"✓ Saved PROVIDED annotated image: {annotated_path}")
-        else:
-            logger.info("   Regenerating annotated image (no pre-annotated frame provided)...")
-            _, annotated = predict_image(frame, conf=0.25)
-            cv2.imwrite(str(annotated_path), annotated)
-            logger.info(f"✓ Saved generated annotated image: {annotated_path}")
+        cv2.imwrite(str(annotated_path), annotated)
+        logger.info(f"✓ Saved annotated image: {annotated_path}")
         
         # === IMMEDIATE: Insert pending detection event ===
         if db_manager:
             try:
                 db_manager.insert_detection_event(
                     report_id=report_id,
-                    timestamp=timestamp,
+                    timestamp=timestamp.isoformat(),  # Use ISO format to preserve timezone
                     person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
                     violation_count=len(violation_detections),
                     severity='HIGH',
@@ -807,7 +502,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
         if violation_queue:
             violation_data = {
                 'report_id': report_id,
-                'timestamp': timestamp,
+                'timestamp': timestamp.isoformat(),  # Use ISO format
                 'detections': detections,
                 'violation_types': violation_types,
                 'violation_count': len(violation_detections),
@@ -818,20 +513,15 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], force: bool = F
             
             success = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id=device_id,
+                device_id='webcam_0',
                 report_id=report_id,
-                severity=severity
+                severity='HIGH'
             )
             
             if success:
                 logger.info(f"✓ Violation {report_id} added to processing queue")
                 queue_stats = violation_queue.get_stats()
                 logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
-                
-                # Update scene state for smart detection
-                update_scene_state(detections, frame_width, frame_height)
-                logger.info(f"   Scene state updated: {len(current_scene_state['violation_types'])} violation type(s), {current_scene_state['person_count']} person(s)")
-                
                 return report_id
             else:
                 logger.error("Failed to add violation to queue")
@@ -868,6 +558,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     annotated_path = Path(data['annotated_image_path'])
     
     logger.info(f"📄 Processing queued violation: {report_id}")
+    
+    # Update progress
+    update_report_progress(
+        current=report_id,
+        current_step='Validating work environment'
+    )
     
     # === ENVIRONMENT VALIDATION (before heavy processing) ===
     # Uses semaphore to prevent concurrent Ollama calls (VRAM exhaustion)
@@ -925,6 +621,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception as e:
             logger.warning(f"Could not update status: {e}")
     
+    # Update progress
+    update_report_progress(
+        current=report_id,
+        current_step='Generating image caption'
+    )
+    
     # Generate caption (with semaphore to prevent concurrent Ollama calls)
     caption = ""
     env_context = ""
@@ -973,14 +675,23 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     report_created = False
     if report_generator:
         try:
+            # Update progress
+            update_report_progress(
+                current=report_id,
+                current_step='Generating analysis report'
+            )
+            
             logger.info("📄 Generating NLP report with Llama3...")
+            
+            violation_types_raw = violation_types
+            violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
             
             report_data = {
                 'report_id': report_id,
                 'timestamp': timestamp,
                 'detections': detections,
-                'violation_summary': f"PPE Violation Detected: {', '.join(violation_types)}",
-                'violation_count': len(violation_types),
+                'violation_summary': ', '.join(violation_types_formatted),
+                'violation_count': len(violation_types_formatted),
                 'caption': caption,
                 'image_caption': caption,
                 'original_image_path': str(original_path),
@@ -990,9 +701,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'person_count': len(detections)
             }
             
-            logger.info("📄 Generating NLP report with Llama3 (acquiring Ollama lock)...")
-            with ollama_semaphore:
-                result = report_generator.generate_report(report_data)
+            result = report_generator.generate_report(report_data)
             
             if result and result.get('html'):
                 target_html = violation_dir / 'report.html'
@@ -1020,60 +729,15 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     if not report_created:
         create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
     
-    # Extract missing PPE and count persons for metadata
-    missing_ppe = []
-    person_count = 0
-    for d in detections:
-        cls = d.get('class_name', '')
-        if cls.startswith('NO-'):
-            ppe = cls.replace('NO-', '')
-            if ppe not in missing_ppe:
-                missing_ppe.append(ppe)
-        if 'person' in cls.lower():
-            person_count += 1
-            
-    # Normalize PPE names for tags
-    ppe_tags = [f"NO-{p.upper()}" for p in missing_ppe]
-    violation_summary = f"PPE Violation Detected: {', '.join([f'NO-{p}' for p in missing_ppe])}" if missing_ppe else "PPE Violation"
-
-    # Calculate severity dynamically
-    severity = 'LOW'
-    min_priority = 4  # Lower number = Higher priority (1=Critical, 4=Low)
-    
-    if not missing_ppe:
-        # No specific PPE missing, but violation occurred (e.g. unknown class)
-        severity = 'MEDIUM'
-    else:
-        for ppe in missing_ppe:
-            # Check config for this PPE
-            ppe_key = ppe.lower()
-            if ppe_key in VIOLATION_RULES.get('required_ppe', {}):
-                rule_severity = VIOLATION_RULES['required_ppe'][ppe_key].get('severity', 'LOW')
-                rule_priority = get_severity_priority(rule_severity)
-                
-                if rule_priority < min_priority:
-                    min_priority = rule_priority
-                    severity = rule_severity
-            
-            # Check for critical overrides
-            if f"NO-{ppe}" in VIOLATION_RULES.get('critical', {}):
-                severity = 'HIGH'  # User requested checks map to HIGH, not CRITICAL
-                min_priority = 2
-
-
     # Save metadata
+    violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
     metadata = {
         'report_id': report_id,
-        'timestamp': format_timestamp_myt(timestamp),
-        'violation_type': violation_types[0] if violation_types else 'PPE Violation',
-        'violation_summary': violation_summary,
-        'severity': severity,
+        'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
+        'violation_type': violation_types_formatted[0] if violation_types_formatted else 'PPE Violation',
+        'severity': 'HIGH',
         'location': 'Live Stream Monitor',
         'detection_count': len(detections),
-        'violation_count': len(missing_ppe) if missing_ppe else 1,
-        'person_count': max(1, person_count),  # Ensure at least 1 person if report generated
-        'missing_ppe': missing_ppe,
-        'ppe_tags': ppe_tags,
         'has_caption': bool(caption),
         'has_report': report_created
     }
@@ -1399,6 +1063,21 @@ def favicon():
     return send_from_directory('frontend', 'favicon.ico', mimetype='image/x-icon')
 
 
+@app.route('/manifest.json')
+def manifest():
+    """Serve PWA manifest."""
+    return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
+
+
+@app.route('/service-worker.js')
+def service_worker():
+    """Serve PWA service worker from root scope."""
+    response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
+
+
 # =========================================================================
 # API ENDPOINTS - VIOLATIONS & REPORTS
 # =========================================================================
@@ -1440,35 +1119,15 @@ def api_violations():
                         
                         violations.append({
                             'report_id': report_id,
-                            'timestamp': format_timestamp_myt(timestamp),
+                            'timestamp': timestamp.isoformat(),
                             'has_original': has_original,
                             'has_annotated': has_annotated,
                             'has_report': has_report,
                             'status': status,
-                            'status': status,
                             'severity': metadata.get('severity', 'HIGH'),
                             'violation_type': metadata.get('violation_type', 'PPE Violation'),
-                            'location': metadata.get('location', 'Unknown'),
-                            'violation_count': metadata.get('violation_count', 1),
-                            'missing_ppe': metadata.get('detection_data', {}).get('missing_ppe', []),
-                            'violation_summary': metadata.get('violation_summary', 'PPE Violation')
+                            'location': metadata.get('location', 'Unknown')
                         })
-                        
-                        # Enrich with missing ppe if available in metadata
-                        if 'violation_summary' in metadata:
-                             summary = metadata['violation_summary']
-                             mp = []
-                             if 'PPE Violation Detected:' in summary:
-                                parts = summary.split('PPE Violation Detected:')[1].strip().split(',')
-                                mp = [p.strip().replace('NO-', '').replace('No-', '') for p in parts]
-                             elif 'Missing' in summary:
-                                import re
-                                mp = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
-                             
-                             if mp:
-                                violations[-1]['missing_ppe'] = mp
-                                violations[-1]['violation_count'] = len(mp)
-                                violations[-1]['ppe_tags'] = [f"NO-{p.strip().upper().replace(' ', '-')}" for p in mp]
                     except ValueError:
                         logger.warning(f"Skipping invalid report directory: {report_id}")
                         continue
@@ -1530,41 +1189,25 @@ def api_violations():
                     # Split by comma and clean up
                     violation_items = [item.strip() for item in violations_part.split(',')]
                     for item in violation_items:
-                        # Handle "NO-Hardhat" and "No-Hardhat"
-                        clean_item = item.replace('NO-', '').replace('No-', '')
-                        if clean_item:
-                           missing_ppe.append(clean_item)
-                           ppe_tags.append(f"NO-{clean_item.upper()}")
-
-                # Parse format: "Worker detected with PPE violations: NO-Hardhat"
-                elif 'Worker detected with PPE violations:' in summary:
-                    violations_part = summary.split('Worker detected with PPE violations:')[1].split('.')[0].strip()
-                    violation_items = [item.strip() for item in violations_part.split(',')]
-                    for item in violation_items:
-                        clean_item = item.replace('NO-', '').replace('No-', '')
-                        if clean_item:
-                            missing_ppe.append(clean_item)
-                            ppe_tags.append(f"NO-{clean_item.upper()}")
+                        # Convert "NO-Hardhat" to "Hardhat"
+                        if item.startswith('NO-') or item.startswith('No-'):
+                            ppe_item = item[3:]  # Remove "NO-" prefix
+                            missing_ppe.append(ppe_item)
+                            ppe_tags.append(item.upper())  # Keep NO-HARDHAT format for tags
+                        elif 'Missing' in item:
+                            ppe_item = item.replace('Missing ', '').strip()
+                            missing_ppe.append(ppe_item)
+                            ppe_tags.append(ppe_item.replace(' ', '-').upper())
                 
                 # Also try parsing "Missing Hardhat" format
                 elif 'Missing' in summary:
                     matches = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
-                    for m in matches:
-                        clean_m = m.strip()
-                        if clean_m:
-                             missing_ppe.append(clean_m)
-                             ppe_tags.append(f"NO-{clean_m.replace(' ', '-').upper()}")
-            
-            # Check for images/report - prefer Supabase keys, fallback to local files
-            report_id = v['report_id']
-            local_dir = VIOLATIONS_DIR / report_id
-            has_original = bool(v.get('original_image_key')) or (local_dir / 'original.jpg').exists()
-            has_annotated = bool(v.get('annotated_image_key')) or (local_dir / 'annotated.jpg').exists()
-            has_report = bool(v.get('report_html_key')) or (local_dir / 'report.html').exists()
+                    missing_ppe.extend(matches)
+                    ppe_tags.extend([m.replace(' ', '-').upper() for m in matches])
             
             formatted_violations.append({
-                'report_id': report_id,
-                'timestamp': format_timestamp_myt(v['timestamp']),
+                'report_id': v['report_id'],
+                'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
                 'person_count': v.get('person_count', 0),
                 'violation_count': v.get('violation_count') if v.get('violation_count') else len(missing_ppe) if missing_ppe else 1,
                 'severity': v.get('severity', 'UNKNOWN'),
@@ -1575,11 +1218,9 @@ def api_violations():
                 'missing_ppe': missing_ppe,
                 'ppe_tags': ppe_tags,
                 'violation_type': 'PPE Violation',
-                'has_original': has_original,
-                'has_annotated': has_annotated,
-                'has_report': has_report,
-                'report_html_key': v.get('report_html_key'),
-                'nlp_analysis': v.get('nlp_analysis'),
+                'has_original': bool(v.get('original_image_key')),
+                'has_annotated': bool(v.get('annotated_image_key')),
+                'has_report': bool(v.get('report_html_key')),
                 'detection_data': {
                     'caption_validation': caption_validation
                 } if caption_validation else None
@@ -1593,7 +1234,6 @@ def api_violations():
 
 
 @app.route('/api/stats')
-@app.route('/api/dashboard/stats')
 def api_stats():
     """Get violation statistics from Supabase."""
     if db_manager is None:
@@ -1610,6 +1250,8 @@ def api_stats():
         
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Calculate actual week start (Monday of current week)
+        # weekday() returns 0=Monday, 1=Tuesday, etc.
         days_since_monday = now.weekday()
         week_start = today_start - timedelta(days=days_since_monday)
         
@@ -1617,126 +1259,40 @@ def api_stats():
             'total': len(violations),
             'today': sum(1 for v in violations if v >= today_start),
             'thisWeek': sum(1 for v in violations if v >= week_start),
-            'severity': {'high': 0, 'medium': len(violations), 'low': 0},
-            'breakdown': {}  # Local fallback doesn't support breakdown easily
+            'severity': {
+                'high': 0,
+                'medium': len(violations),
+                'low': 0
+            }
         }
         return jsonify(stats)
     
     # Use Supabase
     try:
-        violations = db_manager.get_recent_violations(limit=2000)
+        violations = db_manager.get_recent_violations(limit=1000)
         
-        # Calculate Date Ranges
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        yesterday_start = today_start - timedelta(days=1)
-        yesterday_end = today_start
-        
-        # Week ranges (Monday start)
+        # Calculate actual week start (Monday of current week)
+        # weekday() returns 0=Monday, 1=Tuesday, etc.
         days_since_monday = now.weekday()
         week_start = today_start - timedelta(days=days_since_monday)
-        last_week_start = week_start - timedelta(days=7)
-        last_week_end = week_start
         
-        # Handle timezone info in violations if present
+        # Convert to timezone-aware for comparison if needed
         if violations and violations[0].get('timestamp') and violations[0]['timestamp'].tzinfo:
             from datetime import timezone
             today_start = today_start.replace(tzinfo=timezone.utc)
-            yesterday_start = yesterday_start.replace(tzinfo=timezone.utc)
-            yesterday_end = yesterday_end.replace(tzinfo=timezone.utc)
             week_start = week_start.replace(tzinfo=timezone.utc)
-            last_week_start = last_week_start.replace(tzinfo=timezone.utc)
-            last_week_end = last_week_end.replace(tzinfo=timezone.utc)
-            
-        # 1. Calculate Summary Stats
-        today_count = 0
-        yesterday_count = 0
-        week_count = 0
-        last_week_count = 0
         
-        # 2. Calculate Breakdown
-        violation_counts = {
-            'NO-Hardhat': 0,
-            'NO-Safety Vest': 0,
-            'NO-Gloves': 0,
-            'NO-Mask': 0,
-            'NO-Goggles': 0,
-            'NO-Safety Shoes': 0,
-            'Other': 0
-        }
-        
-        for v in violations:
-            ts = v.get('timestamp')
-            if ts:
-                if ts >= today_start:
-                    today_count += 1
-                if ts >= yesterday_start and ts < yesterday_end:
-                    yesterday_count += 1
-                if ts >= week_start:
-                    week_count += 1
-                if ts >= last_week_start and ts < last_week_end:
-                    last_week_count += 1
-            
-            # Parse detection data for breakdown
-            parsed_from_detection = False
-            detection_data = v.get('detection_data')
-            if detection_data:
-                # Handle both List (direct) and Dict (wrapper) formats
-                if isinstance(detection_data, dict):
-                    detections = detection_data.get('detections', [])
-                elif isinstance(detection_data, list):
-                    detections = detection_data
-                else:
-                    detections = []
-                    
-                for d in detections:
-                    class_name = d.get('class_name', '')
-                    # Case-insensitive matching
-                    matched = False
-                    for key in violation_counts.keys():
-                        key_lower = key.lower().replace('no-', '').replace('safety ', '')
-                        class_lower = class_name.lower().replace('no-', '').replace('safety ', '')
-                        
-                        if key_lower in class_lower or class_lower in key_lower:
-                            violation_counts[key] += 1
-                            matched = True
-                            parsed_from_detection = True
-                            break
-                    
-                    if not matched and class_name.upper().startswith('NO-'):
-                        # Map unknown NO- classes to Other or count specifically if needed
-                        violation_counts['Other'] += 1
-                        parsed_from_detection = True
-            
-            # Fallback: If detection parsing failed (or no data), try parsing violation_summary
-            if not parsed_from_detection and v.get('violation_summary'):
-                summary = v['violation_summary'].lower()
-                
-                # Robust keyword matching: Check if violation type name appears in summary
-                # e.g. "hardhat" in "Missing hardhat"
-                for key in violation_counts.keys():
-                    # key is "NO-Hardhat", key_simple is "hardhat"
-                    key_simple = key.lower().replace('no-', '').replace('safety ', '')
-                    
-                    # Avoid matching "mask" in "unmasked" if unrelated, but generally safe
-                    # Specific checks for common phrases
-                    if key_simple in summary:
-                        violation_counts[key] += 1
-                    elif 'no-' + key_simple in summary or 'missing ' + key_simple in summary:
-                        violation_counts[key] += 1
-
         stats = {
             'total': len(violations),
-            'today': today_count,
-            'todayDelta': today_count - yesterday_count,
-            'thisWeek': week_count,
-            'weekDelta': week_count - last_week_count,
+            'today': sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= today_start),
+            'thisWeek': sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= week_start),
             'severity': {
-                'high': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'HIGH'),
-                'medium': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'MEDIUM'),
-                'low': sum(1 for v in violations if str(v.get('severity', '')).upper() == 'LOW')
-            },
-            'breakdown': violation_counts
+                'high': sum(1 for v in violations if v.get('severity', '').upper() == 'HIGH'),
+                'medium': sum(1 for v in violations if v.get('severity', '').upper() == 'MEDIUM'),
+                'low': sum(1 for v in violations if v.get('severity', '').upper() == 'LOW')
+            }
         }
         
         return jsonify(stats)
@@ -1744,68 +1300,6 @@ def api_stats():
     except Exception as e:
         logger.error(f"Error fetching stats from Supabase: {e}")
         return jsonify({'error': 'Failed to fetch statistics'}), 500
-
-
-@app.route('/api/analytics/trend')
-def api_analytics_trend():
-    """Get violation trends for the last 14 days."""
-    try:
-        # Get enough data for trends
-        violations = db_manager.get_recent_violations(limit=2000) if db_manager else []
-        
-        # Initialize last 14 days with 0
-        trend_data = {}
-        now = datetime.now()
-        for i in range(13, -1, -1):
-            date_str = (now - timedelta(days=i)).strftime('%Y-%m-%d')
-            trend_data[date_str] = 0
-            
-        # Fill with actual data
-        for v in violations:
-            ts = v.get('timestamp')
-            if ts:
-                # Handle string dates if necessary
-                if isinstance(ts, str):
-                    try:
-                        ts = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                    except:
-                        continue
-                
-                date_key = ts.strftime('%Y-%m-%d')
-                if date_key in trend_data:
-                    trend_data[date_key] += 1
-            elif isinstance(ts, str):
-                # Fallback for string timestamps
-                try:
-                    # Clean up string first
-                    clean_ts = ts.replace('Z', '').split('+')[0]
-                    # Try ISO format without TZ
-                    dt = datetime.fromisoformat(clean_ts)
-                    date_key = dt.strftime('%Y-%m-%d')
-                    if date_key in trend_data:
-                        trend_data[date_key] += 1
-                except:
-                    # Try basic format YYYYMMDD_HHMMSS
-                    try:
-                        dt = datetime.strptime(ts.split('_')[0], '%Y%m%d')
-                        date_key = dt.strftime('%Y-%m-%d')
-                        if date_key in trend_data:
-                            trend_data[date_key] += 1
-                    except:
-                        continue
-        
-        # Convert to sorted list
-        # result = [{'date': '2025-01-25', 'count': 5}, ...] 
-        result = [
-            {'date': date, 'count': count}
-            for date, count in sorted(trend_data.items())
-        ]
-        
-        return jsonify(result)
-        
-    except Exception as e:
-        logger.error(f"Error fetching trends: {e}")
-        return jsonify({'error': 'Failed to fetch trends'}), 500
 
 
 # =========================================================================
@@ -1850,7 +1344,7 @@ def api_get_violation(report_id):
         
         return jsonify({
             'report_id': violation['report_id'],
-            'timestamp': format_timestamp_myt(violation['timestamp']),
+            'timestamp': violation['timestamp'].isoformat() if violation.get('timestamp') else None,
             'person_count': violation.get('person_count', 0),
             'violation_count': violation.get('violation_count', 0),
             'severity': violation.get('severity', 'UNKNOWN'),
@@ -2063,7 +1557,7 @@ def api_pending_reports():
         pending = db_manager.get_pending_reports(limit=10)
         formatted = [{
             'report_id': p['report_id'],
-            'timestamp': format_timestamp_myt(p['timestamp']),
+            'timestamp': p['timestamp'].isoformat() if p.get('timestamp') else None,
             'status': p.get('status', 'pending'),
             'device_id': p.get('device_id'),
             'severity': p.get('severity')
@@ -2093,7 +1587,7 @@ def api_logs():
             'device_id': log.get('device_id'),
             'message': log.get('message'),
             'metadata': log.get('metadata'),
-            'created_at': format_timestamp_myt(log['created_at'])
+            'created_at': log['created_at'].isoformat() if log.get('created_at') else None
         } for log in logs]
         return jsonify(formatted)
         
@@ -2120,19 +1614,18 @@ def api_device_stats(device_id):
 @app.route('/report/<report_id>')
 def view_report(report_id):
     """View a specific violation report from Supabase or local storage."""
-    # Check local filesystem FIRST (Edge priority) specifically for HTML reports
-    # This ensures re-generated reports are seen immediately without cloud sync delay
-    violation_dir = VIOLATIONS_DIR / report_id
-    report_html = violation_dir / 'report.html'
-    
-    if report_html.exists():
-        return send_from_directory(str(violation_dir), 'report.html')
-
     if storage_manager is None or db_manager is None:
+        # Fallback to local filesystem
+        violation_dir = VIOLATIONS_DIR / report_id
+        
         if not violation_dir.exists():
-             abort(404, description="Report not found")
+            abort(404, description="Report not found")
+        
+        report_html = violation_dir / 'report.html'
+        if report_html.exists():
+            return send_from_directory(str(violation_dir), 'report.html')
         else:
-             abort(404, description="Report HTML not found")
+            abort(404, description="Report HTML not found")
     
     # Use Supabase
     try:
@@ -2166,26 +1659,28 @@ def view_report(report_id):
 
 @app.route('/image/<report_id>/<filename>')
 def get_image(report_id, filename):
-    """Serve violation images from local storage first, then Supabase."""
-    
-    # Validate filename first
-    if filename not in ['original.jpg', 'annotated.jpg']:
-        abort(400, description="Invalid filename")
-    
-    # Check local filesystem FIRST (priority - same as view_report)
-    # This ensures locally generated images are served immediately without cloud sync delay
-    violation_dir = VIOLATIONS_DIR / report_id
-    image_path = violation_dir / filename
-    
-    if image_path.exists():
-        return send_from_directory(str(violation_dir), filename)
-    
-    # Fallback to Supabase if local not found
+    """Serve violation images from Supabase or local storage."""
     if storage_manager is None or db_manager is None:
-        abort(404, description="Image not found")
+        # Fallback to local filesystem
+        violation_dir = VIOLATIONS_DIR / report_id
+        
+        if not violation_dir.exists():
+            abort(404, description="Report not found")
+        
+        if filename not in ['original.jpg', 'annotated.jpg']:
+            abort(400, description="Invalid filename")
+        
+        image_path = violation_dir / filename
+        if not image_path.exists():
+            abort(404, description="Image not found")
+        
+        return send_from_directory(str(violation_dir), filename)
     
     # Use Supabase
     try:
+        if filename not in ['original.jpg', 'annotated.jpg']:
+            abort(400, description="Invalid filename")
+        
         # Get violation data from database
         violation = db_manager.get_violation(report_id)
         
@@ -2421,9 +1916,7 @@ def upload_inference():
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            # FORCE capture for manual uploads to bypass smart detection checks
-            # PASS THE ANNOTATED IMAGE to ensure consistency with what user sees
-            report_id = enqueue_violation(frame_copy, detections_copy, force=True, annotated_frame=annotated, severity='CRITICAL', device_id='manual_upload')
+            report_id = enqueue_violation(frame_copy, detections_copy)
             logger.info(f"📥 Violation queued for processing: {report_id}")
         
         # Encode annotated image to base64
@@ -2441,6 +1934,61 @@ def upload_inference():
         
     except Exception as e:
         logger.error(f"Inference error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/report-progress', methods=['GET'])
+def api_report_progress():
+    """Get current report generation progress."""
+    try:
+        progress = get_report_progress()
+        
+        # Add queue size if available
+        if violation_queue:
+            progress['queue_size'] = violation_queue.get_queue_size()
+        else:
+            progress['queue_size'] = 0
+        
+        return jsonify(progress)
+        
+    except Exception as e:
+        logger.error(f"Error getting progress: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/failed-reports', methods=['GET'])
+def api_failed_reports():
+    """Get detailed information about failed reports for debugging."""
+    try:
+        if not db_manager:
+            return jsonify({'error': 'Database not available'}), 503
+        
+        # Get all failed reports with error messages
+        with db_manager.conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    report_id,
+                    timestamp,
+                    status,
+                    error_message,
+                    person_count,
+                    violation_count,
+                    created_at,
+                    updated_at
+                FROM public.detection_events
+                WHERE status = 'failed'
+                ORDER BY timestamp DESC
+                LIMIT 50
+            """)
+            failed_reports = cur.fetchall()
+        
+        return jsonify({
+            'count': len(failed_reports),
+            'reports': failed_reports
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching failed reports: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -2527,58 +2075,35 @@ if __name__ == '__main__':
     logger.info("   POST /api/live/start            - Start monitoring")
     logger.info("   POST /api/live/stop             - Stop monitoring")
     logger.info("   POST /api/inference/upload      - Upload inference")
-    logger.info("   POST /api/inference/upload      - Upload inference")
     logger.info("")
-    
-    # Auto-open browser (prevents need for manual clicking which can cause double-opens)
-    # Auto-open browser (only in main process)
-    def open_browser():
-        import webbrowser
-        import time
-        # Check if we are in the main reloader process or if reloader is disabled
-        # When use_reloader=False, WERKZEUG_RUN_MAIN is not set (None)
-        # When use_reloader=True, Main process is None, Child is 'true'
-        # We want to open ONLY in the Main process (None) to avoid opening on every reload
-        # AND to avoid opening twice (once in Main, once in Child)
-        
-        is_main_process = not os.environ.get('WERKZEUG_RUN_MAIN')
-        
-        if is_main_process:
-            time.sleep(1.5)  # Wait for server to start
-            logger.info("🌐 Opening web browser...")
-            webbrowser.open('http://localhost:5000')
-
-    # Start browser thread
-    import threading
-    threading.Thread(target=open_browser, daemon=True).start()
-
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 80)
+    
+    # Initialize pipeline components on startup (not just when camera starts)
+    logger.info("🔧 Initializing pipeline components...")
+    if FULL_PIPELINE_AVAILABLE:
+        init_success = initialize_pipeline_components()
+        if init_success:
+            logger.info("✓ Pipeline components initialized successfully")
+            logger.info(f"  - Queue worker: {'Running' if queue_worker_running else 'Stopped'}")
+            logger.info(f"  - Caption generator: {'Available' if caption_generator else 'Not available'}")
+            logger.info(f"  - Report generator: {'Available' if report_generator else 'Not available'}")
+        else:
+            logger.error("✗ Pipeline initialization failed")
+    else:
+        logger.warning("⚠️  Pipeline components not available (check imports)")
+    logger.info("")
     
     # Debug mode should ONLY be enabled for local development, NEVER in production
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     if debug_mode:
         logger.warning("⚠️  Flask debug mode is ENABLED - This should ONLY be used for local development!")
         logger.warning("⚠️  NEVER enable debug mode in production as it allows arbitrary code execution!")
-
-    # Initialize the pipeline (starts the queue worker thread)
-    try:
-        if FULL_PIPELINE_AVAILABLE:
-            logger.info("🚀 Initializing pipeline components and queue worker...")
-            success = initialize_pipeline_components()
-            if success:
-                logger.info("✅ Pipeline initialized successfully")
-            else:
-                logger.error("❌ Failed to initialize pipeline")
-        else:
-            logger.warning("⚠️ Full pipeline not available (imports failed)")
-    except Exception as e:
-        logger.error(f"❌ Error during pipeline initialization: {e}")
-
     
+    port = int(os.getenv('PORT', 5000))
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=port,
         debug=debug_mode,
         threaded=True,
         use_reloader=False  # Prevent double initialization

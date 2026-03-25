@@ -25,21 +25,29 @@ import sys
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
 
-# Try to import local Llama
+# Try to import Gemini client (primary AI provider)
+try:
+    from pipeline.backend.integration.gemini_client import GeminiClient, load_regulations, build_regulation_context
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logging.info("Gemini client not available")
+
+# Try to import local Llama (fallback)
 try:
     from pipeline.backend.integration.local_llama import LocalLlamaGenerator
     LOCAL_LLAMA_AVAILABLE = True
 except ImportError:
     LOCAL_LLAMA_AVAILABLE = False
 
-# Try to import Chroma DB
+# Try to import Chroma DB (legacy RAG — only used if Gemini disabled)
 try:
     import chromadb
     from chromadb.config import Settings
     CHROMA_AVAILABLE = True
 except ImportError:
     CHROMA_AVAILABLE = False
-    logging.warning("chromadb not installed. Install with: pip install chromadb")
+    logging.debug("chromadb not installed (not needed when using Gemini)")
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +69,49 @@ class ReportGenerator:
         """
         self.config = config
         
-        # Ollama settings
+        # =====================================================================
+        # GEMINI (Primary AI provider)
+        # =====================================================================
+        gemini_config = config.get('GEMINI_CONFIG', {})
+        self.use_gemini = gemini_config.get('enabled', True) and GEMINI_AVAILABLE
+        self.gemini_client = None
+        
+        if self.use_gemini:
+            try:
+                self.gemini_client = GeminiClient(config)
+                if self.gemini_client.is_available:
+                    logger.info("✓ Gemini client initialized for NLP report generation")
+                else:
+                    logger.warning("Gemini client not available, falling back to Ollama")
+                    self.gemini_client = None
+                    self.use_gemini = False
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini: {e}")
+                self.gemini_client = None
+                self.use_gemini = False
+        
+        # =====================================================================
+        # REGULATION DATA (Direct injection — replaces ChromaDB RAG)
+        # =====================================================================
+        self.regulations_data = {}
+        rag_config = config.get('RAG_CONFIG', {})
+        regulations_file = rag_config.get('regulations_file', '')
+        
+        if GEMINI_AVAILABLE:
+            try:
+                self.regulations_data = load_regulations(str(regulations_file) if regulations_file else None)
+                logger.info(f"✓ Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
+            except Exception as e:
+                logger.error(f"Failed to load regulations: {e}")
+        
+        # =====================================================================
+        # OLLAMA (Fallback AI provider)
+        # =====================================================================
         ollama_config = config.get('OLLAMA_CONFIG', {})
         self.api_url = ollama_config.get('api_url', 'http://localhost:11434/api/generate')
         self.model = ollama_config.get('model', 'llama3')
         self.temperature = ollama_config.get('temperature', 0.7)
-        self.ollama_timeout = ollama_config.get('timeout', 600)  # Default 10 minutes for detailed analysis
+        self.ollama_timeout = ollama_config.get('timeout', 600)
         
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
@@ -74,8 +119,7 @@ class ReportGenerator:
             r'C:\Users\maste\Downloads\FYP Combined\Meta-Llama-3-8B-Instruct')
         self.local_llama = None
         
-        # Initialize local Llama if configured
-        if self.use_local_llama and LOCAL_LLAMA_AVAILABLE:
+        if not self.use_gemini and self.use_local_llama and LOCAL_LLAMA_AVAILABLE:
             try:
                 logger.info("Initializing local Llama model...")
                 self.local_llama = LocalLlamaGenerator(self.local_model_path)
@@ -84,10 +128,11 @@ class ReportGenerator:
                 logger.warning(f"Could not initialize local Llama: {e}")
                 self.local_llama = None
         
-        # RAG settings
-        rag_config = config.get('RAG_CONFIG', {})
+        # =====================================================================
+        # RAG settings (legacy — used only when Gemini is disabled)
+        # =====================================================================
         self.rag_enabled = rag_config.get('enabled', True)
-        self.use_chroma = rag_config.get('use_chroma', False)
+        self.use_chroma = rag_config.get('use_chroma', False) and not self.use_gemini
         self.chroma_path = rag_config.get('chroma_path', '')
         self.collection_name = rag_config.get('collection_name', 'dosh_documentation')
         self.embedding_model = rag_config.get('embedding_model', 'nomic-embed-text')
@@ -95,7 +140,7 @@ class ReportGenerator:
         self.num_similar = rag_config.get('num_similar_incidents', 2)
         self.top_k = rag_config.get('top_k', 3)
         
-        # Chroma DB client
+        # Chroma DB client (legacy)
         self.chroma_client = None
         self.chroma_collection = None
         if self.rag_enabled and self.use_chroma:
@@ -122,7 +167,8 @@ class ReportGenerator:
         if self.rag_enabled:
             self._load_incident_database()
         
-        logger.info("Report Generator initialized")
+        ai_provider = 'Gemini' if self.use_gemini else ('Ollama' if not self.use_local_llama else 'Local Llama')
+        logger.info(f"Report Generator initialized (AI provider: {ai_provider})")
     
     # =========================================================================
     # RAG - INCIDENT DATABASE
@@ -636,9 +682,38 @@ RESPONSE FORMAT (JSON):
         
         return prompt
     
+    def _call_gemini_api(self, prompt: str, image_path: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Call Gemini API for NLP analysis (primary provider).
+        
+        Args:
+            prompt: Prompt to send to Gemini
+            image_path: Optional image for multimodal analysis
+        
+        Returns:
+            Parsed JSON response or None if failed
+        """
+        if not self.gemini_client or not self.gemini_client.is_available:
+            return None
+        
+        try:
+            logger.info("\U0001f680 Using Gemini API for NLP analysis...")
+            result = self.gemini_client.generate_report_json(prompt, image_path=image_path)
+            
+            if result:
+                logger.info("✓ Gemini NLP analysis completed")
+                return result
+            else:
+                logger.warning("Gemini returned no valid JSON")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Gemini API error: {e}")
+            return None
+    
     def _call_ollama_api(self, prompt: str) -> Optional[Dict[str, Any]]:
         """
-        Call Ollama API or use local Llama to get NLP analysis.
+        Call Ollama API or use local Llama to get NLP analysis (fallback).
         
         Args:
             prompt: Prompt to send to Ollama/Llama
@@ -652,7 +727,7 @@ RESPONSE FORMAT (JSON):
                 logger.info("Using local Llama model for NLP analysis...")
                 response = self.local_llama.generate_json(
                     prompt,
-                    max_new_tokens=512,  # Reduced for faster generation
+                    max_new_tokens=512,
                     temperature=self.temperature
                 )
                 
@@ -675,12 +750,12 @@ RESPONSE FORMAT (JSON):
                 json={
                     'model': self.model,
                     'prompt': prompt,
-                    'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
+                    'context': [],
                     'stream': False,
                     'format': 'json',
                     'options': {
                         'temperature': self.temperature,
-                        'num_predict': 1500,  # Increased to prevent Description truncation
+                        'num_predict': 1500,
                         'top_k': 40,
                         'top_p': 0.9
                     }
@@ -695,7 +770,6 @@ RESPONSE FORMAT (JSON):
             data = response.json()
             logger.debug(f"Ollama response: {data}")
             
-            # Parse the JSON response from the model
             nlp_response = json.loads(data['response'])
             logger.info("[OK] NLP analysis completed")
             
@@ -744,24 +818,51 @@ RESPONSE FORMAT (JSON):
         # Step 1: RAG - Retrieve relevant context
         similar_incidents = []
         dosh_context = []
+        regulation_context = ""
         
         if self.rag_enabled:
             query_text = f"{report_data.get('caption', '')} {report_data.get('violation_summary', '')}"
             
-            # Use Chroma DB for DOSH documentation
-            if self.use_chroma and self.chroma_collection:
+            # PRIMARY: Direct regulation injection (Gemini mode)
+            if self.use_gemini and self.regulations_data:
+                detected_violations = [d.get('class_name', '') for d in report_data.get('detections', []) if d.get('class_name', '').startswith('NO-')]
+                caption = report_data.get('caption', '')
+                env_type = self._extract_environment_from_caption(caption)
+                regulation_context = build_regulation_context(
+                    self.regulations_data,
+                    detected_violations=detected_violations,
+                    environment_type=env_type
+                )
+                logger.info(f"Injected {len(regulation_context)} chars of regulation context")
+            
+            # LEGACY: Use Chroma DB for DOSH documentation (only if Gemini disabled)
+            elif self.use_chroma and self.chroma_collection:
                 logger.info("Retrieving relevant DOSH documentation from Chroma DB...")
                 dosh_context = self._query_chroma_db(query_text, n_results=self.top_k)
                 logger.info(f"Retrieved {len(dosh_context)} DOSH documentation chunks")
             
-            # Also get similar incidents from CSV (optional fallback)
+            # Also get similar incidents from CSV (optional)
             similar_incidents = self._find_similar_incidents(query_text, self.num_similar)
             logger.info(f"Found {len(similar_incidents)} similar incidents")
         
-        # Step 2: NLP - Generate analysis with Ollama
+        # Step 2: NLP - Generate analysis
         nlp_analysis = None
         prompt = self._build_nlp_prompt(report_data, similar_incidents, dosh_context)
-        nlp_analysis = self._call_ollama_api(prompt)
+        
+        # Inject regulation context into prompt if using Gemini
+        if regulation_context:
+            prompt = regulation_context + "\n" + prompt
+        
+        # Try Gemini first, then Ollama
+        if self.use_gemini:
+            image_path = report_data.get('original_image_path')
+            nlp_analysis = self._call_gemini_api(prompt, image_path=str(image_path) if image_path else None)
+        
+        if not nlp_analysis:
+            # Fallback to Ollama
+            if self.use_gemini:
+                logger.warning("Gemini failed, falling back to Ollama...")
+            nlp_analysis = self._call_ollama_api(prompt)
         
         if not nlp_analysis:
             # Fallback if NLP fails

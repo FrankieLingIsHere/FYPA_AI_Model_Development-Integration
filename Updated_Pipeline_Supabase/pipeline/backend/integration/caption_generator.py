@@ -1,9 +1,9 @@
 """
-Caption Generator - Wrapper for LLaVA image captioning
+Caption Generator - Wrapper for image captioning
 =======================================================
 
-Integrates existing caption_image.py with LLaVA model.
-Generates natural language descriptions of workplace safety scenes.
+Uses Gemini API (primary) or LLaVA/Qwen2.5-VL via llama.cpp (fallback)
+for generating natural language descriptions of workplace safety scenes.
 
 Usage:
     generator = CaptionGenerator(config)
@@ -18,30 +18,45 @@ from pathlib import Path
 import sys
 import tempfile
 
-# Import existing caption module
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
+logger = logging.getLogger(__name__)
+
+# =========================================================================
+# GEMINI BACKEND (Primary)
+# =========================================================================
+
+GEMINI_CAPTION_AVAILABLE = False
+gemini_client_instance = None
 
 try:
-    from caption_image import caption_image_llava
-    CAPTION_AVAILABLE = True
-    logging.info("✓ caption_image module loaded successfully")
+    from pipeline.backend.integration.gemini_client import GeminiClient
+    GEMINI_CAPTION_AVAILABLE = True
+    logger.info("✓ Gemini caption backend available")
 except ImportError as e:
-    CAPTION_AVAILABLE = False
-    logging.error(f"❌ caption_image import failed: {e}")
-except Exception as e:
-    CAPTION_AVAILABLE = False
-    logging.error(f"❌ caption_image error: {e}")
-    import traceback
-    traceback.print_exc()
+    logger.info(f"Gemini backend not available: {e}")
 
-logger = logging.getLogger(__name__)
+# =========================================================================
+# LEGACY BACKEND (Fallback — Qwen2.5-VL via llama.cpp)
+# =========================================================================
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
+
+CAPTION_ERROR = None
+LEGACY_CAPTION_AVAILABLE = False
+try:
+    from caption_image import caption_image_llava
+    LEGACY_CAPTION_AVAILABLE = True
+    logging.info("✓ Legacy caption_image module loaded (Qwen2.5-VL-3B)")
+except ImportError as e:
+    CAPTION_ERROR = f"Import error: {str(e)}"
+    logging.debug(f"Legacy caption_image not available: {e}")
+except Exception as e:
+    CAPTION_ERROR = f"Error: {str(e)}"
+    logging.debug(f"Legacy caption_image error: {e}")
 
 
 class CaptionGenerator:
     """
-    Generates image captions using LLaVA model.
-    
-    Wraps existing caption_image.py functionality.
+    Generates image captions using Gemini API (primary) or Qwen2.5-VL (fallback).
     """
     
     def __init__(self, config: dict):
@@ -52,20 +67,41 @@ class CaptionGenerator:
             config: Configuration dictionary from config.py
         """
         self.config = config
-        
-        # Note: Prompt is now defined in caption_image.py (Ollama LLaVA)
-        # This class serves as a wrapper for pipeline integration
-        
-        # Model will be loaded lazily when first caption is requested
         self.model_loaded = False
+        self._gemini_client = None
         
-        logger.info("Caption Generator initialized")
+        # Determine backend
+        gemini_config = config.get('GEMINI_CONFIG', {})
+        use_gemini = gemini_config.get('enabled', True) and GEMINI_CAPTION_AVAILABLE
+        
+        if use_gemini:
+            try:
+                self._gemini_client = GeminiClient(config)
+                if self._gemini_client.is_available:
+                    self.backend = 'gemini'
+                    self.model_loaded = True
+                    logger.info("✓ Caption Generator initialized (Gemini API backend)")
+                else:
+                    logger.warning("Gemini client not available, trying legacy backend")
+                    self._gemini_client = None
+                    self.backend = 'legacy' if LEGACY_CAPTION_AVAILABLE else 'none'
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini for captioning: {e}")
+                self._gemini_client = None
+                self.backend = 'legacy' if LEGACY_CAPTION_AVAILABLE else 'none'
+        else:
+            self.backend = 'legacy' if LEGACY_CAPTION_AVAILABLE else 'none'
+        
+        if self.backend == 'legacy':
+            logger.info("Caption Generator initialized (Legacy Qwen2.5-VL backend)")
+        elif self.backend == 'none':
+            logger.warning("⚠️ No caption backend available (Gemini API key not set + legacy model not found)")
     
     def generate_caption(
         self,
         image: Union[str, np.ndarray, Path],
         prompt: Optional[str] = None,
-        max_retries: int = 1  # Reduced from 3 - avoid retry storms on memory errors
+        max_retries: int = 1
     ) -> str:
         """
         Generate a caption for an image.
@@ -73,22 +109,17 @@ class CaptionGenerator:
         Args:
             image: Image path, numpy array, or Path object
             prompt: Optional custom prompt override
-            max_retries: Number of retry attempts (reduced to prevent VRAM exhaustion)
+            max_retries: Number of retry attempts
         
         Returns:
             Generated caption string
         """
-        if not CAPTION_AVAILABLE:
-            logger.warning("Caption module not available, returning placeholder")
-            return "Image captioning not available - LLaVA model not loaded"
-        
         # Convert numpy array to temporary file if needed
         temp_file = None
         image_path = image
         
         if isinstance(image, np.ndarray):
             try:
-                # Save to temporary file
                 temp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
                 cv2.imwrite(temp_file.name, image)
                 image_path = temp_file.name
@@ -97,41 +128,52 @@ class CaptionGenerator:
                 logger.error(f"Error saving image to temp file: {e}")
                 return "Error: Could not process image for captioning"
         
-        # Generate caption with retries
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Generating caption (attempt {attempt + 1}/{max_retries})...")
-                
-                # Call the existing caption function
-                # Note: caption_image_llava only accepts image_path parameter
-                caption = caption_image_llava(str(image_path))
-                
-                if caption and len(caption.strip()) > 0:
+        image_path = str(image_path)
+        
+        try:
+            # Try Gemini first
+            if self._gemini_client and self._gemini_client.is_available:
+                caption = self._gemini_client.caption_image(image_path, custom_prompt=prompt)
+                if caption and not caption.startswith("Error") and not caption.startswith("Failed"):
                     self.model_loaded = True
-                    logger.info(f"[OK] Caption generated: {caption[:100]}...")
-                    return caption.strip()
+                    return caption
                 else:
-                    logger.warning("Empty caption returned")
-                    
-            except Exception as e:
-                logger.error(f"Error generating caption (attempt {attempt + 1}): {e}")
-                if attempt == max_retries - 1:
-                    # Last attempt failed
-                    return f"Error generating caption: {str(e)[:100]}"
-                
-                # Wait before retry
-                import time
-                time.sleep(2)
-        
-        # Clean up temp file
-        if temp_file:
-            try:
-                import os
-                os.unlink(temp_file.name)
-            except:
-                pass
-        
-        return "Failed to generate caption after multiple attempts"
+                    logger.warning(f"Gemini captioning failed, trying legacy: {caption}")
+            
+            # Fallback to legacy (Qwen2.5-VL via llama.cpp)
+            if LEGACY_CAPTION_AVAILABLE:
+                logger.info("Using legacy caption backend (Qwen2.5-VL)...")
+                for attempt in range(max_retries):
+                    try:
+                        caption = caption_image_llava(image_path)
+                        if caption and len(caption.strip()) > 0:
+                            self.model_loaded = True
+                            logger.info(f"✓ Legacy caption generated: {caption[:100]}...")
+                            return caption.strip()
+                    except Exception as e:
+                        logger.error(f"Legacy captioning error (attempt {attempt + 1}): {e}")
+                        if attempt < max_retries - 1:
+                            import time
+                            time.sleep(2)
+            
+            # All backends failed
+            error_msg = "Image captioning not available"
+            if not self._gemini_client or not self._gemini_client.is_available:
+                error_msg += " — Gemini API key not configured"
+            if not LEGACY_CAPTION_AVAILABLE:
+                error_msg += " — Legacy model not found"
+            if CAPTION_ERROR:
+                error_msg += f": {CAPTION_ERROR}"
+            return error_msg
+            
+        finally:
+            # Clean up temp file
+            if temp_file:
+                try:
+                    import os
+                    os.unlink(temp_file.name)
+                except:
+                    pass
     
     def generate_safety_focused_caption(
         self,
@@ -139,32 +181,40 @@ class CaptionGenerator:
     ) -> str:
         """
         Generate a safety-focused caption for construction site images.
-        
-        Args:
-            image: Image to caption
-        
-        Returns:
-            Safety-focused caption
         """
         safety_prompt = (
-            "USER: <image>\n"
-            "Describe this scene in a natural, fluid paragraph. "
-            "Focus on: 1) The environment (indoor/outdoor/construction/residential), "
-            "2) The people present and their actions, 3) Safety gear worn (or missing), "
-            "and 4) Any visible hazards. "
-            "Do not use a numbered list. Be descriptive and objective."
+            "You are a workplace safety inspector. Analyze this image and describe:\n"
+            "1) What workers are doing\n"
+            "2) What safety equipment they are wearing\n"
+            "3) What safety equipment is missing or not worn\n"
+            "4) Any visible hazards in the work environment\n"
+            "Be specific and factual. Output a single paragraph, 3-5 sentences."
         )
         
         return self.generate_caption(image, prompt=safety_prompt)
     
     def get_status(self) -> dict:
         """Get caption generator status."""
-        return {
-            'available': CAPTION_AVAILABLE,
+        status = {
+            'available': self.backend != 'none',
             'model_loaded': self.model_loaded,
-            'backend': 'Ollama LLaVA',
-            'model': 'llava-phi3:3.8b'  # Smaller model for lower memory systems
+            'backend': self.backend,
         }
+        
+        if self.backend == 'gemini':
+            status['model'] = 'Gemini 2.0 Flash (Google AI)'
+        elif self.backend == 'legacy':
+            status['model'] = 'Qwen2.5-VL-3B-Instruct (Q4_K_M GGUF)'
+        else:
+            status['model'] = 'None'
+            
+        if CAPTION_ERROR:
+            status['legacy_error'] = CAPTION_ERROR
+            
+        if self._gemini_client:
+            status['gemini_status'] = self._gemini_client.get_status()
+            
+        return status
 
 
 # =============================================================================
@@ -172,58 +222,34 @@ class CaptionGenerator:
 # =============================================================================
 
 if __name__ == '__main__':
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
-    from config import LLAVA_CONFIG
+    import os
+    from dotenv import load_dotenv
     
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
+    load_dotenv()
+    
     print("=" * 70)
     print("CAPTION GENERATOR TEST")
     print("=" * 70)
     
-    # Create config
-    config = {'LLAVA_CONFIG': LLAVA_CONFIG}
+    # Import config
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
+    from config import LLAVA_CONFIG, GEMINI_CONFIG
     
-    # Create generator
+    config = {
+        'LLAVA_CONFIG': LLAVA_CONFIG,
+        'GEMINI_CONFIG': GEMINI_CONFIG,
+    }
+    
     generator = CaptionGenerator(config)
     
-    print(f"\n[OK] Caption Generator initialized")
-    print(f"Model ID: {generator.model_id}")
-    print(f"Load in 4-bit: {generator.load_in_4bit}")
-    print(f"Max tokens: {generator.max_new_tokens}")
-    print(f"Caption module available: {CAPTION_AVAILABLE}")
-    
+    print(f"\nBackend: {generator.backend}")
     status = generator.get_status()
-    print(f"\nStatus:")
     for key, value in status.items():
         print(f"  {key}: {value}")
     
-    # Test with dummy image (if caption module available)
-    if CAPTION_AVAILABLE:
-        print("\n--- Testing Caption Generation ---")
-        print("Creating dummy test image...")
-        
-        # Create a simple test image
-        test_image = np.zeros((480, 640, 3), dtype=np.uint8)
-        # Add some visual elements
-        cv2.rectangle(test_image, (100, 100), (300, 400), (0, 255, 0), -1)
-        cv2.putText(test_image, "TEST", (150, 250), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
-        
-        print("NOTE: This will load LLaVA model which may take time and memory!")
-        print("Generating caption (this may take 30-60 seconds)...")
-        
-        try:
-            caption = generator.generate_caption(test_image)
-            print(f"\n[OK] Caption: {caption}")
-        except Exception as e:
-            print(f"\n[!] Caption generation failed (expected if model not available): {e}")
-    else:
-        print("\n[!] caption_image module not available - skipping caption generation test")
-    
-    print("\n[OK] All tests completed!")
-    print("=" * 70)
+    print("\n" + "=" * 70)

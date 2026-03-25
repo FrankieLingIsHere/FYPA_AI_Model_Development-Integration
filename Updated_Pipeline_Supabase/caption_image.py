@@ -1,91 +1,56 @@
 """
-Image Captioning with LLaVA via Ollama
+Image Captioning with Qwen2.5-VL via Ollama API
 
-Fast image captioning using Ollama's llava model.
-Generates captions in seconds instead of minutes.
+Fast and accurate image captioning using Qwen2.5-VL through Ollama.
+Superior spatial reasoning, object counting, and PPE detection compared to LLaVA.
 
 Usage:
     python caption_image.py path/to/image.jpg
+
+Requirements:
+    - Ollama installed and running
+    - Qwen2.5-VL model: ollama pull qwen2.5vl
 """
 import sys
-import requests
+import os
 import base64
+import requests
+import json
 from pathlib import Path
 
-# --- OLLAMA CONFIGURATION ---
+# --- QWEN2.5-VL CONFIGURATION ---
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
-
-# Model fallback order (will try in order until one works)
-# Prioritize CPU-friendly models first for broader compatibility
-OLLAMA_MODELS = [
-    {"name": "moondream:1.8b", "description": "CPU-friendly, ~1.5GB RAM - recommended", "min_ram_gb": 2},
-    {"name": "llava-phi3:3.8b", "description": "Higher quality, ~3.6GB RAM - needs more resources", "min_ram_gb": 4},
-]
-
-# Cache the working model to avoid repeated checks
-_working_model = None
-_model_check_done = False
-
-TIMEOUT = 120  # 2 minutes timeout
+MODEL_NAME = "qwen2.5vl"  # Qwen2.5-VL vision model
+TIMEOUT = 60  # Timeout for API requests
 # ---------------------------
 
+def encode_image_to_base64(image_path):
+    """Convert image to base64 string for API."""
+    with open(image_path, 'rb') as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
 def check_ollama_running():
-    """Check if Ollama is running and accessible."""
+    """Check if Ollama is running."""
     try:
-        response = requests.get(OLLAMA_TAGS_URL, timeout=5)
-        return response.ok
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        return response.status_code == 200
     except:
         return False
 
-def get_installed_models():
-    """Get list of installed Ollama models."""
+def check_model_available(model_name):
+    """Check if the specified model is available in Ollama."""
     try:
-        response = requests.get(OLLAMA_TAGS_URL, timeout=10)
-        if response.ok:
-            data = response.json()
-            return [m.get('name', '') for m in data.get('models', [])]
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            return any(model_name in model.get('name', '') for model in models)
     except:
         pass
-    return []
-
-def find_working_model():
-    """Find the first available VLM model from the fallback list."""
-    global _working_model, _model_check_done
-    
-    if _model_check_done and _working_model:
-        return _working_model
-    
-    if not check_ollama_running():
-        print("[X] Ollama is not running!")
-        print("   Start Ollama with: ollama serve")
-        print("   Download from: https://ollama.ai")
-        return None
-    
-    installed = get_installed_models()
-    print(f"Installed Ollama models: {installed}")
-    
-    for model in OLLAMA_MODELS:
-        model_name = model["name"]
-        # Check if model (or partial match) is installed
-        if any(model_name.split(':')[0] in m for m in installed):
-            print(f"[OK] Found VLM model: {model_name}")
-            _working_model = model_name
-            _model_check_done = True
-            return model_name
-    
-    # No models found - provide helpful message
-    print("[X] No VLM models installed!")
-    print("   Install a model with one of these commands:")
-    print("   ollama pull moondream:1.8b   (lighter, ~1.5GB, good for CPU)")
-    print("   ollama pull llava-phi3:3.8b  (better quality, ~3.6GB)")
-    
-    _model_check_done = True
-    return None
+    return False
 
 def caption_image_llava(image_path):
     """
-    Generate caption using Ollama's LLaVA model.
+    Generate caption using Qwen2.5-VL via Ollama API.
     
     Args:
         image_path: Path to image file
@@ -93,258 +58,300 @@ def caption_image_llava(image_path):
     Returns:
         Caption string or None if failed
     """
-    # Find available VLM model with automatic fallback
-    model = find_working_model()
-    if not model:
-        return "Image captioning not available - No VLM model installed. Run: ollama pull moondream:1.8b"
+    # Check prerequisites
+    if not check_ollama_running():
+        print("Error: Ollama is not running. Please start Ollama first.")
+        print("Run: ollama serve")
+        return None
     
-    print(f"Using Ollama VLM model: {model}")
+    if not check_model_available(MODEL_NAME):
+        print(f"Error: Model '{MODEL_NAME}' not found in Ollama.")
+        print(f"Please pull the model first: ollama pull {MODEL_NAME}")
+        return None
     
-    # Load and encode image to base64
-    try:
-        with open(image_path, 'rb') as f:
-            image_data = f.read()
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
-        print(f"Image loaded: {Path(image_path).name}")
-    except FileNotFoundError:
+    print(f"Using {MODEL_NAME} model via Ollama API")
+    
+    # Verify image exists
+    if not Path(image_path).exists():
         print(f"Error: Image file not found at {image_path}")
         return None
-    except Exception as e:
-        print(f"Error loading image: {e}")
-        return None
     
-    # Build prompt based on model capability
-    if 'moondream' in str(model):
-        # HYPER-SPECIFIC SAFETY ASSESSMENT PROMPT FOR MOONDREAM
-        # Moondream needs explicit grounding. Questionnaire caused hallucinations.
-        # We use a defined persona and specific targets.
-        prompt = (
-            "Analyze this construction site image. "
-            "Describe the lighting (day/night), any heavy machinery (excavators, trucks), "
-            "the workers (number, actions), and their safety gear. "
-            "Be factual and detailed."
-        )
-    else:
-        # LLaVA/Phi3 can handle structured output better
-        prompt = """You are a JKR-certified Safety Officer. Analyze this image for strict OSHA 1994 and BOWEC 1986 compliance. Provide a DETAILED, STRUCTURED description.
+    print(f"Image loaded: {Path(image_path).name}")
+    
+    # Build prompt for workplace safety analysis (NEUTRAL - no construction bias)
+    prompt = """You are a workplace safety observer. Describe EXACTLY what you see in this image using a natural narrative style.
 
-REQUIRED OUTPUT FORMAT:
-=======================
-Start with: "SCENE: [number] person(s) detected."
+Start directly describing the person(s) and their actual environment. DO NOT use phrases like "In the image" or "The image shows".
 
-Then for EACH person, describe in this order:
-1. ACTIVITY: What are they doing? (e.g., "Welding", "Working at height >2m", "Excavating trench >1.5m").
-2. POSITION: Where are they? (e.g., "On scaffold", "Near open edge", "Under suspended load").
-3. BODY VISIBILITY: (full body / upper half / head only).
-4. HEAD PROTECTION (MS 183):
-   - Helmet present? (Yes/No)
-   - Chin strap visible/fastened? (CRITICAL for JKR)
-   - Color? (White=Supervisor/Yellow=Worker)
-5. HI-VIZ VEST (MS 1731):
-   - Present? (Yes/No)
-   - Color? (Neon Yellow/Orange/Green)
-   - Retroreflective strips visible?
-6. FALL PROTECTION (MS 2311) [If >2m height]:
-   - Full-body harness present?
-   - Lanyard anchored? (Safe/Unsafe tie-off)
-7. HANDS/FEET: Gloves? Safety boots (reinforced toe)?
-8. FACE: Masks/goggles?
+CRITICAL - ANTI-MISCLASSIFICATION RULES:
+========================================
+1. HARDHAT vs HAIR/CAPS:
+   - A HARDHAT is a RIGID, THICK protective helmet (typically white, yellow, orange, or bright colored)
+   - HAIR (even dark, neat hair) is NOT a hardhat
+   - Baseball caps, beanies, hoodies are NOT hardhats
+   - If unsure, describe what you see: "person has dark hair" NOT "wearing hardhat"
+   - ONLY say "hardhat" if you see a clearly identifiable safety helmet with rigid structure
 
-End with: "ENVIRONMENT: [Brief description - note Hazards like 'Unshored trench', 'Loose scaffolding', 'Trip hazards', 'Poor housekeeping']"
+2. ACTUAL ENVIRONMENT (do not fabricate):
+   - If you see home furniture (sofa, TV stand, decorative items, carpets) → say "residential indoor setting"
+   - If you see office desks, computers, cubicles → say "office environment"
+   - If you see construction equipment, scaffolding, concrete → say "construction area"
+   - DO NOT call a living room a "construction site" or "work zone"
 
-CRITICAL JKR MONITORING RULES:
-==============================
-1. HEAD: Rigid helmet required. Caps/Hats = NON-COMPLIANCE. Chin strap check is mandatory.
-2. VEST: Must be outermost layer. Must be high-visibility neon.
-3. HEIGHT: If feet >2m off ground, look for HARNESS + ANCHOR.
-4. EXCAVATION: If trench >1.5m, look for SHORING. Spoil heap >0.6m from edge?
-5. HOUSEKEEPING: Cables, debris, oil spills?
+3. VISIBILITY RULES:
+   - SAFETY BOOTS: ONLY mention if feet/ankles are clearly visible. If not visible, say "lower body not visible"
+   - GLOVES: Only if hands are clearly visible
+   - If only head/shoulders visible, do NOT speculate about lower body PPE
 
-Analyze now using strict JKR/OSHA standards:"""
+4. PPE MUST BE OBVIOUS:
+   - Safety Vest: Bright fluorescent vest with reflective strips
+   - Hardhat: Rigid helmet with chin strap area visible
+   - Safety Boots: Sturdy work boots (steel toe style)
+   - Goggles: Clear protective eyewear
+   - DO NOT report PPE unless it is CLEARLY VISIBLE and IDENTIFIABLE
 
-    import time
-    timestamp_seed = int(time.time() * 1000)
+Describe in order:
+- Person(s): What are they doing? What body parts are visible (full body / upper half / head only)?
+- Clothing/PPE: Describe ONLY what is actually visible and certain
+  * HEAD: Describe hair/headwear. Only say "hardhat" if you see a rigid safety helmet
+  * TORSO: Describe shirt/jacket. Only say "safety vest" if fluorescent with reflective strips
+  * HANDS: Describe if visible. Only say "gloves" if work gloves are clearly visible
+  * FEET: If visible, describe footwear. If not visible, state "lower body not visible"
+  * FACE: Goggles/mask only if clearly present
+- Actual Environment: Describe the real setting (residential/office/industrial/outdoor/etc.)
+- Safety Context: Any visible hazards IF this is actually a work environment
+
+Be accurate and honest. Do not assume this is a construction site unless you see construction indicators. Write a flowing paragraph, not a numbered list."""
+    
+    # Encode image to base64
+    try:
+        image_base64 = encode_image_to_base64(image_path)
+    except Exception as e:
+        print(f"Error encoding image: {e}")
+        return None
     
     # Call Ollama API
     try:
-        print(f"Generating caption with Ollama (Image size: {len(image_base64)} chars)...")
-        response = requests.post(
-            OLLAMA_API_URL,
-            json={
-                'model': model,
-                'prompt': prompt, # Salt removed to improve model compatibility
-                'context': [],  # FORCE STATELESS: Empty context prevents caching of previous conversations
-                'images': [image_base64],
-                'stream': False,
-                'options': {
-                    'temperature': 0.3,  # Increased for more variety in descriptions
-                    'num_predict': 500,
-                    'stop': ['\\n\\n\\n']
-                }
-            },
-            timeout=TIMEOUT
-        )
+        print(f"Generating caption with {MODEL_NAME}...")
         
-        if not response.ok:
-            print(f"Error: Ollama API returned {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
+        payload = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "images": [image_base64],
+            "stream": False,
+            "options": {
+                "temperature": 0.6,
+                "num_predict": 250
+            }
+        }
         
-        data = response.json()
-        print(f"DEBUG: Raw Ollama response keys: {data.keys()}")
-        print(f"DEBUG: Raw response content: {data.get('response', 'MISSING')[:200]}")
-        caption = data.get('response', '').strip()
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=TIMEOUT)
+        response.raise_for_status()
+        
+        result = response.json()
+        caption = result.get('response', '').strip()
         
         if caption:
-            # Clean up brackets and raw formatting
-            import re
+            # Clean up common prefixes
+            prefixes_to_remove = [
+                "In the image, ",
+                "In the image ",
+                "The image shows ",
+                "The image depicts ",
+                "This image shows ",
+                "This image depicts ",
+                "In this image, ",
+                "In this image "
+            ]
             
-            # Remove leading/trailing brackets
-            caption = caption.strip('[]{}')
-            caption = caption.strip()
-            
-            # Remove quotes
-            caption = caption.replace('"', '').replace("'", "")
-            
-            # Remove any remaining bracket patterns like [text] or {text}
-            caption = re.sub(r'\[([^\]]*)\]', r'\\1', caption)
-            caption = re.sub(r'\{([^\}]*)\}', r'\\1', caption)
-            
-            # Remove bullet points and list markers (preserve structure)
-            # caption = re.sub(r'^[\-\*\•]\s*', '', caption, flags=re.MULTILINE) 
-            
-            # Merge multiple spaces and newlines
-            caption = re.sub(r'\s+', ' ', caption).strip()
+            for prefix in prefixes_to_remove:
+                if caption.startswith(prefix):
+                    caption = caption[len(prefix):]
+                    # Capitalize first letter after removal
+                    if caption:
+                        caption = caption[0].upper() + caption[1:]
+                    break
             
             # Ensure complete sentence - truncate to last period if incomplete
             if caption and not caption.endswith(('.', '!', '?')):
+                # Find last complete sentence
                 last_period = caption.rfind('.')
                 if last_period > 0:
                     caption = caption[:last_period + 1]
                 else:
+                    # If no period found, add one
                     caption = caption + '.'
             
             print("Caption generation complete!")
             return caption
         else:
-            print("Error: Empty response from Ollama")
+            print("Error: Empty response from model")
             return None
             
+    except requests.exceptions.ConnectionError:
+        print("Error: Cannot connect to Ollama API. Make sure Ollama is running.")
+        print("Run: ollama serve")
+        return None
     except requests.exceptions.Timeout:
         print(f"Error: Request timed out after {TIMEOUT} seconds")
         return None
-    except requests.exceptions.ConnectionError:
-        print("Error: Could not connect to Ollama. Make sure Ollama is running.")
-        print("Start Ollama with: ollama serve")
-        return None
     except Exception as e:
-        print(f"Error calling Ollama API: {e}")
+        print(f"Error during caption generation: {e}")
         return None
 
 
 def validate_work_environment(image_path):
     """
-    Quick check to determine if the image shows a valid work environment.
-    Strictly filters out residential/home settings.
+    Quick check to determine if the image shows a valid work environment
+    where PPE monitoring is appropriate (construction site, factory, warehouse, etc.).
+    
+    CLASSIFICATION LOGIC:
+    =====================
+    The LLaVA model classifies the scene into 4 categories:
+    
+    A) CONSTRUCTION/INDUSTRIAL → is_valid=TRUE, confidence=HIGH
+       - Construction sites, factories, warehouses, workshops
+       - Manufacturing plants, work zones, industrial areas
+       - Any place where PPE is typically required
+    
+    B) OFFICE/COMMERCIAL → is_valid=TRUE, confidence=MEDIUM  
+       - Office buildings, retail stores, meeting rooms
+       - These environments MAY require PPE in certain areas
+       - Still processed (not skipped)
+    
+    C) RESIDENTIAL/CASUAL → is_valid=FALSE, confidence=HIGH
+       - Homes, living rooms, bedrooms, kitchens
+       - Parks, beaches, restaurants, casual settings
+       - These are SKIPPED (no report generated)
+    
+    D) OTHER/UNCLEAR → is_valid=TRUE, confidence=LOW
+       - Outdoor roads, vehicle interiors, unclear scenes
+       - Benefit of doubt - still processed
+    
+    ONLY Category C causes violations to be SKIPPED.
+    Categories A, B, D all proceed with normal processing.
+    
+    Args:
+        image_path: Path to image file
+    
+    Returns:
+        dict with:
+            - is_valid: bool - True if this is a work environment (A, B, D) or False (C only)
+            - confidence: str - 'high', 'medium', 'low'
+            - environment_type: str - type of environment detected
+            - reason: str - explanation
     """
     print(f"Validating work environment...")
     
-    # Find available VLM model with automatic fallback
-    model = find_working_model()
-    if not model:
-        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'VLM not available - defaulting to valid'}
+    # Verify image exists
+    if not Path(image_path).exists():
+        print(f"Error: Image not found at {image_path}")
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Image file not found'}
     
+    # Quick environment classification prompt - STRICT scene recognition
+    prompt = """Look at this image carefully and classify the ACTUAL environment you see.
+
+CHECK FOR THESE INDICATORS:
+
+A) CONSTRUCTION/INDUSTRIAL:
+   ✓ Scaffolding, concrete, lumber, construction equipment
+   ✓ Factory machinery, assembly lines, warehouses with industrial shelving
+   ✓ Visible construction materials, work site barriers, heavy machinery
+   ✓ People wearing multiple PPE items in an active work zone
+   → Choose A ONLY if you see CLEAR industrial/construction indicators
+
+B) OFFICE/COMMERCIAL:
+   ✓ Office desks, computers, cubicles, meeting rooms
+   ✓ Retail displays, store shelves, checkout counters
+   ✓ Professional indoor setting with business furniture
+
+C) RESIDENTIAL/CASUAL:
+   ✓ Home furniture: sofas, TV stands, beds, dining tables, home decor
+   ✓ Residential kitchen, living room, bedroom, home interior
+   ✓ Parks, beaches, restaurants, cafes, casual outdoor settings
+   ✓ Person at home (even if wearing safety gear for testing purposes)
+   → Choose C if this looks like someone's HOME or casual setting
+
+D) OTHER:
+   ✓ Vehicle interior, outdoor road/street, unclear background
+   ✓ Cannot determine the setting
+
+IMPORTANT: Do NOT classify a residential living room as construction site just because someone is wearing safety gear! The ENVIRONMENT determines the category, not the person's clothing.
+
+Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
+- "A - construction site with scaffolding"
+- "C - person in living room"
+- "C - home interior with sofa"
+- "B - office desk area" """
+
+    # Encode image to base64
     try:
-        with open(image_path, 'rb') as f:
-            image_data = f.read()
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        image_base64 = encode_image_to_base64(image_path)
     except Exception as e:
-        print(f"Error loading image: {e}")
-        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Could not load image for validation'}
-    
-    # Quick environment classification prompt - STRICT with CLOSE-UP HANDLERS
-    prompt = """Classify the ENVIRONMENT/BACKGROUND. IGNORE the person's clothing.
-
-RULES:
-1. FOCUS ON BACKGROUND: Look past the person. Walls, furniture, equipment?
-2. CLOSE-UPS/BLURRY: If the background is blurry or just a wall/ceiling (Close-up face shot) -> Default to D (Other) or C (Residential) if ANY home hint exists.
-3. ANTI-BIAS: Do NOT assume "Construction" just because of a hardhat.
-
-CATEGORIES (Check in order):
-
-C - RESIDENTIAL (Highest Priority - Home Context):
-   - ANY sign of home: Sofa, Couch, TV, Bed, Wardrobe, Curtain
-   - Kitchen cabinets, Fridge, Carpet, Rug
-   - Living room wall decor, family photos
-   - Home hallway, staircase, wooden flooring
-   -> If you see a sofa or TV, it IS Residential, even if the person looks like a worker.
-
-B - OFFICE/COMMERCIAL:
-   - Computer screens, Keyboards, Whiteboards
-   - Office desks, Cubicles, Meeting rooms
-   - Retail shelves
-
-A - CONSTRUCTION/INDUSTRIAL (Require PROOF):
-   - Scaffolding, Excavators, Cranes
-   - Concrete mixer, Bricks, Lumber stacks
-   - Industrial pipes, Factory machinery
-   - Warehouse racking
-   -> MUST see actual heavy equipment or raw materials.
-   -> A plain wall or door is NOT construction.
-
-D - OTHER/UNCLEAR:
-   - Close-up face shot with no background context
-   - Blurry/Indistinguishable background
-   - Car interior
-   - Outdoor street/sky only
-
-ANSWER FORMAT: Just the letter and 2-5 words.
-Examples:
-"C - living room couch"
-"D - close-up face unclear background"
-"A - scaffolding and concrete"
-"B - office computer"
-
-Your classification:"""
+        print(f"Error encoding image: {e}")
+        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Image encoding failed'}
 
     try:
-        response = requests.post(
-            OLLAMA_API_URL,
-            json={
-                'model': model,
-                'prompt': prompt,
-                'images': [image_base64],
-                'stream': False,
-                'options': {
-                    'temperature': 0.05,  # Very strict
-                    'num_predict': 25,
-                }
-            },
-            timeout=30
-        )
+        payload = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "images": [image_base64],
+            "stream": False,
+            "options": {
+                "temperature": 0.3,
+                "num_predict": 30
+            }
+        }
         
-        if not response.ok:
-            print(f"Environment validation failed: {response.status_code}")
-            return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'API error - defaulting to valid'}
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=TIMEOUT)
+        response.raise_for_status()
         
-        data = response.json()
-        answer = data.get('response', '').strip().upper()
+        result = response.json()
+        answer = result.get('response', '').strip().upper()
         
         print(f"Environment check result: {answer}")
         
+        # Parse the response - ONLY category C causes is_valid=False
         if answer.startswith('A'):
-            return {'is_valid': True, 'confidence': 'high', 'environment_type': 'construction/industrial', 'reason': answer}
+            return {
+                'is_valid': True,
+                'confidence': 'high',
+                'environment_type': 'construction/industrial',
+                'reason': answer
+            }
         elif answer.startswith('B'):
-            return {'is_valid': True, 'confidence': 'medium', 'environment_type': 'office/commercial', 'reason': answer}
+            # Office environments may still need PPE in certain areas
+            return {
+                'is_valid': True,
+                'confidence': 'medium',
+                'environment_type': 'office/commercial',
+                'reason': answer
+            }
         elif answer.startswith('C'):
-            return {'is_valid': False, 'confidence': 'high', 'environment_type': 'residential/casual', 'reason': answer}
+            return {
+                'is_valid': False,
+                'confidence': 'high',
+                'environment_type': 'residential/casual',
+                'reason': answer
+            }
         elif answer.startswith('D'):
-            return {'is_valid': True, 'confidence': 'low', 'environment_type': 'other/unclear', 'reason': answer}
+            return {
+                'is_valid': True,
+                'confidence': 'low',
+                'environment_type': 'other',
+                'reason': answer
+            }
         else:
-            return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': f'Unparseable: {answer[:30]}'}
+            # Couldn't parse - default to valid with low confidence
+            return {
+                'is_valid': True,
+                'confidence': 'low',
+                'environment_type': 'unknown',
+                'reason': f'Unparseable response: {answer[:50]}'
+            }
             
     except Exception as e:
-        print(f"Environment validation error: {e}")
+        print(f"Environment validation error: {e} - defaulting to valid")
         return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': str(e)}
 
 
@@ -358,23 +365,25 @@ if __name__ == "__main__":
     try:
         # First validate environment
         env_result = validate_work_environment(image_path)
-        print(f"\\nEnvironment Validation:")
+        print(f"\nEnvironment Validation:")
         print(f"  Valid work environment: {env_result['is_valid']}")
         print(f"  Confidence: {env_result['confidence']}")
         print(f"  Type: {env_result['environment_type']}")
         print(f"  Reason: {env_result['reason']}")
         
         if env_result['is_valid']:
-            print("\\n--- Generating full caption ---")
+            print("\n--- Generating full caption ---")
             caption = caption_image_llava(image_path)
             if caption:
                 print("Caption:", caption)
         else:
-            print("\\n[!] Skipping caption - not a valid work environment")
+            print("\n⚠️ Skipping caption - not a valid work environment")
             
     except ImportError as e:
-        print(f"\\nImportError: {e}")
-        print("Please ensure you have installed all required libraries:")
-        print("pip install --upgrade transformers accelerate bitsandbytes torch pillow")
+        print(f"\nImportError: {e}")
+        print("Please ensure you have installed required packages:")
+        print("pip install requests")
+        print("\nAlso ensure Ollama is installed and the model is pulled:")
+        print(f"ollama pull {MODEL_NAME}")
     except Exception as e:
-        print(f"\\nAn error occurred: {e}")
+        print(f"\nAn error occurred: {e}")

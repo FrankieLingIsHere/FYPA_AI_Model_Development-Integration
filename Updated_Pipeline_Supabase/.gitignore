@@ -61,5 +61,17 @@ Results/
 tmp/
 temp/
 *.tmp
+
+# Docs (ignore debug/log text files, but keep essential ones)
 *.md
+!README.md
+!INSTALL.md
+!QUICKSTART.md
 *.txt
+!requirements.txt
+
+# Keep deployment files
+!Procfile
+!frontend/manifest.json
+!frontend/vercel.json
+!frontend/service-worker.js

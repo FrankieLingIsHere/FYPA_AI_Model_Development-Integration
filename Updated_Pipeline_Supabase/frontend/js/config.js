@@ -1,6 +1,9 @@
 // API Configuration
+// BASE_URL auto-detects: same-origin when served by Flask,
+// or set window.PPE_API_URL before this script loads for custom backend URL.
+// For Vercel deployment, set PPE_API_URL to your backend server's public URL.
 const API_CONFIG = {
-    BASE_URL: 'http://localhost:5000',
+    BASE_URL: window.PPE_API_URL || '',
     ENDPOINTS: {
         VIOLATIONS: '/api/violations',
         REPORT: (id) => `/report/${id}`,

@@ -1,0 +1,152 @@
+{
+  "version": "1.0",
+  "description": "Malaysian PPE safety regulations consolidated from BOWEC 1986, OSHA 1994, JKR Standard Specifications, USECHH 2000, CIDB CIS 22:2021, and Malaysian Standards (MS).",
+  "last_updated": "2025-01-01",
+  "regulations": {
+    "hardhat": {
+      "ppe_item": "Safety Helmet / Hard Hat",
+      "hazard": "Exposure to falling objects (timber piles, debris) or impact with fixed structures in a mandatory Hard Hat Zone.",
+      "risk": "Fatal/Severe: Traumatic Brain Injury (TBI), skull fracture, or concussion from overhead debris.",
+      "corrective_action": "Stop work immediately. Issue MS 183:2001 certified industrial safety helmet. Verify chin strap is fastened. Sun hats/caps are PROHIBITED.",
+      "legal_citation": "BOWEC 1986, Reg. 24: Mandatory head protection on construction sites.",
+      "technical_standard": "MS 183:2001: Specifications for industrial safety helmets (min. 4.9kN impact resistance).",
+      "regulation_ref": "BOWEC 1986 Reg. 24 / MS 183:2001",
+      "requirement": "Personnel must wear MS 183:2001 certified industrial safety helmets (at least 4.9kN impact resistance). Sun hats/caps are PROHIBITED.",
+      "penalty": "Violation of OSHA 1994 Section 15. Mandatory fine up to RM 50,000 or 2 years imprisonment for failing to provide safe equipment.",
+      "severity": "HIGH"
+    },
+    "safety_vest": {
+      "ppe_item": "High-Visibility Safety Vest",
+      "hazard": "Failure to be visible to operators of mobile plant (excavators, lorries) and passing traffic on roadside sites.",
+      "risk": "Fatal: Struck-by-vehicle incident from lorry, excavator, or passing traffic near roadside work zones.",
+      "corrective_action": "Worker must immediately wear SIRIM-certified neon vest with retroreflective strips. HIGH RISK of being struck if not visible.",
+      "legal_citation": "JKR Standard Spec (Section A): High-viz required near plant/traffic.",
+      "technical_standard": "MS 1731:2004: Retroreflective materials for high-visibility safety vests (Class 2 Minimum, visible from 200m).",
+      "regulation_ref": "JKR Std Spec Sec A / MS 1731:2004",
+      "requirement": "Workers must wear SIRIM-certified neon vests with retroreflective strips visible from 200m (Class 2 Minimum).",
+      "penalty": "Violation of JKR Standard Specification Section A. Mandatory fine up to RM 50,000 under Section 15 of OSHA 1994 for failing to provide a safe system of work.",
+      "severity": "HIGH"
+    },
+    "mask": {
+      "ppe_item": "Respiratory Protection / Face Mask",
+      "hazard": "Inhalation of hazardous construction dusts (silica from concrete, wood particles from timber handling) or fumes.",
+      "risk": "Chronic/Acute: Respiratory impairment (Silicosis, Asthma) or lung damage from prolonged dust exposure.",
+      "corrective_action": "Stop exposure to dust/fumes immediately. Provide N95/P2 particulate mask compliant with MS 2323:2010.",
+      "legal_citation": "USECHH Regulations 2000: Control of exposure to hazardous chemicals.",
+      "technical_standard": "MS 2323:2010: Respiratory protective devices - Selection, use and maintenance.",
+      "regulation_ref": "USECHH 2000 / MS 2323:2010",
+      "requirement": "Workers exposed to construction dusts must wear MS 2323:2010 compliant respirators (Min. N95/P2 class).",
+      "penalty": "Violation of USECHH Regulations 2000. Fine up to RM 10,000 or 1 year imprisonment.",
+      "severity": "MEDIUM"
+    },
+    "gloves": {
+      "ppe_item": "Protective Gloves",
+      "hazard": "Direct contact with abrasive materials, sharp edges (rebar), or corrosive substances.",
+      "risk": "Moderate: Lacerations, chemical burns, punctures, or dermatitis.",
+      "corrective_action": "Issue task-specific hand protection: cut-resistant gloves for rebar handling, chemical-resistant gloves for wet works.",
+      "legal_citation": "OSHA 1994 Section 15: Employer duty to provide suitable PPE.",
+      "technical_standard": "MS 2097: Protective gloves for construction.",
+      "regulation_ref": "OSHA 1994 Section 15 / MS 2097",
+      "requirement": "Suitable hand protection (MS 2097) must be worn when handling abrasive, sharp, or hazardous materials.",
+      "penalty": "General penalty under OSHA 1994 Section 15: Fine up to RM 50,000.",
+      "severity": "MEDIUM"
+    },
+    "goggles": {
+      "ppe_item": "Eye Protection / Safety Goggles",
+      "hazard": "Exposure to flying particles (grinding/chipping), chemical splashes, or intense light emissions.",
+      "risk": "Severe: Corneal abrasion, chemical eye burns, or permanent vision loss.",
+      "corrective_action": "Issue MS 2050 compliant eye protection appropriate for the specific task (welding, cutting, grinding).",
+      "legal_citation": "BOWEC 1986 Reg. 13: Eye protection for hazardous processes.",
+      "technical_standard": "MS 2050: Eye protectors for industrial use.",
+      "regulation_ref": "BOWEC 1986 Reg. 13 / MS 2050",
+      "requirement": "Eye protection (MS 2050) is mandatory for processes involving flying particles (welding, cutting, grinding).",
+      "penalty": "Strict liability offense under FMA 1967. Fine up to RM 5,000.",
+      "severity": "MEDIUM"
+    },
+    "footwear": {
+      "ppe_item": "Safety Footwear / Boots",
+      "hazard": "Foot exposure to sharp objects (nails), crushing weights, or uneven terrain/slip hazards.",
+      "risk": "Serious: Crushed toes, puncture wounds (tetanus risk), or skeletal fractures.",
+      "corrective_action": "Enforce MS ISO 20345 safety boots with steel toe. Slippers, sandals, and sneakers are PROHIBITED on site.",
+      "legal_citation": "BOWEC 1986 Reg. 15: Safety footwear mandatory on construction sites.",
+      "technical_standard": "MS ISO 20345: Personal protective equipment - Safety footwear (200J toe protection, penetration resistance).",
+      "regulation_ref": "BOWEC 1986 Reg. 15 / MS ISO 20345",
+      "requirement": "Safety footwear (MS ISO 20345) with toe protection (200J) and penetration resistance is MANDATORY. Slippers/sneakers are prohibited.",
+      "penalty": "Violation of BOWEC Reg 15. Fine up to RM 5,000.",
+      "severity": "MEDIUM"
+    },
+    "harness": {
+      "ppe_item": "Full-Body Safety Harness",
+      "hazard": "Working at height (>2m) without fall arrest system or improper anchorage.",
+      "risk": "Fatal: Fall from height resulting in death or catastrophic injury.",
+      "corrective_action": "STOP WORK IMMEDIATELY. Equip worker with MS 2311 full-body harness with secure anchorage before resuming any work at height.",
+      "legal_citation": "BOWEC 1986 Reg. 12: Fall protection mandatory for work at height.",
+      "technical_standard": "MS 2311: Full-body harness for fall arrest systems.",
+      "regulation_ref": "BOWEC 1986 Reg. 12 / MS 2311",
+      "requirement": "Full-body harness (MS 2311) with secure anchorage is mandatory for all work at height >2m.",
+      "penalty": "Immediate Prohibition Notice. Fine up to RM 50,000 under OSHA 1994.",
+      "severity": "HIGH"
+    }
+  },
+  "environment_rules": {
+    "Roadside Work Zone": {
+      "primary_regulation": "JKR Arahan Teknik (Jalan) 2C/85",
+      "requirements": [
+        "Traffic Management Plan (TMP) is MANDATORY",
+        "High Visibility Vest (MS 1731:2004, Class 2 minimum) is MANDATORY",
+        "Advance Warning Signs, Safety Cones, and Flagmen required",
+        "No work without JKR ATJ 2C/85 compliant traffic control devices"
+      ],
+      "penalty": "Major offense under OSHA 1994 Section 15. Fine up to RM 50,000 or 2 years imprisonment."
+    },
+    "Work at Height": {
+      "primary_regulation": "BOWEC 1986 (Scaffolds & Work at Height)",
+      "requirements": [
+        "Safety Harness (MS 2311) is MANDATORY for work >2m",
+        "Safety Helmet (MS 183:2001) is MANDATORY",
+        "Scaffold must comply with BOWEC 1986 standards",
+        "Edge protection and toe boards required"
+      ],
+      "penalty": "Immediate Prohibition Notice. Fine up to RM 50,000."
+    },
+    "Excavation / Trenching": {
+      "primary_regulation": "DOSH Guidelines on Trenching and Excavation",
+      "requirements": [
+        "Shoring/Barriers required for excavations >1.5m",
+        "Safety Helmet is MANDATORY",
+        "Access ladder required every 7.5m",
+        "Daily inspection before work begins"
+      ],
+      "penalty": "Violation of OSHA 1994. Fine up to RM 50,000."
+    },
+    "Construction Site": {
+      "primary_regulation": "BOWEC 1986 (General)",
+      "requirements": [
+        "Safety Helmet (MS 183:2001) is MANDATORY",
+        "Safety Footwear (MS ISO 20345) is MANDATORY",
+        "Personal fall protection for work at height",
+        "Site Safety Induction completed"
+      ],
+      "penalty": "Violation of BOWEC 1986 and OSHA 1994 Section 15."
+    },
+    "General Workspace": {
+      "primary_regulation": "OSHA 1994 (General Provisions)",
+      "requirements": [
+        "PPE as determined by risk assessment",
+        "Employer must provide safe system of work (Section 15)",
+        "Workers must cooperate with safety measures (Section 24)"
+      ],
+      "penalty": "General penalty under OSHA 1994 Section 15: Fine up to RM 50,000."
+    }
+  },
+  "acronyms": {
+    "BOWEC": "Building Operations and Works of Engineering Construction (Safety) Regulations 1986",
+    "OSHA": "Occupational Safety and Health Act 1994 (Malaysia)",
+    "JKR": "Jabatan Kerja Raya (Public Works Department of Malaysia)",
+    "DOSH": "Department of Occupational Safety and Health, Malaysia",
+    "USECHH": "Use and Standards of Exposure of Chemicals Hazardous to Health Regulations 2000",
+    "CIDB": "Construction Industry Development Board Malaysia",
+    "MS": "Malaysian Standard (published by SIRIM/Department of Standards Malaysia)",
+    "FMA": "Factories and Machinery Act 1967"
+  }
+}

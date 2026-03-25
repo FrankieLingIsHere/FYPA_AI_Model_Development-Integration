@@ -1,0 +1,28 @@
+{
+  "name": "PPE Safety Monitor - AI-Powered Workplace Safety",
+  "short_name": "PPE Monitor",
+  "description": "AI-powered PPE compliance monitoring system using YOLOv8, LLaVA, and Llama3 for real-time workplace safety detection.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a1a",
+  "theme_color": "#00d4ff",
+  "orientation": "any",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities", "business"],
+  "lang": "en",
+  "dir": "ltr"
+}

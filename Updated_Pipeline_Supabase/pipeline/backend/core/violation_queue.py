@@ -173,12 +173,9 @@ class ViolationQueueManager:
         
         # Generate report_id if not provided
         if not report_id:
-            from zoneinfo import ZoneInfo
-            myt = ZoneInfo('Asia/Kuala_Lumpur')
-            now_myt = datetime.now(myt)
-            timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
-            micro = now_myt.strftime('%f')[:4]
+            micro = datetime.now().strftime('%f')[:4]
             report_id = f"{timestamp}_{device_hash}_{micro}"
         
         priority = self._get_priority(severity)
@@ -279,6 +276,10 @@ class ViolationQueueManager:
             self._stats['total_processed'] += 1
             if violation.device_id in self._stats['by_device']:
                 self._stats['by_device'][violation.device_id]['processed'] += 1
+    
+    def get_queue_size(self) -> int:
+        """Get current queue size."""
+        return self.queue.qsize()
     
     def get_stats(self) -> Dict[str, Any]:
         """Get queue statistics."""
@@ -457,12 +458,9 @@ class MultiDeviceViolationHandler:
         """
         # Generate report_id if not provided
         if not report_id:
-            from zoneinfo import ZoneInfo
-            myt = ZoneInfo('Asia/Kuala_Lumpur')
-            now_myt = datetime.now(myt)
-            timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
-            micro = now_myt.strftime('%f')[:4]
+            micro = datetime.now().strftime('%f')[:4]
             report_id = f"{timestamp}_{device_hash}_{micro}"
         
         # Add to database with pending status

@@ -1,308 +1,131 @@
-// Timezone Management Utility
-// Provides timezone selection and date formatting with Malaysian Time (MYT, UTC+8) as default
+/**
+ * Timezone Utility for Frontend
+ * Handles timezone conversion and display based on user selection
+ */
 
-const TimezoneManager = {
-    // Malaysian Time as default
-    DEFAULT_TIMEZONE: 'Asia/Kuala_Lumpur',
-    STORAGE_KEY: 'luna_timezone',
+// Get selected timezone offset from localStorage or default to Malaysia (UTC+8)
+function getTimezoneOffset() {
+    return parseFloat(localStorage.getItem('timezoneOffset') || '8');
+}
 
-    // Available timezones for dropdown
-    TIMEZONES: [
-        { id: 'Asia/Kuala_Lumpur', label: 'Malaysian Time (MYT, UTC+8)', offset: '+08:00' },
-        { id: 'Asia/Singapore', label: 'Singapore Time (SGT, UTC+8)', offset: '+08:00' },
-        { id: 'Asia/Jakarta', label: 'Indonesia Time (WIB, UTC+7)', offset: '+07:00' },
-        { id: 'Asia/Bangkok', label: 'Thailand Time (ICT, UTC+7)', offset: '+07:00' },
-        { id: 'Asia/Tokyo', label: 'Japan Time (JST, UTC+9)', offset: '+09:00' },
-        { id: 'Asia/Shanghai', label: 'China Time (CST, UTC+8)', offset: '+08:00' },
-        { id: 'Australia/Sydney', label: 'Australia Eastern (AEST, UTC+10/+11)', offset: '+10:00' },
-        { id: 'Europe/London', label: 'UK Time (GMT/BST)', offset: '+00:00' },
-        { id: 'America/New_York', label: 'US Eastern (EST/EDT)', offset: '-05:00' },
-        { id: 'America/Los_Angeles', label: 'US Pacific (PST/PDT)', offset: '-08:00' },
-        { id: 'UTC', label: 'UTC (Coordinated Universal Time)', offset: '+00:00' },
-    ],
+// Save timezone offset to localStorage
+function setTimezoneOffset(offset) {
+    localStorage.setItem('timezoneOffset', offset.toString());
+}
 
-    /**
-     * Get the currently selected timezone
-     * @returns {string} Timezone ID (e.g., 'Asia/Kuala_Lumpur')
-     */
-    getCurrentTimezone() {
-        try {
-            const stored = localStorage.getItem(this.STORAGE_KEY);
-            if (stored && this.TIMEZONES.some(tz => tz.id === stored)) {
-                return stored;
-            }
-        } catch (e) {
-            console.warn('Error reading timezone from localStorage:', e);
-        }
-        return this.DEFAULT_TIMEZONE;
-    },
+// Convert UTC timestamp to selected timezone
+function convertToLocalTime(utcTimestamp) {
+    const offset = getTimezoneOffset();
+    const date = new Date(utcTimestamp);
+    
+    // Add timezone offset
+    const localTime = new Date(date.getTime() + (offset * 60 * 60 * 1000));
+    
+    return localTime;
+}
 
-    /**
-     * Set the timezone preference
-     * @param {string} timezoneId - Timezone ID to set
-     * @returns {boolean} Success status
-     */
-    setTimezone(timezoneId) {
-        if (!this.TIMEZONES.some(tz => tz.id === timezoneId)) {
-            console.warn('Invalid timezone:', timezoneId);
-            return false;
-        }
-
-        try {
-            localStorage.setItem(this.STORAGE_KEY, timezoneId);
-            // Dispatch event for components to update
-            window.dispatchEvent(new CustomEvent('timezoneChanged', {
-                detail: { timezone: timezoneId }
-            }));
-            return true;
-        } catch (e) {
-            console.error('Error saving timezone to localStorage:', e);
-            return false;
-        }
-    },
-
-    /**
-     * Format a date using the selected timezone
-     * @param {Date|string} date - Date to format
-     * @param {Object} options - Intl.DateTimeFormat options (optional)
-     * @returns {string} Formatted date string
-     */
-    formatDate(date, options = {}) {
-        const dateObj = this.parseServerTimestamp ? this.parseServerTimestamp(date) :
-            (date instanceof Date ? date : new Date(date));
-
-        if (isNaN(dateObj.getTime())) {
-            console.warn('Invalid date provided to formatDate:', date);
-            return 'Invalid Date';
-        }
-
-        const defaultOptions = {
-            timeZone: this.getCurrentTimezone(),
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            ...options
-        };
-
-        try {
-            return new Intl.DateTimeFormat('en-MY', defaultOptions).format(dateObj);
-        } catch (e) {
-            console.error('Error formatting date:', e);
-            return dateObj.toLocaleDateString();
-        }
-    },
-
-    /**
-     * Parse a timestamp from the server, treating it as MYT if no timezone specified.
-     * Server timestamps are in Malaysian Time but may lack timezone suffix.
-     * @param {Date|string} date - Date to parse
-     * @returns {Date} Properly parsed Date object
-     */
-    parseServerTimestamp(date) {
-        if (date instanceof Date) {
-            return date;
-        }
-
-        const dateStr = String(date);
-
-        // If timestamp already has timezone info (Z, +, or -), parse directly
-        if (dateStr.includes('Z') || dateStr.includes('+') || /T.*-/.test(dateStr)) {
-            return new Date(dateStr);
-        }
-
-        // No timezone info - assume it's MYT (UTC+8)
-        // Append +08:00 to treat as Malaysian Time
-        return new Date(dateStr + '+08:00');
-    },
-
-    /**
-     * Format a date and time using the selected timezone
-     * @param {Date|string} date - Date to format (assumed to be MYT if no TZ specified)
-     * @returns {string} Formatted date and time string
-     */
-    formatDateTime(date) {
-        const dateObj = this.parseServerTimestamp(date);
-
-        if (isNaN(dateObj.getTime())) {
-            console.warn('Invalid date provided to formatDateTime:', date);
-            return 'Invalid Date';
-        }
-
-        const options = {
-            timeZone: this.getCurrentTimezone(),
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        };
-
-        try {
-            return new Intl.DateTimeFormat('en-MY', options).format(dateObj);
-        } catch (e) {
-            console.error('Error formatting datetime:', e);
-            return dateObj.toLocaleString();
-        }
-    },
-
-    /**
-     * Format time only using the selected timezone
-     * @param {Date|string} date - Date to format
-     * @returns {string} Formatted time string
-     */
-    formatTime(date) {
-        const dateObj = date instanceof Date ? date : new Date(date);
-
-        if (isNaN(dateObj.getTime())) {
-            return 'Invalid Time';
-        }
-
-        const options = {
-            timeZone: this.getCurrentTimezone(),
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-        };
-
-        try {
-            return new Intl.DateTimeFormat('en-MY', options).format(dateObj);
-        } catch (e) {
-            return dateObj.toLocaleTimeString();
-        }
-    },
-
-    /**
-     * Get the current time in the selected timezone
-     * @returns {string} Current time formatted
-     */
-    getCurrentTime() {
-        return this.formatTime(new Date());
-    },
-
-    /**
-     * Get timezone label for display
-     * @param {string} timezoneId - Timezone ID (optional, uses current if not provided)
-     * @returns {string} Timezone label
-     */
-    getTimezoneLabel(timezoneId = null) {
-        const tz = timezoneId || this.getCurrentTimezone();
-        const found = this.TIMEZONES.find(t => t.id === tz);
-        return found ? found.label : tz;
-    },
-
-    /**
-     * Get short timezone abbreviation
-     * @returns {string} Short timezone code (e.g., "MYT")
-     */
-    getTimezoneAbbreviation() {
-        const tz = this.getCurrentTimezone();
-        // Extract abbreviation from label
-        const found = this.TIMEZONES.find(t => t.id === tz);
-        if (found) {
-            const match = found.label.match(/\(([A-Z]{2,4})/);
-            return match ? match[1] : 'TZ';
-        }
-        return 'TZ';
-    },
-
-    /**
-     * Initialize the custom timezone dropdown in the UI
-     */
-    initSelector() {
-        const dropdown = document.getElementById('timezoneDropdown');
-        const optionsContainer = document.getElementById('timezoneOptions');
-        const selectedText = document.getElementById('selectedTimezoneText');
-        const selectedEl = dropdown ? dropdown.querySelector('.tz-selected') : null;
-
-        if (!dropdown || !optionsContainer || !selectedText) {
-            console.warn('Timezone dropdown elements not found');
-            return;
-        }
-
-        // Toggle Dropdown
-        selectedEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            dropdown.classList.toggle('active');
-        });
-
-        // Close when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!dropdown.contains(e.target)) {
-                dropdown.classList.remove('active');
-            }
-        });
-
-        // Float-up behavior: Close when mouse leaves the sidebar area
-        const sidebar = document.querySelector('.sidebar');
-        if (sidebar) {
-            sidebar.addEventListener('mouseleave', () => {
-                dropdown.classList.remove('active');
-            });
-        }
-
-        // Populate Options
-        this.renderOptions(optionsContainer, selectedText, dropdown);
-    },
-
-    renderOptions(container, labelEl, dropdown) {
-        container.innerHTML = '';
-        const currentTz = this.getCurrentTimezone();
-
-        // Update Label
-        const currentData = this.TIMEZONES.find(t => t.id === currentTz);
-        if (currentData) {
-            labelEl.textContent = currentData.label;
-        } else {
-            // Custom timezone support
-            labelEl.textContent = currentTz;
-        }
-
-        this.TIMEZONES.forEach(tz => {
-            const div = document.createElement('div');
-            div.className = `tz-option ${tz.id === currentTz ? 'selected' : ''}`;
-            div.textContent = tz.label;
-
-            div.addEventListener('click', (e) => {
-                e.stopPropagation();
-
-                // Normal selection
-                this.setTimezone(tz.id);
-                console.log('Timezone changed to:', tz.id);
-                labelEl.textContent = tz.label;
-                dropdown.classList.remove('active');
-                this.renderOptions(container, labelEl, dropdown);
-            });
-
-            container.appendChild(div);
-        });
-
-        // Add "Other..." Option
-        const otherDiv = document.createElement('div');
-        otherDiv.className = 'tz-option';
-        otherDiv.innerHTML = '<i class="fas fa-edit"></i> Other...';
-        otherDiv.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const userInput = prompt("Enter your IANA Timezone (e.g. 'Europe/Paris' or 'Asia/Dubai'):");
-            if (userInput && userInput.trim() !== "") {
-                try {
-                    // Validate timezone
-                    Intl.DateTimeFormat(undefined, { timeZone: userInput });
-
-                    // Save custom standard
-                    this.setTimezone(userInput);
-                    labelEl.textContent = userInput;
-                    dropdown.classList.remove('active');
-                    this.renderOptions(container, labelEl, dropdown);
-                } catch (err) {
-                    alert("Invalid Timezone ID. Please use format like 'Asia/Dubai'");
-                }
-            }
-        });
-        container.appendChild(otherDiv);
+// Format timestamp for display
+function formatTimestamp(timestamp, format = 'full') {
+    const date = convertToLocalTime(timestamp);
+    const offset = getTimezoneOffset();
+    const offsetStr = offset >= 0 ? `+${offset}` : offset;
+    
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+    
+    switch (format) {
+        case 'full':
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} (UTC${offsetStr})`;
+        case 'datetime':
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+        case 'date':
+            return `${year}-${month}-${day}`;
+        case 'time':
+            return `${hours}:${minutes}:${seconds}`;
+        case 'short':
+            return `${month}/${day} ${hours}:${minutes}`;
+        default:
+            return date.toISOString();
     }
-};
+}
 
-// Make globally available
-window.TimezoneManager = TimezoneManager;
+// Get relative time (e.g., "2 hours ago")
+function getRelativeTime(timestamp) {
+    const now = new Date();
+    const date = new Date(timestamp);
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+    
+    if (diffSec < 60) return 'Just now';
+    if (diffMin < 60) return `${diffMin} minute${diffMin > 1 ? 's' : ''} ago`;
+    if (diffHour < 24) return `${diffHour} hour${diffHour > 1 ? 's' : ''} ago`;
+    if (diffDay < 7) return `${diffDay} day${diffDay > 1 ? 's' : ''} ago`;
+    
+    return formatTimestamp(timestamp, 'date');
+}
+
+// Initialize timezone selector
+function initTimezoneSelector() {
+    const selector = document.getElementById('timezone-selector');
+    if (!selector) return;
+    
+    // Load saved timezone
+    const savedOffset = getTimezoneOffset();
+    selector.value = savedOffset;
+    
+    // Handle timezone change
+    selector.addEventListener('change', (e) => {
+        const newOffset = parseFloat(e.target.value);
+        setTimezoneOffset(newOffset);
+        
+        // Show notification
+        const offsetStr = newOffset >= 0 ? `+${newOffset}` : newOffset;
+        showNotification(`Timezone changed to UTC${offsetStr}`, 'info');
+        
+        // Refresh current page to update timestamps
+        if (typeof window.currentPage !== 'undefined' && window.loadPage) {
+            window.loadPage(window.currentPage);
+        }
+    });
+    
+    // Update all timestamps on page
+    updateAllTimestamps();
+}
+
+// Update all elements with timestamp data
+function updateAllTimestamps() {
+    document.querySelectorAll('[data-timestamp]').forEach(element => {
+        const timestamp = element.getAttribute('data-timestamp');
+        const format = element.getAttribute('data-format') || 'full';
+        element.textContent = formatTimestamp(timestamp, format);
+    });
+    
+    document.querySelectorAll('[data-timestamp-relative]').forEach(element => {
+        const timestamp = element.getAttribute('data-timestamp-relative');
+        element.textContent = getRelativeTime(timestamp);
+    });
+}
+
+// Initialize on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTimezoneSelector);
+} else {
+    initTimezoneSelector();
+}
+
+// Export functions for use in other scripts
+window.TimezoneUtils = {
+    getTimezoneOffset,
+    setTimezoneOffset,
+    convertToLocalTime,
+    formatTimestamp,
+    getRelativeTime,
+    updateAllTimestamps
+};

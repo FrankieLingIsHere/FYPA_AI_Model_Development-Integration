@@ -37,6 +37,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def format_violation_type(class_name: str) -> str:
+    """
+    Format violation class name for display.
+    
+    Examples:
+        'NO-Hardhat' -> 'Missing Hardhat'
+        'NO-Safety Vest' -> 'Missing Safety Vest'
+        'NO-Gloves' -> 'Missing Gloves'
+    """
+    if class_name.startswith('NO-'):
+        item = class_name.replace('NO-', '')
+        # Format specific items
+        item = item.replace('Hardhat', 'Hard Hat')
+        item = item.replace('Safety Vest', 'Safety Vest')
+        return f"Missing {item}"
+    return class_name
+
+
 # Verify required environment variables
 required_env_vars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_DB_URL']
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
@@ -116,47 +135,6 @@ def initialize_managers():
         return False
 
 
-
-DOCS_HISTORY_PATH = Path('docs/VLM_VERSION_HISTORY.md')
-
-def update_version_history(report_id, caption_history: list):
-    """Update the markdown history file for the golden sample report."""
-    if report_id != "20251223_170058":
-        return
-        
-    try:
-        if not DOCS_HISTORY_PATH.exists():
-            logger.warning("History file not found, skipping update.")
-            return
-
-        # Get latest entry
-        if not caption_history:
-            return
-            
-        latest = caption_history[-1]
-        version = latest.get('version')
-        model = latest.get('model')
-        timestamp = latest.get('timestamp')
-        text = latest.get('caption', '').replace('\n', ' ')
-        
-        # Determine explanation
-        explanation = "Automated update via reprocess_reports.py"
-        if 'moondream' in str(model).lower():
-            explanation += " - Narrative output (Model limitation)"
-        elif 'llava' in str(model).lower():
-            explanation += " - Structured output"
-            
-        # Append to table
-        row = f"| **v{version}** | `{model}` | {timestamp} | {text[:100]}... | {explanation} |\n"
-        
-        with open(DOCS_HISTORY_PATH, 'a', encoding='utf-8') as f:
-            f.write(row)
-            
-        logger.info(f"📝 Updated version history in {DOCS_HISTORY_PATH}")
-        
-    except Exception as e:
-        logger.error(f"Failed to update version history: {e}")
-
 def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     """
     Reprocess a single violation report.
@@ -230,7 +208,8 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         
         # 6. Extract violation types
         violation_detections = [d for d in detections if 'no-' in d['class_name'].lower()]
-        violation_types = [d['class_name'] for d in violation_detections]
+        violation_types_raw = [d['class_name'] for d in violation_detections]
+        violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         
         logger.info(f"🚨 Violations detected: {violation_types}")
         
@@ -244,57 +223,22 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             logger.info(f"🗑️ Report {report_id} deleted (no longer valid)")
             return True  # Successfully processed (deleted)
         
-        # --- Handle Caption History (Moved before report generation) ---
-        existing_detection_data = violation.get('detection_data') or {}
-        if isinstance(existing_detection_data, str):
-            import json
-            try:
-                existing_detection_data = json.loads(existing_detection_data)
-            except:
-                existing_detection_data = {}
-        
-        caption_history = existing_detection_data.get('caption_history', [])
-        
-        # Add previous caption if it exists and history is empty
-        previous_caption = violation.get('caption')
-        if previous_caption and not caption_history:
-            caption_history.append({
-                'version': 1,
-                'timestamp': violation.get('timestamp', datetime.now()).isoformat(),
-                'caption': previous_caption,
-                'model': 'original'
-            })
-        
-        # Add NEW caption
-        caption_history.append({
-            'version': len(caption_history) + 1,
-            'timestamp': datetime.now().isoformat(),
-            'caption': caption,
-            'model': 'llava-phi3:3.8b'
-        })
-        # -----------------------------------------------------------
-
         # 7. Generate new report with updated data
         logger.info("📄 Generating new report...")
         report_data = {
             'report_id': report_id,
             'timestamp': violation.get('timestamp') or datetime.now(),
             'detections': detections,
-            'violation_summary': f"PPE Violation Detected: {', '.join(violation_types)}" if violation_types else "No violations detected",
+            'violation_summary': ', '.join(violation_types),
             'violation_count': len(violation_types),
             'caption': caption,
             'image_caption': caption,
-            'caption_history': caption_history, # Added history here
             'original_image_path': str(temp_image),
             'annotated_image_path': str(annotated_path),
             'location': violation.get('device_id', 'Reprocessed'),
             'severity': 'HIGH' if len(violation_types) >= 2 else 'MEDIUM' if violation_types else 'LOW',
             'person_count': len([d for d in detections if 'person' in d['class_name'].lower()]),
-            'detection_data': {
-                'reprocessed': True, 
-                'reprocess_date': datetime.now().isoformat(),
-                'caption_history': caption_history
-            }
+            'detection_data': {'reprocessed': True, 'reprocess_date': datetime.now().isoformat()}
         }
         
         result = report_generator.generate_report(report_data)
@@ -302,17 +246,15 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         if result and result.get('html'):
             logger.info("✓ Report generated successfully")
             
-            # 9. Update database with new data
+            # 9. Update database with new data (skip report_generator's insert since record exists)
             logger.info("💾 Updating database...")
             
-            # Build metadata (preserving existing data)
-            metadata = existing_detection_data.copy()
-            metadata.update({
+            # Build metadata
+            metadata = {
                 'detections': detections,
                 'reprocessed': True,
-                'reprocess_date': datetime.now().isoformat(),
-                'caption_history': caption_history
-            })
+                'reprocess_date': datetime.now().isoformat()
+            }
             
             # Update violation record
             success = db_manager.update_violation(
@@ -337,10 +279,6 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             )
             
             logger.info(f"✅ Report {report_id} reprocessed successfully")
-            
-            # Update documentation if this is the benchmark report
-            update_version_history(report_id, caption_history)
-            
             return True
         else:
             logger.error("Failed to generate report")
@@ -395,7 +333,7 @@ def reprocess_all_reports(since_date=None):
         
         for idx, violation in enumerate(violations, 1):
             report_id = violation['report_id']
-            logger.info(f"\\n[{idx}/{total}] Processing {report_id}...")
+            logger.info(f"\n[{idx}/{total}] Processing {report_id}...")
             
             result = reprocess_single_report(report_id, temp_dir)
             
@@ -408,7 +346,7 @@ def reprocess_all_reports(since_date=None):
             time.sleep(1)
         
         # Summary
-        logger.info("\\n" + "=" * 70)
+        logger.info("\n" + "=" * 70)
         logger.info("REPROCESSING SUMMARY")
         logger.info("=" * 70)
         logger.info(f"Total reports:    {total}")

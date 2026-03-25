@@ -68,42 +68,49 @@ if %errorlevel% neq 0 (
 
 echo.
 echo ==========================================
-echo Starting Ollama Server...
+echo Checking Ollama Installation...
 echo ==========================================
 echo.
 
 REM Check if Ollama is installed
 where ollama >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Warning: Ollama not found in PATH!
+    echo Error: Ollama not found in PATH!
     echo Please install Ollama from: https://ollama.ai
     echo.
-    echo The app will start but AI reports won't be generated.
-    timeout /t 5
-) else (
-    echo Ollama found. Starting server in background...
-    start "Ollama Server" /min cmd /c "ollama serve"
-    timeout /t 3
-    echo Ollama server started
-    
-    REM Check if llama3 model is available
-    echo Checking for required models...
-    ollama list 2>nul | findstr /i "llama3" >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo llama3 model not found. Pulling now...
-        echo This may take several minutes on first run...
-        ollama pull llama3
-        if %errorlevel% neq 0 (
-            echo Warning: Failed to pull llama3 model.
-            echo Reports will use fallback analysis.
-            timeout /t 3
-        ) else (
-            echo llama3 model ready!
-        )
-    ) else (
-        echo llama3 model ready!
-    )
+    pause
+    exit /b 1
 )
+
+echo Ollama found. Starting server in background...
+start "Ollama Server" /min cmd /c "ollama serve"
+timeout /t 3
+echo Ollama server started
+echo.
+
+echo ==========================================
+echo Checking Qwen2.5-VL Model...
+echo ==========================================
+echo.
+
+REM Check if qwen2.5vl model is installed
+ollama list | findstr /C:"qwen2.5vl" >nul 2>&1
+if errorlevel 1 (
+    echo Model 'qwen2.5vl' not found. Pulling from Ollama...
+    echo This is a one-time download and may take a few minutes.
+    echo.
+    ollama pull qwen2.5vl
+    if errorlevel 1 (
+        echo Warning: Failed to pull qwen2.5vl model!
+        echo You can pull it manually later: ollama pull qwen2.5vl
+        timeout /t 5
+    ) else (
+        echo Model pulled successfully!
+    )
+) else (
+    echo Model 'qwen2.5vl' is already installed.
+)
+echo.
 
 echo.
 echo ==========================================

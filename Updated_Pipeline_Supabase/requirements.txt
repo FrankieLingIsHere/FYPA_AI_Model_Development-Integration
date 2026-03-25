@@ -7,14 +7,15 @@ Flask==3.1.2
 Werkzeug==3.1.3
 
 # Computer Vision & Object Detection
-opencv-python==4.12.0.88
+opencv-python-headless==4.12.0.88
 ultralytics==8.3.228
 torch==2.9.1
 torchvision==0.24.1
 
-# Image Captioning (Ollama LLaVA - Fast!)
-# Note: Uses Ollama's llava:7b model instead of transformers
-# Generates captions in 30-60 seconds instead of 10+ minutes
+# Image Captioning (Qwen2.5-VL via Ollama API)
+# Uses Ollama API for efficient inference with Qwen2.5-VL vision model
+# No GGUF files or compilation needed - models managed by Ollama
+# Run: ollama pull qwen2.5vl
 pillow==12.0.0
 
 # RAG & Vector Database
@@ -56,9 +57,21 @@ rich==14.2.0
 supabase
 psycopg2-binary
 
-# Note: Ollama must be installed separately for LLaVA captioning and Llama3 reports
-# Download from: https://ollama.ai
-# Required models:
-#   - ollama pull llava:7b        (for image captioning - 30-60 sec per image)
+# CORS (for cross-origin frontend requests)
+flask-cors
+
+# Gemini API (Primary AI provider — replaces Ollama for captioning + NLP)
+google-genai
+
+# Note: Model files must be downloaded separately:
+# 
+# FOR IMAGE CAPTIONING (Qwen2.5-VL-3B):
+#   Download these files to Updated_Pipeline_Supabase/ directory:
+#   1. Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf (~1.93GB)
+#   2. mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf (~1.34GB)
+#   From: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF
+#
+# FOR REPORT GENERATION (Ollama still used):
+#   Install Ollama from: https://ollama.ai
 #   - ollama pull llama3          (for report generation)
 #   - ollama pull nomic-embed-text (for DOSH RAG embeddings)

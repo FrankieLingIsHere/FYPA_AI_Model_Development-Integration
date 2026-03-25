@@ -20,11 +20,11 @@ RUN apt-get update && apt-get install -y \
     && curl -fsSL https://ollama.com/install.sh | sh
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY Updated_Pipeline_Supabase/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY . .
+COPY Updated_Pipeline_Supabase/ .
 
 # Pre-pull required Ollama models so they are baked into the image
 # This prevents downloading multi-gigabyte files during container startup

@@ -12,15 +12,12 @@ WORKDIR /app
 # Install system dependencies and ollama
 RUN apt-get update && apt-get install -y \
     curl \
-    tar \
     git \
     procps \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -L https://ollama.com/download/ollama-linux-amd64.tgz -o ollama.tgz \
-    && tar -C /usr -xzf ollama.tgz \
-    && rm ollama.tgz
+    && curl -fsSL https://ollama.com/install.sh | OLLAMA_SKIP_START=1 sh
 
 # Copy requirements and install Python dependencies
 COPY Updated_Pipeline_Supabase/requirements.txt .
@@ -31,10 +28,10 @@ COPY Updated_Pipeline_Supabase/ .
 
 # Pre-pull required Ollama models so they are baked into the image
 # This prevents downloading multi-gigabyte files during container startup
-RUN /usr/bin/ollama serve > /dev/null 2>&1 & \
+RUN /usr/local/bin/ollama serve > /dev/null 2>&1 & \
     sleep 5 \
-    && /usr/bin/ollama pull llama3 \
-    && /usr/bin/ollama pull nomic-embed-text
+    && /usr/local/bin/ollama pull llama3 \
+    && /usr/local/bin/ollama pull nomic-embed-text
 
 # Make the entrypoint executable
 RUN chmod +x docker-entrypoint.sh

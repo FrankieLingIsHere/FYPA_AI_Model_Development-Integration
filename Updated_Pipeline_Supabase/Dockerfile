@@ -29,10 +29,10 @@ COPY Updated_Pipeline_Supabase/ .
 
 # Pre-pull required Ollama models so they are baked into the image
 # This prevents downloading multi-gigabyte files during container startup
-RUN bash -c "nohup ollama serve > /dev/null 2>&1 &" && sleep 5 \
-    && ollama pull llama3 \
-    && ollama pull nomic-embed-text \
-    && pkill ollama
+RUN /usr/bin/ollama serve > /dev/null 2>&1 & \
+    sleep 5 \
+    && /usr/bin/ollama pull llama3 \
+    && /usr/bin/ollama pull nomic-embed-text
 
 # Make the entrypoint executable
 RUN chmod +x docker-entrypoint.sh

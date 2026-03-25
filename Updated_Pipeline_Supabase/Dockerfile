@@ -12,13 +12,15 @@ WORKDIR /app
 # Install system dependencies and ollama
 RUN apt-get update && apt-get install -y \
     curl \
+    tar \
     git \
     procps \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -L https://ollama.com/download/ollama-linux-amd64 -o /usr/bin/ollama \
-    && chmod +x /usr/bin/ollama
+    && curl -L https://ollama.com/download/ollama-linux-amd64.tgz -o ollama.tgz \
+    && tar -C /usr -xzf ollama.tgz \
+    && rm ollama.tgz
 
 # Copy requirements and install Python dependencies
 COPY Updated_Pipeline_Supabase/requirements.txt .

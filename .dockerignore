@@ -1,0 +1,16 @@
+**/.git
+**/venv
+**/env
+**/__pycache__
+**/*.pyc
+**/*.gguf
+**/*.pt
+**/*.pth
+**/*.onnx
+**/Results/
+**/violations/
+**/reports/
+**/logs/
+**/*.log
+**/*.sqlite3
+**/.env

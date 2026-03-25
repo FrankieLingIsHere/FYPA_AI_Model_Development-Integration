@@ -56,6 +56,9 @@ rich==14.2.0
 supabase
 psycopg2-binary
 
+# Optional camera source (Intel RealSense)
+pyrealsense2; platform_system == "Windows"
+
 # Note: Ollama must be installed separately for LLaVA captioning and Llama3 reports
 # Download from: https://ollama.ai
 # Required models:

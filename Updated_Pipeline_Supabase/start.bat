@@ -53,18 +53,15 @@ echo Virtual environment activated: %VIRTUAL_ENV%
 echo.
 
 REM Check if requirements need to be installed
-pip show flask >nul 2>&1
+echo Running dependency preflight check...
+python preflight_check.py --install
 if %errorlevel% neq 0 (
-    echo Installing dependencies...
-    pip install -r requirements.txt
-    if %errorlevel% neq 0 (
-        echo Failed to install dependencies!
-        pause
-        exit /b 1
-    )
-    echo Dependencies installed.
-    echo.
+    echo Dependency preflight failed!
+    pause
+    exit /b 1
 )
+echo Dependencies verified.
+echo.
 
 echo.
 echo ==========================================

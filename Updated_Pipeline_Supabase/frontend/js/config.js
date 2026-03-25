@@ -10,6 +10,9 @@ const API_CONFIG = {
         LIVE_START: '/api/live/start',
         LIVE_STOP: '/api/live/stop',
         LIVE_STATUS: '/api/live/status',
+        LIVE_DEVICES: '/api/live/devices',
+        LIVE_DEPTH_STATUS: '/api/live/depth/status',
+        LIVE_DEPTH_PREVIEW: '/api/live/depth/preview',
         UPLOAD_INFERENCE: '/api/inference/upload',
         SYSTEM_INFO: '/api/system/info'
     }

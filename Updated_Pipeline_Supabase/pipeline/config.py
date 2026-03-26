@@ -5,6 +5,7 @@ Pipeline Configuration
 Central configuration for all pipeline components.
 """
 
+import os
 from pathlib import Path
 
 # Base directories
@@ -210,7 +211,6 @@ DATABASE_CONFIG = {
 # SUPABASE CONFIGURATION
 # =========================================================================
 
-import os
 import hashlib
 from datetime import datetime
 

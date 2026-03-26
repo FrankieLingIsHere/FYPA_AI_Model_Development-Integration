@@ -35,6 +35,10 @@ COPY Updated_Pipeline_Supabase/ .
 RUN chmod +x docker-entrypoint.sh
 RUN chmod +x start.sh
 
+# DIAGNOSTICS: Check size of the python packages and app directory
+RUN echo "=== PIP PACKAGES SIZE ===" && du -sh /usr/local/lib/python*/site-packages/* | sort -rh | head -n 20 \
+    && echo "=== APP SIZE ===" && du -sh /app/* | sort -rh
+
 # Expose port
 EXPOSE $PORT
 

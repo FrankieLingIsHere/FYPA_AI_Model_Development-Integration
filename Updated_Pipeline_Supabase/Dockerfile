@@ -9,16 +9,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies and ollama
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     procps \
-    zstd \
     libgl1 \
     libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://ollama.com/install.sh | OLLAMA_SKIP_START=1 sh
+    && rm -rf /var/lib/apt/lists/*
 
 # Install CPU-only PyTorch manually to prevent downloading 10GB of Nvidia CUDA binary bloat
 RUN pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu
@@ -38,9 +36,6 @@ COPY Updated_Pipeline_Supabase/ .
 # Make the entrypoint executable
 RUN chmod +x docker-entrypoint.sh
 RUN chmod +x start.sh
-
-# DIAGNOSTICS: Hunt down the 5.1GB Ghost Bloat inside /usr
-RUN echo "=== /USR DEEP SCAN ===" && du -d 3 -h /usr | sort -rh | head -n 30
 
 # Expose port
 EXPOSE $PORT

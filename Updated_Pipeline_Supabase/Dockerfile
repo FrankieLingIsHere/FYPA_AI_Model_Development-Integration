@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://ollama.com/install.sh | OLLAMA_SKIP_START=1 sh
 
-# Copy requirements and install Python dependencies
+# Install CPU-only PyTorch manually to prevent downloading 10GB of Nvidia CUDA binary bloat
+RUN pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Copy remaining requirements and install
 COPY Updated_Pipeline_Supabase/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

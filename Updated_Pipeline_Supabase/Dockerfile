@@ -26,7 +26,11 @@ RUN pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 --index-url http
 # Copy remaining requirements and install using the cpu index to prevent implicit CUDA downloads
 COPY Updated_Pipeline_Supabase/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu \
-    && pip uninstall -y nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-nccl-cu12 nvidia-nvtx-cu12 || true
+    && pip uninstall -y nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-nccl-cu12 nvidia-nvtx-cu12 || true \
+    && echo "Aggressively stripping debug symbols from massive ML binaries to compress image..." \
+    && apt-get install -y binutils \
+    && find /usr/local/lib/python3.11/site-packages/ -name "*.so" -exec strip {} \; || true \
+    && apt-get purge -y binutils && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # Copy application files
 COPY Updated_Pipeline_Supabase/ .

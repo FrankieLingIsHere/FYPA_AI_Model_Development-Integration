@@ -39,8 +39,8 @@ COPY Updated_Pipeline_Supabase/ .
 RUN chmod +x docker-entrypoint.sh
 RUN chmod +x start.sh
 
-# DIAGNOSTICS: Check size of every folder in the entire server
-RUN echo "=== ROOT FILESYSTEM PIP PACKAGES SIZE ===" && du -sh /* | sort -rh
+# DIAGNOSTICS: Hunt down the 5.1GB Ghost Bloat inside /usr
+RUN echo "=== /USR DEEP SCAN ===" && du -d 3 -h /usr | sort -rh | head -n 30
 
 # Expose port
 EXPOSE $PORT

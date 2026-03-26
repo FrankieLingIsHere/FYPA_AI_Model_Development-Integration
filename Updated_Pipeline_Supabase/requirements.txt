@@ -62,15 +62,5 @@ flask-cors
 # Gemini API (Primary AI provider — replaces Ollama for captioning + NLP)
 google-genai
 
-# Note: Model files must be downloaded separately:
-# 
-# FOR IMAGE CAPTIONING (Qwen2.5-VL-3B):
-#   Download these files to Updated_Pipeline_Supabase/ directory:
-#   1. Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf (~1.93GB)
-#   2. mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf (~1.34GB)
-#   From: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF
-#
-# FOR REPORT GENERATION (Ollama still used):
-#   Install Ollama from: https://ollama.ai
-#   - ollama pull llama3          (for report generation)
-#   - ollama pull nomic-embed-text (for DOSH RAG embeddings)
+# Optional camera source (Intel RealSense)
+pyrealsense2; platform_system == "Windows"

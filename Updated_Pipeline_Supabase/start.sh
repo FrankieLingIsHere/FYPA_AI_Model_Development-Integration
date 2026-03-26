@@ -41,6 +41,15 @@ else
 fi
 
 echo ""
+echo "Running dependency preflight check..."
+python preflight_check.py --install
+if [ $? -ne 0 ]; then
+    echo "❌ Dependency preflight failed"
+    exit 1
+fi
+echo "✓ Dependencies verified"
+
+echo ""
 echo "Starting LUNA application..."
 echo ""
 echo "Once started, open your browser to:"

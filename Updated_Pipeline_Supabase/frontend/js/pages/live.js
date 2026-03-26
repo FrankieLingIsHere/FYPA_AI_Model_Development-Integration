@@ -19,6 +19,9 @@ const LivePage = {
                     <div class="card-header">
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
+                            <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
+                                <i class="fas fa-camera"></i> Source: Webcam
+                            </button>
                             <button id="startLiveBtn" class="btn btn-success" style="margin-right: 10px;">
                                 <i class="fas fa-play"></i> Start
                             </button>
@@ -28,6 +31,7 @@ const LivePage = {
                         </div>
                     </div>
                     <div class="card-content">
+                        <div id="realsenseCapabilities" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;"></div>
                         <!-- Live Stream Container -->
                         <div id="liveStreamContainer" style="background: transparent; border-radius: 8px; text-align: center; margin-bottom: 1.5rem; position: relative;">
                             <div id="streamPlaceholder" style="padding: 2rem; background: #000; border-radius: 8px; width: 100%;">
@@ -40,6 +44,18 @@ const LivePage = {
                             <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
                             <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #4CAF50; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: none;">
                                 <i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE
+                            </div>
+                            <div id="depthHud" style="position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,0.75); color: #fff; border-radius: 8px; padding: 10px; min-width: 190px; text-align: left; display: none;">
+                                <div style="font-weight: 600; margin-bottom: 6px;"><i class="fas fa-ruler-combined"></i> Depth HUD</div>
+                                <div style="font-size: 0.85rem; line-height: 1.5;">
+                                    <div>Center: <span id="depthCenter">-</span></div>
+                                    <div>Range: <span id="depthRange">-</span></div>
+                                    <div>Confidence: <span id="depthConfidence">-</span></div>
+                                </div>
+                            </div>
+                            <div id="depthPreviewBox" style="position: absolute; right: 10px; bottom: 10px; background: rgba(0,0,0,0.75); border-radius: 8px; padding: 6px; display: none;">
+                                <div style="font-size: 0.72rem; color: #ddd; margin-bottom: 4px; text-align: left;">Depth Preview</div>
+                                <img id="depthPreview" alt="Depth preview" style="width: 160px; height: 90px; object-fit: cover; border-radius: 4px; display: block;" />
                             </div>
                         </div>
 
@@ -322,6 +338,29 @@ const LivePage = {
                 .toggle-switch input:checked + .toggle-slider:before {
                     transform: translateX(30px);
                 }
+
+                .rs-cap-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 4px 10px;
+                    border-radius: 999px;
+                    font-size: 0.78rem;
+                    font-weight: 600;
+                    border: 1px solid transparent;
+                }
+
+                .rs-cap-badge.ok {
+                    color: #2e7d32;
+                    background: rgba(76, 175, 80, 0.12);
+                    border-color: rgba(76, 175, 80, 0.35);
+                }
+
+                .rs-cap-badge.off {
+                    color: #8d6e63;
+                    background: rgba(158, 158, 158, 0.14);
+                    border-color: rgba(158, 158, 158, 0.3);
+                }
             </style>
         `;
     },
@@ -334,11 +373,19 @@ const LivePage = {
         const uploadContainer = document.getElementById('uploadContainer');
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
+        const sourceToggleBtn = document.getElementById('sourceToggleBtn');
         const startBtn = document.getElementById('startLiveBtn');
         const stopBtn = document.getElementById('stopLiveBtn');
         const streamImg = document.getElementById('liveStream');
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
+        const capabilitiesContainer = document.getElementById('realsenseCapabilities');
+        const depthHud = document.getElementById('depthHud');
+        const depthPreviewBox = document.getElementById('depthPreviewBox');
+        const depthPreview = document.getElementById('depthPreview');
+        const depthCenter = document.getElementById('depthCenter');
+        const depthRange = document.getElementById('depthRange');
+        const depthConfidence = document.getElementById('depthConfidence');
         const instructionsList = document.getElementById('instructionsList');
         
         // Upload elements
@@ -355,6 +402,106 @@ const LivePage = {
         
         let currentMode = 'live';
         let selectedFile = null;
+        let selectedSource = 'webcam';
+        let realsenseAvailable = false;
+        let realsenseDeviceName = 'Intel RealSense';
+        let realsenseCapabilities = {};
+        let depthStatusInterval = null;
+
+        function renderCapabilities() {
+            if (!capabilitiesContainer) return;
+
+            if (!realsenseAvailable) {
+                capabilitiesContainer.innerHTML = '<span class="rs-cap-badge off"><i class="fas fa-microchip"></i> RealSense Depth: Not detected</span>';
+                return;
+            }
+
+            const depthOk = !!realsenseCapabilities.depth_stream;
+            const imuOk = !!realsenseCapabilities.imu;
+            const colorOk = !!realsenseCapabilities.color_stream;
+            const resolution = realsenseCapabilities.resolution || '-';
+            const fps = realsenseCapabilities.fps || '-';
+
+            capabilitiesContainer.innerHTML = `
+                <span class="rs-cap-badge ok"><i class="fas fa-microchip"></i> ${realsenseDeviceName || 'RealSense'}</span>
+                <span class="rs-cap-badge ${depthOk ? 'ok' : 'off'}"><i class="fas fa-ruler-combined"></i> Depth ${depthOk ? 'On' : 'Off'}</span>
+                <span class="rs-cap-badge ${colorOk ? 'ok' : 'off'}"><i class="fas fa-video"></i> RGB ${colorOk ? 'On' : 'Off'}</span>
+                <span class="rs-cap-badge ${imuOk ? 'ok' : 'off'}"><i class="fas fa-compass"></i> IMU ${imuOk ? 'On' : 'Off'}</span>
+                <span class="rs-cap-badge ok"><i class="fas fa-expand"></i> ${resolution} @ ${fps}fps</span>
+            `;
+        }
+
+        function hideDepthWidgets() {
+            if (depthHud) depthHud.style.display = 'none';
+            if (depthPreviewBox) depthPreviewBox.style.display = 'none';
+        }
+
+        function updateDepthWidgets(depthTelemetry) {
+            const showDepth = APP_STATE.liveStreamActive && selectedSource === 'realsense' && realsenseAvailable;
+            if (!showDepth || !depthTelemetry || !depthTelemetry.depth_available) {
+                hideDepthWidgets();
+                return;
+            }
+
+            if (depthHud) depthHud.style.display = 'block';
+            if (depthPreviewBox) depthPreviewBox.style.display = 'block';
+
+            const center = depthTelemetry.center_distance_m;
+            const minD = depthTelemetry.min_distance_m;
+            const maxD = depthTelemetry.max_distance_m;
+            const confidence = depthTelemetry.valid_depth_ratio;
+
+            depthCenter.textContent = center != null ? `${center.toFixed(2)} m` : '-';
+            depthRange.textContent = (minD != null && maxD != null) ? `${minD.toFixed(2)} - ${maxD.toFixed(2)} m` : '-';
+            depthConfidence.textContent = confidence != null ? `${Math.round(confidence * 100)}%` : '-';
+
+            if (depthPreview) {
+                depthPreview.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEPTH_PREVIEW}?t=${Date.now()}`;
+            }
+        }
+
+        async function refreshDepthStatus() {
+            try {
+                const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEPTH_STATUS}`);
+                if (!resp.ok) return;
+
+                const payload = await resp.json();
+                realsenseCapabilities = payload.realsense_capabilities || realsenseCapabilities;
+                renderCapabilities();
+                updateDepthWidgets(payload.depth_telemetry || null);
+            } catch (error) {
+                console.error('Error refreshing depth status:', error);
+                hideDepthWidgets();
+            }
+        }
+
+        function renderSourceToggle() {
+            if (!sourceToggleBtn) return;
+
+            if (selectedSource === 'realsense') {
+                sourceToggleBtn.innerHTML = `<i class="fas fa-microchip"></i> Source: ${realsenseDeviceName || 'RealSense'}`;
+            } else {
+                sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam';
+            }
+
+            const canToggle = realsenseAvailable && !APP_STATE.liveStreamActive;
+            sourceToggleBtn.disabled = !canToggle;
+
+            if (!realsenseAvailable) {
+                sourceToggleBtn.title = 'RealSense not detected';
+                sourceToggleBtn.style.opacity = '0.55';
+                sourceToggleBtn.style.cursor = 'not-allowed';
+                hideDepthWidgets();
+            } else if (APP_STATE.liveStreamActive) {
+                sourceToggleBtn.title = 'Stop monitoring to switch source';
+                sourceToggleBtn.style.opacity = '0.7';
+                sourceToggleBtn.style.cursor = 'not-allowed';
+            } else {
+                sourceToggleBtn.title = 'Click to switch webcam/RealSense';
+                sourceToggleBtn.style.opacity = '1';
+                sourceToggleBtn.style.cursor = 'pointer';
+            }
+        }
 
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
@@ -422,6 +569,12 @@ const LivePage = {
         // Mode button listeners
         liveModeBtn.addEventListener('click', switchToLiveMode);
         uploadModeBtn.addEventListener('click', switchToUploadMode);
+
+        sourceToggleBtn.addEventListener('click', () => {
+            if (!realsenseAvailable || APP_STATE.liveStreamActive) return;
+            selectedSource = selectedSource === 'realsense' ? 'webcam' : 'realsense';
+            renderSourceToggle();
+        });
         
         // Image upload handling
         imageUpload.addEventListener('change', (e) => {
@@ -538,6 +691,8 @@ const LivePage = {
                 stopBtn.disabled = true;
                 startBtn.disabled = false;
                 APP_STATE.liveStreamActive = false;
+                renderSourceToggle();
+                hideDepthWidgets();
             } catch (error) {
                 console.error('Error stopping live stream:', error);
             }
@@ -553,11 +708,20 @@ const LivePage = {
 
                 // Start monitoring on backend
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_START}`, {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ source: selectedSource })
                 });
 
                 if (!response.ok) {
                     throw new Error('Failed to start monitoring');
+                }
+
+                const startData = await response.json();
+                if (startData.source) {
+                    selectedSource = startData.source;
                 }
 
                 // Hide placeholder, show stream
@@ -574,6 +738,12 @@ const LivePage = {
                 
                 // Update state
                 APP_STATE.liveStreamActive = true;
+                renderSourceToggle();
+                await refreshDepthStatus();
+
+                if (startData.fallback_to_webcam) {
+                    showNotification(startData.message || 'RealSense unavailable, switched to webcam', 'warning');
+                }
 
             } catch (error) {
                 console.error('Error starting live stream:', error);
@@ -594,12 +764,50 @@ const LivePage = {
             statusIndicator.style.display = 'none';
             startBtn.disabled = false;
             stopBtn.disabled = true;
+            APP_STATE.liveStreamActive = false;
+            renderSourceToggle();
+            hideDepthWidgets();
         });
+
+        // Get preferred/default source and RealSense availability
+        try {
+            const devicesResp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}`);
+            const devices = await devicesResp.json();
+            realsenseAvailable = !!devices.realsense_available;
+            if (devices.realsense_device_name) {
+                realsenseDeviceName = devices.realsense_device_name;
+            }
+            realsenseCapabilities = devices.realsense_capabilities || {};
+            selectedSource = devices.default_source || 'webcam';
+            if (!realsenseAvailable) {
+                selectedSource = 'webcam';
+            }
+            renderCapabilities();
+            renderSourceToggle();
+        } catch (error) {
+            console.error('Error checking live devices:', error);
+            selectedSource = 'webcam';
+            realsenseAvailable = false;
+            renderCapabilities();
+            renderSourceToggle();
+        }
 
         // Check initial status
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STATUS}`);
             const status = await response.json();
+
+            if (status.realsense_available !== undefined) {
+                realsenseAvailable = !!status.realsense_available;
+            }
+            if (status.realsense_device_name) {
+                realsenseDeviceName = status.realsense_device_name;
+            }
+            realsenseCapabilities = status.realsense_capabilities || realsenseCapabilities;
+            selectedSource = status.source || status.default_source || selectedSource;
+            if (!realsenseAvailable) {
+                selectedSource = 'webcam';
+            }
             
             if (status.active) {
                 // Stream is already active
@@ -611,8 +819,14 @@ const LivePage = {
                 startBtn.disabled = true;
                 APP_STATE.liveStreamActive = true;
             }
+
+            renderCapabilities();
+            renderSourceToggle();
+            await refreshDepthStatus();
         } catch (error) {
             console.error('Error checking stream status:', error);
+            renderCapabilities();
+            renderSourceToggle();
         }
 
         // =========================================
@@ -797,8 +1011,10 @@ const LivePage = {
 
         // Auto-refresh queue status every 5 seconds when on this page
         const queueRefreshInterval = setInterval(updateQueueStatus, 5000);
+        depthStatusInterval = setInterval(refreshDepthStatus, 1500);
 
         // Clean up interval when leaving page (store for cleanup)
         window._livePageQueueInterval = queueRefreshInterval;
+        window._liveDepthStatusInterval = depthStatusInterval;
     }
 };

@@ -44,12 +44,18 @@ from PIL import Image
 import io
 import base64
 
+# Ensure relative paths (e.g. Results/... weights) resolve correctly no matter
+# where the process is launched from.
+APP_DIR = Path(__file__).resolve().parent
+os.chdir(APP_DIR)
+
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
 
 # Import project modules
 from infer_image import predict_image
+from pipeline.backend.core.realsense_source import RealSenseSource
 
 # Global progress tracking for report generation
 report_progress = {
@@ -106,6 +112,28 @@ VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
 # Thread-safe camera access
 camera_lock = Lock()
 active_camera = None
+active_camera_source = 'webcam'
+realsense_source = RealSenseSource()
+
+# Live stream performance tuning
+LIVE_ASYNC_DETECTION_ENABLED = True
+LIVE_DETECTION_DISPATCH_EVERY_N_FRAMES = 1
+REALSENSE_STREAM_JPEG_QUALITY = 70
+WEBCAM_STREAM_JPEG_QUALITY = 78
+
+# Runtime diagnostics for live streaming pipeline
+live_perf_lock = Lock()
+live_perf_stats = {
+    'source': None,
+    'capture_fps': 0.0,
+    'inference_fps': 0.0,
+    'stream_fps': 0.0,
+    'inference_in_flight': False,
+    'detection_latency_ms': 0.0,
+    'detection_age_ms': 0.0,
+    'last_error': None,
+    'updated_at': None,
+}
 
 # Violation detection state
 violation_detector = None
@@ -1715,17 +1743,22 @@ def get_image(report_id, filename):
 # =========================================================================
 
 def generate_frames(conf=0.25):
-    """Generate frames from webcam with YOLO detection and violation processing."""
-    global active_camera
+    """Generate frames from selected source with YOLO detection and violation processing."""
+    global active_camera, active_camera_source
     
     with camera_lock:
-        if active_camera is None:
-            active_camera = cv2.VideoCapture(0)
-            if not active_camera.isOpened():
-                logger.error("Failed to open webcam")
+        source = active_camera_source
+        if source == 'webcam':
+            if active_camera is None:
+                active_camera = cv2.VideoCapture(0)
+                if not active_camera.isOpened():
+                    logger.error("Failed to open webcam")
+                    return
+            cap = active_camera
+        else:
+            if realsense_source.pipeline is None:
+                logger.error("RealSense source selected but pipeline is not active")
                 return
-        
-        cap = active_camera
     
     logger.info("Starting live frame generation...")
     logger.info("=" * 80)
@@ -1744,67 +1777,163 @@ def generate_frames(conf=0.25):
     
     logger.info("=" * 80)
     
+    frame_count = 0
+    infer_state_lock = Lock()
+    latest_annotated = None
+    latest_detections = []
+    latest_detection_ts = 0.0
+    latest_detection_latency_ms = 0.0
+    inference_in_flight = False
+
+    perf_window_start = time.perf_counter()
+    capture_count = 0
+    infer_count = 0
+    stream_count = 0
+
+    def handle_violations(detections, frame_for_report):
+        """Handle violation queueing from completed detections."""
+        if not detections or not FULL_PIPELINE_AVAILABLE:
+            return
+
+        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
+                             'no-mask', 'no-goggles']
+
+        has_violation = any(
+            any(keyword in d['class_name'].lower() for keyword in violation_keywords)
+            for d in detections
+        )
+
+        if has_violation:
+            violation_classes = [d['class_name'] for d in detections
+                               if any(keyword in d['class_name'].lower()
+                                     for keyword in violation_keywords)]
+            logger.info("=" * 80)
+            logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
+            logger.info(f"Caption generator available: {caption_generator is not None}")
+            logger.info(f"Report generator available: {report_generator is not None}")
+            logger.info(f"Violation queue available: {violation_queue is not None}")
+            logger.info("=" * 80)
+
+            frame_copy = frame_for_report.copy()
+            detections_copy = detections.copy()
+            report_id = enqueue_violation(frame_copy, detections_copy)
+            if report_id:
+                logger.info(f"✓ Violation {report_id} queued for processing")
+            else:
+                logger.debug("Violation not queued (cooldown or already processing)")
+
+    def run_inference_async(frame_for_infer):
+        """Inference worker that updates latest annotated frame without blocking stream."""
+        nonlocal latest_annotated, latest_detections, latest_detection_ts
+        nonlocal latest_detection_latency_ms, infer_count, inference_in_flight
+
+        infer_start = time.perf_counter()
+        try:
+            detections, annotated = predict_image(frame_for_infer, conf=conf)
+
+            with infer_state_lock:
+                latest_annotated = annotated
+                latest_detections = detections
+                latest_detection_ts = time.perf_counter()
+                latest_detection_latency_ms = (latest_detection_ts - infer_start) * 1000.0
+
+            infer_count += 1
+            handle_violations(detections, frame_for_infer)
+
+        except Exception as infer_err:
+            logger.error(f"Error in async inference: {infer_err}")
+            with live_perf_lock:
+                live_perf_stats['last_error'] = str(infer_err)
+        finally:
+            with infer_state_lock:
+                inference_in_flight = False
+
     try:
         while True:
             with camera_lock:
+                source = active_camera_source
+                cap = active_camera
+
+            if source == 'realsense':
+                ok, frame, err = realsense_source.read()
+                if not ok:
+                    logger.warning(f"Failed to read RealSense frame: {err}")
+                    continue
+            else:
                 if cap is None or not cap.isOpened():
                     break
-                
+
                 ret, frame = cap.read()
                 if not ret:
                     logger.warning("Failed to read frame")
                     break
             
-            # Run YOLO detection
-            try:
+            frame_count += 1
+            capture_count += 1
+
+            # Schedule async inference, keep stream loop independent from model latency.
+            if LIVE_ASYNC_DETECTION_ENABLED:
+                with infer_state_lock:
+                    should_dispatch = (
+                        (not inference_in_flight) and
+                        (frame_count % LIVE_DETECTION_DISPATCH_EVERY_N_FRAMES == 0)
+                    )
+                    if should_dispatch:
+                        inference_in_flight = True
+
+                if should_dispatch:
+                    Thread(target=run_inference_async, args=(frame.copy(),), daemon=True).start()
+
+                with infer_state_lock:
+                    detections = latest_detections
+                    annotated = latest_annotated if latest_annotated is not None else frame
+                    detection_ts = latest_detection_ts
+                    detection_latency_ms = latest_detection_latency_ms
+                    infer_in_flight_snapshot = inference_in_flight
+            else:
+                # Fallback path: synchronous inference (legacy behavior)
+                infer_start = time.perf_counter()
                 detections, annotated = predict_image(frame, conf=conf)
-                
+                infer_count += 1
+                detection_ts = time.perf_counter()
+                detection_latency_ms = (detection_ts - infer_start) * 1000.0
+                infer_in_flight_snapshot = False
+                handle_violations(detections, frame)
+
+            try:
                 # Log all detections for debugging
                 if detections:
                     detected_classes = [d['class_name'] for d in detections]
                     logger.debug(f"Detected: {detected_classes}")
                 
-                # Check for violations in background thread (non-blocking)
-                if detections and FULL_PIPELINE_AVAILABLE:
-                    # Check for ANY PPE violations (match actual model class names)
-                    violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
-                                         'no-mask', 'no-goggles']
-                    
-                    has_violation = any(
-                        any(keyword in d['class_name'].lower() for keyword in violation_keywords)
-                        for d in detections
-                    )
-                    
-                    if has_violation:
-                        # Log detected violations
-                        violation_classes = [d['class_name'] for d in detections 
-                                           if any(keyword in d['class_name'].lower() 
-                                                 for keyword in violation_keywords)]
-                        logger.info("=" * 80)
-                        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
-                        logger.info(f"Caption generator available: {caption_generator is not None}")
-                        logger.info(f"Report generator available: {report_generator is not None}")
-                        logger.info(f"Violation queue available: {violation_queue is not None}")
-                        logger.info("=" * 80)
-                        
-                        # Use queue-based approach to prevent missing violations
-                        # enqueue_violation is fast (saves images, adds to queue)
-                        # Queue worker processes reports in background
-                        frame_copy = frame.copy()
-                        detections_copy = detections.copy()
-                        
-                        report_id = enqueue_violation(frame_copy, detections_copy)
-                        if report_id:
-                            logger.info(f"✓ Violation {report_id} queued for processing")
-                        else:
-                            logger.debug("Violation not queued (cooldown or already processing)")
-                
                 # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                stream_quality = REALSENSE_STREAM_JPEG_QUALITY if source == 'realsense' else WEBCAM_STREAM_JPEG_QUALITY
+                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, stream_quality])
                 if not ret:
                     continue
                 
                 frame_bytes = buffer.tobytes()
+                stream_count += 1
+
+                now = time.perf_counter()
+                perf_elapsed = now - perf_window_start
+                if perf_elapsed >= 1.0:
+                    detection_age_ms = (now - detection_ts) * 1000.0 if detection_ts > 0 else 0.0
+                    with live_perf_lock:
+                        live_perf_stats.update({
+                            'source': source,
+                            'capture_fps': round(capture_count / perf_elapsed, 2),
+                            'inference_fps': round(infer_count / perf_elapsed, 2),
+                            'stream_fps': round(stream_count / perf_elapsed, 2),
+                            'inference_in_flight': infer_in_flight_snapshot,
+                            'detection_latency_ms': round(detection_latency_ms, 2),
+                            'detection_age_ms': round(detection_age_ms, 2),
+                            'updated_at': datetime.now().isoformat(),
+                        })
+                    perf_window_start = now
+                    capture_count = 0
+                    infer_count = 0
+                    stream_count = 0
                 
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
@@ -1824,7 +1953,7 @@ def generate_frames(conf=0.25):
 
 @app.route('/api/live/stream')
 def live_stream():
-    """Live webcam stream with YOLO detection."""
+    """Live stream with YOLO detection."""
     conf = float(request.args.get('conf', 0.10))
     return Response(
         generate_frames(conf=conf),
@@ -1832,18 +1961,121 @@ def live_stream():
     )
 
 
+def default_live_source() -> str:
+    """Prefer RealSense if detected, otherwise webcam."""
+    status = realsense_source.get_status()
+    return 'realsense' if status.get('device_available') else 'webcam'
+
+
+def stop_live_sources_locked():
+    """Stop all active live sources. Caller must hold camera_lock."""
+    global active_camera, active_camera_source
+
+    if active_camera is not None:
+        active_camera.release()
+        active_camera = None
+
+    realsense_source.stop()
+    active_camera_source = 'webcam'
+
+
+def start_webcam_locked():
+    """Start webcam source. Caller must hold camera_lock."""
+    global active_camera, active_camera_source
+
+    cap = cv2.VideoCapture(0)
+    try:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 60)
+    except Exception:
+        pass
+    if not cap.isOpened():
+        return False, 'Failed to open webcam'
+
+    active_camera = cap
+    active_camera_source = 'webcam'
+    return True, ''
+
+
+def start_realsense_locked():
+    """Start RealSense source. Caller must hold camera_lock."""
+    global active_camera, active_camera_source
+
+    ok, err = realsense_source.start()
+    if not ok:
+        return False, err
+
+    if active_camera is not None:
+        active_camera.release()
+        active_camera = None
+
+    active_camera_source = 'realsense'
+    return True, ''
+
+
+@app.route('/api/live/devices')
+def live_devices():
+    """Get live input device availability."""
+    rs_status = realsense_source.get_status()
+    rs_caps = realsense_source.get_capabilities()
+    return jsonify({
+        'default_source': default_live_source(),
+        'webcam_available': True,
+        'realsense_available': rs_status.get('device_available', False),
+        'realsense_sdk_available': rs_status.get('sdk_available', False),
+        'realsense_device_name': rs_status.get('device_name'),
+        'realsense_reason': rs_status.get('reason'),
+        'realsense_capabilities': rs_caps
+    })
+
+
 @app.route('/api/live/start', methods=['POST'])
 def start_live():
-    """Start live monitoring."""
-    global active_camera
-    
+    """Start live monitoring using requested source with fallback."""
+    global active_camera_source
+
+    payload = request.get_json(silent=True) or {}
+    requested_source = payload.get('source')
+    if requested_source not in ['webcam', 'realsense']:
+        requested_source = default_live_source()
+
+    rs_status = realsense_source.get_status()
+
     with camera_lock:
-        if active_camera is None:
-            active_camera = cv2.VideoCapture(0)
-            if not active_camera.isOpened():
-                return jsonify({'success': False, 'error': 'Failed to open webcam'}), 500
-    
-    return jsonify({'success': True, 'message': 'Live monitoring started'})
+        stop_live_sources_locked()
+
+        fallback_to_webcam = False
+        fallback_reason = None
+
+        if requested_source == 'realsense':
+            ok, err = start_realsense_locked()
+            if not ok:
+                fallback_to_webcam = True
+                fallback_reason = err
+                ok, err = start_webcam_locked()
+                if not ok:
+                    return jsonify({'success': False, 'error': err}), 500
+        else:
+            ok, err = start_webcam_locked()
+            if not ok:
+                return jsonify({'success': False, 'error': err}), 500
+
+    msg = 'Live monitoring started'
+    if fallback_to_webcam:
+        msg = f'RealSense unavailable ({fallback_reason}); webcam started'
+
+    return jsonify({
+        'success': True,
+        'message': msg,
+        'source': active_camera_source,
+        'requested_source': requested_source,
+        'fallback_to_webcam': fallback_to_webcam,
+        'fallback_reason': fallback_reason,
+        'realsense_available': rs_status.get('device_available', False),
+        'realsense_device_name': rs_status.get('device_name')
+    })
 
 
 @app.route('/api/live/stop', methods=['POST'])
@@ -1852,9 +2084,7 @@ def stop_live():
     global active_camera
     
     with camera_lock:
-        if active_camera is not None:
-            active_camera.release()
-            active_camera = None
+        stop_live_sources_locked()
     
     return jsonify({'success': True, 'message': 'Live monitoring stopped'})
 
@@ -1862,13 +2092,64 @@ def stop_live():
 @app.route('/api/live/status')
 def live_status():
     """Get live monitoring status."""
+    rs_status = realsense_source.get_status()
+    rs_caps = realsense_source.get_capabilities()
+    depth = realsense_source.get_depth_telemetry()
+
     with camera_lock:
-        is_active = active_camera is not None and active_camera.isOpened()
+        webcam_active = active_camera is not None and active_camera.isOpened()
+        realsense_active = realsense_source.pipeline is not None
+        is_active = webcam_active or realsense_active
+        source = active_camera_source if is_active else default_live_source()
     
     return jsonify({
         'active': is_active,
-        'camera_index': 0 if is_active else None
+        'camera_index': 0 if (is_active and source == 'webcam') else None,
+        'source': source,
+        'default_source': default_live_source(),
+        'realsense_available': rs_status.get('device_available', False),
+        'realsense_sdk_available': rs_status.get('sdk_available', False),
+        'realsense_device_name': rs_status.get('device_name'),
+        'realsense_reason': rs_status.get('reason'),
+        'realsense_capabilities': rs_caps,
+        'depth_telemetry': depth
     })
+
+
+@app.route('/api/live/depth/status')
+def live_depth_status():
+    """Get latest RealSense depth telemetry and capabilities."""
+    rs_status = realsense_source.get_status()
+    rs_caps = realsense_source.get_capabilities()
+    depth = realsense_source.get_depth_telemetry()
+
+    with camera_lock:
+        source = active_camera_source
+
+    return jsonify({
+        'source': source,
+        'realsense_available': rs_status.get('device_available', False),
+        'realsense_device_name': rs_status.get('device_name'),
+        'realsense_reason': rs_status.get('reason'),
+        'realsense_capabilities': rs_caps,
+        'depth_telemetry': depth
+    })
+
+
+@app.route('/api/live/depth/preview')
+def live_depth_preview():
+    """Get latest depth colormap preview frame as JPEG."""
+    preview = realsense_source.get_depth_preview_jpeg()
+    if not preview:
+        return Response(status=204)
+    return Response(preview, mimetype='image/jpeg')
+
+
+@app.route('/api/live/perf')
+def live_perf():
+    """Get live stream performance diagnostics."""
+    with live_perf_lock:
+        return jsonify(dict(live_perf_stats))
 
 
 # =========================================================================
@@ -2040,9 +2321,7 @@ def cleanup():
     global active_camera
     
     with camera_lock:
-        if active_camera is not None:
-            active_camera.release()
-            active_camera = None
+        stop_live_sources_locked()
     
     cv2.destroyAllWindows()
 

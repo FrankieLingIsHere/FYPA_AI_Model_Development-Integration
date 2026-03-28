@@ -1,5 +1,143 @@
 // API Functions
 const API = {
+    canonicalViolationKey(rawKey) {
+        if (!rawKey) return null;
+
+        const normalized = rawKey
+            .toString()
+            .trim()
+            .toUpperCase()
+            .replace(/\s+/g, ' ')
+            .replace(/^NO\s+/, 'NO-');
+
+        const mapping = {
+            'NO-HARDHAT': 'NO-Hardhat',
+            'NO-HARD HAT': 'NO-Hardhat',
+            'NO-SAFETY VEST': 'NO-Safety Vest',
+            'NO-VEST': 'NO-Safety Vest',
+            'NO-GLOVES': 'NO-Gloves',
+            'NO-MASK': 'NO-Mask',
+            'NO-GOGGLES': 'NO-Goggles',
+            'NO-SAFETY SHOES': 'NO-Safety Shoes'
+        };
+
+        if (mapping[normalized]) {
+            return mapping[normalized];
+        }
+
+        return normalized.startsWith('NO-') ? rawKey : null;
+    },
+
+    extractViolationKeys(violation) {
+        const keys = [];
+
+        if (Array.isArray(violation?.ppe_tags) && violation.ppe_tags.length > 0) {
+            violation.ppe_tags.forEach((tag) => {
+                const key = this.canonicalViolationKey(tag);
+                if (key) keys.push(key);
+            });
+        }
+
+        if (keys.length === 0 && Array.isArray(violation?.missing_ppe) && violation.missing_ppe.length > 0) {
+            violation.missing_ppe.forEach((item) => {
+                const key = this.canonicalViolationKey(`NO-${item}`);
+                if (key) keys.push(key);
+            });
+        }
+
+        if (keys.length === 0 && violation?.violation_summary) {
+            const summary = violation.violation_summary.toString();
+            const matches = summary.match(/NO-[A-Za-z ]+/g) || [];
+            matches.forEach((m) => {
+                const key = this.canonicalViolationKey(m.trim());
+                if (key) keys.push(key);
+            });
+        }
+
+        return keys;
+    },
+
+    buildBreakdown(violations) {
+        const breakdown = {
+            'NO-Hardhat': 0,
+            'NO-Safety Vest': 0,
+            'NO-Gloves': 0,
+            'NO-Mask': 0,
+            'NO-Goggles': 0,
+            'NO-Safety Shoes': 0
+        };
+
+        violations.forEach((violation) => {
+            const keys = this.extractViolationKeys(violation);
+            if (keys.length === 0) return;
+            keys.forEach((key) => {
+                const canonical = this.canonicalViolationKey(key);
+                if (canonical && Object.prototype.hasOwnProperty.call(breakdown, canonical)) {
+                    breakdown[canonical] += 1;
+                }
+            });
+        });
+
+        return breakdown;
+    },
+
+    computeDeltas(violations) {
+        const now = new Date();
+        const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startYesterday = new Date(startToday);
+        startYesterday.setDate(startYesterday.getDate() - 1);
+
+        const startThisWeek = new Date(startToday);
+        startThisWeek.setDate(startThisWeek.getDate() - ((startThisWeek.getDay() + 6) % 7));
+
+        const startLastWeek = new Date(startThisWeek);
+        startLastWeek.setDate(startLastWeek.getDate() - 7);
+
+        let todayCount = 0;
+        let yesterdayCount = 0;
+        let thisWeekCount = 0;
+        let lastWeekCount = 0;
+
+        violations.forEach((v) => {
+            if (!v?.timestamp) return;
+            const ts = new Date(v.timestamp);
+            if (Number.isNaN(ts.getTime())) return;
+
+            if (ts >= startToday) todayCount += 1;
+            else if (ts >= startYesterday) yesterdayCount += 1;
+
+            if (ts >= startThisWeek) thisWeekCount += 1;
+            else if (ts >= startLastWeek) lastWeekCount += 1;
+        });
+
+        return {
+            todayDelta: todayCount - yesterdayCount,
+            weekDelta: thisWeekCount - lastWeekCount
+        };
+    },
+
+    enrichStatsWithViolations(baseStats, violations) {
+        const sortedViolations = [...violations].sort((a, b) => {
+            const aTs = new Date(a.timestamp || 0).getTime();
+            const bTs = new Date(b.timestamp || 0).getTime();
+            return bTs - aTs;
+        });
+
+        const deltas = this.computeDeltas(sortedViolations);
+
+        return {
+            ...baseStats,
+            breakdown: baseStats.breakdown && Object.keys(baseStats.breakdown).length
+                ? baseStats.breakdown
+                : this.buildBreakdown(sortedViolations),
+            todayDelta: baseStats.todayDelta !== undefined ? baseStats.todayDelta : deltas.todayDelta,
+            weekDelta: baseStats.weekDelta !== undefined ? baseStats.weekDelta : deltas.weekDelta,
+            recentViolations: baseStats.recentViolations && baseStats.recentViolations.length
+                ? baseStats.recentViolations
+                : sortedViolations.slice(0, 5)
+        };
+    },
+
     // Fetch all violations with status info
     async getViolations() {
         try {
@@ -55,13 +193,18 @@ const API = {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/stats`);
             if (response.ok) {
                 const data = await response.json();
+                const needsEnrichment =
+                    data.todayDelta === undefined ||
+                    data.weekDelta === undefined ||
+                    !data.breakdown ||
+                    !data.recentViolations;
 
-                // Ensure recent violations are attached if not present
-                if (!data.recentViolations) {
-                    const violations = await this.getViolations();
-                    data.recentViolations = violations.slice(0, 5);
+                if (!needsEnrichment) {
+                    return data;
                 }
-                return data;
+
+                const violations = await this.getViolations();
+                return this.enrichStatsWithViolations(data, violations);
             }
         } catch (e) {
             console.warn('Backend stats endpoint failed, falling back to client-side calc:', e);
@@ -115,7 +258,7 @@ const API = {
                 else stats.severity.low++;
             });
 
-            return stats;
+            return this.enrichStatsWithViolations(stats, violations);
         } catch (error) {
             console.error('Error calculating stats:', error);
             return {

@@ -76,18 +76,22 @@ const AnalyticsPage = {
 
     async mount() {
         try {
-            const [stats, trendData] = await Promise.all([
+            const [stats, violations] = await Promise.all([
                 API.getStats(),
-                fetch('/api/analytics/trend').then(r => r.json())
+                API.getViolations()
             ]);
 
             this.renderStats(stats);
-            this.renderTrendsChart(trendData);
+            this.renderTrendsChart(violations);
             this.renderViolationTypes(stats);
-            this.renderTimeDistribution(stats);
+            this.renderTimeDistribution(violations);
             this.calculateSafetyScore(stats);
         } catch (e) {
             console.error('Error loading analytics:', e);
+            const statsEl = document.getElementById('analytics-stats');
+            if (statsEl) {
+                statsEl.innerHTML = '<div class="alert alert-danger">Failed to load analytics data.</div>';
+            }
         }
     },
 
@@ -113,19 +117,49 @@ const AnalyticsPage = {
         `;
     },
 
-    renderTrendsChart(data) {
-        const ctx = document.getElementById('trendChart').getContext('2d');
+    renderTrendsChart(violations) {
+        const canvas = document.getElementById('trendChart');
+        if (!canvas) return;
+
+        if (typeof Chart === 'undefined') {
+            canvas.parentElement.innerHTML = '<div class="alert alert-warning">Trend chart is unavailable because Chart.js failed to load.</div>';
+            return;
+        }
+
+        const ctx = canvas.getContext('2d');
 
         // Destroy existing chart if any
         if (window.analyticsChart) {
             window.analyticsChart.destroy();
         }
 
-        const labels = data.map(d => {
-            const date = new Date(d.date);
+        // Build 7-day trend from violations
+        const today = new Date();
+        const dayBuckets = new Map();
+        for (let i = 6; i >= 0; i -= 1) {
+            const d = new Date(today);
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() - i);
+            const key = d.toISOString().slice(0, 10);
+            dayBuckets.set(key, 0);
+        }
+
+        (violations || []).forEach((v) => {
+            if (!v?.timestamp) return;
+            const ts = new Date(v.timestamp);
+            if (Number.isNaN(ts.getTime())) return;
+            ts.setHours(0, 0, 0, 0);
+            const key = ts.toISOString().slice(0, 10);
+            if (dayBuckets.has(key)) {
+                dayBuckets.set(key, dayBuckets.get(key) + 1);
+            }
+        });
+
+        const labels = Array.from(dayBuckets.keys()).map((isoDate) => {
+            const date = new Date(`${isoDate}T00:00:00`);
             return `${date.getDate()}/${date.getMonth() + 1}`;
         });
-        const counts = data.map(d => d.count);
+        const counts = Array.from(dayBuckets.values());
 
         window.analyticsChart = new Chart(ctx, {
             type: 'line',
@@ -163,14 +197,17 @@ const AnalyticsPage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById('violation-types');
-
-        // For now, all violations are NO-Hardhat
+        const breakdown = stats.breakdown || {};
         const types = [
-            { name: 'Missing Hardhat', count: stats.total, color: 'var(--error-color)' },
-            { name: 'Missing Safety Vest', count: 0, color: 'var(--warning-color)' },
-            { name: 'Missing Gloves', count: 0, color: 'var(--info-color)' },
-            { name: 'Other PPE', count: 0, color: 'var(--text-color)' }
+            { name: 'Missing Hardhat', count: breakdown['NO-Hardhat'] || 0, color: 'var(--error-color)' },
+            { name: 'Missing Safety Vest', count: breakdown['NO-Safety Vest'] || 0, color: 'var(--warning-color)' },
+            { name: 'Missing Gloves', count: breakdown['NO-Gloves'] || 0, color: 'var(--info-color)' },
+            { name: 'Missing Mask', count: breakdown['NO-Mask'] || 0, color: '#9b59b6' },
+            { name: 'Missing Goggles', count: breakdown['NO-Goggles'] || 0, color: '#e67e22' },
+            { name: 'Missing Safety Shoes', count: breakdown['NO-Safety Shoes'] || 0, color: '#16a085' }
         ];
+
+        const total = types.reduce((sum, type) => sum + type.count, 0);
 
         container.innerHTML = `
             <div style="display: flex; flex-direction: column; gap: 1rem;">
@@ -181,7 +218,7 @@ const AnalyticsPage = {
                             <span style="font-weight: 600; color: ${type.color};">${type.count}</span>
                         </div>
                         <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
-                            <div style="height: 100%; background: ${type.color}; width: ${stats.total > 0 ? (type.count / stats.total * 100) : 0}%; transition: width 0.5s ease;"></div>
+                            <div style="height: 100%; background: ${type.color}; width: ${total > 0 ? (type.count / total * 100) : 0}%; transition: width 0.5s ease;"></div>
                         </div>
                     </div>
                 `).join('')}
@@ -189,7 +226,7 @@ const AnalyticsPage = {
         `;
     },
 
-    renderTimeDistribution(stats) {
+    renderTimeDistribution(violations) {
         const container = document.getElementById('time-distribution');
 
         // Calculate time distribution
@@ -200,10 +237,10 @@ const AnalyticsPage = {
             'Night (12AM-6AM)': 0
         };
 
-        // Analyze violations (placeholder - would need actual time data)
-        const violations = stats.recentViolations || [];
-        violations.forEach(v => {
+        (violations || []).forEach(v => {
+            if (!v?.timestamp) return;
             const hour = new Date(v.timestamp).getHours();
+            if (Number.isNaN(hour)) return;
             if (hour >= 6 && hour < 12) distribution['Morning (6AM-12PM)']++;
             else if (hour >= 12 && hour < 18) distribution['Afternoon (12PM-6PM)']++;
             else if (hour >= 18 && hour < 24) distribution['Evening (6PM-12AM)']++;

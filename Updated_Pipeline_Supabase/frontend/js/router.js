@@ -35,7 +35,7 @@ const Router = {
 
     // Update active navigation link
     updateActiveNav(path) {
-        document.querySelectorAll('.sidebar-link').forEach(link => {
+        document.querySelectorAll('.sidebar-link, .nav-link').forEach(link => {
             link.classList.remove('active');
             if (link.dataset.page === path) {
                 link.classList.add('active');
@@ -47,8 +47,15 @@ const Router = {
     init() {
         // Handle navigation clicks
         document.addEventListener('click', (e) => {
-            if (e.target.classList.contains('sidebar-link') || e.target.closest('.sidebar-link')) {
-                const link = e.target.classList.contains('sidebar-link') ? e.target : e.target.closest('.sidebar-link');
+            if (
+                e.target.classList.contains('sidebar-link') ||
+                e.target.closest('.sidebar-link') ||
+                e.target.classList.contains('nav-link') ||
+                e.target.closest('.nav-link')
+            ) {
+                const link = e.target.classList.contains('sidebar-link') || e.target.classList.contains('nav-link')
+                    ? e.target
+                    : e.target.closest('.sidebar-link, .nav-link');
 
                 // Ignore hash links that shouldn't trigger routing (like #)
                 if (link.getAttribute('href') === '#' && !link.dataset.page) return;

@@ -1,6 +1,7 @@
 // Simple Router for SPA Navigation
 const Router = {
     routes: {},
+    currentComponent: null,
 
     // Register a route
     register(path, component) {
@@ -24,8 +25,13 @@ const Router = {
 
     // Render component
     render(component) {
+        if (this.currentComponent && this.currentComponent.unmount) {
+            this.currentComponent.unmount();
+        }
+
         const app = document.getElementById('app');
         app.innerHTML = component.render();
+        this.currentComponent = component;
 
         // Call mount lifecycle if exists
         if (component.mount) {

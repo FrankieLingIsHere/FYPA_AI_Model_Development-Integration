@@ -1,5 +1,10 @@
 // Home Page Component
 const HomePage = {
+    _realtimeHandler: null,
+    _connectionHandler: null,
+    _realtimeRefreshTimer: null,
+    _fallbackInterval: null,
+
     render() {
         return `
         <div class="home-dashboard">
@@ -97,8 +102,58 @@ const HomePage = {
     },
 
     async mount() {
-        const stats = await API.getStats();
+        await this.refreshData();
 
+        this._realtimeHandler = () => {
+            if (this._realtimeRefreshTimer) return;
+            this._realtimeRefreshTimer = setTimeout(async () => {
+                this._realtimeRefreshTimer = null;
+                await this.refreshData();
+            }, 800);
+        };
+        window.addEventListener('ppe-realtime:update', this._realtimeHandler);
+
+        this._connectionHandler = () => this.syncFallbackPolling();
+        window.addEventListener('ppe-realtime:connection', this._connectionHandler);
+        this.syncFallbackPolling();
+    },
+
+    unmount() {
+        if (this._realtimeHandler) {
+            window.removeEventListener('ppe-realtime:update', this._realtimeHandler);
+            this._realtimeHandler = null;
+        }
+        if (this._realtimeRefreshTimer) {
+            clearTimeout(this._realtimeRefreshTimer);
+            this._realtimeRefreshTimer = null;
+        }
+        if (this._connectionHandler) {
+            window.removeEventListener('ppe-realtime:connection', this._connectionHandler);
+            this._connectionHandler = null;
+        }
+        if (this._fallbackInterval) {
+            clearInterval(this._fallbackInterval);
+            this._fallbackInterval = null;
+        }
+    },
+
+    syncFallbackPolling() {
+        const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
+        if (connected) {
+            if (this._fallbackInterval) {
+                clearInterval(this._fallbackInterval);
+                this._fallbackInterval = null;
+            }
+            return;
+        }
+
+        if (!this._fallbackInterval) {
+            this._fallbackInterval = setInterval(() => this.refreshData(), 12000);
+        }
+    },
+
+    async refreshData() {
+        const stats = await API.getStats();
         this.renderHomeSummary(stats);
         this.renderViolationTypes(stats);
         this.renderRecentViolations(stats.recentViolations || []);

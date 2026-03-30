@@ -19,6 +19,8 @@ import logging
 import json
 import base64
 import time
+import re
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 
@@ -57,13 +59,22 @@ class GeminiClient:
                 - GEMINI_CONFIG: {api_key, model, temperature, max_tokens, ...}
         """
         gemini_config = config.get('GEMINI_CONFIG', {})
-        
-        self.api_key = gemini_config.get('api_key', '')
+
+        def _clean_key(value: Any) -> str:
+            if value is None:
+                return ''
+            key = str(value).strip()
+            if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+                key = key[1:-1].strip()
+            return key
+
+        self.api_key = _clean_key(gemini_config.get('api_key')) or _clean_key(os.getenv('GEMINI_API_KEY', ''))
         self.model_name = gemini_config.get('model', 'gemini-2.0-flash')
         self.temperature = gemini_config.get('temperature', 0.4)
         self.max_tokens = gemini_config.get('max_tokens', 2000)
         self.timeout = gemini_config.get('timeout', 120)
         self.max_retries = gemini_config.get('max_retries', 3)
+        self.last_error = None
         
         # Rate limiter state
         self._last_call_time = 0
@@ -75,10 +86,12 @@ class GeminiClient:
         
         if not GEMINI_AVAILABLE:
             logger.error(f"Gemini SDK not available: {GEMINI_ERROR}")
+            self.last_error = GEMINI_ERROR
             return
             
         if not self.api_key:
             logger.error("GEMINI_API_KEY not set. Add it to .env file.")
+            self.last_error = "GEMINI_API_KEY not set"
             return
         
         try:
@@ -87,6 +100,7 @@ class GeminiClient:
             logger.info(f"✓ Gemini client initialized (model: {self.model_name})")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Gemini client: {e}")
+            self.last_error = str(e)
     
     @property
     def is_available(self) -> bool:
@@ -166,18 +180,21 @@ class GeminiClient:
         if not self.is_available:
             return "Image captioning not available — Gemini API not configured"
         
-        # Default safety-focused prompt
+        # Default safety-focused prompt with stronger people/action/situation structure.
         prompt = custom_prompt or (
-            "You are a workplace safety inspector analyzing this image. "
-            "Describe the scene in detail, focusing on:\n"
-            "1. The work environment (construction site, roadside, warehouse, office, etc.)\n"
-            "2. Number of workers visible and what they are doing\n"
-            "3. What safety equipment (PPE) each worker IS wearing\n"
-            "4. What safety equipment each worker is NOT wearing or is missing\n"
-            "5. Any visible hazards (machinery, heights, traffic, materials)\n\n"
-            "Be specific of the exact scene in the image. "
-            "Do NOT guess or make up things not shown in the image. "
-            "Output a single paragraph, 3-5 sentences."
+            "You are a workplace visual analyst. Write a factual caption from this image only.\n\n"
+            "Output rules (single paragraph, 4-6 sentences):\n"
+            "1. Start with total visible people count and scene type.\n"
+            "2. For each visible person, describe their action, visible body region, and immediate situation/context.\n"
+            "3. Mention PPE only when clearly visible and certain.\n"
+            "4. If PPE region is not visible, explicitly state it is not visible.\n"
+            "5. End with concise safety context grounded in visible facts.\n\n"
+            "Strict grounding:\n"
+            "- Do not invent hazards, tools, or PPE.\n"
+            "- Do not assume construction/worksite unless visual evidence supports it.\n"
+            "- Hardhat must be a rigid safety helmet (hair/cap/hood is not hardhat).\n"
+            "- Safety vest must be fluorescent and reflective.\n\n"
+            "Style: professional natural English, no markdown, no bullet points, avoid 'In the image'."
         )
         
         # Load image
@@ -197,7 +214,7 @@ class GeminiClient:
                     contents=[prompt, image_part],
                     config=types.GenerateContentConfig(
                         temperature=0.3,  # Lower temp for factual description
-                        max_output_tokens=300,
+                        max_output_tokens=420,
                     )
                 )
                 
@@ -240,6 +257,7 @@ class GeminiClient:
         """
         if not self.is_available:
             logger.error("Gemini not available for report generation")
+            self.last_error = "Gemini client not available for report generation"
             return None
         
         # Build content parts
@@ -275,6 +293,7 @@ class GeminiClient:
                     try:
                         result = json.loads(raw_text)
                         logger.info("✓ NLP report JSON generated successfully")
+                        self.last_error = None
                         return result
                     except json.JSONDecodeError:
                         # Try to extract JSON from markdown code blocks
@@ -282,28 +301,57 @@ class GeminiClient:
                             json_str = raw_text.split('```json')[1].split('```')[0].strip()
                             result = json.loads(json_str)
                             logger.info("✓ NLP report JSON extracted from code block")
+                            self.last_error = None
                             return result
                         elif '```' in raw_text:
                             json_str = raw_text.split('```')[1].split('```')[0].strip()
                             result = json.loads(json_str)
+                            self.last_error = None
                             return result
                         else:
-                            logger.error(f"Could not parse JSON from Gemini response: {raw_text[:200]}...")
+                            # Fallback: recover the largest JSON-like object and clean trailing commas
+                            first_brace = raw_text.find('{')
+                            last_brace = raw_text.rfind('}')
+                            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                                json_candidate = raw_text[first_brace:last_brace + 1]
+                                cleaned = re.sub(r',\s*([}\]])', r'\1', json_candidate)
+                                try:
+                                    result = json.loads(cleaned)
+                                    logger.info("✓ NLP report JSON recovered from mixed response")
+                                    self.last_error = None
+                                    return result
+                                except json.JSONDecodeError:
+                                    pass
+
+                                self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
+                                logger.error(self.last_error)
                 else:
-                    logger.warning(f"Empty response from Gemini (attempt {attempt + 1})")
+                            self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
+                            logger.warning(self.last_error)
                     
             except json.JSONDecodeError as e:
-                logger.error(f"JSON parse error (attempt {attempt + 1}): {e}")
+                self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
+                logger.error(self.last_error)
                 if attempt < self.max_retries - 1:
                     time.sleep(2)
             except Exception as e:
-                logger.error(f"Gemini report generation error (attempt {attempt + 1}): {e}")
+                err_text = str(e)
+                self.last_error = f"Gemini report generation error (attempt {attempt + 1}): {err_text}"
+                logger.error(self.last_error)
+
+                # Fail fast on quota/resource exhaustion to avoid long stuck generation windows.
+                upper = err_text.upper()
+                if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    break
+
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)
         
         logger.error("Failed to generate NLP report after all retries")
+        if not self.last_error:
+            self.last_error = "Failed to generate NLP report after all retries"
         return None
     
     def get_status(self) -> Dict[str, Any]:

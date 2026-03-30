@@ -202,6 +202,36 @@ body {
     font-size: 1.8rem;
 }
 
+.nav-toggle {
+    display: none;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-radius: 8px;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.nav-more-toggle {
+    display: none;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-radius: 8px;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.nav-more-panel {
+    display: flex;
+}
+
 .nav-menu {
     display: flex;
     list-style: none;
@@ -232,6 +262,61 @@ body {
     font-size: 1.1rem;
 }
 
+.nav-right-tools {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+}
+
+.nav-timezone {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.timezone-select {
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    padding: 0.35rem 0.5rem;
+    max-width: 180px;
+}
+
+.realtime-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 999px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    line-height: 1;
+}
+
+.realtime-badge i {
+    font-size: 0.72rem;
+}
+
+.realtime-live {
+    color: #1b5e20;
+    background: rgba(129, 199, 132, 0.28);
+    border-color: rgba(76, 175, 80, 0.45);
+}
+
+.realtime-reconnecting {
+    color: #8d6e63;
+    background: rgba(255, 224, 178, 0.32);
+    border-color: rgba(255, 167, 38, 0.45);
+}
+
+.realtime-offline {
+    color: #b71c1c;
+    background: rgba(255, 205, 210, 0.45);
+    border-color: rgba(244, 67, 54, 0.45);
+}
+
 /* Main Content */
 .main-content {
     flex: 1;
@@ -239,6 +324,57 @@ body {
     width: 100%;
     margin: 0 auto;
     padding: var(--spacing-lg);
+    overflow-x: hidden;
+}
+
+/* Mobile portrait lock overlay */
+.mobile-orientation-overlay {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(165deg, #1f2937, #111827);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    z-index: 5000;
+}
+
+.mobile-orientation-card {
+    width: 100%;
+    max-width: 420px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    padding: 1.2rem;
+    text-align: center;
+    color: #f9fafb;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.mobile-orientation-icon {
+    font-size: 2rem;
+    margin-bottom: 0.6rem;
+    color: #fbbf24;
+}
+
+.mobile-orientation-card h2 {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.mobile-orientation-card p {
+    margin: 0.25rem 0;
+    color: #d1d5db;
+}
+
+body.mobile-portrait-locked .navbar,
+body.mobile-portrait-locked .main-content,
+body.mobile-portrait-locked .footer {
+    display: none !important;
+}
+
+body.mobile-portrait-locked .mobile-orientation-overlay {
+    display: flex;
 }
 
 /* Page Container */
@@ -285,6 +421,11 @@ body {
 
 .card-content {
     padding: var(--spacing-lg);
+    overflow-wrap: anywhere;
+}
+
+.card table {
+    width: 100%;
 }
 
 /* Grid Layouts */
@@ -309,6 +450,15 @@ body {
     .grid-4 {
         grid-template-columns: repeat(2, 1fr);
     }
+
+    .main-content {
+        padding: 1rem;
+        margin-left: 0;
+    }
+
+    .card-content {
+        padding: 1rem;
+    }
 }
 
 @media (max-width: 768px) {
@@ -324,12 +474,213 @@ body {
         gap: 0.25rem;
     }
 
+    .nav-right-tools {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .timezone-select {
+        max-width: 150px;
+    }
+
     .nav-link {
         padding: 0.5rem 0.75rem;
         font-size: 0.9rem;
     }
+
+    .home-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stat-card h3 {
+        font-size: 1.9rem;
+    }
 }
 
+@media (max-width: 900px) {
+    .nav-container {
+        height: auto;
+        min-height: 64px;
+        padding: 0.65rem 0.8rem;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        position: relative;
+    }
+
+    .nav-brand {
+        font-size: 1.1rem;
+        gap: 0.5rem;
+    }
+
+    .nav-brand i {
+        font-size: 1.3rem;
+    }
+
+    .nav-toggle {
+        display: inline-flex;
+        margin-left: auto;
+    }
+
+    body.is-phone-device .nav-more-toggle {
+        display: inline-flex;
+    }
+
+    .nav-menu {
+        order: 3;
+        width: 100%;
+        display: none;
+        flex-direction: column;
+        gap: 0.4rem;
+        background: rgba(0, 0, 0, 0.18);
+        border-radius: 10px;
+        padding: 0.55rem;
+        max-height: 42vh;
+        overflow-y: auto;
+    }
+
+    body.nav-open .nav-menu {
+        display: flex;
+    }
+
+    .nav-link {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .nav-right-tools {
+        order: 2;
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        row-gap: 0.35rem;
+    }
+
+    body.is-phone-device .nav-more-panel {
+        order: initial;
+        width: min(92vw, 320px);
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0.8rem;
+        z-index: 1300;
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.6rem;
+        padding: 0.7rem;
+        background: rgba(17, 24, 39, 0.97);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    }
+
+    body.is-phone-device.nav-more-open .nav-more-panel {
+        display: flex;
+    }
+
+    body.is-phone-device .nav-more-panel .nav-timezone {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    body.is-phone-device .nav-more-panel .timezone-select {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    body.is-phone-device .nav-more-panel .realtime-badge {
+        justify-content: center;
+        width: 100%;
+    }
+
+    .timezone-select {
+        max-width: min(48vw, 140px);
+        font-size: 0.78rem;
+        padding: 0.3rem 0.35rem;
+    }
+
+    .realtime-badge {
+        font-size: 0.7rem;
+        padding: 0.28rem 0.5rem;
+    }
+
+    .main-content {
+        padding: 0.75rem;
+        margin-left: 0;
+        max-width: 100%;
+    }
+
+    .card {
+        border-radius: 10px;
+    }
+
+    .card-content {
+        padding: 0.85rem;
+    }
+
+    .card table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    .grid {
+        gap: 0.75rem;
+    }
+
+    .footer {
+        padding: 1rem 0.8rem;
+        margin-top: 1rem;
+    }
+
+    .footer-tech {
+        font-size: 0.78rem;
+    }
+}
+
+@media (max-width: 560px) {
+    .nav-right-tools {
+        align-items: center;
+        gap: 0.45rem;
+    }
+
+    .nav-timezone {
+        min-width: 0;
+        flex: 1 1 auto;
+        justify-content: flex-end;
+    }
+
+    .timezone-select {
+        max-width: min(56vw, 128px);
+        font-size: 0.74rem;
+    }
+
+    .realtime-badge {
+        flex: 0 0 auto;
+    }
+
+    .realtime-badge span {
+        display: none;
+    }
+
+    body.is-phone-device .nav-more-panel .realtime-badge span {
+        display: inline;
+    }
+}
+
+@media (max-height: 430px) and (orientation: landscape) {
+    .nav-menu {
+        max-height: 32vh;
+    }
+
+    .main-content {
+        padding: 0.5rem;
+    }
+}
 /* Buttons */
 .btn {
     padding: var(--spacing-sm) var(--spacing-md);
@@ -348,6 +699,102 @@ body {
 .btn-primary {
     background: linear-gradient(45deg, var(--secondary-color), #2980b9);
     color: white;
+}
+
+@media (max-width: 900px) {
+    body.is-phone-device .handbook-modal {
+        width: min(96vw, 900px);
+        height: min(92vh, 700px);
+        max-width: none;
+    }
+
+    body.is-phone-device .handbook-body {
+        flex-direction: column;
+    }
+
+    body.is-phone-device .handbook-nav {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.35rem;
+    }
+
+    body.is-phone-device .handbook-link {
+        justify-content: center;
+        text-align: center;
+        font-size: 0.82rem;
+        padding: 0.5rem;
+    }
+
+    body.is-phone-device .handbook-link i {
+        margin-right: 0.35rem;
+    }
+
+    body.is-phone-device .handbook-content {
+        padding: 1rem;
+    }
+}
+
+@media (max-height: 430px) and (orientation: landscape) {
+    body.is-phone-device .handbook-modal {
+        height: 96vh;
+    }
+
+    body.is-phone-device .handbook-header {
+        padding: 0.7rem 1rem;
+    }
+
+    body.is-phone-device .handbook-content {
+        padding: 0.75rem;
+    }
+}
+
+.handbook-page-picker {
+    display: none;
+}
+
+body.is-phone-device .handbook-overlay {
+    padding: 0;
+    align-items: stretch;
+}
+
+body.is-phone-device .handbook-modal {
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    border-radius: 0;
+}
+
+body.is-phone-device .handbook-header {
+    gap: 0.6rem;
+    padding: 0.7rem 0.8rem;
+}
+
+body.is-phone-device .handbook-page-picker {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.35rem 0.55rem;
+}
+
+body.is-phone-device .handbook-page-picker option {
+    color: #1f2937;
+}
+
+body.is-phone-device .handbook-nav {
+    display: none;
+}
+
+body.is-phone-device .handbook-content {
+    padding: 0.9rem;
 }
 
 .btn-primary:hover {
@@ -1389,4 +1836,23 @@ body {
 
 .faq-item.active .faq-answer {
     padding: 0 1rem 1rem 1rem;
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+    .navbar {
+        position: sticky;
+    }
+
+    .nav-container {
+        min-height: 58px;
+        padding: 0.5rem 0.7rem;
+    }
+
+    .main-content {
+        padding: 0.55rem;
+    }
+
+    .footer {
+        padding: 0.7rem;
+    }
 }

@@ -157,11 +157,19 @@ class SupabaseDatabaseManager:
                         WHERE report_id = %s
                     """, (status, error_message, report_id))
                 else:
-                    cur.execute("""
-                        UPDATE public.detection_events 
-                        SET status = %s, updated_at = NOW()
-                        WHERE report_id = %s
-                    """, (status, report_id))
+                    # Clear stale error_message when transitioning to healthy/in-progress states.
+                    if str(status).lower() in ('pending', 'generating', 'completed', 'partial', 'skipped'):
+                        cur.execute("""
+                            UPDATE public.detection_events 
+                            SET status = %s, error_message = NULL, updated_at = NOW()
+                            WHERE report_id = %s
+                        """, (status, report_id))
+                    else:
+                        cur.execute("""
+                            UPDATE public.detection_events 
+                            SET status = %s, updated_at = NOW()
+                            WHERE report_id = %s
+                        """, (status, report_id))
                 
                 self.conn.commit()
                 logger.info(f"Updated detection status: {report_id} -> {status}")

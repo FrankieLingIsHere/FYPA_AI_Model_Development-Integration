@@ -323,5 +323,90 @@ const API = {
             console.error('Error reprocessing report:', error);
             return { success: false, error: error.message };
         }
+    },
+
+    async generateReportNow(reportId, options = {}) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/generate-now`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    force: !!options.force
+                })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || 'Failed to trigger priority generation');
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('Error triggering priority generation:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getProviderRoutingSettings() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/provider-routing`);
+            if (!response.ok) throw new Error('Failed to fetch provider routing settings');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching provider routing settings:', error);
+            return null;
+        }
+    },
+
+    async updateProviderRoutingSettings(settings) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/provider-routing`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            if (!response.ok) throw new Error('Failed to update provider routing settings');
+            return await response.json();
+        } catch (error) {
+            console.error('Error updating provider routing settings:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getDiskSpaceStatus() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/disk-space-status`);
+            if (!response.ok) throw new Error('Failed to fetch disk space status');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching disk space status:', error);
+            return null;
+        }
+    },
+
+    async getReliabilityStats(windowSize = 50) {
+        try {
+            const safeWindow = Number.isFinite(Number(windowSize)) ? Number(windowSize) : 50;
+            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.RELIABILITY_STATS}?window=${safeWindow}`);
+            if (!response.ok) throw new Error('Failed to fetch reliability stats');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching reliability stats:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    getRealtimeStreamUrl() {
+        return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REALTIME_STREAM}`;
+    },
+
+    getRealtimeSnapshotUrl() {
+        return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REALTIME_SNAPSHOT}`;
+    },
+
+    getSupabaseRealtimeConfig() {
+        const runtime = window.__PPE_CONFIG__ || {};
+        return {
+            url: runtime.SUPABASE_URL || window.PPE_SUPABASE_URL || '',
+            anonKey: runtime.SUPABASE_ANON_KEY || window.PPE_SUPABASE_ANON_KEY || ''
+        };
     }
 };

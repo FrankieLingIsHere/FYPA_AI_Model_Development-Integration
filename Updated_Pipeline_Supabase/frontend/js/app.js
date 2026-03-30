@@ -2,6 +2,8 @@
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 PPE Safety Monitor - Initializing...');
 
+    setupResponsiveMobileUX();
+
     // Register all routes
     Router.register('home', HomePage);
     Router.register('live', LivePage);
@@ -19,6 +21,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     console.log('✅ Application ready!');
+
+    if (typeof RealtimeSync !== 'undefined' && RealtimeSync.start) {
+        RealtimeSync.start();
+    }
 
     // Check backend connection
     checkBackendConnection();
@@ -68,6 +74,130 @@ function showBackendWarning() {
     }, 10000);
 }
 
+function setupResponsiveMobileUX() {
+    const body = document.body;
+    const navToggle = document.getElementById('navToggle');
+    const navMoreToggle = document.getElementById('navMoreToggle');
+    const navMorePanel = document.getElementById('navMorePanel');
+    const overlay = document.getElementById('mobileOrientationOverlay');
+    const retryBtn = document.getElementById('orientationRetryBtn');
+    const navLinks = Array.from(document.querySelectorAll('.nav-link'));
+
+    if (!body) return;
+
+    const state = {
+        alertShownForCurrentPortrait: false,
+        wasLocked: false
+    };
+
+    const closePhoneMoreMenu = () => {
+        body.classList.remove('nav-more-open');
+        if (navMoreToggle) navMoreToggle.setAttribute('aria-expanded', 'false');
+    };
+
+    const isTouchPhone = () => {
+        const ua = (navigator.userAgent || '').toLowerCase();
+        const mobileUA = /android|iphone|ipod|blackberry|windows phone|mobile/i.test(ua);
+        const touchCapable = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches;
+        const narrowViewport = window.matchMedia('(max-width: 900px)').matches;
+        const tabletUA = /ipad|tablet/i.test(ua);
+        return touchCapable && (mobileUA || (narrowViewport && !tabletUA));
+    };
+
+    const isPortrait = () => {
+        if (window.matchMedia && window.matchMedia('(orientation: portrait)').matches) {
+            return true;
+        }
+        return window.innerHeight > window.innerWidth;
+    };
+
+    const applyMobileUX = () => {
+        const phoneDevice = isTouchPhone();
+        const portrait = isPortrait();
+        const locked = phoneDevice && portrait;
+
+        body.classList.toggle('is-phone-device', phoneDevice);
+        body.classList.toggle('mobile-portrait-locked', locked);
+
+        if (!phoneDevice) {
+            body.classList.remove('nav-open');
+            closePhoneMoreMenu();
+        }
+
+        if (overlay) {
+            overlay.setAttribute('aria-hidden', locked ? 'false' : 'true');
+        }
+
+        if (locked && !state.wasLocked && !state.alertShownForCurrentPortrait) {
+            state.alertShownForCurrentPortrait = true;
+            window.alert('Please rotate your phone to landscape mode to use PPE Safety Monitor.');
+        }
+
+        if (!locked) {
+            state.alertShownForCurrentPortrait = false;
+        }
+
+        if (locked) {
+            body.classList.remove('nav-open');
+            closePhoneMoreMenu();
+            window.scrollTo({ top: 0, behavior: 'auto' });
+        }
+
+        state.wasLocked = locked;
+    };
+
+    if (navToggle) {
+        navToggle.addEventListener('click', () => {
+            if (body.classList.contains('mobile-portrait-locked')) return;
+            closePhoneMoreMenu();
+            body.classList.toggle('nav-open');
+            navToggle.setAttribute('aria-expanded', body.classList.contains('nav-open') ? 'true' : 'false');
+        });
+    }
+
+    navLinks.forEach((link) => {
+        link.addEventListener('click', () => {
+            body.classList.remove('nav-open');
+            closePhoneMoreMenu();
+            if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+        });
+    });
+
+    if (navMoreToggle) {
+        navMoreToggle.addEventListener('click', () => {
+            if (body.classList.contains('mobile-portrait-locked')) return;
+            if (!body.classList.contains('is-phone-device')) return;
+            body.classList.remove('nav-open');
+            if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+            body.classList.toggle('nav-more-open');
+            navMoreToggle.setAttribute('aria-expanded', body.classList.contains('nav-more-open') ? 'true' : 'false');
+        });
+    }
+
+    document.addEventListener('click', (event) => {
+        if (!body.classList.contains('nav-more-open')) return;
+        if (!navMoreToggle || !navMorePanel) return;
+        const insidePanel = navMorePanel.contains(event.target);
+        const onToggle = navMoreToggle.contains(event.target);
+        if (!insidePanel && !onToggle) {
+            closePhoneMoreMenu();
+        }
+    });
+
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => applyMobileUX());
+    }
+
+    window.addEventListener('resize', applyMobileUX, { passive: true });
+    window.addEventListener('orientationchange', applyMobileUX, { passive: true });
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) applyMobileUX();
+    });
+    window.addEventListener('pageshow', applyMobileUX, { passive: true });
+
+    applyMobileUX();
+}
+
 
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('handbookModal');
@@ -99,15 +229,61 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
 
-    document.querySelectorAll('.handbook-link').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.handbook-link').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.handbook-page').forEach(p => p.classList.remove('active'));
+    const handbookLinks = Array.from(modal.querySelectorAll('.handbook-link'));
+    const handbookPages = Array.from(modal.querySelectorAll('.handbook-page'));
+    const handbookHeader = modal.querySelector('.handbook-header');
+    let handbookPagePicker = null;
 
-            btn.classList.add('active');
-            document
-                .getElementById('handbook-' + btn.dataset.page)
-                .classList.add('active');
+    const activateHandbookPage = (pageKey) => {
+        if (!pageKey) return;
+
+        let activated = false;
+        handbookLinks.forEach((link) => {
+            const isActive = link.dataset.page === pageKey;
+            link.classList.toggle('active', isActive);
+            if (isActive) activated = true;
+        });
+
+        handbookPages.forEach((page) => {
+            page.classList.toggle('active', page.id === `handbook-${pageKey}`);
+        });
+
+        if (!activated && handbookLinks.length > 0) {
+            const fallbackKey = handbookLinks[0].dataset.page;
+            activateHandbookPage(fallbackKey);
+            return;
+        }
+
+        if (handbookPagePicker) {
+            handbookPagePicker.value = pageKey;
+        }
+    };
+
+    if (handbookHeader && handbookLinks.length > 0) {
+        handbookPagePicker = document.createElement('select');
+        handbookPagePicker.className = 'handbook-page-picker';
+        handbookPagePicker.setAttribute('aria-label', 'Select handbook section');
+
+        handbookLinks.forEach((link) => {
+            const option = document.createElement('option');
+            option.value = link.dataset.page || '';
+            option.textContent = (link.textContent || '').trim().replace(/\s+/g, ' ');
+            handbookPagePicker.appendChild(option);
+        });
+
+        handbookPagePicker.addEventListener('change', () => {
+            activateHandbookPage(handbookPagePicker.value);
+        });
+
+        handbookHeader.appendChild(handbookPagePicker);
+    }
+
+    handbookLinks.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            activateHandbookPage(btn.dataset.page);
         });
     });
+
+    const initialActive = handbookLinks.find((link) => link.classList.contains('active'));
+    activateHandbookPage((initialActive && initialActive.dataset.page) || (handbookLinks[0] && handbookLinks[0].dataset.page));
 });

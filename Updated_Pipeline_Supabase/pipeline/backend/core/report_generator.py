@@ -16,6 +16,7 @@ Based on NLP_Luna/llama3_variant implementation.
 import logging
 import json
 import csv
+import os
 import requests
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
@@ -68,6 +69,8 @@ class ReportGenerator:
             config: Configuration dictionary from config.py
         """
         self.config = config
+        self.last_nlp_error = None
+        self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
         
         # =====================================================================
         # GEMINI (Primary AI provider)
@@ -109,9 +112,30 @@ class ReportGenerator:
         # =====================================================================
         ollama_config = config.get('OLLAMA_CONFIG', {})
         self.api_url = ollama_config.get('api_url', 'http://localhost:11434/api/generate')
+        self.embeddings_url = ollama_config.get('embeddings_url', 'http://localhost:11434/api/embeddings')
         self.model = ollama_config.get('model', 'llama3')
         self.temperature = ollama_config.get('temperature', 0.7)
         self.ollama_timeout = ollama_config.get('timeout', 600)
+
+        # =====================================================================
+        # MODEL API ROUTING (primary when configured)
+        # =====================================================================
+        model_api_config = config.get('MODEL_API_CONFIG', {})
+        self.model_api_enabled = model_api_config.get('enabled', False)
+        self.nlp_provider_order = model_api_config.get(
+            'nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']
+        )
+        self.embedding_provider_order = model_api_config.get(
+            'embedding_provider_order', ['model_api', 'ollama']
+        )
+
+        self.nlp_api_url = model_api_config.get('nlp_api_url', '')
+        self.nlp_api_key = model_api_config.get('nlp_api_key', '')
+        self.nlp_model = model_api_config.get('nlp_model', self.model)
+
+        self.embedding_api_url = model_api_config.get('embedding_api_url', '')
+        self.embedding_api_key = model_api_config.get('embedding_api_key', '')
+        self.embedding_api_model = model_api_config.get('embedding_model', 'nomic-ai/nomic-embed-text-v1.5')
         
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
@@ -167,8 +191,109 @@ class ReportGenerator:
         if self.rag_enabled:
             self._load_incident_database()
         
-        ai_provider = 'Gemini' if self.use_gemini else ('Ollama' if not self.use_local_llama else 'Local Llama')
-        logger.info(f"Report Generator initialized (AI provider: {ai_provider})")
+        ai_provider = ' -> '.join(self.nlp_provider_order)
+        logger.info(f"Report Generator initialized (NLP provider order: {ai_provider})")
+
+    def _normalize_openai_base_url(self, raw_url: str, endpoint_suffix: str) -> str:
+        """Normalize OpenAI-compatible base URL so callers can pass either base URL or full endpoint."""
+        if not raw_url:
+            return ''
+        url = raw_url.rstrip('/')
+        if url.endswith(endpoint_suffix):
+            return url
+        if url.endswith('/v1'):
+            return f"{url}{endpoint_suffix}"
+        return f"{url}/v1{endpoint_suffix}"
+
+    def _build_auth_headers(self, api_key: str) -> Dict[str, str]:
+        """Build headers for provider API calls."""
+        headers = {'Content-Type': 'application/json'}
+        if api_key:
+            headers['Authorization'] = f"Bearer {api_key}"
+        return headers
+
+    def _call_model_api_nlp(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Call a model-specific cloud API (OpenAI-compatible chat/completions) for NLP JSON output."""
+        if not self.model_api_enabled:
+            return None
+        if not self.nlp_api_url or not self.nlp_model:
+            return None
+
+        endpoint = self._normalize_openai_base_url(self.nlp_api_url, '/chat/completions')
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers=self._build_auth_headers(self.nlp_api_key),
+                json={
+                    'model': self.nlp_model,
+                    'messages': [
+                        {
+                            'role': 'user',
+                            'content': prompt
+                        }
+                    ],
+                    'temperature': self.temperature,
+                    'max_tokens': 1600,
+                    'response_format': {'type': 'json_object'}
+                },
+                timeout=self.ollama_timeout
+            )
+
+            if not response.ok:
+                logger.warning(f"Model API NLP call failed: {response.status_code}")
+                return None
+
+            data = response.json()
+            choices = data.get('choices', [])
+            if not choices:
+                logger.warning("Model API NLP returned no choices")
+                return None
+
+            content = choices[0].get('message', {}).get('content', '')
+            if not content:
+                logger.warning("Model API NLP returned empty content")
+                return None
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.warning(f"Model API NLP error: {e}")
+            return None
+
+    def _get_model_api_embeddings(self, text: str) -> Optional[List[float]]:
+        """Call a model-specific cloud API (OpenAI-compatible embeddings) for vector search."""
+        if not self.model_api_enabled:
+            return None
+        if not self.embedding_api_url or not self.embedding_api_model:
+            return None
+
+        endpoint = self._normalize_openai_base_url(self.embedding_api_url, '/embeddings')
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers=self._build_auth_headers(self.embedding_api_key),
+                json={
+                    'model': self.embedding_api_model,
+                    'input': text
+                },
+                timeout=45
+            )
+
+            if not response.ok:
+                logger.warning(f"Model API embeddings call failed: {response.status_code}")
+                return None
+
+            data = response.json()
+            vectors = data.get('data', [])
+            if not vectors:
+                return None
+            return vectors[0].get('embedding')
+
+        except Exception as e:
+            logger.warning(f"Model API embeddings error: {e}")
+            return None
     
     # =========================================================================
     # RAG - INCIDENT DATABASE
@@ -230,9 +355,20 @@ class ReportGenerator:
     
     def _get_ollama_embeddings(self, text: str) -> Optional[List[float]]:
         """Get embeddings from Ollama using nomic-embed-text."""
+        if os.getenv('DISABLE_OLLAMA_EMBEDDINGS', 'false').lower() == 'true':
+            logger.info("Skipping Ollama embeddings because DISABLE_OLLAMA_EMBEDDINGS=true")
+            return None
+
+        # Try model-specific cloud embedding API first (if enabled)
+        for provider in self.embedding_provider_order:
+            if provider == 'model_api':
+                cloud_embedding = self._get_model_api_embeddings(text)
+                if cloud_embedding:
+                    return cloud_embedding
+
         try:
             response = requests.post(
-                'http://localhost:11434/api/embeddings',
+                self.embeddings_url,
                 json={
                     'model': self.embedding_model,
                     'prompt': text
@@ -702,16 +838,20 @@ RESPONSE FORMAT (JSON):
             
             if result:
                 logger.info("✓ Gemini NLP analysis completed")
+                self.last_nlp_error = None
                 return result
             else:
-                logger.warning("Gemini returned no valid JSON")
+                detail = getattr(self.gemini_client, 'last_error', None) or 'Gemini returned no valid JSON'
+                self.last_nlp_error = detail
+                logger.warning(f"Gemini NLP failed: {detail}")
                 return None
                 
         except Exception as e:
+            self.last_nlp_error = f"Gemini API error: {e}"
             logger.error(f"Gemini API error: {e}")
             return None
     
-    def _call_ollama_api(self, prompt: str) -> Optional[Dict[str, Any]]:
+    def _call_ollama_api(self, prompt: str, allow_local_fallback: bool = True) -> Optional[Dict[str, Any]]:
         """
         Call Ollama API or use local Llama to get NLP analysis (fallback).
         
@@ -722,7 +862,7 @@ RESPONSE FORMAT (JSON):
             Parsed JSON response or None if failed
         """
         # Try local Llama first if available
-        if self.local_llama is not None:
+        if allow_local_fallback and self.local_llama is not None:
             try:
                 logger.info("Using local Llama model for NLP analysis...")
                 response = self.local_llama.generate_json(
@@ -853,19 +993,46 @@ RESPONSE FORMAT (JSON):
         if regulation_context:
             prompt = regulation_context + "\n" + prompt
         
-        # Try Gemini first, then Ollama
-        if self.use_gemini:
-            image_path = report_data.get('original_image_path')
-            nlp_analysis = self._call_gemini_api(prompt, image_path=str(image_path) if image_path else None)
+        # Try NLP providers in configured order.
+        image_path = report_data.get('original_image_path')
+        image_path_str = str(image_path) if image_path else None
+
+        self.last_nlp_error = None
+        for provider in self.nlp_provider_order:
+            if nlp_analysis:
+                break
+
+            provider_name = provider.strip().lower()
+            if provider_name == 'model_api':
+                logger.info("Trying model-specific cloud NLP API...")
+                nlp_analysis = self._call_model_api_nlp(prompt)
+                if not nlp_analysis:
+                    self.last_nlp_error = self.last_nlp_error or 'model_api did not return valid NLP JSON'
+            elif provider_name == 'gemini':
+                if self.use_gemini:
+                    logger.info("Trying Gemini NLP API...")
+                    nlp_analysis = self._call_gemini_api(prompt, image_path=image_path_str)
+                    if not nlp_analysis:
+                        self.last_nlp_error = self.last_nlp_error or 'Gemini NLP provider failed'
+            elif provider_name == 'ollama':
+                logger.info("Trying Ollama NLP API...")
+                nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=False)
+                if not nlp_analysis:
+                    self.last_nlp_error = self.last_nlp_error or 'Ollama NLP provider failed'
+            elif provider_name == 'local':
+                logger.info("Trying local Llama fallback...")
+                nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=True)
+                if not nlp_analysis:
+                    self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
+
+            if nlp_analysis:
+                logger.info(f"NLP analysis succeeded with provider: {provider_name}")
+                break
         
         if not nlp_analysis:
-            # Fallback to Ollama
-            if self.use_gemini:
-                logger.warning("Gemini failed, falling back to Ollama...")
-            nlp_analysis = self._call_ollama_api(prompt)
-        
-        if not nlp_analysis:
-            # Fallback if NLP fails
+            if self.strict_report_generation:
+                detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
+                raise RuntimeError(f"NLP analysis failed: {detail}")
             logger.warning("NLP analysis failed, using fallback")
             nlp_analysis = self._generate_fallback_analysis(report_data)
         else:
@@ -1294,7 +1461,17 @@ RESPONSE FORMAT (JSON):
             Path to HTML report
         """
         report_id = report_data.get('report_id')
-        timestamp = report_data.get('timestamp', datetime.now())
+        timestamp_raw = report_data.get('timestamp', datetime.now())
+        timestamp = timestamp_raw
+        if isinstance(timestamp_raw, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00'))
+            except Exception:
+                timestamp = datetime.now()
+        elif not isinstance(timestamp_raw, datetime):
+            timestamp = datetime.now()
+
+        timestamp_display = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
         # Clean violation summary (Deduplicate)
         raw_summary = report_data.get('violation_summary', '')
@@ -1315,6 +1492,12 @@ RESPONSE FORMAT (JSON):
         annotated_img = f"/image/{report_id}/annotated.jpg"
         
         # Build HTML content
+        safe_report_id_js = json.dumps(str(report_id))
+        safe_timestamp_js = json.dumps(str(report_data.get('timestamp', 'N/A')))
+        safe_environment_js = json.dumps(str(nlp_analysis.get('environment_type', 'Construction Site')))
+        safe_severity_js = json.dumps(str(nlp_analysis.get('severity_level', 'HIGH')))
+        safe_summary_js = json.dumps(str(nlp_analysis.get('summary', 'PPE violation detected')))
+
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1775,9 +1958,142 @@ RESPONSE FORMAT (JSON):
             gap: 0.5rem;
         }}
 
+        .report-split-card {{
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: #ffffff;
+            overflow: hidden;
+        }}
+
+        .report-split-top,
+        .report-split-bottom {{
+            transition: transform 0.22s ease;
+        }}
+
+        .report-split-middle {{
+            max-height: 0;
+            overflow: hidden;
+            opacity: 0;
+            transform: scaleY(0.94);
+            transform-origin: top center;
+            transition: max-height 0.24s ease, opacity 0.18s ease, transform 0.24s ease;
+            border-top: 1px solid transparent;
+        }}
+
+        .report-split-card.expanded .report-split-top {{
+            transform: translateY(-6px);
+        }}
+
+        .report-split-card.expanded .report-split-bottom {{
+            transform: translateY(6px);
+        }}
+
+        .report-split-card.expanded .report-split-middle {{
+            max-height: 9000px;
+            opacity: 1;
+            transform: scaleY(1);
+            border-top-color: var(--border-color);
+        }}
+
+        .report-expand-toggle-wrap {{
+            padding: 1rem 0 0;
+            display: flex;
+            justify-content: center;
+        }}
+
+        .report-expand-toggle {{
+            background: linear-gradient(135deg, #1f2937, #374151);
+            color: #ffffff;
+            border: none;
+            border-radius: 999px;
+            padding: 0.65rem 1.25rem;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+        }}
+
+        .report-expand-toggle:hover {{
+            filter: brightness(1.06);
+        }}
+
         @media (max-width: 768px) {{
             .grid {{
                 grid-template-columns: 1fr;
+            }}
+
+            .content {{
+                padding: 1rem;
+            }}
+
+            .report-split-card.expanded .report-split-top,
+            .report-split-card.expanded .report-split-bottom {{
+                transform: none;
+            }}
+        }}
+
+        @media (max-width: 560px), (max-height: 430px) and (orientation: landscape) {{
+            body {{
+                padding: 0.6rem;
+                line-height: 1.45;
+            }}
+
+            .header {{
+                padding: 1rem;
+            }}
+
+            .header h1 {{
+                font-size: 1.35rem;
+            }}
+
+            .content {{
+                padding: 0.75rem;
+            }}
+
+            .section {{
+                margin-bottom: 1rem;
+            }}
+
+            .section-title {{
+                font-size: 1.05rem;
+            }}
+
+            .info-item {{
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.25rem;
+            }}
+
+            .info-label {{
+                min-width: 0;
+            }}
+
+            .person-header {{
+                padding: 1rem;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.4rem;
+            }}
+
+            .person-content {{
+                padding: 1rem;
+                gap: 0.9rem;
+            }}
+
+            .ppe-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .report-expand-toggle {{
+                width: 100%;
+                max-width: 100%;
+            }}
+        }}
+
+        @media (prefers-reduced-motion: reduce) {{
+            .report-split-top,
+            .report-split-bottom,
+            .report-split-middle {{
+                transition: none;
             }}
         }}
     </style>
@@ -1787,114 +2103,124 @@ RESPONSE FORMAT (JSON):
         <div class="header">
             <h1>⚠️ PPE Safety Violation Report</h1>
             <p class="report-id">Report ID: {report_id}</p>
-            <p>Generated: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p>Generated: {timestamp_display}</p>
         </div>
         
         <div class="content">
-            <!-- Images Section -->
-            <div class="section">
-                <h2 class="section-title">📸 Visual Evidence</h2>
-                <div class="grid">
-                    <div class="card">
-                        <div class="card-header">Original Image (1920x1080)</div>
-                        <div class="image-container">
-                            <img src="{original_img}" alt="Original Image">
+            <div id="reportSplitCard" class="report-split-card">
+                <div class="report-split-top">
+                    <!-- Images Section -->
+                    <div class="section">
+                        <h2 class="section-title">📸 Visual Evidence</h2>
+                        <div class="grid">
+                            <div class="card">
+                                <div class="card-header">Original Image (1920x1080)</div>
+                                <div class="image-container">
+                                    <img src="{original_img}" alt="Original Image">
+                                </div>
+                            </div>
+                            <div class="card">
+                                <div class="card-header">Annotated Image (Detections)</div>
+                                <div class="image-container">
+                                    <img src="{annotated_img}" alt="Annotated Image">
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="card">
-                        <div class="card-header">Annotated Image (Detections)</div>
-                        <div class="image-container">
-                            <img src="{annotated_img}" alt="Annotated Image">
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Violation Details -->
-            <div class="section">
-                <h2 class="section-title">📋 Violation Details</h2>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">Report ID:</span>
-                        <span class="info-value">{report_id}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Timestamp:</span>
-                        <span class="info-value">{timestamp.strftime('%Y-%m-%d %H:%M:%S')}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Violation Type:</span>
-                        <span class="info-value">{report_data.get('violation_summary', 'PPE Violation')}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Severity:</span>
-                        <span class="info-value"><span class="badge badge-danger">{report_data.get('severity', 'HIGH')}</span></span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Violation Count:</span>
-                        <span class="info-value">{report_data.get('violation_count', 1)}</span>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- AI Scene Analysis -->
-            <div class="section">
-                <h2 class="section-title">🤖 AI Scene Description</h2>
-                <div class="card">
-                    <div class="card-content">
-                        <p>{nlp_analysis.get('visual_evidence', report_data.get('caption', 'No description available'))}</p>
-                    </div>
-                </div>
-            </div>
-            
-            
 
-            <!-- NLP Analysis -->
-            <div class="section">
-                <h2 class="section-title">📊 Safety Analysis</h2>
-                
-                <!-- Environment Type -->
-                <div class="environment-badge">
-                    <span>🏗️</span>
-                    <span>Environment: {nlp_analysis.get('environment_type', 'Unknown')}</span>
+                    <!-- Violation Details -->
+                    <div class="section">
+                        <h2 class="section-title">📋 Violation Details</h2>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="info-label">Report ID:</span>
+                                <span class="info-value">{report_id}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Timestamp:</span>
+                                <span class="info-value">{timestamp_display}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Violation Type:</span>
+                                <span class="info-value">{report_data.get('violation_summary', 'PPE Violation')}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Severity:</span>
+                                <span class="info-value"><span class="badge badge-danger">{report_data.get('severity', 'HIGH')}</span></span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Violation Count:</span>
+                                <span class="info-value">{report_data.get('violation_count', 1)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI Scene Analysis -->
+                    <div class="section">
+                        <h2 class="section-title">🤖 AI Scene Description</h2>
+                        <div class="card">
+                            <div class="card-content">
+                                <p>{nlp_analysis.get('visual_evidence', report_data.get('caption', 'No description available'))}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NLP Analysis -->
+                    <div class="section" style="margin-bottom: 1rem;">
+                        <h2 class="section-title">📊 Safety Analysis</h2>
+
+                        <div class="environment-badge">
+                            <span>🏗️</span>
+                            <span>Environment: {nlp_analysis.get('environment_type', 'Unknown')}</span>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">Summary</div>
+                            <div class="card-content">
+                                {self._format_summary_html(nlp_analysis, report_data)}
+                                {f"<p style='margin-top: 1rem; font-style: italic; color: #7f8c8d;'>{nlp_analysis.get('environment_assessment', '')}</p>" if nlp_analysis.get('environment_assessment') else ''}
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                
-                <!-- Summary -->
-                <div class="card">
-                    <div class="card-header">Summary</div>
-                    <div class="card-content">
-                        {self._format_summary_html(nlp_analysis, report_data)}
-                        {f"<p style='margin-top: 1rem; font-style: italic; color: #7f8c8d;'>{nlp_analysis.get('environment_assessment', '')}</p>" if nlp_analysis.get('environment_assessment') else ''}
+
+                <div class="report-split-middle" id="reportExpandedContext" aria-hidden="true">
+                    <!-- DOSH Regulations -->
+                    {self._generate_dosh_regulations_section(nlp_analysis)}
+
+                    <!-- Individual Person Analysis -->
+                    {self._generate_person_cards_section(nlp_analysis, report_data)}
+
+                    <!-- Functional NCR Generation Section -->
+                    <div class="section" style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); border: 2px solid #495057; padding: 1.5rem; margin: 1rem 0; border-radius: 8px; text-align: center;">
+                        <h3 style="color: #495057; margin-bottom: 0.5rem;">📋 Generate Official Documentation</h3>
+                        <p style="color: #6c757d; margin-bottom: 1rem;">Create formal documentation for regulatory compliance and incident reporting.</p>
+                        <button onclick="generateNCR()" style="background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                            📄 Generate Non-Conformance Report (NCR)
+                        </button>
+                        <button onclick="generateJKKP7()" style="background: linear-gradient(135deg, #007bff, #0056b3); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                            ⚠️ Generate JKKP-7 Incident Form
+                        </button>
+                    </div>
+                </div>
+
+                <div class="report-split-bottom">
+                    <div class="report-expand-toggle-wrap">
+                        <button id="reportExpandToggle" class="report-expand-toggle" type="button" aria-expanded="false" aria-controls="reportExpandedContext">
+                            Show Full Report Context
+                        </button>
                     </div>
                 </div>
             </div>
-            
-            <!-- DOSH Regulations -->
-            {self._generate_dosh_regulations_section(nlp_analysis)}
-            
-            <!-- Individual Person Analysis -->
-            {self._generate_person_cards_section(nlp_analysis, report_data)}
-        </div>
-        
-        <!-- Functional NCR Generation Section -->
-        <div class="section" style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); border: 2px solid #495057; padding: 1.5rem; margin: 1rem 0; border-radius: 8px; text-align: center;">
-            <h3 style="color: #495057; margin-bottom: 0.5rem;">📋 Generate Official Documentation</h3>
-            <p style="color: #6c757d; margin-bottom: 1rem;">Create formal documentation for regulatory compliance and incident reporting.</p>
-            <button onclick="generateNCR()" style="background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                📄 Generate Non-Conformance Report (NCR)
-            </button>
-            <button onclick="generateJKKP7()" style="background: linear-gradient(135deg, #007bff, #0056b3); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                ⚠️ Generate JKKP-7 Incident Form
-            </button>
         </div>
         
         <script>
         function generateNCR() {{
-            const reportId = '{report_id}';
-            const timestamp = '{report_data.get("timestamp", "N/A")}';
-            const environment = '{nlp_analysis.get("environment_type", "Construction Site")}';
-            const severity = '{nlp_analysis.get("severity_level", "HIGH")}';
-            const summary = `{nlp_analysis.get("summary", "PPE violation detected").replace('"', "").replace("'", "")}`;
+            const reportId = {safe_report_id_js};
+            const timestamp = {safe_timestamp_js};
+            const environment = {safe_environment_js};
+            const severity = {safe_severity_js};
+            const summary = {safe_summary_js};
             
             // Collect violations from the page
             const violations = [];
@@ -2000,8 +2326,8 @@ RESPONSE FORMAT (JSON):
         }}
         
         function generateJKKP7() {{
-            const reportId = '{report_id}';
-            const timestamp = '{report_data.get("timestamp", "N/A")}';
+            const reportId = {safe_report_id_js};
+            const timestamp = {safe_timestamp_js};
             
             const jkkpHtml = `
 <!DOCTYPE html>
@@ -2081,6 +2407,24 @@ RESPONSE FORMAT (JSON):
             jkkpWindow.document.write(jkkpHtml);
             jkkpWindow.document.close();
         }}
+
+        (function initReportExpandToggle() {{
+            const splitCard = document.getElementById('reportSplitCard');
+            const toggle = document.getElementById('reportExpandToggle');
+            const expandedContext = document.getElementById('reportExpandedContext');
+
+            if (!splitCard || !toggle || !expandedContext) return;
+
+            const setExpanded = (expanded) => {{
+                splitCard.classList.toggle('expanded', expanded);
+                toggle.setAttribute('aria-expanded', String(expanded));
+                expandedContext.setAttribute('aria-hidden', String(!expanded));
+                toggle.textContent = expanded ? 'Collapse Full Report Context' : 'Show Full Report Context';
+            }};
+
+            setExpanded(false);
+            toggle.addEventListener('click', () => setExpanded(!splitCard.classList.contains('expanded')));
+        }})();
         </script>
         
         <div class="footer">
@@ -2114,7 +2458,9 @@ RESPONSE FORMAT (JSON):
     
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
-        summary_text = nlp_analysis.get('summary', 'Analysis in progress...')
+        import re
+
+        summary_text = str(nlp_analysis.get('summary', 'Analysis in progress...') or 'Analysis in progress...')
         # Get count from report_data (YOLO) if possible for accuracy
         violation_count = 0
         person_count = 0
@@ -2156,16 +2502,34 @@ RESPONSE FORMAT (JSON):
         
         # Extract environment/risk keywords
         env_type = nlp_analysis.get('environment_type', 'Unknown')
-        hazards = nlp_analysis.get('hazards_detected', [])
+        hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
         
         # Get regulations
         regs = nlp_analysis.get('dosh_regulations_cited', [])
-        reg_names = [r.get('regulation', '').split(':')[0] for r in regs]
-        reg_text = ", ".join(list(set(reg_names))[:3]) if reg_names else "BOWEC 1986"
+        reg_names = []
+        if isinstance(regs, list):
+            for entry in regs:
+                if isinstance(entry, dict):
+                    reg_name = str(entry.get('regulation') or entry.get('technical_standard') or '').strip()
+                    if reg_name:
+                        reg_names.append(reg_name)
+                elif isinstance(entry, str):
+                    clean_entry = entry.strip()
+                    if clean_entry:
+                        reg_names.append(clean_entry)
+        elif isinstance(regs, str):
+            reg_names = [item.strip() for item in re.split(r'[\n;]+', regs) if item.strip()]
+
+        # Preserve order while removing duplicates.
+        reg_names = list(dict.fromkeys(reg_names))
+        reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names) if reg_names else "BOWEC 1986"
+
+        hazard_items = [item.strip() for item in hazards if str(item).strip()]
+        hazard_items = list(dict.fromkeys(hazard_items))
+        hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe Conditions Detected'
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>
-        import re
         parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', summary_text)
         # 2. Lists/Newlines: • or - -> <br>•
         parsed_summary = parsed_summary.replace('\n', '<br>')
@@ -2185,17 +2549,17 @@ RESPONSE FORMAT (JSON):
                     </tr>
                     <tr style="border-bottom: 1px solid #eee;">
                         <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">WHAT</td>
-                        <td style="padding: 12px;">{self._inject_interactive_tooltips(parsed_summary)}</td>
+                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{self._inject_interactive_tooltips(parsed_summary)}</td>
                     </tr>
                     <tr style="border-bottom: 1px solid #eee;">
                         <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">DANGER</td>
-                        <td style="padding: 12px; color: #c0392b; font-weight: 500;">
-                            {self._inject_interactive_tooltips(', '.join(hazards[:3]) if hazards else 'Unsafe Conditions Detected')}
+                        <td style="padding: 12px; color: #c0392b; font-weight: 500; white-space: normal; word-break: break-word;">
+                            {hazard_text}
                         </td>
                     </tr>
                     <tr>
                         <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">LAW</td>
-                        <td style="padding: 12px;">{self._inject_interactive_tooltips(reg_text)}</td>
+                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{reg_text}</td>
                     </tr>
                 </table>
             </div>

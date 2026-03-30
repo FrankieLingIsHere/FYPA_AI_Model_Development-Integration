@@ -22,6 +22,67 @@ This version replaces SQLite and local file storage with **Supabase** for cloud-
 
 ---
 
+## 🌐 Split Deployment (Frontend + Backend)
+
+You can now deploy frontend and backend independently:
+
+- Frontend: deploy `Updated_Pipeline_Supabase/frontend` to Vercel
+- Backend API: deploy `Updated_Pipeline_Supabase` to Railway
+
+### Backend (Railway) Environment Variables
+
+Set these in Railway:
+
+```bash
+SERVE_FRONTEND=false
+ALLOWED_ORIGINS=https://your-frontend.vercel.app
+
+# Optional: switchable model provider routing
+MODEL_API_ENABLED=true
+NLP_PROVIDER_ORDER=model_api,gemini,ollama,local
+VISION_PROVIDER_ORDER=model_api,gemini,ollama
+EMBEDDING_PROVIDER_ORDER=model_api,ollama
+
+# Model-specific APIs (OpenAI-compatible)
+NLP_API_URL=https://your-llama-provider/v1
+NLP_API_KEY=...
+NLP_API_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
+
+VISION_API_URL=https://your-qwen-or-moondream-provider/v1
+VISION_API_KEY=...
+VISION_API_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+
+EMBEDDING_API_URL=https://your-embedding-provider/v1
+EMBEDDING_API_KEY=...
+EMBEDDING_API_MODEL=nomic-ai/nomic-embed-text-v1.5
+
+# Google fallback
+GEMINI_ENABLED=true
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+Notes:
+
+- `SERVE_FRONTEND=false` makes `/` return API status JSON instead of serving SPA files
+- `ALLOWED_ORIGINS` controls CORS for `/api/*`, `/report/*`, and `/image/*`
+- Multiple origins are supported with comma-separated values
+- Provider order is configurable per task; if `model_api` fails, the system falls back to Gemini, then Ollama/local depending on your order.
+
+### Frontend (Vercel) Backend URL
+
+In `frontend/js/runtime-config.js`, set:
+
+```javascript
+window.__PPE_CONFIG__ = {
+    API_BASE_URL: 'https://your-backend.up.railway.app'
+};
+```
+
+If empty, frontend uses same-origin (`''`) which is suitable only when frontend and backend share the same host.
+
+---
+
 ## 📋 Prerequisites
 
 1. **Supabase Account** - Create a free account at [supabase.com](https://supabase.com)

@@ -1,5 +1,16 @@
 // Live Monitoring Page Component
 const LivePage = {
+    queueRefreshInterval: null,
+    reliabilityRefreshInterval: null,
+    depthStatusInterval: null,
+    settingsKeydownHandler: null,
+    realtimeHandler: null,
+    realtimeConnectionHandler: null,
+    phoneCameraStream: null,
+    phoneInferenceInterval: null,
+    phoneInferenceBusy: false,
+    phoneLastViolationNoticeAt: 0,
+
     render() {
         return `
             <div class="page">
@@ -19,6 +30,10 @@ const LivePage = {
                     <div class="card-header">
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
+                            <span id="phoneCameraPermissionBadge" style="display: none; margin-right: 10px; font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; vertical-align: middle;"></span>
+                            <button id="openSettingsWindowBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Open monitoring settings">
+                                <i class="fas fa-cog"></i> Settings
+                            </button>
                             <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
@@ -42,6 +57,7 @@ const LivePage = {
                                 </p>
                             </div>
                             <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
+                            <video id="phoneCameraPreview" autoplay playsinline muted style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;"></video>
                             <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #4CAF50; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: none;">
                                 <i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE
                             </div>
@@ -103,52 +119,44 @@ const LivePage = {
                             </div>
                         </div>
 
-                        <div class="live-tabs">
-                            <button class="live-tab active" data-tab="instructions">Instructions</button>
-                            <button class="live-tab" data-tab="features">Features</button>
-                            <button class="live-tab" data-tab="Dsettings">Detection Settings</button>
-                            <button class="live-tab" data-tab="Psettings">Processing Settings</button>
-                        </div>
-                        
-                        <div class="live-section active" id="tab-instructions">
-                        <h3 style="margin-bottom: 1rem;">Instructions:</h3>
-                        <ol id="instructionsList" style="margin-left: 1.5rem; line-height: 2;">
-                            <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
-                            <li>Your webcam will activate and show the live feed</li>
-                            <li>YOLO will detect PPE in real-time with bounding boxes</li>
-                            <li>When violations are detected, they will be logged automatically</li>
-                            <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
-                        </ol>
+                        <div style="padding: 1rem; border: 1px dashed var(--border-color); border-radius: 8px; background: #fafafa; margin-top: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                                <div>
+                                    <h3 style="margin: 0 0 0.4rem 0;"><i class="fas fa-sliders-h"></i> Monitoring Settings</h3>
+                                    <p style="margin: 0; color: var(--text-secondary); font-size: 0.92rem;">
+                                        Use the Settings button near Start/Stop to open the full configuration window.
+                                    </p>
+                                </div>
+                                <button id="quickRecommendedSettingsBtn" class="btn btn-primary">
+                                    <i class="fas fa-magic"></i> Use Recommended Settings
+                                </button>
+                            </div>
                         </div>
 
-                        <div class="live-section" id="tab-features">
-                        <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detection Features:</h3>
-                        <div class="grid grid-3">
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-bolt" style="font-size: 2rem; color: var(--warning-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">Real-Time</h4>
-                                    <p>Instant PPE detection at 30 FPS</p>
+                        <div id="settingsModal" class="settings-modal" aria-hidden="true">
+                            <div id="settingsWindow" class="settings-window">
+                                <div class="settings-window-header">
+                                    <h3 style="margin: 0;"><i class="fas fa-cogs"></i> Monitoring Settings</h3>
+                                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
+                                        <button id="recommendedSettingsBtn" class="btn btn-primary">
+                                            <i class="fas fa-magic"></i> Use Recommended Settings
+                                        </button>
+                                        <button id="toggleSettingsWindowSizeBtn" class="btn btn-secondary" title="Enlarge settings window">
+                                            <i class="fas fa-expand"></i> Enlarge
+                                        </button>
+                                        <button id="closeSettingsWindowBtn" class="btn btn-danger" title="Close settings window">
+                                            <i class="fas fa-times"></i> Close
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-brain" style="font-size: 2rem; color: var(--primary-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">AI-Powered</h4>
-                                    <p>YOLOv8 trained on 14 PPE classes</p>
-                                </div>
-                            </div>
-                            <div class="card" style="background: var(--background-color);">
-                                <div class="card-content text-center">
-                                    <i class="fas fa-check-circle" style="font-size: 2rem; color: var(--success-color);"></i>
-                                    <h4 style="margin-top: 0.5rem;">Accurate</h4>
-                                    <p>95%+ detection accuracy</p>
-                                </div>
-                            </div>
-                        </div>
-                        </div>
-                        <!-- Detection Settings Tab -->
-                        <div class="live-section" id="tab-Dsettings">
+
+                                <div class="settings-window-content">
+                                    <div class="settings-tabs">
+                                        <button class="settings-tab active" data-settings-tab="Dsettings">Detection Settings</button>
+                                        <button class="settings-tab" data-settings-tab="Psettings">Processing Settings</button>
+                                    </div>
+
+                                    <div class="settings-section active" id="settings-tab-Dsettings">
                             <h3 style="margin-bottom: 1rem;">Detection Settings</h3>
                             <div class="grid grid-2">
                                 <div>
@@ -180,10 +188,9 @@ const LivePage = {
                                     </ul>
                                 </div>
                             </div>
-                        </div>
+                                    </div>
 
-                        <!-- Processing Settings Tab -->
-                        <div class="live-section" id="tab-Psettings">  
+                                    <div class="settings-section" id="settings-tab-Psettings">  
                             <h3 style="margin-bottom: 1rem;">Processing Settings</h3>
                             <div class="grid grid-2">
                                 <!-- Environment Validation Toggle -->
@@ -258,6 +265,142 @@ const LivePage = {
                                 <button id="refreshQueueBtn" class="btn btn-secondary" style="margin-top: 0.75rem;">
                                     <i class="fas fa-sync-alt"></i> Refresh Status
                                 </button>
+                            </div>
+
+                            <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                <h4 style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.45rem;">
+                                    <i id="reliabilityHeadingIcon" class="fas fa-shield-alt" style="color: var(--success-color);"></i>
+                                    Reliability (Real vs Fallback)
+                                </h4>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.8rem;">
+                                    Tracks true report quality from backend strict metrics. "Real Success" means completed with non-fallback report content.
+                                </p>
+
+                                <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.8rem;">
+                                    <label for="reliabilityWindowSelect" style="font-size: 0.85rem; color: var(--text-secondary);">Window</label>
+                                    <select id="reliabilityWindowSelect" class="provider-input" style="width: 100px; margin-bottom: 0;">
+                                        <option value="25">25</option>
+                                        <option value="50" selected>50</option>
+                                        <option value="100">100</option>
+                                    </select>
+                                    <button id="refreshReliabilityBtn" class="btn btn-secondary">
+                                        <i class="fas fa-sync-alt"></i> Refresh Reliability
+                                    </button>
+                                    <span id="reliabilityLastUpdated" style="font-size: 0.82rem; color: var(--text-secondary);">Last updated: -</span>
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;">
+                                    <div style="text-align: center; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem;">
+                                        <div id="reliabilityRealSuccess" style="font-size: 1.4rem; font-weight: bold; color: var(--success-color);">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Real Success Rate</div>
+                                    </div>
+                                    <div style="text-align: center; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem;">
+                                        <div id="reliabilityFallbackRate" style="font-size: 1.4rem; font-weight: bold; color: var(--warning-color);">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Fallback Needed Rate</div>
+                                    </div>
+                                    <div style="text-align: center; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem;">
+                                        <div id="reliabilityHardFailed" style="font-size: 1.4rem; font-weight: bold; color: var(--error-color);">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Hard Failed</div>
+                                    </div>
+                                    <div style="text-align: center; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem;">
+                                        <div id="reliabilityConsidered" style="font-size: 1.4rem; font-weight: bold; color: var(--primary-color);">-</div>
+                                        <div style="font-size: 0.8rem; color: #7f8c8d;">Reports Considered</div>
+                                    </div>
+                                </div>
+
+                                <div style="margin-top: 0.8rem; background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem;">
+                                    <div style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Failure causes</div>
+                                    <div id="reliabilityFailureCauses" style="font-size: 0.88rem; color: var(--text-color);">-</div>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
+                                <h4 style="margin-bottom: 0.75rem;">
+                                    <i class="fas fa-network-wired" style="color: var(--secondary-color);"></i>
+                                    AI Provider Routing
+                                </h4>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+                                    Configure runtime provider switches and fallback order for Vision, NLP, and Embeddings.
+                                </p>
+
+                                <div class="grid grid-2" style="gap: 1rem;">
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <label style="font-weight: 600;">Model API Enabled</label>
+                                            <label class="toggle-switch">
+                                                <input type="checkbox" id="modelApiToggle">
+                                                <span class="toggle-slider"></span>
+                                            </label>
+                                        </div>
+                                        <small style="color: var(--text-secondary);">Use provider-specific cloud APIs first.</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <label style="font-weight: 600;">Gemini Fallback Enabled</label>
+                                            <label class="toggle-switch">
+                                                <input type="checkbox" id="geminiToggle">
+                                                <span class="toggle-slider"></span>
+                                            </label>
+                                        </div>
+                                        <small style="color: var(--text-secondary);">If cloud API fails, route to Google Gemini.</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Provider Order</label>
+                                        <input id="nlpProviderOrderInput" class="provider-input" type="text" value="model_api,gemini,ollama,local" />
+                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, gemini, ollama, local</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Provider Order</label>
+                                        <input id="visionProviderOrderInput" class="provider-input" type="text" value="model_api,gemini,ollama" />
+                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, gemini, ollama</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Provider Order</label>
+                                        <input id="embeddingProviderOrderInput" class="provider-input" type="text" value="model_api,ollama" />
+                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, ollama</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Model</label>
+                                        <input id="nlpModelInput" class="provider-input" type="text" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" />
+                                        <small style="color: var(--text-secondary);">Cloud NLP model identifier</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Model</label>
+                                        <input id="visionModelInput" class="provider-input" type="text" placeholder="Qwen/Qwen2.5-VL-7B-Instruct" />
+                                        <small style="color: var(--text-secondary);">Cloud vision model identifier</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Model</label>
+                                        <input id="embeddingModelInput" class="provider-input" type="text" placeholder="nomic-ai/nomic-embed-text-v1.5" />
+                                        <small style="color: var(--text-secondary);">Cloud embedding model identifier</small>
+                                    </div>
+
+                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Gemini Model</label>
+                                        <input id="geminiModelInput" class="provider-input" type="text" placeholder="gemini-2.5-flash" />
+                                        <small style="color: var(--text-secondary);">Fallback Gemini text model</small>
+                                    </div>
+                                </div>
+
+                                <div style="display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap;">
+                                    <button id="applyProviderRoutingBtn" class="btn btn-primary">
+                                        <i class="fas fa-save"></i> Apply Provider Routing
+                                    </button>
+                                    <button id="reloadProviderRoutingBtn" class="btn btn-secondary">
+                                        <i class="fas fa-sync-alt"></i> Reload Provider Settings
+                                    </button>
+                                </div>
+                                <div id="providerRoutingStatus" style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);"></div>
+                            </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -361,6 +504,117 @@ const LivePage = {
                     background: rgba(158, 158, 158, 0.14);
                     border-color: rgba(158, 158, 158, 0.3);
                 }
+
+                .provider-input {
+                    width: 100%;
+                    border: 1px solid var(--border-color);
+                    border-radius: 6px;
+                    padding: 0.5rem 0.65rem;
+                    font-size: 0.92rem;
+                    background: #fff;
+                    color: var(--text-color);
+                    margin-bottom: 0.4rem;
+                }
+
+                .provider-input:focus {
+                    outline: none;
+                    border-color: var(--secondary-color);
+                    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.15);
+                }
+
+                .settings-modal {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(0, 0, 0, 0.45);
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 1400;
+                    padding: 1rem;
+                }
+
+                .settings-modal.open {
+                    display: flex;
+                }
+
+                .settings-window {
+                    width: min(1080px, 94vw);
+                    max-height: 88vh;
+                    background: #ffffff;
+                    border-radius: 12px;
+                    border: 1px solid var(--border-color);
+                    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+                    overflow: hidden;
+                    display: flex;
+                    flex-direction: column;
+                }
+
+                .settings-window.expanded {
+                    width: min(1320px, 98vw);
+                    max-height: 94vh;
+                }
+
+                .settings-window-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 0.75rem;
+                    padding: 0.9rem 1rem;
+                    background: linear-gradient(180deg, #fff, #f8f9fb);
+                    border-bottom: 1px solid var(--border-color);
+                }
+
+                .settings-window-content {
+                    padding: 1rem;
+                    overflow: auto;
+                }
+
+                .settings-tabs {
+                    display: flex;
+                    gap: 0.5rem;
+                    border-bottom: 2px solid var(--border-color);
+                    margin-bottom: 1rem;
+                    flex-wrap: wrap;
+                }
+
+                .settings-tab {
+                    padding: 10px 16px;
+                    background: transparent;
+                    border: none;
+                    border-bottom: 3px solid transparent;
+                    color: var(--text-secondary);
+                    font-size: 0.95rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                }
+
+                .settings-tab.active {
+                    color: var(--primary-color);
+                    border-bottom-color: var(--primary-color);
+                }
+
+                .settings-section {
+                    display: none;
+                }
+
+                .settings-section.active {
+                    display: block;
+                }
+
+                @media (max-width: 768px) {
+                    .settings-window,
+                    .settings-window.expanded {
+                        width: 100vw;
+                        max-height: 100vh;
+                        height: 100vh;
+                        border-radius: 0;
+                    }
+
+                    .settings-window-header {
+                        flex-direction: column;
+                        align-items: flex-start;
+                    }
+                }
             </style>
         `;
     },
@@ -374,9 +628,12 @@ const LivePage = {
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
         const sourceToggleBtn = document.getElementById('sourceToggleBtn');
+        const openSettingsWindowBtn = document.getElementById('openSettingsWindowBtn');
         const startBtn = document.getElementById('startLiveBtn');
         const stopBtn = document.getElementById('stopLiveBtn');
+        const phoneCameraPermissionBadge = document.getElementById('phoneCameraPermissionBadge');
         const streamImg = document.getElementById('liveStream');
+        const phoneCameraPreview = document.getElementById('phoneCameraPreview');
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
         const capabilitiesContainer = document.getElementById('realsenseCapabilities');
@@ -397,8 +654,14 @@ const LivePage = {
         const uploadResults = document.getElementById('uploadResults');
         const uploadResultsContent = document.getElementById('uploadResultsContent');
         const annotatedResult = document.getElementById('annotatedResult');
-        const tabs = document.querySelectorAll('.live-tab');
-        const sections = document.querySelectorAll('.live-section');
+        const settingsModal = document.getElementById('settingsModal');
+        const settingsWindow = document.getElementById('settingsWindow');
+        const settingsTabs = document.querySelectorAll('.settings-tab');
+        const settingsSections = document.querySelectorAll('.settings-section');
+        const closeSettingsWindowBtn = document.getElementById('closeSettingsWindowBtn');
+        const toggleSettingsWindowSizeBtn = document.getElementById('toggleSettingsWindowSizeBtn');
+        const quickRecommendedSettingsBtn = document.getElementById('quickRecommendedSettingsBtn');
+        const recommendedSettingsBtn = document.getElementById('recommendedSettingsBtn');
         
         let currentMode = 'live';
         let selectedFile = null;
@@ -406,8 +669,167 @@ const LivePage = {
         let realsenseAvailable = false;
         let realsenseDeviceName = 'Intel RealSense';
         let realsenseCapabilities = {};
-        let depthStatusInterval = null;
+        const isPhoneDevice = document.body.classList.contains('is-phone-device');
+        const phoneCameraSupported = !!(isPhoneDevice && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+        const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
+        let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
+        const phoneCaptureCanvas = document.createElement('canvas');
 
+        const updatePhonePermissionBadge = () => {
+            if (!phoneCameraPermissionBadge) return;
+
+            if (!phoneCameraSupported) {
+                phoneCameraPermissionBadge.style.display = 'none';
+                return;
+            }
+
+            const map = {
+                granted: {
+                    label: '<i class="fas fa-check-circle"></i> Camera: Granted',
+                    color: '#1b5e20',
+                    bg: '#e8f5e9',
+                    border: '#a5d6a7'
+                },
+                denied: {
+                    label: '<i class="fas fa-times-circle"></i> Camera: Denied',
+                    color: '#b71c1c',
+                    bg: '#ffebee',
+                    border: '#ef9a9a'
+                },
+                prompt: {
+                    label: '<i class="fas fa-exclamation-circle"></i> Camera: Prompt',
+                    color: '#8a6d00',
+                    bg: '#fff8e1',
+                    border: '#ffe082'
+                },
+                unavailable: {
+                    label: '<i class="fas fa-info-circle"></i> Camera: Unavailable',
+                    color: '#455a64',
+                    bg: '#eceff1',
+                    border: '#cfd8dc'
+                }
+            };
+
+            const style = map[phonePermissionState] || map.prompt;
+            phoneCameraPermissionBadge.innerHTML = style.label;
+            phoneCameraPermissionBadge.style.color = style.color;
+            phoneCameraPermissionBadge.style.background = style.bg;
+            phoneCameraPermissionBadge.style.borderColor = style.border;
+            phoneCameraPermissionBadge.style.display = 'inline-flex';
+            phoneCameraPermissionBadge.style.alignItems = 'center';
+            phoneCameraPermissionBadge.style.gap = '0.35rem';
+        };
+
+        const initPhonePermissionWatcher = async () => {
+            if (!phoneCameraSupported) return;
+            if (!permissionsApiSupported) {
+                phonePermissionState = 'prompt';
+                updatePhonePermissionBadge();
+                return;
+            }
+
+            try {
+                const permissionStatus = await navigator.permissions.query({ name: 'camera' });
+                if (permissionStatus && permissionStatus.state) {
+                    phonePermissionState = permissionStatus.state;
+                    updatePhonePermissionBadge();
+                }
+
+                permissionStatus.onchange = () => {
+                    phonePermissionState = permissionStatus.state || 'prompt';
+                    updatePhonePermissionBadge();
+                };
+            } catch (error) {
+                phonePermissionState = 'prompt';
+                updatePhonePermissionBadge();
+            }
+        };
+
+        const stopPhoneInferenceLoop = () => {
+            if (this.phoneInferenceInterval) {
+                clearInterval(this.phoneInferenceInterval);
+                this.phoneInferenceInterval = null;
+            }
+            this.phoneInferenceBusy = false;
+        };
+
+        const stopPhoneCameraTrack = () => {
+            if (this.phoneCameraStream) {
+                this.phoneCameraStream.getTracks().forEach((track) => track.stop());
+                this.phoneCameraStream = null;
+            }
+
+            if (phoneCameraPreview) {
+                phoneCameraPreview.pause();
+                phoneCameraPreview.srcObject = null;
+                phoneCameraPreview.style.display = 'none';
+            }
+        };
+
+        const getAvailableSources = () => {
+            const sources = ['webcam'];
+            if (realsenseAvailable) {
+                sources.push('realsense');
+            }
+            if (phoneCameraSupported) {
+                sources.push('phone');
+            }
+            return sources;
+        };
+
+        const shouldUsePhoneSource = () => selectedSource === 'phone' && phoneCameraSupported;
+
+        const capturePhoneFrameForInference = async () => {
+            if (!this.phoneCameraStream || !phoneCameraPreview) return;
+            if (this.phoneInferenceBusy) return;
+            if (phoneCameraPreview.readyState < 2) return;
+
+            const width = phoneCameraPreview.videoWidth || 1280;
+            const height = phoneCameraPreview.videoHeight || 720;
+            if (width <= 0 || height <= 0) return;
+
+            phoneCaptureCanvas.width = width;
+            phoneCaptureCanvas.height = height;
+            const ctx = phoneCaptureCanvas.getContext('2d');
+            if (!ctx) return;
+
+            ctx.drawImage(phoneCameraPreview, 0, 0, width, height);
+
+            const blob = await new Promise((resolve) => {
+                phoneCaptureCanvas.toBlob(resolve, 'image/jpeg', 0.85);
+            });
+            if (!blob) return;
+
+            this.phoneInferenceBusy = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('image', blob, 'phone_live.jpg');
+                formData.append('conf', '0.10');
+
+                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Phone frame inference failed');
+                }
+
+                const result = await response.json();
+                if (result && result.violations_detected) {
+                    const now = Date.now();
+                    if (now - this.phoneLastViolationNoticeAt > 10000) {
+                        this.phoneLastViolationNoticeAt = now;
+                        showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
+                    }
+                }
+            } catch (error) {
+                console.error('Phone camera inference error:', error);
+            } finally {
+                this.phoneInferenceBusy = false;
+            }
+        };
         function renderCapabilities() {
             if (!capabilitiesContainer) return;
 
@@ -480,40 +902,73 @@ const LivePage = {
 
             if (selectedSource === 'realsense') {
                 sourceToggleBtn.innerHTML = `<i class="fas fa-microchip"></i> Source: ${realsenseDeviceName || 'RealSense'}`;
+            } else if (selectedSource === 'phone') {
+                sourceToggleBtn.innerHTML = '<i class="fas fa-mobile-alt"></i> Source: Phone Camera';
             } else {
                 sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam';
             }
 
-            const canToggle = realsenseAvailable && !APP_STATE.liveStreamActive;
+            const canToggle = getAvailableSources().length > 1 && !APP_STATE.liveStreamActive;
             sourceToggleBtn.disabled = !canToggle;
 
-            if (!realsenseAvailable) {
-                sourceToggleBtn.title = 'RealSense not detected';
+            if (!canToggle) {
+                if (APP_STATE.liveStreamActive) {
+                    sourceToggleBtn.title = 'Stop monitoring to switch source';
+                } else if (!realsenseAvailable && !phoneCameraSupported) {
+                    sourceToggleBtn.title = 'No additional camera source available';
+                } else {
+                    sourceToggleBtn.title = 'Only one source currently available';
+                }
                 sourceToggleBtn.style.opacity = '0.55';
                 sourceToggleBtn.style.cursor = 'not-allowed';
-                hideDepthWidgets();
-            } else if (APP_STATE.liveStreamActive) {
-                sourceToggleBtn.title = 'Stop monitoring to switch source';
-                sourceToggleBtn.style.opacity = '0.7';
-                sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
-                sourceToggleBtn.title = 'Click to switch webcam/RealSense';
+                sourceToggleBtn.title = phoneCameraSupported
+                    ? 'Click to switch Webcam / RealSense / Phone Camera'
+                    : 'Click to switch webcam/RealSense';
                 sourceToggleBtn.style.opacity = '1';
                 sourceToggleBtn.style.cursor = 'pointer';
             }
+
+            if (selectedSource !== 'realsense') {
+                hideDepthWidgets();
+            }
         }
 
-        tabs.forEach(tab => {
+        function openSettingsWindow() {
+            if (!settingsModal) return;
+            settingsModal.classList.add('open');
+            settingsModal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+            showNotification('Settings window opened', 'info');
+        }
+
+        function closeSettingsWindow() {
+            if (!settingsModal) return;
+            settingsModal.classList.remove('open');
+            settingsModal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+
+        function toggleSettingsWindowSize() {
+            if (!settingsWindow || !toggleSettingsWindowSizeBtn) return;
+            const expanded = settingsWindow.classList.toggle('expanded');
+            toggleSettingsWindowSizeBtn.innerHTML = expanded
+                ? '<i class="fas fa-compress"></i> Compact'
+                : '<i class="fas fa-expand"></i> Enlarge';
+            toggleSettingsWindowSizeBtn.title = expanded
+                ? 'Return to compact size'
+                : 'Enlarge settings window';
+            showNotification(expanded ? 'Settings window enlarged' : 'Settings window set to compact size', 'info');
+        }
+
+        settingsTabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                tabs.forEach(t => t.classList.remove('active'));
+                settingsTabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
 
-                const target = tab.dataset.tab;
-                sections.forEach(sec => {
-                    sec.classList.toggle(
-                        'active',
-                        sec.id === `tab-${target}`
-                    );
+                const target = tab.dataset.settingsTab;
+                settingsSections.forEach(sec => {
+                    sec.classList.toggle('active', sec.id === `settings-tab-${target}`);
                 });
             });
         });
@@ -531,13 +986,15 @@ const LivePage = {
             cardTitle.innerHTML = '<i class="fas fa-video"></i> Live Camera Monitoring';
             
             // Update instructions
-            instructionsList.innerHTML = `
-                <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
-                <li>Your webcam will activate and show the live feed</li>
-                <li>YOLO will detect PPE in real-time with bounding boxes</li>
-                <li>When violations are detected, they will be logged automatically</li>
-                <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
-            `;
+            if (instructionsList) {
+                instructionsList.innerHTML = `
+                    <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
+                    <li>Your webcam will activate and show the live feed</li>
+                    <li>YOLO will detect PPE in real-time with bounding boxes</li>
+                    <li>When violations are detected, they will be logged automatically</li>
+                    <li>Click <strong>"Stop"</strong> to end the monitoring session</li>
+                `;
+            }
         }
         
         function switchToUploadMode() {
@@ -557,13 +1014,15 @@ const LivePage = {
             cardTitle.innerHTML = '<i class="fas fa-image"></i> Image Analysis';
             
             // Update instructions
-            instructionsList.innerHTML = `
-                <li>Click the upload area or <strong>drop an image</strong> to select a file</li>
-                <li>Preview will show your selected image</li>
-                <li>Click <strong>"Analyze for PPE Violations"</strong> to run detection</li>
-                <li>Violations will be automatically logged and full reports generated</li>
-                <li>View detection results with annotated bounding boxes</li>
-            `;
+            if (instructionsList) {
+                instructionsList.innerHTML = `
+                    <li>Click the upload area or <strong>drop an image</strong> to select a file</li>
+                    <li>Preview will show your selected image</li>
+                    <li>Click <strong>"Analyze for PPE Violations"</strong> to run detection</li>
+                    <li>Violations will be automatically logged and full reports generated</li>
+                    <li>View detection results with annotated bounding boxes</li>
+                `;
+            }
         }
         
         // Mode button listeners
@@ -571,9 +1030,25 @@ const LivePage = {
         uploadModeBtn.addEventListener('click', switchToUploadMode);
 
         sourceToggleBtn.addEventListener('click', () => {
-            if (!realsenseAvailable || APP_STATE.liveStreamActive) return;
-            selectedSource = selectedSource === 'realsense' ? 'webcam' : 'realsense';
+            if (APP_STATE.liveStreamActive) {
+                showNotification('Stop monitoring before switching camera source.', 'warning');
+                return;
+            }
+
+            const sources = getAvailableSources();
+            if (sources.length < 2) {
+                showNotification('No alternate camera source is available.', 'warning');
+                return;
+            }
+
+            const currentIndex = sources.indexOf(selectedSource);
+            selectedSource = sources[(currentIndex + 1) % sources.length];
             renderSourceToggle();
+
+            const sourceLabel = selectedSource === 'realsense'
+                ? (realsenseDeviceName || 'RealSense')
+                : (selectedSource === 'phone' ? 'Phone Camera' : 'Webcam');
+            showNotification(`Camera source changed to ${sourceLabel}`, 'success');
         });
         
         // Image upload handling
@@ -681,20 +1156,29 @@ const LivePage = {
         // Live stream functions
         async function stopLiveStream() {
             try {
-                await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STOP}`, {
-                    method: 'POST'
-                });
+                if (shouldUsePhoneSource()) {
+                    stopPhoneInferenceLoop();
+                    stopPhoneCameraTrack();
+                } else {
+                    await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STOP}`, {
+                        method: 'POST'
+                    });
+                }
+
                 streamImg.src = '';
                 streamImg.style.display = 'none';
                 placeholder.style.display = 'block';
                 statusIndicator.style.display = 'none';
+                if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
                 stopBtn.disabled = true;
                 startBtn.disabled = false;
                 APP_STATE.liveStreamActive = false;
                 renderSourceToggle();
                 hideDepthWidgets();
+                showNotification('Live monitoring stopped', 'info');
             } catch (error) {
                 console.error('Error stopping live stream:', error);
+                showNotification('Failed to stop live monitoring cleanly', 'error');
             }
         }
         
@@ -705,6 +1189,53 @@ const LivePage = {
                 // Disable start button
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
+
+                if (shouldUsePhoneSource()) {
+                    if (APP_STATE.liveStreamActive) {
+                        startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+                        return;
+                    }
+
+                    phonePermissionState = 'prompt';
+                    updatePhonePermissionBadge();
+
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: { ideal: 'environment' },
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        },
+                        audio: false
+                    });
+
+                    this.phoneCameraStream = stream;
+                    phonePermissionState = 'granted';
+                    updatePhonePermissionBadge();
+
+                    if (phoneCameraPreview) {
+                        phoneCameraPreview.srcObject = stream;
+                        await phoneCameraPreview.play();
+                        phoneCameraPreview.style.display = 'block';
+                    }
+
+                    placeholder.style.display = 'none';
+                    streamImg.style.display = 'none';
+                    statusIndicator.style.display = 'block';
+                    statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE';
+
+                    stopBtn.disabled = false;
+                    startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+                    APP_STATE.liveStreamActive = true;
+                    hideDepthWidgets();
+                    renderSourceToggle();
+
+                    stopPhoneInferenceLoop();
+                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 3500);
+                    await capturePhoneFrameForInference();
+
+                    showNotification('Phone camera access granted and monitoring started', 'success');
+                    return;
+                }
 
                 // Start monitoring on backend
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_START}`, {
@@ -726,8 +1257,10 @@ const LivePage = {
 
                 // Hide placeholder, show stream
                 placeholder.style.display = 'none';
+                if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
                 streamImg.style.display = 'block';
                 statusIndicator.style.display = 'block';
+                statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
 
                 // Set stream source
                 streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
@@ -741,13 +1274,39 @@ const LivePage = {
                 renderSourceToggle();
                 await refreshDepthStatus();
 
+                showNotification(`Live monitoring started (${selectedSource === 'realsense' ? (realsenseDeviceName || 'RealSense') : 'Webcam'})`, 'success');
+
                 if (startData.fallback_to_webcam) {
                     showNotification(startData.message || 'RealSense unavailable, switched to webcam', 'warning');
                 }
 
             } catch (error) {
                 console.error('Error starting live stream:', error);
-                alert('Failed to start live monitoring. Please check if the webcam is available.');
+
+                if (shouldUsePhoneSource()) {
+                    const isPermissionDenied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
+                    const isCameraMissing = error && error.name === 'NotFoundError';
+                    if (isPermissionDenied) {
+                        phonePermissionState = 'denied';
+                        updatePhonePermissionBadge();
+                        alert('Camera permission was denied. Please allow camera access in your browser settings and try again.');
+                    } else if (isCameraMissing) {
+                        phonePermissionState = 'unavailable';
+                        updatePhonePermissionBadge();
+                        alert('No usable phone camera was found.');
+                    } else {
+                        if (phonePermissionState !== 'denied') {
+                            phonePermissionState = 'prompt';
+                            updatePhonePermissionBadge();
+                        }
+                        alert('Failed to start phone camera. Please check browser camera permissions and HTTPS access.');
+                    }
+                    stopPhoneInferenceLoop();
+                    stopPhoneCameraTrack();
+                } else {
+                    alert('Failed to start live monitoring. Please check if the webcam is available.');
+                }
+
                 startBtn.disabled = false;
                 startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
             }
@@ -782,6 +1341,10 @@ const LivePage = {
             if (!realsenseAvailable) {
                 selectedSource = 'webcam';
             }
+
+            if (phoneCameraSupported && selectedSource !== 'realsense' && selectedSource !== 'webcam' && selectedSource !== 'phone') {
+                selectedSource = 'phone';
+            }
             renderCapabilities();
             renderSourceToggle();
         } catch (error) {
@@ -808,12 +1371,18 @@ const LivePage = {
             if (!realsenseAvailable) {
                 selectedSource = 'webcam';
             }
+
+            if (phoneCameraSupported && selectedSource !== 'realsense' && selectedSource !== 'webcam' && selectedSource !== 'phone') {
+                selectedSource = 'phone';
+            }
             
             if (status.active) {
                 // Stream is already active
                 placeholder.style.display = 'none';
+                if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
                 streamImg.style.display = 'block';
                 statusIndicator.style.display = 'block';
+                statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
                 streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
                 stopBtn.disabled = false;
                 startBtn.disabled = true;
@@ -839,6 +1408,53 @@ const LivePage = {
         const cooldownValue = document.getElementById('cooldownValue');
         const applyCooldownBtn = document.getElementById('applyCooldownBtn');
         const refreshQueueBtn = document.getElementById('refreshQueueBtn');
+        const modelApiToggle = document.getElementById('modelApiToggle');
+        const geminiToggle = document.getElementById('geminiToggle');
+        const nlpProviderOrderInput = document.getElementById('nlpProviderOrderInput');
+        const visionProviderOrderInput = document.getElementById('visionProviderOrderInput');
+        const embeddingProviderOrderInput = document.getElementById('embeddingProviderOrderInput');
+        const nlpModelInput = document.getElementById('nlpModelInput');
+        const visionModelInput = document.getElementById('visionModelInput');
+        const embeddingModelInput = document.getElementById('embeddingModelInput');
+        const geminiModelInput = document.getElementById('geminiModelInput');
+        const applyProviderRoutingBtn = document.getElementById('applyProviderRoutingBtn');
+        const reloadProviderRoutingBtn = document.getElementById('reloadProviderRoutingBtn');
+        const providerRoutingStatus = document.getElementById('providerRoutingStatus');
+        const reliabilityHeadingIcon = document.getElementById('reliabilityHeadingIcon');
+        const reliabilityWindowSelect = document.getElementById('reliabilityWindowSelect');
+        const refreshReliabilityBtn = document.getElementById('refreshReliabilityBtn');
+        const reliabilityLastUpdated = document.getElementById('reliabilityLastUpdated');
+        const reliabilityRealSuccess = document.getElementById('reliabilityRealSuccess');
+        const reliabilityFallbackRate = document.getElementById('reliabilityFallbackRate');
+        const reliabilityHardFailed = document.getElementById('reliabilityHardFailed');
+        const reliabilityConsidered = document.getElementById('reliabilityConsidered');
+        const reliabilityFailureCauses = document.getElementById('reliabilityFailureCauses');
+        const RECOMMENDED_SETTINGS = {
+            environment_validation_enabled: true,
+            cooldown_seconds: 3,
+            provider_routing: {
+                model_api_enabled: false,
+                gemini_enabled: false,
+                nlp_provider_order: 'ollama,local,model_api,gemini',
+                vision_provider_order: 'ollama,model_api,gemini',
+                embedding_provider_order: 'ollama,model_api',
+                nlp_model: 'meta-llama/Meta-Llama-3-8B-Instruct',
+                vision_model: 'Qwen/Qwen2.5-VL-7B-Instruct',
+                embedding_model: 'nomic-ai/nomic-embed-text-v1.5',
+                gemini_model: 'gemini-2.5-flash'
+            }
+        };
+        const API_MODE_SETTINGS = {
+            model_api_enabled: true,
+            gemini_enabled: true,
+            nlp_provider_order: 'model_api,gemini,ollama,local',
+            vision_provider_order: 'model_api,gemini,ollama',
+            embedding_provider_order: 'model_api,ollama',
+            nlp_model: 'meta-llama/Meta-Llama-3-8B-Instruct',
+            vision_model: 'Qwen/Qwen2.5-VL-7B-Instruct',
+            embedding_model: 'nomic-ai/nomic-embed-text-v1.5',
+            gemini_model: 'gemini-2.5-flash'
+        };
 
         // Function to update environment validation status display
         function updateEnvValidationStatus(enabled) {
@@ -897,6 +1513,74 @@ const LivePage = {
             }
         }
 
+        function updateReliabilityHeadingVisual(realSuccessRate) {
+            if (!reliabilityHeadingIcon) return;
+
+            if (realSuccessRate >= 0.85) {
+                reliabilityHeadingIcon.className = 'fas fa-shield-alt';
+                reliabilityHeadingIcon.style.color = 'var(--success-color)';
+            } else if (realSuccessRate >= 0.6) {
+                reliabilityHeadingIcon.className = 'fas fa-exclamation-triangle';
+                reliabilityHeadingIcon.style.color = 'var(--warning-color)';
+            } else {
+                reliabilityHeadingIcon.className = 'fas fa-exclamation-circle';
+                reliabilityHeadingIcon.style.color = 'var(--error-color)';
+            }
+        }
+
+        function humanizeFailureCauses(causes) {
+            if (!causes || typeof causes !== 'object') {
+                return 'No failure cause data';
+            }
+
+            const pairs = Object.entries(causes)
+                .filter(([, value]) => Number(value) > 0)
+                .sort((a, b) => Number(b[1]) - Number(a[1]));
+
+            if (pairs.length === 0) {
+                return 'No failures in selected window';
+            }
+
+            return pairs.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`).join(' • ');
+        }
+
+        async function updateReliabilityStatus() {
+            try {
+                const windowSize = reliabilityWindowSelect ? Number(reliabilityWindowSelect.value || 50) : 50;
+                const data = await API.getReliabilityStats(windowSize);
+
+                if (!data || data.success === false) {
+                    throw new Error((data && data.error) || 'Unable to load reliability stats');
+                }
+
+                const realSuccessRate = Number(data.real_success_rate || 0);
+                const fallbackNeededRate = Number(data.fallback_needed_rate || 0);
+                const hardFailed = Number(data.hard_failed_count || 0);
+                const considered = Number(data.considered_count || 0);
+
+                if (reliabilityRealSuccess) reliabilityRealSuccess.textContent = `${(realSuccessRate * 100).toFixed(1)}%`;
+                if (reliabilityFallbackRate) reliabilityFallbackRate.textContent = `${(fallbackNeededRate * 100).toFixed(1)}%`;
+                if (reliabilityHardFailed) reliabilityHardFailed.textContent = String(hardFailed);
+                if (reliabilityConsidered) reliabilityConsidered.textContent = String(considered);
+                if (reliabilityFailureCauses) reliabilityFailureCauses.textContent = humanizeFailureCauses(data.failure_causes || {});
+
+                updateReliabilityHeadingVisual(realSuccessRate);
+
+                if (reliabilityLastUpdated) {
+                    reliabilityLastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+                }
+            } catch (error) {
+                console.error('Error fetching reliability status:', error);
+                if (reliabilityLastUpdated) {
+                    reliabilityLastUpdated.textContent = 'Last updated: failed to fetch';
+                }
+                if (reliabilityFailureCauses) {
+                    reliabilityFailureCauses.textContent = 'Unable to load reliability stats';
+                }
+                updateReliabilityHeadingVisual(0);
+            }
+        }
+
         // Function to fetch current settings
         async function loadCurrentSettings() {
             try {
@@ -917,6 +1601,218 @@ const LivePage = {
 
             // Also update queue status
             await updateQueueStatus();
+            await updateReliabilityStatus();
+            await loadProviderRoutingSettings();
+        }
+
+        function setProviderStatus(message, type = 'info') {
+            if (!providerRoutingStatus) return;
+
+            providerRoutingStatus.textContent = message;
+            if (type === 'success') {
+                providerRoutingStatus.style.color = 'var(--success-color)';
+            } else if (type === 'error') {
+                providerRoutingStatus.style.color = 'var(--error-color)';
+            } else if (type === 'warning') {
+                providerRoutingStatus.style.color = 'var(--warning-color)';
+            } else {
+                providerRoutingStatus.style.color = 'var(--text-secondary)';
+            }
+        }
+
+        async function loadProviderRoutingSettings() {
+            try {
+                setProviderStatus('Loading provider settings...');
+
+                const settings = await API.getProviderRoutingSettings();
+                if (!settings) {
+                    setProviderStatus('Unable to load provider settings', 'warning');
+                    return;
+                }
+
+                if (modelApiToggle) modelApiToggle.checked = !!settings.model_api_enabled;
+                if (geminiToggle) geminiToggle.checked = !!settings.gemini_enabled;
+                if (nlpProviderOrderInput) nlpProviderOrderInput.value = (settings.nlp_provider_order || []).join(',');
+                if (visionProviderOrderInput) visionProviderOrderInput.value = (settings.vision_provider_order || []).join(',');
+                if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = (settings.embedding_provider_order || []).join(',');
+                if (nlpModelInput) nlpModelInput.value = settings.nlp_model || '';
+                if (visionModelInput) visionModelInput.value = settings.vision_model || '';
+                if (embeddingModelInput) embeddingModelInput.value = settings.embedding_model || '';
+                if (geminiModelInput) geminiModelInput.value = settings.gemini_model || '';
+
+                setProviderStatus('Provider settings loaded');
+            } catch (error) {
+                console.error('Error loading provider settings:', error);
+                setProviderStatus('Failed to load provider settings', 'error');
+            }
+        }
+
+        async function applyProviderRoutingSettings() {
+            try {
+                applyProviderRoutingBtn.disabled = true;
+                applyProviderRoutingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
+
+                const payload = {
+                    model_api_enabled: !!modelApiToggle.checked,
+                    gemini_enabled: !!geminiToggle.checked,
+                    nlp_provider_order: (nlpProviderOrderInput.value || '').trim(),
+                    vision_provider_order: (visionProviderOrderInput.value || '').trim(),
+                    embedding_provider_order: (embeddingProviderOrderInput.value || '').trim(),
+                    nlp_model: (nlpModelInput.value || '').trim(),
+                    vision_model: (visionModelInput.value || '').trim(),
+                    embedding_model: (embeddingModelInput.value || '').trim(),
+                    gemini_model: (geminiModelInput.value || '').trim()
+                };
+
+                const result = await API.updateProviderRoutingSettings(payload);
+                if (result && result.success) {
+                    setProviderStatus('Provider routing updated successfully', 'success');
+                    showNotification('Provider routing updated', 'success');
+                    await loadProviderRoutingSettings();
+                } else {
+                    const errorMessage = (result && result.error) ? result.error : 'Failed to update provider settings';
+                    setProviderStatus(errorMessage, 'error');
+                    showNotification(errorMessage, 'error');
+                }
+            } catch (error) {
+                console.error('Error applying provider settings:', error);
+                setProviderStatus('Failed to update provider settings', 'error');
+                showNotification('Failed to update provider settings', 'error');
+            } finally {
+                applyProviderRoutingBtn.disabled = false;
+                applyProviderRoutingBtn.innerHTML = '<i class="fas fa-save"></i> Apply Provider Routing';
+            }
+        }
+
+        function applyRecommendedValuesToForm() {
+            if (envValidationToggle) envValidationToggle.checked = !!RECOMMENDED_SETTINGS.environment_validation_enabled;
+            if (cooldownSlider) cooldownSlider.value = RECOMMENDED_SETTINGS.cooldown_seconds;
+            if (cooldownValue) cooldownValue.textContent = RECOMMENDED_SETTINGS.cooldown_seconds + 's';
+
+            const routing = RECOMMENDED_SETTINGS.provider_routing;
+            if (modelApiToggle) modelApiToggle.checked = !!routing.model_api_enabled;
+            if (geminiToggle) geminiToggle.checked = !!routing.gemini_enabled;
+            if (nlpProviderOrderInput) nlpProviderOrderInput.value = routing.nlp_provider_order;
+            if (visionProviderOrderInput) visionProviderOrderInput.value = routing.vision_provider_order;
+            if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = routing.embedding_provider_order;
+            if (nlpModelInput) nlpModelInput.value = routing.nlp_model;
+            if (visionModelInput) visionModelInput.value = routing.vision_model;
+            if (embeddingModelInput) embeddingModelInput.value = routing.embedding_model;
+            if (geminiModelInput) geminiModelInput.value = routing.gemini_model;
+
+            updateEnvValidationStatus(!!RECOMMENDED_SETTINGS.environment_validation_enabled);
+            setProviderStatus('Recommended values loaded. Click apply buttons or use the recommended action again to save.', 'info');
+        }
+
+        function applyApiModeValuesToForm() {
+            if (modelApiToggle) modelApiToggle.checked = !!API_MODE_SETTINGS.model_api_enabled;
+            if (geminiToggle) geminiToggle.checked = !!API_MODE_SETTINGS.gemini_enabled;
+            if (nlpProviderOrderInput) nlpProviderOrderInput.value = API_MODE_SETTINGS.nlp_provider_order;
+            if (visionProviderOrderInput) visionProviderOrderInput.value = API_MODE_SETTINGS.vision_provider_order;
+            if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = API_MODE_SETTINGS.embedding_provider_order;
+            if (nlpModelInput) nlpModelInput.value = API_MODE_SETTINGS.nlp_model;
+            if (visionModelInput) visionModelInput.value = API_MODE_SETTINGS.vision_model;
+            if (embeddingModelInput) embeddingModelInput.value = API_MODE_SETTINGS.embedding_model;
+            if (geminiModelInput) geminiModelInput.value = API_MODE_SETTINGS.gemini_model;
+        }
+
+        async function applyApiModeSettings() {
+            const providerResult = await API.updateProviderRoutingSettings({
+                ...API_MODE_SETTINGS
+            });
+
+            if (!providerResult || !providerResult.success) {
+                throw new Error((providerResult && providerResult.error) || 'Failed to switch to API mode');
+            }
+
+            applyApiModeValuesToForm();
+            setProviderStatus('API mode enabled for optimized cloud inference', 'success');
+            showNotification('Switched to API mode', 'success');
+        }
+
+        async function setEnvironmentValidation(enabled) {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/environment-validation`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+
+            const data = await response.json();
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to update environment validation');
+            }
+
+            return data;
+        }
+
+        async function setCooldown(seconds) {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/cooldown`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cooldown_seconds: seconds })
+            });
+
+            const data = await response.json();
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to update cooldown');
+            }
+
+            return data;
+        }
+
+        async function applyRecommendedSettings() {
+            try {
+                const targets = [quickRecommendedSettingsBtn, recommendedSettingsBtn].filter(Boolean);
+                targets.forEach(btn => {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying recommended...';
+                });
+
+                applyRecommendedValuesToForm();
+
+                await setEnvironmentValidation(!!RECOMMENDED_SETTINGS.environment_validation_enabled);
+                await setCooldown(RECOMMENDED_SETTINGS.cooldown_seconds);
+
+                const providerResult = await API.updateProviderRoutingSettings({
+                    ...RECOMMENDED_SETTINGS.provider_routing
+                });
+
+                if (!providerResult || !providerResult.success) {
+                    throw new Error((providerResult && providerResult.error) || 'Failed to apply provider routing');
+                }
+
+                const diskStatus = await API.getDiskSpaceStatus();
+                if (diskStatus && diskStatus.success && diskStatus.sufficient === false) {
+                    const warningText = [
+                        'Local-first mode may not run well because available disk space is below the model requirement.',
+                        `Required: ${diskStatus.required_gb} GB`,
+                        `Available: ${diskStatus.free_gb} GB`,
+                        'Switch to API mode now for optimized experience?'
+                    ].join('\n');
+
+                    const shouldSwitchToApi = confirm(warningText);
+                    if (shouldSwitchToApi) {
+                        await applyApiModeSettings();
+                    } else {
+                        alert('You can switch to API mode later from Provider Routing settings.');
+                        showNotification('Low disk space detected. API mode is recommended.', 'warning');
+                    }
+                }
+
+                await loadCurrentSettings();
+                showNotification('Recommended monitoring settings applied', 'success');
+                setProviderStatus('Recommended provider settings applied', 'success');
+            } catch (error) {
+                console.error('Error applying recommended settings:', error);
+                showNotification(error.message || 'Failed to apply recommended settings', 'error');
+                setProviderStatus('Failed to apply recommended provider settings', 'error');
+            } finally {
+                const targets = [quickRecommendedSettingsBtn, recommendedSettingsBtn].filter(Boolean);
+                targets.forEach(btn => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-magic"></i> Use Recommended Settings';
+                });
+            }
         }
 
         // Environment validation toggle handler
@@ -924,13 +1820,7 @@ const LivePage = {
             const enabled = envValidationToggle.checked;
             
             try {
-                const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/environment-validation`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled: enabled })
-                });
-                
-                const data = await response.json();
+                const data = await setEnvironmentValidation(enabled);
                 
                 if (data.success) {
                     updateEnvValidationStatus(data.enabled);
@@ -959,20 +1849,10 @@ const LivePage = {
             try {
                 applyCooldownBtn.disabled = true;
                 applyCooldownBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
+
+                await setCooldown(newCooldown);
                 
-                const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/cooldown`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cooldown_seconds: newCooldown })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    showNotification(`Cooldown set to ${newCooldown} seconds`, 'success');
-                } else {
-                    showNotification(data.error || 'Failed to update cooldown', 'error');
-                }
+                showNotification(`Cooldown set to ${newCooldown} seconds`, 'success');
             } catch (error) {
                 console.error('Error updating cooldown:', error);
                 showNotification('Failed to update cooldown', 'error');
@@ -988,33 +1868,190 @@ const LivePage = {
             refreshQueueBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
             
             await updateQueueStatus();
+            await updateReliabilityStatus();
             
             refreshQueueBtn.disabled = false;
             refreshQueueBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Status';
+            showNotification('Queue and reliability status refreshed', 'info');
         });
+
+        if (refreshReliabilityBtn) {
+            refreshReliabilityBtn.addEventListener('click', async () => {
+                refreshReliabilityBtn.disabled = true;
+                refreshReliabilityBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+                await updateReliabilityStatus();
+                refreshReliabilityBtn.disabled = false;
+                refreshReliabilityBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Reliability';
+            });
+        }
+
+        if (reliabilityWindowSelect) {
+            reliabilityWindowSelect.addEventListener('change', updateReliabilityStatus);
+        }
+
+        if (applyProviderRoutingBtn) {
+            applyProviderRoutingBtn.addEventListener('click', applyProviderRoutingSettings);
+        }
+
+        if (reloadProviderRoutingBtn) {
+            reloadProviderRoutingBtn.addEventListener('click', async () => {
+                reloadProviderRoutingBtn.disabled = true;
+                reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reloading...';
+                await loadProviderRoutingSettings();
+                reloadProviderRoutingBtn.disabled = false;
+                reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Reload Provider Settings';
+                showNotification('Provider routing settings reloaded', 'info');
+            });
+        }
+
+        if (openSettingsWindowBtn) {
+            openSettingsWindowBtn.addEventListener('click', openSettingsWindow);
+        }
+
+        if (closeSettingsWindowBtn) {
+            closeSettingsWindowBtn.addEventListener('click', closeSettingsWindow);
+        }
+
+        if (toggleSettingsWindowSizeBtn) {
+            toggleSettingsWindowSizeBtn.addEventListener('click', toggleSettingsWindowSize);
+        }
+
+        if (settingsModal) {
+            settingsModal.addEventListener('click', (event) => {
+                if (event.target === settingsModal) {
+                    closeSettingsWindow();
+                }
+            });
+        }
+
+        const onSettingsKeydown = (event) => {
+            if (event.key === 'Escape' && settingsModal && settingsModal.classList.contains('open')) {
+                closeSettingsWindow();
+            }
+        };
+        document.addEventListener('keydown', onSettingsKeydown);
+        this.settingsKeydownHandler = onSettingsKeydown;
+
+        if (quickRecommendedSettingsBtn) {
+            quickRecommendedSettingsBtn.addEventListener('click', applyRecommendedSettings);
+        }
+
+        if (recommendedSettingsBtn) {
+            recommendedSettingsBtn.addEventListener('click', applyRecommendedSettings);
+        }
+
+        this.realtimeHandler = () => {
+            updateQueueStatus();
+            updateReliabilityStatus();
+        };
+        window.addEventListener('ppe-realtime:update', this.realtimeHandler);
+
+        this.realtimeConnectionHandler = () => {
+            const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
+            if (connected) {
+                if (this.queueRefreshInterval) {
+                    clearInterval(this.queueRefreshInterval);
+                    this.queueRefreshInterval = null;
+                }
+                if (this.reliabilityRefreshInterval) {
+                    clearInterval(this.reliabilityRefreshInterval);
+                    this.reliabilityRefreshInterval = null;
+                }
+            } else {
+                if (!this.queueRefreshInterval) {
+                    this.queueRefreshInterval = setInterval(updateQueueStatus, 5000);
+                }
+                if (!this.reliabilityRefreshInterval) {
+                    this.reliabilityRefreshInterval = setInterval(updateReliabilityStatus, 10000);
+                }
+            }
+        };
+        window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
 
         // Simple notification function (fallback if not defined globally)
         function showNotification(message, type = 'info') {
-            if (typeof Notifications !== 'undefined' && Notifications.show) {
-                Notifications.show(message, type);
-            } else {
-                console.log(`[${type.toUpperCase()}] ${message}`);
-                // Simple alert fallback
-                if (type === 'error') {
-                    alert(message);
-                }
+            if (typeof NotificationManager !== 'undefined') {
+                if (type === 'success') return NotificationManager.success(message);
+                if (type === 'warning') return NotificationManager.warning(message);
+                if (type === 'error') return NotificationManager.error(message);
+                return NotificationManager.info(message);
+            }
+
+            console.log(`[${type.toUpperCase()}] ${message}`);
+            if (type === 'error') {
+                alert(message);
             }
         }
 
         // Load settings on mount
+        updatePhonePermissionBadge();
+        await initPhonePermissionWatcher();
         await loadCurrentSettings();
 
-        // Auto-refresh queue status every 5 seconds when on this page
-        const queueRefreshInterval = setInterval(updateQueueStatus, 5000);
-        depthStatusInterval = setInterval(refreshDepthStatus, 1500);
+        const depthStatusInterval = setInterval(refreshDepthStatus, 1500);
+        this.depthStatusInterval = depthStatusInterval;
+
+        // Realtime-first: only use polling if realtime stream is unavailable.
+        this.realtimeConnectionHandler();
 
         // Clean up interval when leaving page (store for cleanup)
-        window._livePageQueueInterval = queueRefreshInterval;
+        window._livePageQueueInterval = this.queueRefreshInterval;
+        window._livePageReliabilityInterval = this.reliabilityRefreshInterval;
         window._liveDepthStatusInterval = depthStatusInterval;
+    },
+
+    unmount() {
+        if (this.phoneInferenceInterval) {
+            clearInterval(this.phoneInferenceInterval);
+            this.phoneInferenceInterval = null;
+        }
+
+        if (this.phoneCameraStream) {
+            this.phoneCameraStream.getTracks().forEach((track) => track.stop());
+            this.phoneCameraStream = null;
+        }
+
+        if (this.queueRefreshInterval) {
+            clearInterval(this.queueRefreshInterval);
+            this.queueRefreshInterval = null;
+        }
+
+        if (this.reliabilityRefreshInterval) {
+            clearInterval(this.reliabilityRefreshInterval);
+            this.reliabilityRefreshInterval = null;
+        }
+
+        if (this.depthStatusInterval) {
+            clearInterval(this.depthStatusInterval);
+            this.depthStatusInterval = null;
+        }
+
+        if (this.settingsKeydownHandler) {
+            document.removeEventListener('keydown', this.settingsKeydownHandler);
+            this.settingsKeydownHandler = null;
+        }
+
+        if (this.realtimeHandler) {
+            window.removeEventListener('ppe-realtime:update', this.realtimeHandler);
+            this.realtimeHandler = null;
+        }
+
+        if (this.realtimeConnectionHandler) {
+            window.removeEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
+            this.realtimeConnectionHandler = null;
+        }
+
+        if (window._livePageQueueInterval) {
+            clearInterval(window._livePageQueueInterval);
+            window._livePageQueueInterval = null;
+        }
+        if (window._livePageReliabilityInterval) {
+            clearInterval(window._livePageReliabilityInterval);
+            window._livePageReliabilityInterval = null;
+        }
+        if (window._liveDepthStatusInterval) {
+            clearInterval(window._liveDepthStatusInterval);
+            window._liveDepthStatusInterval = null;
+        }
     }
 };

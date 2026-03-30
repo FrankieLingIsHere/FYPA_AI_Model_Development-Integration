@@ -17,6 +17,9 @@ cd /d "%~dp0"
 echo Working directory: %CD%
 echo.
 
+set "VENV_PYTHON=%CD%\venv\Scripts\python.exe"
+set "VENV_PIP=%CD%\venv\Scripts\pip.exe"
+
 REM Check if .env file exists
 if not exist .env (
     echo Error: .env file not found!
@@ -32,7 +35,10 @@ if not exist .env (
 REM Check if venv exists and activate it
 if not exist venv\Scripts\activate.bat (
     echo Virtual environment not found. Creating...
-    python -m venv venv
+    py -3 -m venv venv
+    if %errorlevel% neq 0 (
+        python -m venv venv
+    )
     if %errorlevel% neq 0 (
         echo Failed to create virtual environment!
         pause
@@ -52,16 +58,33 @@ if %errorlevel% neq 0 (
 echo Virtual environment activated: %VIRTUAL_ENV%
 echo.
 
-REM Check if requirements need to be installed
-echo Running dependency preflight check...
-python preflight_check.py --install
-if %errorlevel% neq 0 (
-    echo Dependency preflight failed!
+if not exist "%VENV_PYTHON%" (
+    echo Error: venv Python not found at:
+    echo   %VENV_PYTHON%
     pause
     exit /b 1
 )
-echo Dependencies verified.
-echo.
+
+if not exist "%VENV_PIP%" (
+    echo Error: venv pip not found at:
+    echo   %VENV_PIP%
+    pause
+    exit /b 1
+)
+
+REM Check if requirements need to be installed
+"%VENV_PIP%" show flask >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Installing dependencies...
+    "%VENV_PIP%" install -r requirements.txt
+    if %errorlevel% neq 0 (
+        echo Failed to install dependencies!
+        pause
+        exit /b 1
+    )
+    echo Dependencies installed.
+    echo.
+)
 
 echo.
 echo ==========================================
@@ -122,4 +145,4 @@ echo ==========================================
 echo.
 
 REM Start the application
-python luna_app.py
+"%VENV_PYTHON%" luna_app.py

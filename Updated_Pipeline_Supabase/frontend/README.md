@@ -212,7 +212,15 @@ Edit `frontend/css/style.css`:
 ```
 
 ### Change API Endpoint
-Edit `frontend/js/config.js`:
+Preferred: edit `frontend/js/runtime-config.js`:
+
+```javascript
+window.__PPE_CONFIG__ = {
+    API_BASE_URL: 'https://your-backend.up.railway.app'
+};
+```
+
+Alternative: edit `frontend/js/config.js`:
 ```javascript
 const API_CONFIG = {
     BASE_URL: 'http://your-server:port',

@@ -22,10 +22,12 @@ import os
 import sys
 import logging
 import re
+import shutil
+import html
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
-from typing import List, Dict
+from typing import List, Dict, Any
 import json
 import time
 
@@ -33,29 +35,19 @@ import time
 from timezone_utils import get_local_time, to_local_time, get_timezone_info
 
 from flask import Flask, render_template, send_from_directory, jsonify, abort, Response, request, redirect
-try:
-    from flask_cors import CORS
-    CORS_AVAILABLE = True
-except ImportError:
-    CORS_AVAILABLE = False
+from werkzeug.exceptions import HTTPException
 import cv2
 import numpy as np
 from PIL import Image
 import io
 import base64
 
-# Ensure relative paths (e.g. Results/... weights) resolve correctly no matter
-# where the process is launched from.
-APP_DIR = Path(__file__).resolve().parent
-os.chdir(APP_DIR)
-
 # Load environment variables
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 # Import project modules
 from infer_image import predict_image
-from pipeline.backend.core.realsense_source import RealSenseSource
 
 # Global progress tracking for report generation
 report_progress = {
@@ -76,10 +68,20 @@ try:
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
     from pipeline.backend.core.violation_queue import ViolationQueueManager, QueuedViolation
-    from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG
+    from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, GEMINI_CONFIG, MODEL_API_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     FULL_PIPELINE_AVAILABLE = False
+    VIOLATION_RULES = {}
+    LLAVA_CONFIG = {}
+    OLLAMA_CONFIG = {}
+    GEMINI_CONFIG = {'enabled': False, 'model': 'gemini-2.5-flash'}
+    MODEL_API_CONFIG = {'enabled': False, 'nlp_provider_order': ['model_api', 'gemini', 'ollama', 'local'], 'embedding_provider_order': ['model_api', 'ollama']}
+    RAG_CONFIG = {}
+    REPORT_CONFIG = {}
+    BRAND_COLORS = {}
+    REPORTS_DIR = Path('pipeline/reports')
+    SUPABASE_CONFIG = {}
     logging.warning(f"Full pipeline components not available - violations will be detected but reports won't be generated: {e}")
 
 # Setup logging
@@ -98,12 +100,54 @@ app = Flask(__name__,
             static_folder='frontend',
             static_url_path='/static')
 
-# Enable CORS for cross-origin requests (needed when frontend is deployed on Vercel)
-if CORS_AVAILABLE:
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
-    logger.info("CORS enabled for /api/* endpoints")
-else:
-    logger.warning("flask-cors not installed - CORS not enabled. Install with: pip install flask-cors")
+SERVE_FRONTEND = os.getenv('SERVE_FRONTEND', 'true').lower() == 'true'
+ALLOWED_ORIGINS = [
+    origin.strip() for origin in os.getenv('ALLOWED_ORIGINS', '*').split(',') if origin.strip()
+]
+
+
+def _is_origin_allowed(origin: str) -> bool:
+    """Check whether an Origin is allowed for CORS."""
+    if not origin:
+        return False
+    if '*' in ALLOWED_ORIGINS:
+        return True
+    return origin in ALLOWED_ORIGINS
+
+
+def _apply_cors_headers(response):
+    """Attach CORS headers to API/report/image responses for split frontend/backend deployments."""
+    origin = request.headers.get('Origin')
+    path = request.path or ''
+    should_apply = path.startswith('/api/') or path.startswith('/report/') or path.startswith('/image/')
+
+    if not should_apply:
+        return response
+
+    if '*' in ALLOWED_ORIGINS and not origin:
+        response.headers['Access-Control-Allow-Origin'] = '*'
+    elif _is_origin_allowed(origin):
+        response.headers['Access-Control-Allow-Origin'] = origin
+
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+    response.headers['Vary'] = 'Origin'
+    return response
+
+
+@app.before_request
+def _handle_preflight():
+    """Respond to browser preflight requests before route handlers run."""
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        return _apply_cors_headers(response)
+    return None
+
+
+@app.after_request
+def _add_cors_headers(response):
+    """Apply CORS headers to outgoing responses."""
+    return _apply_cors_headers(response)
 
 # Directories
 VIOLATIONS_DIR = Path('pipeline/violations')
@@ -112,28 +156,6 @@ VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
 # Thread-safe camera access
 camera_lock = Lock()
 active_camera = None
-active_camera_source = 'webcam'
-realsense_source = RealSenseSource()
-
-# Live stream performance tuning
-LIVE_ASYNC_DETECTION_ENABLED = True
-LIVE_DETECTION_DISPATCH_EVERY_N_FRAMES = 1
-REALSENSE_STREAM_JPEG_QUALITY = 70
-WEBCAM_STREAM_JPEG_QUALITY = 78
-
-# Runtime diagnostics for live streaming pipeline
-live_perf_lock = Lock()
-live_perf_stats = {
-    'source': None,
-    'capture_fps': 0.0,
-    'inference_fps': 0.0,
-    'stream_fps': 0.0,
-    'inference_in_flight': False,
-    'detection_latency_ms': 0.0,
-    'detection_age_ms': 0.0,
-    'last_error': None,
-    'updated_at': None,
-}
 
 # Violation detection state
 violation_detector = None
@@ -198,7 +220,17 @@ INVALID_ENVIRONMENT_KEYWORDS = [
 # REPORT PROGRESS TRACKING
 # =========================================================================
 
-def update_report_progress(step='', current=None, total=None, status='processing', error=None):
+def update_report_progress(
+    step='',
+    current=None,
+    total=None,
+    status='processing',
+    error=None,
+    current_step=None,
+    completed=None,
+    error_message=None,
+    **_ignored
+):
     """Update the global report generation progress."""
     global report_progress
     with report_progress_lock:
@@ -206,11 +238,15 @@ def update_report_progress(step='', current=None, total=None, status='processing
             report_progress['current'] = current
         if total is not None:
             report_progress['total'] = total
-        if step:
-            report_progress['current_step'] = step
+        step_value = current_step if current_step is not None else step
+        if step_value:
+            report_progress['current_step'] = step_value
         report_progress['status'] = status
-        if error:
-            report_progress['error_message'] = error
+        error_value = error_message if error_message is not None else error
+        if error_value:
+            report_progress['error_message'] = error_value
+        if completed is not None:
+            report_progress['completed'] = completed
         if status == 'completed':
             report_progress['completed'] = report_progress.get('total', 0)
 
@@ -296,6 +332,8 @@ def initialize_pipeline_components():
             logger.info("Initializing Supabase report generator...")
             report_config = {
                 'OLLAMA_CONFIG': OLLAMA_CONFIG,
+                'GEMINI_CONFIG': GEMINI_CONFIG,
+                'MODEL_API_CONFIG': MODEL_API_CONFIG,
                 'RAG_CONFIG': RAG_CONFIG,
                 'REPORT_CONFIG': REPORT_CONFIG,
                 'BRAND_COLORS': BRAND_COLORS,
@@ -687,6 +725,21 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 if has_invalid_indicators and not has_work_indicators:
                     logger.warning(f"⚠️ Caption suggests non-work environment: {caption[:100]}...")
                     env_context = " [Warning: Scene may not be a typical work environment]"
+
+                if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
+                    failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
+                    logger.error(f"❌ Local mode unavailable for {report_id}: {failure_reason}")
+                    if db_manager:
+                        try:
+                            db_manager.update_detection_status(report_id, 'failed', failure_reason)
+                        except Exception as status_err:
+                            logger.warning(f"Could not update status for local-mode failure: {status_err}")
+                    update_report_progress(
+                        current=report_id,
+                        status='error',
+                        error_message=failure_reason
+                    )
+                    return
                     
             else:
                 caption = "Caption generation returned empty"
@@ -701,6 +754,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     
     # Generate report
     report_created = False
+    failure_reason = None
     if report_generator:
         try:
             # Update progress
@@ -744,18 +798,38 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             logger.info(f"✓ Status updated to COMPLETED: {report_id}")
                         except Exception as e:
                             logger.warning(f"Could not update status: {e}")
+                else:
+                    failure_reason = "report.html was not found in violation directory after generation"
+            else:
+                failure_reason = "Report generator returned empty or missing HTML output"
                             
         except Exception as e:
             logger.error(f"❌ Report generation failed: {e}")
-            if db_manager:
-                try:
-                    db_manager.update_detection_status(report_id, 'failed', str(e))
-                except Exception as e2:
-                    logger.warning(f"Could not update status: {e2}")
+            failure_reason = f"{type(e).__name__}: {e}"
     
-    # Create placeholder if report generation failed
+    # Do not auto-create fallback report. Keep explicit failed status with detailed reason.
     if not report_created:
-        create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
+        if not failure_reason:
+            failure_reason = "Unknown error: report generation did not complete"
+
+        failure_path = violation_dir / 'generation_failure.txt'
+        try:
+            with open(failure_path, 'w', encoding='utf-8') as f:
+                f.write(f"Report ID: {report_id}\n")
+                f.write(f"Timestamp: {timestamp}\n")
+                f.write(f"Reason: {failure_reason}\n")
+        except Exception as e:
+            logger.warning(f"Could not persist generation failure details: {e}")
+
+        if db_manager:
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'failed',
+                    failure_reason
+                )
+            except Exception as e:
+                logger.warning(f"Could not update failed status for report: {e}")
     
     # Save metadata
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
@@ -767,7 +841,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'location': 'Live Stream Monitor',
         'detection_count': len(detections),
         'has_caption': bool(caption),
-        'has_report': report_created
+        'has_report': report_created,
+        'failure_reason': failure_reason
     }
     
     metadata_path = violation_dir / 'metadata.json'
@@ -910,6 +985,16 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         f.write(caption)
                     logger.info(f"✓ Caption saved: {caption_path}")
                     logger.info(f"  Caption preview: {caption[:100]}...")
+
+                    if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
+                        failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
+                        logger.error(f"❌ Local mode unavailable for {report_id}: {failure_reason}")
+                        if db_manager:
+                            try:
+                                db_manager.update_detection_status(report_id, 'failed', failure_reason)
+                            except Exception as status_err:
+                                logger.warning(f"Could not update status for local-mode failure: {status_err}")
+                        return
                 else:
                     logger.error("Caption generation returned None or empty string")
                     caption = "Caption generation returned empty"
@@ -990,64 +1075,14 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     except Exception as e2:
                         logger.warning(f"Could not update status: {e2}")
         
-        # Create placeholder report if generation failed or unavailable
-        if not report_created:
-            # Create placeholder report even if generator not available
-            if report_generator is None:
-                logger.warning("Report generator is None - creating placeholder report")
-            else:
-                logger.warning("Report generator exists but failed to create report - creating placeholder")
-            report_html_path = violation_dir / 'report.html'
-            placeholder_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Violation Report - {report_id}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-        .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        h1 {{ color: #d32f2f; }}
-        .warning {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }}
-        .info {{ background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 20px 0; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚨 PPE Violation Report</h1>
-        <p><strong>Report ID:</strong> {report_id}</p>
-        <p><strong>Timestamp:</strong> {timestamp}</p>
-        <p><strong>Violation Type:</strong> NO-HARDHAT</p>
-        <p><strong>Severity:</strong> HIGH</p>
-        
-        <div class="warning">
-            <h3>⚠️ Report Generator Not Available</h3>
-            <p>The NLP report generator (Llama3) is not configured or not running.</p>
-            <p>To enable full report generation:</p>
-            <ol>
-                <li>Install Ollama: <a href="https://ollama.ai" target="_blank">https://ollama.ai</a></li>
-                <li>Run: <code>ollama serve</code></li>
-                <li>Run: <code>ollama pull llama3</code></li>
-                <li>Restart LUNA</li>
-            </ol>
-        </div>
-        
-        <div class="info">
-            <h3>📋 Detection Summary</h3>
-            <p><strong>Detections:</strong> {len(detections)}</p>
-            <p><strong>NO-HARDHAT Count:</strong> {sum(1 for d in detections if 'no-hardhat' in d['class_name'].lower())}</p>
-        </div>
-        
-        <h3>📸 Images</h3>
-        <p>Original: <a href="original.jpg">original.jpg</a></p>
-        <p>Annotated: <a href="annotated.jpg">annotated.jpg</a></p>
-        
-        <h3>📝 Caption</h3>
-        <p>{caption if caption else 'No caption available'}</p>
-    </div>
-</body>
-</html>"""
-            with open(report_html_path, 'w', encoding='utf-8') as f:
-                f.write(placeholder_html)
-            logger.info(f"✓ Placeholder report saved: {report_html_path}")
+        # Do not auto-create fallback report templates. Keep explicit failed status.
+        if not report_created and db_manager:
+            failure_reason = "Report generation did not produce model-generated HTML output"
+            try:
+                db_manager.update_detection_status(report_id, 'failed', failure_reason)
+                logger.info(f"✓ Status updated to FAILED: {report_id}")
+            except Exception as e:
+                logger.warning(f"Could not update failed status: {e}")
         
         # Save metadata
         metadata = {
@@ -1059,7 +1094,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'detection_count': len(detections),
             'no_hardhat_count': sum(1 for d in detections if 'no-hardhat' in d['class_name'].lower()),
             'has_caption': bool(caption),
-            'has_report': report_generator is not None
+            'has_report': report_created
         }
         
         metadata_path = violation_dir / 'metadata.json'
@@ -1081,29 +1116,23 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 
 @app.route('/')
 def index():
-    """Serve the main frontend application."""
+    """Serve frontend (unified mode) or a backend status payload (API-only mode)."""
+    if not SERVE_FRONTEND:
+        return jsonify({
+            'service': 'LUNA PPE API',
+            'status': 'ok',
+            'frontend_served': False,
+            'message': 'Frontend is deployed separately. Use this host for API requests only.'
+        })
     return send_from_directory('frontend', 'index.html')
 
 
 @app.route('/favicon.ico')
 def favicon():
     """Serve favicon."""
+    if not SERVE_FRONTEND:
+        abort(404)
     return send_from_directory('frontend', 'favicon.ico', mimetype='image/x-icon')
-
-
-@app.route('/manifest.json')
-def manifest():
-    """Serve PWA manifest."""
-    return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
-
-
-@app.route('/service-worker.js')
-def service_worker():
-    """Serve PWA service worker from root scope."""
-    response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Service-Worker-Allowed'] = '/'
-    return response
 
 
 # =========================================================================
@@ -1188,6 +1217,7 @@ def api_violations():
             missing_ppe = []
             ppe_tags = []
             detection_data_parsed = v.get('detection_data')
+            resolved_person_count = None
             
             if detection_data_parsed:
                 # Try to parse violation details from stored detection data
@@ -1198,6 +1228,17 @@ def api_violations():
                         detection_data_parsed = None
                 
                 if isinstance(detection_data_parsed, dict):
+                    detections = detection_data_parsed.get('detections', []) if isinstance(detection_data_parsed.get('detections', []), list) else []
+                    detected_people = [
+                        d for d in detections
+                        if isinstance(d, dict)
+                        and isinstance(d.get('class_name'), str)
+                        and 'person' in d['class_name'].lower()
+                        and not d['class_name'].lower().startswith('no-')
+                    ]
+                    if detected_people:
+                        resolved_person_count = len(detected_people)
+
                     # Extract from violation_summary field in detection data
                     if 'violation_summary' in detection_data_parsed:
                         for item in detection_data_parsed['violation_summary']:
@@ -1232,11 +1273,14 @@ def api_violations():
                     matches = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
                     missing_ppe.extend(matches)
                     ppe_tags.extend([m.replace(' ', '-').upper() for m in matches])
+
+            if resolved_person_count is None:
+                resolved_person_count = v.get('person_count', 0)
             
             formatted_violations.append({
                 'report_id': v['report_id'],
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
-                'person_count': v.get('person_count', 0),
+                'person_count': resolved_person_count,
                 'violation_count': v.get('violation_count') if v.get('violation_count') else len(missing_ppe) if missing_ppe else 1,
                 'severity': v.get('severity', 'UNKNOWN'),
                 'status': status,
@@ -1414,7 +1458,80 @@ def api_report_status(report_id):
     
     # Use Supabase
     try:
-        status_info = db_manager.get_status(report_id)
+        if hasattr(db_manager, 'get_status'):
+            status_info = db_manager.get_status(report_id)
+        else:
+            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists())
+
+            if not event and not violation:
+                status_info = None
+            else:
+                status = str((event or {}).get('status') or '').strip().lower()
+                if not status:
+                    status = 'completed' if ((violation and violation.get('report_html_key')) or local_report_exists) else 'pending'
+
+                has_report = bool((violation or {}).get('report_html_key')) or local_report_exists
+
+                # Guard against false-completed states with no report artifact.
+                if status == 'completed' and not has_report:
+                    status = 'failed'
+                    if not (event or {}).get('error_message'):
+                        if local_report_exists:
+                            status = 'completed'
+                        else:
+                            if hasattr(db_manager, 'update_detection_status'):
+                                try:
+                                    db_manager.update_detection_status(
+                                        report_id,
+                                        'failed',
+                                        'Completed status had no report artifact; marked failed for consistency.'
+                                    )
+                                except Exception:
+                                    pass
+
+                status_info = {
+                    'status': status,
+                    'has_report': has_report,
+                    'has_original': bool((violation or {}).get('original_image_key')),
+                    'has_annotated': bool((violation or {}).get('annotated_image_key')),
+                    'device_id': (event or {}).get('device_id'),
+                    'error_message': (event or {}).get('error_message'),
+                    'timestamp': (event or {}).get('timestamp'),
+                    'updated_at': (event or {}).get('updated_at')
+                }
+
+                # If generation is stale with no report output, surface a real failure reason.
+                if status_info['status'] == 'generating' and not status_info['has_report']:
+                    ref_time = status_info.get('updated_at') or status_info.get('timestamp')
+                    dt_obj = None
+                    if isinstance(ref_time, datetime):
+                        dt_obj = ref_time
+                    elif isinstance(ref_time, str):
+                        try:
+                            dt_obj = datetime.fromisoformat(ref_time.replace('Z', '+00:00'))
+                        except Exception:
+                            dt_obj = None
+
+                    if dt_obj is not None:
+                        if dt_obj.tzinfo is None:
+                            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                        age_seconds = (datetime.now(timezone.utc) - dt_obj).total_seconds()
+                        if age_seconds > 120:
+                            timeout_reason = 'Report generation timed out without producing report output.'
+                            status_info['status'] = 'failed'
+                            status_info['error_message'] = timeout_reason
+                            if hasattr(db_manager, 'update_detection_status'):
+                                try:
+                                    db_manager.update_detection_status(report_id, 'failed', timeout_reason)
+                                except Exception:
+                                    pass
+
+                # Do not surface stale old error text once report artifact exists.
+                if status_info.get('has_report') and status_info.get('status') == 'completed':
+                    status_info['error_message'] = None
+
         if not status_info:
             return jsonify({
                 'status': 'not_found',
@@ -1442,7 +1559,7 @@ def api_report_status(report_id):
         })
         
     except Exception as e:
-        logger.error(f"Error fetching report status: {e}")
+        logger.error(f"Error fetching report status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch status'}), 500
 
 
@@ -1473,6 +1590,125 @@ def api_queue_status():
     except Exception as e:
         logger.error(f"Error getting queue status: {e}")
         return jsonify({'error': 'Failed to get queue status'}), 500
+
+
+def _iso_or_none(value):
+    """Safely convert datetime-like values to ISO8601 strings."""
+    if value is None:
+        return None
+    if hasattr(value, 'isoformat'):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
+    """Collect compact realtime state for frontend auto-refresh subscribers."""
+    queue_data = {
+        'available': violation_queue is not None,
+        'worker_running': bool(queue_worker_running),
+        'queue_size': 0,
+        'total_processed': 0,
+        'total_failed': 0
+    }
+
+    if violation_queue is not None:
+        try:
+            stats = violation_queue.get_stats()
+            queue_data.update({
+                'queue_size': stats.get('current_size', 0),
+                'total_processed': stats.get('total_processed', 0),
+                'total_failed': stats.get('total_failed', 0)
+            })
+        except Exception as e:
+            logger.debug(f"Queue stats unavailable for realtime snapshot: {e}")
+
+    report_rows = []
+    if db_manager is not None and getattr(db_manager, 'conn', None) is not None:
+        try:
+            with db_manager.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT report_id, status, error_message, timestamp, updated_at
+                    FROM public.detection_events
+                    ORDER BY COALESCE(updated_at, timestamp) DESC
+                    LIMIT %s
+                    """,
+                    (int(limit),)
+                )
+                rows = cur.fetchall()
+
+            for row in rows:
+                report_rows.append({
+                    'report_id': row.get('report_id'),
+                    'status': str(row.get('status') or '').strip().lower() or 'unknown',
+                    'error_message': row.get('error_message'),
+                    'timestamp': _iso_or_none(row.get('timestamp')),
+                    'updated_at': _iso_or_none(row.get('updated_at'))
+                })
+        except Exception as e:
+            logger.debug(f"Realtime report snapshot query failed: {e}")
+
+    return {
+        'server_time': datetime.now(timezone.utc).isoformat(),
+        'queue': queue_data,
+        'progress': get_report_progress(),
+        'reports': report_rows
+    }
+
+
+@app.route('/api/realtime/stream', methods=['GET'])
+def api_realtime_stream():
+    """Server-Sent Events stream for live UI updates without manual refresh."""
+
+    def _event_stream():
+        last_signature = None
+        heartbeat_counter = 0
+
+        while True:
+            payload = _build_realtime_snapshot(limit=30)
+            signature_source = {
+                'queue': payload.get('queue'),
+                'progress': payload.get('progress'),
+                'reports': payload.get('reports')
+            }
+            signature = json.dumps(signature_source, sort_keys=True, default=str)
+
+            # Push update when state changes; otherwise keep connection warm.
+            if signature != last_signature:
+                data = json.dumps(payload, default=str)
+                yield f"event: update\ndata: {data}\n\n"
+                last_signature = signature
+                heartbeat_counter = 0
+            else:
+                heartbeat_counter += 1
+                if heartbeat_counter >= 8:
+                    heartbeat_counter = 0
+                    ping = json.dumps({'server_time': datetime.now(timezone.utc).isoformat()})
+                    yield f"event: heartbeat\ndata: {ping}\n\n"
+
+            time.sleep(2)
+
+    response = Response(_event_stream(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+
+@app.route('/api/realtime/snapshot', methods=['GET'])
+def api_realtime_snapshot():
+    """Lightweight realtime snapshot endpoint for websocket-triggered UI refresh."""
+    limit_raw = request.args.get('limit', '30')
+    try:
+        limit = max(1, min(100, int(limit_raw)))
+    except Exception:
+        limit = 30
+
+    payload = _build_realtime_snapshot(limit=limit)
+    return jsonify(payload)
 
 
 @app.route('/api/settings/environment-validation', methods=['GET', 'POST'])
@@ -1539,6 +1775,180 @@ def api_cooldown_setting():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/settings/disk-space-status', methods=['GET'])
+def api_disk_space_status():
+    """Return disk free space and whether it is sufficient for local model mode."""
+    try:
+        required_gb = float(os.getenv('LOCAL_MODEL_REQUIRED_SPACE_GB', '12'))
+        usage = shutil.disk_usage(Path.cwd())
+
+        free_gb = usage.free / (1024 ** 3)
+        total_gb = usage.total / (1024 ** 3)
+        used_gb = (usage.total - usage.free) / (1024 ** 3)
+        sufficient = free_gb >= required_gb
+
+        return jsonify({
+            'success': True,
+            'required_gb': round(required_gb, 2),
+            'free_gb': round(free_gb, 2),
+            'used_gb': round(used_gb, 2),
+            'total_gb': round(total_gb, 2),
+            'sufficient': sufficient,
+            'message': (
+                'Disk space is sufficient for local model mode.'
+                if sufficient else
+                'Disk space is low for local model mode. Please choose API mode for optimized experience.'
+            )
+        })
+    except Exception as e:
+        logger.error(f"Error checking disk space status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _normalize_provider_order(raw_value, default_order):
+    """Normalize provider order payload into a validated list."""
+    allowed = {'model_api', 'gemini', 'ollama', 'local'}
+    if raw_value is None:
+        return list(default_order)
+
+    if isinstance(raw_value, str):
+        parts = [p.strip().lower() for p in raw_value.split(',') if p.strip()]
+    elif isinstance(raw_value, list):
+        parts = [str(p).strip().lower() for p in raw_value if str(p).strip()]
+    else:
+        return list(default_order)
+
+    filtered = []
+    for provider in parts:
+        if provider in allowed and provider not in filtered:
+            filtered.append(provider)
+
+    return filtered if filtered else list(default_order)
+
+
+def _current_provider_settings():
+    """Return current runtime provider routing settings."""
+    try:
+        from caption_image import get_runtime_provider_settings
+        vision_settings = get_runtime_provider_settings()
+    except Exception:
+        vision_settings = {
+            'vision_provider_order': ['model_api', 'gemini', 'ollama'],
+            'vision_api_url': os.getenv('VISION_API_URL', ''),
+            'vision_api_model': os.getenv('VISION_API_MODEL', ''),
+            'ollama_vision_model': os.getenv('OLLAMA_VISION_MODEL', 'qwen2.5vl'),
+            'gemini_vision_model': os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'))
+        }
+
+    return {
+        'model_api_enabled': bool(MODEL_API_CONFIG.get('enabled', False)),
+        'gemini_enabled': bool(GEMINI_CONFIG.get('enabled', True)),
+        'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
+        'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama']),
+        'vision_provider_order': vision_settings.get('vision_provider_order', ['model_api', 'gemini', 'ollama']),
+        'nlp_model': MODEL_API_CONFIG.get('nlp_model', OLLAMA_CONFIG.get('model', 'llama3')),
+        'vision_model': vision_settings.get('vision_api_model', ''),
+        'embedding_model': MODEL_API_CONFIG.get('embedding_model', RAG_CONFIG.get('embedding_model', 'nomic-embed-text')),
+        'ollama_nlp_model': OLLAMA_CONFIG.get('model', 'llama3'),
+        'ollama_vision_model': vision_settings.get('ollama_vision_model', 'qwen2.5vl'),
+        'gemini_model': GEMINI_CONFIG.get('model', 'gemini-2.5-flash'),
+        'gemini_vision_model': vision_settings.get('gemini_vision_model', GEMINI_CONFIG.get('model', 'gemini-2.5-flash'))
+    }
+
+
+@app.route('/api/settings/provider-routing', methods=['GET', 'POST'])
+def api_provider_routing_settings():
+    """Get or update runtime provider routing settings for NLP/vision/embeddings."""
+    global report_generator
+
+    if request.method == 'GET':
+        return jsonify(_current_provider_settings())
+
+    try:
+        data = request.get_json(silent=True) or {}
+
+        model_api_enabled = bool(data.get('model_api_enabled', MODEL_API_CONFIG.get('enabled', False)))
+        gemini_enabled = bool(data.get('gemini_enabled', GEMINI_CONFIG.get('enabled', True)))
+
+        nlp_provider_order = _normalize_provider_order(
+            data.get('nlp_provider_order'),
+            MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+        )
+        embedding_provider_order = _normalize_provider_order(
+            data.get('embedding_provider_order'),
+            MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama'])
+        )
+        vision_provider_order = _normalize_provider_order(
+            data.get('vision_provider_order'),
+            ['model_api', 'gemini', 'ollama']
+        )
+
+        # Update in-memory config objects
+        MODEL_API_CONFIG['enabled'] = model_api_enabled
+        MODEL_API_CONFIG['nlp_provider_order'] = nlp_provider_order
+        MODEL_API_CONFIG['embedding_provider_order'] = embedding_provider_order
+
+        if data.get('nlp_model'):
+            MODEL_API_CONFIG['nlp_model'] = str(data['nlp_model']).strip()
+        if data.get('embedding_model'):
+            MODEL_API_CONFIG['embedding_model'] = str(data['embedding_model']).strip()
+
+        GEMINI_CONFIG['enabled'] = gemini_enabled
+        if data.get('gemini_model'):
+            GEMINI_CONFIG['model'] = str(data['gemini_model']).strip()
+
+        if data.get('ollama_nlp_model'):
+            OLLAMA_CONFIG['model'] = str(data['ollama_nlp_model']).strip()
+
+        # Persist to environment for module consumers
+        os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
+        os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
+        os.environ['NLP_PROVIDER_ORDER'] = ','.join(nlp_provider_order)
+        os.environ['EMBEDDING_PROVIDER_ORDER'] = ','.join(embedding_provider_order)
+        os.environ['VISION_PROVIDER_ORDER'] = ','.join(vision_provider_order)
+
+        if MODEL_API_CONFIG.get('nlp_model'):
+            os.environ['NLP_API_MODEL'] = MODEL_API_CONFIG['nlp_model']
+        if MODEL_API_CONFIG.get('embedding_model'):
+            os.environ['EMBEDDING_API_MODEL'] = MODEL_API_CONFIG['embedding_model']
+        if GEMINI_CONFIG.get('model'):
+            os.environ['GEMINI_MODEL'] = GEMINI_CONFIG['model']
+        if OLLAMA_CONFIG.get('model'):
+            os.environ['OLLAMA_MODEL'] = OLLAMA_CONFIG['model']
+
+        # Update captioning module runtime routing without restart
+        try:
+            from caption_image import update_runtime_provider_settings
+            update_runtime_provider_settings({
+                'vision_provider_order': vision_provider_order,
+                'vision_model': data.get('vision_model'),
+                'gemini_vision_model': data.get('gemini_vision_model'),
+                'ollama_vision_model': data.get('ollama_vision_model')
+            })
+        except Exception as caption_err:
+            logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
+
+        # Apply to active report generator immediately
+        if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+            report_generator.model_api_enabled = MODEL_API_CONFIG.get('enabled', False)
+            report_generator.nlp_provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+            report_generator.embedding_provider_order = MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama'])
+            report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
+            report_generator.embedding_api_model = MODEL_API_CONFIG.get('embedding_model', report_generator.embedding_model)
+            report_generator.use_gemini = GEMINI_CONFIG.get('enabled', True) and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
+            report_generator.model = OLLAMA_CONFIG.get('model', report_generator.model)
+
+        return jsonify({
+            'success': True,
+            'message': 'Provider routing settings updated',
+            'settings': _current_provider_settings()
+        })
+
+    except Exception as e:
+        logger.error(f"Error updating provider routing settings: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/fix-stuck-reports', methods=['POST'])
 def api_fix_stuck_reports():
     """Manually trigger fixing of stuck reports."""
@@ -1582,19 +1992,134 @@ def api_pending_reports():
     
     # Use Supabase
     try:
-        pending = db_manager.get_pending_reports(limit=10)
-        formatted = [{
-            'report_id': p['report_id'],
-            'timestamp': p['timestamp'].isoformat() if p.get('timestamp') else None,
-            'status': p.get('status', 'pending'),
-            'device_id': p.get('device_id'),
-            'severity': p.get('severity')
-        } for p in pending]
+        if hasattr(db_manager, 'get_pending_reports'):
+            all_items = db_manager.get_pending_reports(limit=200)
+        elif hasattr(db_manager, 'get_all_violations_with_status'):
+            all_items = db_manager.get_all_violations_with_status(limit=200)
+        elif hasattr(db_manager, 'get_recent_detection_events'):
+            all_items = db_manager.get_recent_detection_events(limit=200)
+        else:
+            all_items = []
+
+        pending = []
+        for p in all_items:
+            status = str(p.get('status') or '').strip().lower()
+            has_report = bool(p.get('report_html_key'))
+            if status in ('pending', 'generating', 'queued', 'processing') or (not status and not has_report):
+                ts = p.get('timestamp')
+                if hasattr(ts, 'isoformat'):
+                    ts_value = ts.isoformat()
+                else:
+                    ts_value = str(ts) if ts else None
+
+                pending.append({
+                    'report_id': p.get('report_id'),
+                    'timestamp': ts_value,
+                    'status': status or 'pending',
+                    'device_id': p.get('device_id'),
+                    'severity': p.get('severity')
+                })
+
+        formatted = pending[:10]
         return jsonify(formatted)
         
     except Exception as e:
-        logger.error(f"Error fetching pending reports: {e}")
+        logger.error(f"Error fetching pending reports: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch pending reports'}), 500
+
+
+@app.route('/api/report/<report_id>/generate-now', methods=['POST'])
+def api_generate_report_now(report_id):
+    """Force a report into the processing queue with highest priority."""
+    if db_manager is None:
+        return jsonify({'success': False, 'error': 'Database not available'}), 503
+
+    if violation_queue is None:
+        return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        force_reprocess = bool(payload.get('force', False))
+
+        event = db_manager.get_detection_event(report_id)
+        if not event:
+            return jsonify({'success': False, 'error': 'Report not found'}), 404
+
+        current_status = (event.get('status') or '').lower()
+        if current_status == 'completed' and not force_reprocess:
+            return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
+
+        violation_dir = VIOLATIONS_DIR.absolute() / report_id
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+
+        if not original_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'Original image is missing for this report. Cannot regenerate locally.'
+            }), 400
+
+        detections = []
+        violation_types = []
+
+        violation = db_manager.get_violation(report_id)
+        if violation and isinstance(violation.get('detection_data'), dict):
+            detections = violation['detection_data'].get('detections', []) or []
+
+        if detections:
+            violation_types = [
+                d.get('class_name', '') for d in detections
+                if isinstance(d, dict) and 'no-' in d.get('class_name', '').lower()
+            ]
+
+        if not annotated_path.exists():
+            try:
+                frame = cv2.imread(str(original_path))
+                if frame is not None:
+                    _, annotated = predict_image(frame, conf=0.25)
+                    cv2.imwrite(str(annotated_path), annotated)
+            except Exception as annotate_err:
+                logger.warning(f"Could not regenerate annotated image for {report_id}: {annotate_err}")
+
+        if not queue_worker_running:
+            start_queue_worker()
+
+        violation_data = {
+            'report_id': report_id,
+            'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
+            'detections': detections,
+            'violation_types': violation_types,
+            'violation_count': len(violation_types),
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(annotated_path),
+            'violation_dir': str(violation_dir)
+        }
+
+        enqueued = violation_queue.enqueue(
+            violation_data=violation_data,
+            device_id=event.get('device_id') or 'manual_regenerate',
+            report_id=report_id,
+            severity='CRITICAL'
+        )
+
+        if not enqueued:
+            return jsonify({'success': False, 'error': 'Could not enqueue report (queue full or rate limited)'}), 409
+
+        db_manager.update_detection_status(report_id, 'pending')
+
+        queue_stats = violation_queue.get_stats()
+        return jsonify({
+            'success': True,
+            'message': 'Report moved to the front of queue for generation' + (' (reprocess mode)' if force_reprocess else ''),
+            'report_id': report_id,
+            'force_reprocess': force_reprocess,
+            'queue_size': queue_stats.get('current_size', 0),
+            'worker_running': queue_worker_running
+        })
+
+    except Exception as e:
+        logger.error(f"Error prioritizing report {report_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/logs')
@@ -1642,6 +2167,8 @@ def api_device_stats(device_id):
 @app.route('/report/<report_id>')
 def view_report(report_id):
     """View a specific violation report from Supabase or local storage."""
+    failed_view = str(request.args.get('failed', '0')).lower() in ('1', 'true', 'yes')
+
     if storage_manager is None or db_manager is None:
         # Fallback to local filesystem
         violation_dir = VIOLATIONS_DIR / report_id
@@ -1651,38 +2178,804 @@ def view_report(report_id):
         
         report_html = violation_dir / 'report.html'
         if report_html.exists():
-            return send_from_directory(str(violation_dir), 'report.html')
+            trace_payload = _build_traceability_payload(
+                report_id=report_id,
+                violation={},
+                event={},
+                source='local_filesystem',
+                failed_view_requested=failed_view,
+            )
+            return _read_local_report_with_trace(report_html, trace_payload)
         else:
             abort(404, description="Report HTML not found")
     
+    local_violation_dir = VIOLATIONS_DIR / report_id
+    local_report_html = local_violation_dir / 'report.html'
+
     # Use Supabase
     try:
+        event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+        event_status = str((event or {}).get('status') or '').strip().lower()
+        event_error = (event or {}).get('error_message') or 'Unknown generation error'
+
         # Get violation data from database
         violation = db_manager.get_violation(report_id)
+        trace_payload = _build_traceability_payload(
+            report_id=report_id,
+            violation=violation or {},
+            event=event or {},
+            source='supabase_storage',
+            failed_view_requested=failed_view,
+        )
         
         if not violation:
+            if failed_view and event_status in ('failed', 'partial', 'skipped'):
+                return _render_regenerate_report_page(
+                    report_id,
+                    f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                    status_code=409
+                )
+
+            if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
+                trace_payload = _build_traceability_payload(
+                    report_id=report_id,
+                    violation={},
+                    event=event or {},
+                    source='local_filesystem_fallback',
+                    failed_view_requested=failed_view,
+                )
+                return _read_local_report_with_trace(local_report_html, trace_payload)
+
+            if event_status in ('failed', 'partial', 'skipped'):
+                return _render_regenerate_report_page(
+                    report_id,
+                    f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                    status_code=409
+                )
             abort(404, description="Report not found")
         
         # Get signed URL for report HTML
         report_html_key = violation.get('report_html_key')
         if not report_html_key:
+            if failed_view and event_status in ('failed', 'partial', 'skipped'):
+                return _render_regenerate_report_page(
+                    report_id,
+                    f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                    status_code=409
+                )
+
+            if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
+                trace_payload = _build_traceability_payload(
+                    report_id=report_id,
+                    violation=violation or {},
+                    event=event or {},
+                    source='local_filesystem_fallback',
+                    failed_view_requested=failed_view,
+                )
+                return _read_local_report_with_trace(local_report_html, trace_payload)
+
+            if event_status in ('failed', 'partial', 'skipped'):
+                return _render_regenerate_report_page(
+                    report_id,
+                    f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                    status_code=409
+                )
             abort(404, description="Report HTML not found")
         
         # Download the HTML content and render it
         try:
             html_content = storage_manager.download_file_content(report_html_key)
             if not html_content:
+                if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
+                    trace_payload = _build_traceability_payload(
+                        report_id=report_id,
+                        violation=violation or {},
+                        event=event or {},
+                        source='local_filesystem_fallback',
+                        failed_view_requested=failed_view,
+                    )
+                    return _read_local_report_with_trace(local_report_html, trace_payload)
+
+                if event_status in ('failed', 'partial', 'skipped'):
+                    return _render_regenerate_report_page(
+                        report_id,
+                        f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                        status_code=409
+                    )
                 abort(404, description="Failed to download report HTML")
+
+            if isinstance(html_content, (bytes, bytearray)):
+                html_content = html_content.decode('utf-8', errors='replace')
+            elif not isinstance(html_content, str):
+                html_content = str(html_content)
+
+            if _looks_like_fallback_template_html(html_content):
+                logger.warning(f"Blocked fallback-template HTML from Supabase for report {report_id}")
+                return _render_regenerate_report_page(
+                    report_id,
+                    "Report content is fallback-template output. Regenerate to use model-generated response.",
+                    status_code=409
+                )
             
             # Return the HTML content directly so browser renders it
-            return html_content, 200, {'Content-Type': 'text/html; charset=utf-8'}
+            trace_payload = _build_traceability_payload(
+                report_id=report_id,
+                violation=violation or {},
+                event=event or {},
+                source='supabase_storage',
+                failed_view_requested=failed_view,
+            )
+            html_content = _repair_report_documentation_block(html_content, report_id)
+            html_content = _inject_traceability_widget(html_content, trace_payload)
+            return html_content, 200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error downloading report HTML: {e}")
+            if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
+                trace_payload = _build_traceability_payload(
+                    report_id=report_id,
+                    violation=violation or {},
+                    event=event or {},
+                    source='local_filesystem_fallback',
+                    failed_view_requested=failed_view,
+                )
+                return _read_local_report_with_trace(local_report_html, trace_payload)
+
+            if event_status in ('failed', 'partial', 'skipped'):
+                return _render_regenerate_report_page(
+                    report_id,
+                    f"Report generation failed: {event_error}. Fallback template views are disabled.",
+                    status_code=409
+                )
             abort(500, description=f"Error loading report: {str(e)}")
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching report from Supabase: {e}")
+        if local_report_html.exists() and not failed_view:
+            trace_payload = _build_traceability_payload(
+                report_id=report_id,
+                violation={},
+                event={},
+                source='local_filesystem_exception_fallback',
+                failed_view_requested=failed_view,
+            )
+            return _read_local_report_with_trace(local_report_html, trace_payload)
         abort(500, description="Failed to fetch report")
+
+
+def _safe_parse_json_like(value: Any) -> Dict[str, Any]:
+        """Parse JSON-like payloads that may already be dicts or JSON strings."""
+        if isinstance(value, dict):
+                return value
+        if isinstance(value, str):
+                try:
+                        parsed = json.loads(value)
+                        return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                        return {}
+        return {}
+
+
+def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
+        """Identify whether caption text appears to be a fallback/placeholder string."""
+        normalized = str(caption or '').strip()
+        lowered = normalized.lower()
+        known_markers = [
+                'caption generation failed',
+                'caption generation returned empty',
+                'image captioning not available',
+                'failed to generate caption after multiple attempts',
+                'error generating caption',
+                'could not process image for captioning',
+            'alert_local_mode_unavailable',
+            'local mode is unavailable on this device',
+        ]
+        matched_marker = next((m for m in known_markers if m in lowered), None)
+        return {
+                'is_placeholder': bool(matched_marker),
+                'matched_marker': matched_marker,
+                'length': len(normalized),
+                'preview': normalized[:200]
+        }
+
+
+def _looks_like_fallback_template_html(html_content: str) -> bool:
+        """Detect legacy fallback report templates that should not be served as final reports."""
+        lowered = str(html_content or '').lower()
+        has_fallback_label = (
+            'report generator not available' in lowered
+            or 'explicit failed-report fallback view' in lowered
+        )
+        has_setup_instructions = (
+            'to enable full report generation' in lowered
+            or 'ollama pull llama3' in lowered
+        )
+        return has_fallback_label and has_setup_instructions
+
+
+def _render_regenerate_report_page(report_id: str, reason: str, status_code: int = 409):
+        """Render an actionable page that lets users trigger report regeneration with one click."""
+        safe_report_id = html.escape(str(report_id or 'UNKNOWN'))
+        safe_reason = html.escape(str(reason or 'Report content is unavailable'))
+        page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Report Needs Regeneration - {safe_report_id}</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background:#f3f4f6; margin:0; }}
+        .wrap {{ max-width: 760px; margin: 40px auto; background:#fff; border-radius:12px; padding:24px; box-shadow:0 8px 30px rgba(0,0,0,0.08); }}
+        h1 {{ margin:0 0 12px 0; color:#111827; font-size: 1.5rem; }}
+        .meta {{ color:#374151; margin-bottom: 12px; }}
+        .reason {{ background:#fff7ed; border:1px solid #fdba74; color:#9a3412; padding:12px; border-radius:8px; margin:12px 0 16px 0; }}
+        .actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom: 14px; }}
+        button {{ border:none; border-radius:8px; padding:10px 16px; font-weight:700; cursor:pointer; }}
+        #regen-btn {{ background:#111827; color:#f9fafb; }}
+        #regen-btn:disabled {{ background:#6b7280; cursor:not-allowed; }}
+        #open-reports-btn {{ background:#e5e7eb; color:#111827; }}
+        #status {{ margin-top:10px; color:#1f2937; font-size:0.95rem; }}
+        .stage-list {{ display:flex; gap:8px; flex-wrap:wrap; margin: 8px 0 0 0; padding: 0; list-style: none; }}
+        .stage-item {{ padding:6px 10px; border-radius:999px; font-size:12px; font-weight:700; background:#e5e7eb; color:#4b5563; }}
+        .stage-item.active {{ background:#f59e0b; color:#111827; }}
+        .stage-item.done {{ background:#10b981; color:#ecfeff; }}
+        .cooldown {{ margin-top: 6px; color:#b45309; font-size: 0.88rem; }}
+        .retry {{ margin-top: 6px; color:#374151; font-size: 0.88rem; }}
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>Report content was blocked</h1>
+        <div class="meta"><strong>Report ID:</strong> {safe_report_id}</div>
+        <div class="reason">{safe_reason}</div>
+        <div class="actions">
+            <button id="regen-btn" type="button">Regenerate Report Now</button>
+            <button id="open-reports-btn" type="button">Back to Reports</button>
+        </div>
+        <ul class="stage-list" id="stage-list">
+            <li class="stage-item" data-stage="idle">Ready</li>
+            <li class="stage-item" data-stage="queued">Queued</li>
+            <li class="stage-item" data-stage="generating">Generating</li>
+            <li class="stage-item" data-stage="completed">Completed</li>
+        </ul>
+        <div id="status">Ready to regenerate.</div>
+        <div id="cooldown" class="cooldown" style="display:none;"></div>
+        <div id="retry" class="retry"></div>
+    </div>
+
+    <script>
+        (function() {{
+            const reportId = {json.dumps(str(report_id or ''))};
+            const statusEl = document.getElementById('status');
+            const regenBtn = document.getElementById('regen-btn');
+            const openReportsBtn = document.getElementById('open-reports-btn');
+            const cooldownEl = document.getElementById('cooldown');
+            const retryEl = document.getElementById('retry');
+            const stageEls = Array.from(document.querySelectorAll('.stage-item'));
+
+            const MAX_RETRIES = 5;
+            const COOLDOWN_SECONDS = 8;
+            const POLL_INTERVAL_MS = 2500;
+            const MAX_WAIT_MS = 240000;
+            let retryCount = 0;
+            let cooldownTimer = null;
+
+            function setStatus(msg) {{
+                if (statusEl) statusEl.textContent = msg;
+            }}
+
+            function setStage(stage) {{
+                const order = ['idle', 'queued', 'generating', 'completed'];
+                const idx = order.indexOf(stage);
+                stageEls.forEach((el) => {{
+                    const elIdx = order.indexOf(el.dataset.stage);
+                    el.classList.remove('active', 'done');
+                    if (idx >= 0 && elIdx < idx) el.classList.add('done');
+                    if (el.dataset.stage === stage) el.classList.add('active');
+                    if (stage === 'completed' && el.dataset.stage === 'completed') {{
+                        el.classList.remove('active');
+                        el.classList.add('done');
+                    }}
+                }});
+            }}
+
+            function updateRetryLabel() {{
+                if (!retryEl) return;
+                retryEl.textContent = `Retries used: ${{retryCount}} / ${{MAX_RETRIES}}`;
+            }}
+
+            function startCooldown(seconds) {{
+                if (!cooldownEl) return;
+                if (cooldownTimer) clearInterval(cooldownTimer);
+                let remaining = seconds;
+                regenBtn.disabled = true;
+                cooldownEl.style.display = 'block';
+                cooldownEl.textContent = `Queue busy. Retry available in ${{remaining}}s...`;
+                cooldownTimer = setInterval(() => {{
+                    remaining -= 1;
+                    if (remaining <= 0) {{
+                        clearInterval(cooldownTimer);
+                        cooldownTimer = null;
+                        cooldownEl.style.display = 'none';
+                        regenBtn.disabled = retryCount >= MAX_RETRIES;
+                        return;
+                    }}
+                    cooldownEl.textContent = `Queue busy. Retry available in ${{remaining}}s...`;
+                }}, 1000);
+            }}
+
+            async function openReportInNewTab() {{
+                const url = `/report/${{encodeURIComponent(reportId)}}`;
+                const w = window.open(url, '_blank');
+                if (!w) {{
+                    window.location.href = url;
+                    return;
+                }}
+                setTimeout(() => {{
+                    window.location.href = url;
+                }}, 700);
+            }}
+
+            async function checkStatusAndMaybeOpen() {{
+                try {{
+                    const res = await fetch(`/api/report/${{encodeURIComponent(reportId)}}/status`, {{ cache: 'no-store' }});
+                    const data = await res.json();
+                    const status = String((data && data.status) || '').toLowerCase();
+                    if (status === 'pending' || status === 'queued') {{
+                        setStage('queued');
+                        setStatus('Report is queued for regeneration...');
+                        return false;
+                    }}
+                    if (status === 'generating' || status === 'processing') {{
+                        setStage('generating');
+                        setStatus('Report is generating...');
+                        return false;
+                    }}
+                    if (status === 'completed' && data.has_report) {{
+                        setStage('completed');
+                        setStatus('Report completed. Opening in a new tab...');
+                        await openReportInNewTab();
+                        return true;
+                    }}
+                    return false;
+                }} catch (err) {{
+                    return false;
+                }}
+            }}
+
+            async function regenerateNow() {{
+                if (!reportId) {{
+                    setStatus('Missing report id.');
+                    return;
+                }}
+                if (retryCount >= MAX_RETRIES) {{
+                    setStatus('Maximum retries reached. Please wait and refresh later.');
+                    regenBtn.disabled = true;
+                    return;
+                }}
+
+                regenBtn.disabled = true;
+                setStage('queued');
+                setStatus('Submitting regenerate request...');
+                try {{
+                    const res = await fetch(`/api/report/${{encodeURIComponent(reportId)}}/generate-now`, {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ force: true }})
+                    }});
+                    const data = await res.json().catch(() => ({{}}));
+                    if (!res.ok || !data.success) {{
+                        retryCount += 1;
+                        updateRetryLabel();
+                        if (res.status === 409 || res.status === 429 || res.status === 503) {{
+                            setStatus(`Regeneration queued failed (${{data.error || 'queue busy'}}).`);
+                            startCooldown(COOLDOWN_SECONDS);
+                            return;
+                        }}
+                        throw new Error(data.error || `Request failed with status ${{res.status}}`);
+                    }}
+
+                    setStage('queued');
+                    setStatus('Regeneration queued. Waiting for report completion...');
+                    const start = Date.now();
+                    const timer = setInterval(async () => {{
+                        const done = await checkStatusAndMaybeOpen();
+                        if (done) {{
+                            clearInterval(timer);
+                            return;
+                        }}
+                        if (Date.now() - start > MAX_WAIT_MS) {{
+                            clearInterval(timer);
+                            regenBtn.disabled = false;
+                            setStatus('Still processing. You can retry opening this report in a moment.');
+                        }}
+                    }}, POLL_INTERVAL_MS);
+                }} catch (err) {{
+                    retryCount += 1;
+                    updateRetryLabel();
+                    regenBtn.disabled = retryCount >= MAX_RETRIES;
+                    setStatus(`Regeneration failed: ${{err.message}}`);
+                }}
+            }}
+
+            setStage('idle');
+            updateRetryLabel();
+            checkStatusAndMaybeOpen();
+
+            regenBtn.addEventListener('click', regenerateNow);
+            openReportsBtn.addEventListener('click', () => {{
+                window.location.href = '/#reports';
+            }});
+        }})();
+    </script>
+</body>
+</html>"""
+        return page, status_code, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+def _build_traceability_payload(
+        report_id: str,
+        violation: Dict[str, Any],
+        event: Dict[str, Any],
+        source: str,
+        failed_view_requested: bool
+) -> Dict[str, Any]:
+        """Build report provenance metadata for in-page traceability widget."""
+        violation = violation or {}
+        event = event or {}
+
+        detection_data = _safe_parse_json_like(violation.get('detection_data'))
+        caption = str(violation.get('caption') or '')
+        placeholder = _caption_placeholder_info(caption)
+
+        event_status = str(event.get('status') or '').strip().lower() or None
+        event_error = event.get('error_message')
+        violation_status = str(violation.get('status') or '').strip().lower() or None
+
+        caption_validation = detection_data.get('caption_validation') if isinstance(detection_data, dict) else None
+
+        detections = []
+        if isinstance(detection_data, dict):
+            raw_detections = detection_data.get('detections')
+            if isinstance(raw_detections, list):
+                detections = raw_detections
+
+        def _normalized_label(item: Dict[str, Any]) -> str:
+            label = item.get('class_name') if isinstance(item, dict) else None
+            if label is None and isinstance(item, dict):
+                label = item.get('class')
+            label = str(label or '').strip().lower()
+            label = label.replace('_', '-').replace(' ', '-')
+            return label
+
+        detected_people = [
+            d for d in detections
+            if _normalized_label(d) in {'person', 'worker', 'man', 'woman'}
+        ]
+        detected_violations = [
+            d for d in detections
+            if _normalized_label(d).startswith('no-')
+        ]
+
+        person_count = len(detected_people) if detections else (event.get('person_count') if isinstance(event, dict) else None)
+        if person_count is None:
+            person_count = violation.get('person_count')
+
+        violation_count = len(detected_violations) if detections else (event.get('violation_count') if isinstance(event, dict) else None)
+        if violation_count is None:
+            violation_count = violation.get('violation_count')
+
+        return {
+                'report_id': report_id,
+                'inspected_at_utc': datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+                'served_from': source,
+                'failed_view_requested': failed_view_requested,
+                'report_status': {
+                        'detection_event_status': event_status,
+                        'violation_status': violation_status,
+                        'error_message': event_error,
+                        'has_report_html_key': bool(violation.get('report_html_key')),
+                },
+                'caption': {
+                        'source_classification': 'placeholder_or_fallback' if placeholder['is_placeholder'] else 'model_generated_text',
+                        'placeholder_marker': placeholder['matched_marker'],
+                        'length': placeholder['length'],
+                        'preview': placeholder['preview'],
+                },
+                'caption_validation': caption_validation,
+                'person_count': person_count,
+                'violation_count': violation_count,
+                'severity': violation.get('severity'),
+        }
+
+
+def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]) -> str:
+        """Inject a fixed top toggle widget that reveals traceability metadata on hover/click."""
+        if not html_content:
+                return html_content
+
+        # Prevent duplicate injection if report already contains the widget.
+        if 'id="traceability-widget"' in html_content:
+                return html_content
+
+        payload_json = json.dumps(trace_payload or {}, ensure_ascii=False)
+        payload_json = payload_json.replace('</', '<\\/')
+
+        widget_html = f"""
+<button id=\"report-back-btn\" type=\"button\" class=\"report-back-btn\" title=\"Back to previous page\">BACK</button>
+<div id=\"traceability-widget\" class=\"traceability-widget\" aria-label=\"Report traceability\">
+    <button id=\"traceability-toggle\" type=\"button\" class=\"traceability-toggle\" aria-expanded=\"false\" title=\"Hover or click to inspect report provenance\">TRACEABILITY</button>
+    <section id=\"traceability-panel\" class=\"traceability-panel\" role=\"region\" aria-label=\"Traceability details\">
+        <div class=\"traceability-title\">Report Provenance</div>
+        <pre id=\"traceability-json\" class=\"traceability-json\"></pre>
+    </section>
+</div>
+<style>
+    .report-back-btn {{
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 2147483647;
+        border: 2px solid #1f2937;
+        background: #111827;
+        color: #f9fafb;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        cursor: pointer;
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+    }}
+    .report-back-btn:hover {{
+        background: #374151;
+    }}
+    .traceability-widget {{
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 2147483647;
+        font-family: Consolas, 'Courier New', monospace;
+    }}
+    .traceability-toggle {{
+        border: 2px solid #7c2d12;
+        background: #f59e0b;
+        color: #111827;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        cursor: pointer;
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+    }}
+    .traceability-toggle:hover {{
+        background: #fbbf24;
+    }}
+    .traceability-panel {{
+        margin-top: 8px;
+        width: min(92vw, 540px);
+        max-height: min(78vh, 540px);
+        overflow: auto;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.97);
+        color: #e2e8f0;
+        padding: 10px;
+        display: none;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }}
+    .traceability-widget.trace-open .traceability-panel {{
+        display: block;
+    }}
+    .traceability-title {{
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 6px;
+        color: #93c5fd;
+    }}
+    .traceability-json {{
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 11px;
+        line-height: 1.35;
+    }}
+    @media (max-width: 560px), (max-height: 430px) and (orientation: landscape) {{
+        .report-back-btn,
+        .traceability-toggle {{
+            padding: 6px 10px;
+            font-size: 11px;
+            letter-spacing: 0.2px;
+        }}
+        .traceability-panel {{
+            width: min(96vw, 420px);
+            max-height: min(58vh, 320px);
+        }}
+    }}
+</style>
+<script>
+(() => {{
+    const root = document.getElementById('traceability-widget');
+    const toggle = document.getElementById('traceability-toggle');
+    const pre = document.getElementById('traceability-json');
+    const backBtn = document.getElementById('report-back-btn');
+    if (!root || !toggle || !pre) return;
+
+    const traceData = {payload_json};
+    pre.textContent = JSON.stringify(traceData, null, 2);
+
+    if (backBtn) {{
+        backBtn.addEventListener('click', () => {{
+            if (window.history.length > 1) {{
+                window.history.back();
+            }} else if (document.referrer) {{
+                window.location.href = document.referrer;
+            }} else {{
+                window.location.href = '/';
+            }}
+        }});
+    }}
+
+    let pinned = false;
+    const setOpen = (open) => root.classList.toggle('trace-open', !!open);
+
+    root.addEventListener('mouseenter', () => {{
+        if (!pinned) setOpen(true);
+    }});
+    root.addEventListener('mouseleave', () => {{
+        if (!pinned) setOpen(false);
+    }});
+
+    toggle.addEventListener('click', () => {{
+        pinned = !pinned;
+        setOpen(pinned);
+        toggle.setAttribute('aria-expanded', String(pinned));
+    }});
+
+    // Fallback handler: ensure documentation buttons always work even if report JS breaks.
+    const reportId = traceData.report_id || 'UNKNOWN';
+    const timestamp = (traceData.inspected_at_utc || '').replace('T', ' ').replace('Z', ' UTC');
+    const severity = (traceData.severity || 'HIGH');
+
+    const openDocWindow = (title, html) => {{
+        const win = window.open('', '_blank');
+        if (!win) {{
+            alert('Popup was blocked. Please allow popups for this site.');
+            return;
+        }}
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
+        win.document.title = title;
+    }};
+
+    const openNCR = () => {{
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>NCR - ${{reportId}}</title>
+        </head><body style="font-family:Arial,sans-serif;max-width:860px;margin:0 auto;padding:18px;line-height:1.45;">
+        <button onclick="window.print()" style="margin:8px 0;padding:8px 12px;">Print</button><h1 style="margin-bottom:6px;">NON-CONFORMANCE REPORT (NCR)</h1>
+        <p><b>Report ID:</b> ${{reportId}}</p><p><b>Timestamp:</b> ${{timestamp}}</p><p><b>Severity:</b> ${{severity}}</p>
+        <table border="1" cellpadding="8" cellspacing="0" style="width:100%;border-collapse:collapse;margin-top:10px;"><tr><th align="left">Issue</th><td>PPE non-compliance detected by CASM Safety Monitor</td></tr><tr><th align="left">Immediate Action</th><td>Stop work and restore PPE compliance before continuation</td></tr></table>
+        </body></html>`;
+        openDocWindow(`NCR - ${{reportId}}`, html);
+    }};
+
+    const openJKKP7 = () => {{
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>JKKP-7 - ${{reportId}}</title>
+        </head><body style="font-family:Arial,sans-serif;max-width:860px;margin:0 auto;padding:18px;line-height:1.45;">
+        <button onclick="window.print()" style="margin:8px 0;padding:8px 12px;">Print</button><h1 style="margin-bottom:6px;">BORANG JKKP 7</h1>
+        <p><b>Report ID:</b> ${{reportId}}</p><p><b>Timestamp:</b> ${{timestamp}}</p>
+        <table border="1" cellpadding="8" cellspacing="0" style="width:100%;border-collapse:collapse;margin-top:10px;"><tr><th align="left">Case</th><td>Workplace PPE non-compliance</td></tr><tr><th align="left">Reference</th><td>Auto-generated from CASM report</td></tr></table>
+        </body></html>`;
+        openDocWindow(`JKKP-7 - ${{reportId}}`, html);
+    }};
+
+    const bindDocsButtons = () => {{
+        const buttons = Array.from(document.querySelectorAll('button'));
+        buttons.forEach((btn) => {{
+            const label = (btn.textContent || '').toLowerCase();
+            if (label.includes('non-conformance') || label.includes('ncr')) {{
+                btn.onclick = (ev) => {{ ev.preventDefault(); openNCR(); }};
+            }}
+            if (label.includes('jkkp-7') || label.includes('incident form')) {{
+                btn.onclick = (ev) => {{ ev.preventDefault(); openJKKP7(); }};
+            }}
+        }});
+    }};
+
+    bindDocsButtons();
+}})();
+</script>
+"""
+
+        if re.search(r'<body[^>]*>', html_content, flags=re.IGNORECASE):
+            return re.sub(r'<body[^>]*>', lambda m: m.group(0) + '\n' + widget_html, html_content, count=1, flags=re.IGNORECASE)
+        if re.search(r'</body\s*>', html_content, flags=re.IGNORECASE):
+            return re.sub(r'</body\s*>', widget_html + '\n</body>', html_content, count=1, flags=re.IGNORECASE)
+        return html_content + widget_html
+
+
+def _repair_report_documentation_block(html_content: str, report_id: str) -> str:
+        """Repair malformed Generate Documentation script blocks and bind robust button handlers."""
+        if not html_content:
+                return html_content
+
+        html_content = re.sub(
+                r'<script>\s*function\s+generateNCR\s*\(\)\s*\{[\s\S]*?(?=<div\s+class="footer")',
+                '',
+                html_content,
+                flags=re.IGNORECASE,
+        )
+        html_content = re.sub(
+                r';\s*const\s+ncrWindow\s*=\s*window\.open[\s\S]*?(?=<div\s+class="footer")',
+                '',
+                html_content,
+                flags=re.IGNORECASE,
+        )
+
+        html_content = html_content.replace('onclick="generateNCR()"', 'id="btn-generate-ncr"')
+        html_content = html_content.replace('onclick="generateJKKP7()"', 'id="btn-generate-jkkp7"')
+
+        report_id_js = json.dumps(str(report_id or 'UNKNOWN'))
+        safe_doc_script = (
+                "<script>(function(){"
+                "const reportId=" + report_id_js + ";"
+                "const openDoc=(title,body)=>{const w=window.open('','_blank');if(!w){alert('Popup was blocked. Please allow popups for this site.');return;}w.document.open();w.document.write('<!DOCTYPE html><html><head><meta charset=\\\"UTF-8\\\"><title>'+title+'</title></head><body style=\\\"font-family:Arial,sans-serif;max-width:860px;margin:0 auto;padding:18px;line-height:1.45;\\\">'+body+'</body></html>');w.document.close();};"
+                "const openNCR=()=>openDoc('NCR - '+reportId,'<button onclick=\\\"window.print()\\\" style=\\\"margin:8px 0;padding:8px 12px;\\\">Print</button><h1 style=\\\"margin-bottom:6px;\\\">NON-CONFORMANCE REPORT (NCR)</h1><p><b>Report ID:</b> '+reportId+'</p><p><b>Generated:</b> '+new Date().toISOString()+'</p><table border=\\\"1\\\" cellpadding=\\\"8\\\" cellspacing=\\\"0\\\" style=\\\"width:100%;border-collapse:collapse;margin-top:10px;\\\"><tr><th align=\\\"left\\\">Issue</th><td>PPE non-compliance detected by CASM Safety Monitor</td></tr><tr><th align=\\\"left\\\">Immediate Action</th><td>Stop work and restore PPE compliance before continuation</td></tr></table>');"
+                "const openJKKP7=()=>openDoc('JKKP-7 - '+reportId,'<button onclick=\\\"window.print()\\\" style=\\\"margin:8px 0;padding:8px 12px;\\\">Print</button><h1 style=\\\"margin-bottom:6px;\\\">BORANG JKKP 7</h1><p><b>Report ID:</b> '+reportId+'</p><p><b>Generated:</b> '+new Date().toISOString()+'</p><table border=\\\"1\\\" cellpadding=\\\"8\\\" cellspacing=\\\"0\\\" style=\\\"width:100%;border-collapse:collapse;margin-top:10px;\\\"><tr><th align=\\\"left\\\">Case</th><td>Workplace PPE non-compliance</td></tr><tr><th align=\\\"left\\\">Reference</th><td>Auto-generated from CASM report</td></tr></table>');"
+            "const bind=()=>{const n=document.getElementById('btn-generate-ncr');const j=document.getElementById('btn-generate-jkkp7');if(n)n.onclick=(e)=>{e.preventDefault();openNCR();};if(j)j.onclick=(e)=>{e.preventDefault();openJKKP7();};"
+            "const card=document.getElementById('reportSplitCard');const t=document.getElementById('reportExpandToggle');const x=document.getElementById('reportExpandedContext');"
+            "if(card&&t&&x){const setExpanded=(expanded)=>{card.classList.toggle('expanded',expanded);t.setAttribute('aria-expanded',String(expanded));x.setAttribute('aria-hidden',String(!expanded));t.textContent=expanded?'Collapse Full Report Context':'Show Full Report Context';};setExpanded(false);t.onclick=(e)=>{e.preventDefault();setExpanded(!card.classList.contains('expanded'));};}};"
+                "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',bind);}else{bind();}"
+                "})();</script>"
+        )
+
+        if re.search(r'</body\s*>', html_content, flags=re.IGNORECASE):
+                html_content = re.sub(r'</body\s*>', safe_doc_script + '\n</body>', html_content, count=1, flags=re.IGNORECASE)
+        else:
+                html_content += safe_doc_script
+
+        return html_content
+
+
+def _read_local_report_with_trace(local_report_html: Path, trace_payload: Dict[str, Any]):
+    """Read local report HTML and inject traceability widget before returning response."""
+    try:
+        with open(local_report_html, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+
+        if _looks_like_fallback_template_html(html_content):
+            logger.warning(f"Blocked fallback-template local HTML for report {trace_payload.get('report_id')}")
+            return _render_regenerate_report_page(
+                str(trace_payload.get('report_id') or ''),
+                "Report content is fallback-template output. Regenerate to use model-generated response.",
+                status_code=409
+            )
+
+        html_content = _repair_report_documentation_block(
+            html_content,
+            str(trace_payload.get('report_id') or 'UNKNOWN')
+        )
+        html_content = _inject_traceability_widget(html_content, trace_payload)
+        return html_content, 200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not inject traceability into local report {local_report_html}: {e}")
+        return send_from_directory(str(local_report_html.parent), local_report_html.name)
 
 
 @app.route('/image/<report_id>/<filename>')
@@ -1743,22 +3036,17 @@ def get_image(report_id, filename):
 # =========================================================================
 
 def generate_frames(conf=0.25):
-    """Generate frames from selected source with YOLO detection and violation processing."""
-    global active_camera, active_camera_source
+    """Generate frames from webcam with YOLO detection and violation processing."""
+    global active_camera
     
     with camera_lock:
-        source = active_camera_source
-        if source == 'webcam':
-            if active_camera is None:
-                active_camera = cv2.VideoCapture(0)
-                if not active_camera.isOpened():
-                    logger.error("Failed to open webcam")
-                    return
-            cap = active_camera
-        else:
-            if realsense_source.pipeline is None:
-                logger.error("RealSense source selected but pipeline is not active")
+        if active_camera is None:
+            active_camera = cv2.VideoCapture(0)
+            if not active_camera.isOpened():
+                logger.error("Failed to open webcam")
                 return
+        
+        cap = active_camera
     
     logger.info("Starting live frame generation...")
     logger.info("=" * 80)
@@ -1777,163 +3065,67 @@ def generate_frames(conf=0.25):
     
     logger.info("=" * 80)
     
-    frame_count = 0
-    infer_state_lock = Lock()
-    latest_annotated = None
-    latest_detections = []
-    latest_detection_ts = 0.0
-    latest_detection_latency_ms = 0.0
-    inference_in_flight = False
-
-    perf_window_start = time.perf_counter()
-    capture_count = 0
-    infer_count = 0
-    stream_count = 0
-
-    def handle_violations(detections, frame_for_report):
-        """Handle violation queueing from completed detections."""
-        if not detections or not FULL_PIPELINE_AVAILABLE:
-            return
-
-        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
-                             'no-mask', 'no-goggles']
-
-        has_violation = any(
-            any(keyword in d['class_name'].lower() for keyword in violation_keywords)
-            for d in detections
-        )
-
-        if has_violation:
-            violation_classes = [d['class_name'] for d in detections
-                               if any(keyword in d['class_name'].lower()
-                                     for keyword in violation_keywords)]
-            logger.info("=" * 80)
-            logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
-            logger.info(f"Caption generator available: {caption_generator is not None}")
-            logger.info(f"Report generator available: {report_generator is not None}")
-            logger.info(f"Violation queue available: {violation_queue is not None}")
-            logger.info("=" * 80)
-
-            frame_copy = frame_for_report.copy()
-            detections_copy = detections.copy()
-            report_id = enqueue_violation(frame_copy, detections_copy)
-            if report_id:
-                logger.info(f"✓ Violation {report_id} queued for processing")
-            else:
-                logger.debug("Violation not queued (cooldown or already processing)")
-
-    def run_inference_async(frame_for_infer):
-        """Inference worker that updates latest annotated frame without blocking stream."""
-        nonlocal latest_annotated, latest_detections, latest_detection_ts
-        nonlocal latest_detection_latency_ms, infer_count, inference_in_flight
-
-        infer_start = time.perf_counter()
-        try:
-            detections, annotated = predict_image(frame_for_infer, conf=conf)
-
-            with infer_state_lock:
-                latest_annotated = annotated
-                latest_detections = detections
-                latest_detection_ts = time.perf_counter()
-                latest_detection_latency_ms = (latest_detection_ts - infer_start) * 1000.0
-
-            infer_count += 1
-            handle_violations(detections, frame_for_infer)
-
-        except Exception as infer_err:
-            logger.error(f"Error in async inference: {infer_err}")
-            with live_perf_lock:
-                live_perf_stats['last_error'] = str(infer_err)
-        finally:
-            with infer_state_lock:
-                inference_in_flight = False
-
     try:
         while True:
             with camera_lock:
-                source = active_camera_source
-                cap = active_camera
-
-            if source == 'realsense':
-                ok, frame, err = realsense_source.read()
-                if not ok:
-                    logger.warning(f"Failed to read RealSense frame: {err}")
-                    continue
-            else:
                 if cap is None or not cap.isOpened():
                     break
-
+                
                 ret, frame = cap.read()
                 if not ret:
                     logger.warning("Failed to read frame")
                     break
             
-            frame_count += 1
-            capture_count += 1
-
-            # Schedule async inference, keep stream loop independent from model latency.
-            if LIVE_ASYNC_DETECTION_ENABLED:
-                with infer_state_lock:
-                    should_dispatch = (
-                        (not inference_in_flight) and
-                        (frame_count % LIVE_DETECTION_DISPATCH_EVERY_N_FRAMES == 0)
-                    )
-                    if should_dispatch:
-                        inference_in_flight = True
-
-                if should_dispatch:
-                    Thread(target=run_inference_async, args=(frame.copy(),), daemon=True).start()
-
-                with infer_state_lock:
-                    detections = latest_detections
-                    annotated = latest_annotated if latest_annotated is not None else frame
-                    detection_ts = latest_detection_ts
-                    detection_latency_ms = latest_detection_latency_ms
-                    infer_in_flight_snapshot = inference_in_flight
-            else:
-                # Fallback path: synchronous inference (legacy behavior)
-                infer_start = time.perf_counter()
-                detections, annotated = predict_image(frame, conf=conf)
-                infer_count += 1
-                detection_ts = time.perf_counter()
-                detection_latency_ms = (detection_ts - infer_start) * 1000.0
-                infer_in_flight_snapshot = False
-                handle_violations(detections, frame)
-
+            # Run YOLO detection
             try:
+                detections, annotated = predict_image(frame, conf=conf)
+                
                 # Log all detections for debugging
                 if detections:
                     detected_classes = [d['class_name'] for d in detections]
                     logger.debug(f"Detected: {detected_classes}")
                 
+                # Check for violations in background thread (non-blocking)
+                if detections and FULL_PIPELINE_AVAILABLE:
+                    # Check for ANY PPE violations (match actual model class names)
+                    violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
+                                         'no-mask', 'no-goggles']
+                    
+                    has_violation = any(
+                        any(keyword in d['class_name'].lower() for keyword in violation_keywords)
+                        for d in detections
+                    )
+                    
+                    if has_violation:
+                        # Log detected violations
+                        violation_classes = [d['class_name'] for d in detections 
+                                           if any(keyword in d['class_name'].lower() 
+                                                 for keyword in violation_keywords)]
+                        logger.info("=" * 80)
+                        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
+                        logger.info(f"Caption generator available: {caption_generator is not None}")
+                        logger.info(f"Report generator available: {report_generator is not None}")
+                        logger.info(f"Violation queue available: {violation_queue is not None}")
+                        logger.info("=" * 80)
+                        
+                        # Use queue-based approach to prevent missing violations
+                        # enqueue_violation is fast (saves images, adds to queue)
+                        # Queue worker processes reports in background
+                        frame_copy = frame.copy()
+                        detections_copy = detections.copy()
+                        
+                        report_id = enqueue_violation(frame_copy, detections_copy)
+                        if report_id:
+                            logger.info(f"✓ Violation {report_id} queued for processing")
+                        else:
+                            logger.debug("Violation not queued (cooldown or already processing)")
+                
                 # Encode frame as JPEG
-                stream_quality = REALSENSE_STREAM_JPEG_QUALITY if source == 'realsense' else WEBCAM_STREAM_JPEG_QUALITY
-                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, stream_quality])
+                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if not ret:
                     continue
                 
                 frame_bytes = buffer.tobytes()
-                stream_count += 1
-
-                now = time.perf_counter()
-                perf_elapsed = now - perf_window_start
-                if perf_elapsed >= 1.0:
-                    detection_age_ms = (now - detection_ts) * 1000.0 if detection_ts > 0 else 0.0
-                    with live_perf_lock:
-                        live_perf_stats.update({
-                            'source': source,
-                            'capture_fps': round(capture_count / perf_elapsed, 2),
-                            'inference_fps': round(infer_count / perf_elapsed, 2),
-                            'stream_fps': round(stream_count / perf_elapsed, 2),
-                            'inference_in_flight': infer_in_flight_snapshot,
-                            'detection_latency_ms': round(detection_latency_ms, 2),
-                            'detection_age_ms': round(detection_age_ms, 2),
-                            'updated_at': datetime.now().isoformat(),
-                        })
-                    perf_window_start = now
-                    capture_count = 0
-                    infer_count = 0
-                    stream_count = 0
                 
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
@@ -1953,7 +3145,7 @@ def generate_frames(conf=0.25):
 
 @app.route('/api/live/stream')
 def live_stream():
-    """Live stream with YOLO detection."""
+    """Live webcam stream with YOLO detection."""
     conf = float(request.args.get('conf', 0.10))
     return Response(
         generate_frames(conf=conf),
@@ -1961,121 +3153,18 @@ def live_stream():
     )
 
 
-def default_live_source() -> str:
-    """Prefer RealSense if detected, otherwise webcam."""
-    status = realsense_source.get_status()
-    return 'realsense' if status.get('device_available') else 'webcam'
-
-
-def stop_live_sources_locked():
-    """Stop all active live sources. Caller must hold camera_lock."""
-    global active_camera, active_camera_source
-
-    if active_camera is not None:
-        active_camera.release()
-        active_camera = None
-
-    realsense_source.stop()
-    active_camera_source = 'webcam'
-
-
-def start_webcam_locked():
-    """Start webcam source. Caller must hold camera_lock."""
-    global active_camera, active_camera_source
-
-    cap = cv2.VideoCapture(0)
-    try:
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 60)
-    except Exception:
-        pass
-    if not cap.isOpened():
-        return False, 'Failed to open webcam'
-
-    active_camera = cap
-    active_camera_source = 'webcam'
-    return True, ''
-
-
-def start_realsense_locked():
-    """Start RealSense source. Caller must hold camera_lock."""
-    global active_camera, active_camera_source
-
-    ok, err = realsense_source.start()
-    if not ok:
-        return False, err
-
-    if active_camera is not None:
-        active_camera.release()
-        active_camera = None
-
-    active_camera_source = 'realsense'
-    return True, ''
-
-
-@app.route('/api/live/devices')
-def live_devices():
-    """Get live input device availability."""
-    rs_status = realsense_source.get_status()
-    rs_caps = realsense_source.get_capabilities()
-    return jsonify({
-        'default_source': default_live_source(),
-        'webcam_available': True,
-        'realsense_available': rs_status.get('device_available', False),
-        'realsense_sdk_available': rs_status.get('sdk_available', False),
-        'realsense_device_name': rs_status.get('device_name'),
-        'realsense_reason': rs_status.get('reason'),
-        'realsense_capabilities': rs_caps
-    })
-
-
 @app.route('/api/live/start', methods=['POST'])
 def start_live():
-    """Start live monitoring using requested source with fallback."""
-    global active_camera_source
-
-    payload = request.get_json(silent=True) or {}
-    requested_source = payload.get('source')
-    if requested_source not in ['webcam', 'realsense']:
-        requested_source = default_live_source()
-
-    rs_status = realsense_source.get_status()
-
+    """Start live monitoring."""
+    global active_camera
+    
     with camera_lock:
-        stop_live_sources_locked()
-
-        fallback_to_webcam = False
-        fallback_reason = None
-
-        if requested_source == 'realsense':
-            ok, err = start_realsense_locked()
-            if not ok:
-                fallback_to_webcam = True
-                fallback_reason = err
-                ok, err = start_webcam_locked()
-                if not ok:
-                    return jsonify({'success': False, 'error': err}), 500
-        else:
-            ok, err = start_webcam_locked()
-            if not ok:
-                return jsonify({'success': False, 'error': err}), 500
-
-    msg = 'Live monitoring started'
-    if fallback_to_webcam:
-        msg = f'RealSense unavailable ({fallback_reason}); webcam started'
-
-    return jsonify({
-        'success': True,
-        'message': msg,
-        'source': active_camera_source,
-        'requested_source': requested_source,
-        'fallback_to_webcam': fallback_to_webcam,
-        'fallback_reason': fallback_reason,
-        'realsense_available': rs_status.get('device_available', False),
-        'realsense_device_name': rs_status.get('device_name')
-    })
+        if active_camera is None:
+            active_camera = cv2.VideoCapture(0)
+            if not active_camera.isOpened():
+                return jsonify({'success': False, 'error': 'Failed to open webcam'}), 500
+    
+    return jsonify({'success': True, 'message': 'Live monitoring started'})
 
 
 @app.route('/api/live/stop', methods=['POST'])
@@ -2084,7 +3173,9 @@ def stop_live():
     global active_camera
     
     with camera_lock:
-        stop_live_sources_locked()
+        if active_camera is not None:
+            active_camera.release()
+            active_camera = None
     
     return jsonify({'success': True, 'message': 'Live monitoring stopped'})
 
@@ -2092,64 +3183,13 @@ def stop_live():
 @app.route('/api/live/status')
 def live_status():
     """Get live monitoring status."""
-    rs_status = realsense_source.get_status()
-    rs_caps = realsense_source.get_capabilities()
-    depth = realsense_source.get_depth_telemetry()
-
     with camera_lock:
-        webcam_active = active_camera is not None and active_camera.isOpened()
-        realsense_active = realsense_source.pipeline is not None
-        is_active = webcam_active or realsense_active
-        source = active_camera_source if is_active else default_live_source()
+        is_active = active_camera is not None and active_camera.isOpened()
     
     return jsonify({
         'active': is_active,
-        'camera_index': 0 if (is_active and source == 'webcam') else None,
-        'source': source,
-        'default_source': default_live_source(),
-        'realsense_available': rs_status.get('device_available', False),
-        'realsense_sdk_available': rs_status.get('sdk_available', False),
-        'realsense_device_name': rs_status.get('device_name'),
-        'realsense_reason': rs_status.get('reason'),
-        'realsense_capabilities': rs_caps,
-        'depth_telemetry': depth
+        'camera_index': 0 if is_active else None
     })
-
-
-@app.route('/api/live/depth/status')
-def live_depth_status():
-    """Get latest RealSense depth telemetry and capabilities."""
-    rs_status = realsense_source.get_status()
-    rs_caps = realsense_source.get_capabilities()
-    depth = realsense_source.get_depth_telemetry()
-
-    with camera_lock:
-        source = active_camera_source
-
-    return jsonify({
-        'source': source,
-        'realsense_available': rs_status.get('device_available', False),
-        'realsense_device_name': rs_status.get('device_name'),
-        'realsense_reason': rs_status.get('reason'),
-        'realsense_capabilities': rs_caps,
-        'depth_telemetry': depth
-    })
-
-
-@app.route('/api/live/depth/preview')
-def live_depth_preview():
-    """Get latest depth colormap preview frame as JPEG."""
-    preview = realsense_source.get_depth_preview_jpeg()
-    if not preview:
-        return Response(status=204)
-    return Response(preview, mimetype='image/jpeg')
-
-
-@app.route('/api/live/perf')
-def live_perf():
-    """Get live stream performance diagnostics."""
-    with live_perf_lock:
-        return jsonify(dict(live_perf_stats))
 
 
 # =========================================================================
@@ -2273,6 +3313,130 @@ def api_failed_reports():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/reliability/stats', methods=['GET'])
+def api_reliability_stats():
+    """
+    Rolling reliability stats for report generation quality.
+
+    Query params:
+      - window: number of most recent detection events to analyze (default 100, max 1000)
+    """
+    if not db_manager:
+        return jsonify({'error': 'Database not available'}), 503
+
+    try:
+        try:
+            window = int(request.args.get('window', 100))
+        except Exception:
+            window = 100
+        window = max(10, min(window, 1000))
+
+        with db_manager.conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    de.report_id,
+                    de.timestamp,
+                    de.status,
+                    de.error_message,
+                    v.report_html_key
+                FROM public.detection_events de
+                LEFT JOIN public.violations v ON de.report_id = v.report_id
+                ORDER BY de.timestamp DESC
+                LIMIT %s
+            """, (window,))
+            rows = cur.fetchall()
+
+        fallback_markers = (
+            'report generator not available',
+            'fallback report',
+            'explicit failed-report fallback'
+        )
+
+        def _is_fallback_content(report_id: str) -> bool:
+            try:
+                local_path = VIOLATIONS_DIR / report_id / 'report.html'
+                if not local_path.exists():
+                    return False
+                content = local_path.read_text(encoding='utf-8', errors='ignore')[:4000].lower()
+                return any(marker in content for marker in fallback_markers)
+            except Exception:
+                return False
+
+        totals = {
+            'considered': 0,
+            'real_success': 0,
+            'fallback_needed': 0,
+            'hard_failed': 0,
+            'in_progress': 0,
+            'unknown': 0
+        }
+        failure_causes = {}
+
+        for row in rows:
+            report_id = row.get('report_id')
+            status = str(row.get('status') or '').strip().lower()
+            error_message = (row.get('error_message') or '').strip()
+
+            local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists()) if report_id else False
+            has_report = bool(row.get('report_html_key')) or local_report_exists
+            fallback_content = _is_fallback_content(report_id) if has_report and report_id else False
+
+            totals['considered'] += 1
+
+            is_real_success = status == 'completed' and has_report and not fallback_content
+            is_fallback_needed = (
+                status in ('failed', 'partial', 'skipped')
+                or (status == 'completed' and not has_report)
+                or fallback_content
+            )
+
+            if is_real_success:
+                totals['real_success'] += 1
+            elif is_fallback_needed:
+                totals['fallback_needed'] += 1
+            elif status in ('pending', 'generating', 'queued', 'processing'):
+                totals['in_progress'] += 1
+            else:
+                totals['unknown'] += 1
+
+            if status in ('failed', 'partial', 'skipped'):
+                totals['hard_failed'] += 1
+                cause_key = 'unknown'
+                upper = error_message.upper()
+                if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    cause_key = 'quota_or_rate_limit'
+                elif 'JSON' in upper or 'PARSE' in upper:
+                    cause_key = 'response_parse_error'
+                elif 'TIMEOUT' in upper:
+                    cause_key = 'timeout'
+                elif "STRFTIME" in upper:
+                    cause_key = 'timestamp_format_bug'
+                elif error_message:
+                    cause_key = 'other_error'
+                failure_causes[cause_key] = failure_causes.get(cause_key, 0) + 1
+
+        considered = totals['considered']
+        real_success_rate = (totals['real_success'] / considered) if considered else 0.0
+        fallback_needed_rate = (totals['fallback_needed'] / considered) if considered else 0.0
+
+        return jsonify({
+            'window': window,
+            'considered': considered,
+            'real_success_count': totals['real_success'],
+            'real_success_rate': real_success_rate,
+            'fallback_needed_count': totals['fallback_needed'],
+            'fallback_needed_rate': fallback_needed_rate,
+            'hard_failed_count': totals['hard_failed'],
+            'in_progress_count': totals['in_progress'],
+            'unknown_count': totals['unknown'],
+            'failure_causes': failure_causes
+        })
+
+    except Exception as e:
+        logger.error(f"Error computing reliability stats: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to compute reliability stats'}), 500
+
+
 # =========================================================================
 # SYSTEM INFO ENDPOINTS
 # =========================================================================
@@ -2293,6 +3457,66 @@ def system_info():
     return jsonify(info)
 
 
+@app.route('/api/health/summary')
+def api_health_summary():
+    """Return a compact operational health snapshot for the full pipeline."""
+    try:
+        queue_data = {
+            'available': violation_queue is not None,
+            'worker_running': bool(queue_worker_running),
+            'queue_size': 0,
+            'capacity': None,
+        }
+        if violation_queue is not None:
+            try:
+                qstats = violation_queue.get_stats()
+                queue_data.update({
+                    'queue_size': qstats.get('current_size', 0),
+                    'capacity': qstats.get('capacity'),
+                    'total_processed': qstats.get('total_processed', 0),
+                    'total_failed': qstats.get('total_failed', 0),
+                    'total_rate_limited': qstats.get('total_rate_limited', 0),
+                })
+            except Exception as qerr:
+                queue_data['error'] = str(qerr)
+
+        rag_file = Path(RAG_CONFIG.get('integration_file', '')) if isinstance(RAG_CONFIG, dict) else None
+        rag_file_exists = bool(rag_file and str(rag_file) and rag_file.exists())
+
+        provider_settings = {
+            'gemini_enabled': bool((GEMINI_CONFIG or {}).get('enabled', False)),
+            'model_api_enabled': bool((MODEL_API_CONFIG or {}).get('enabled', False)),
+            'ollama_base_url': (OLLAMA_CONFIG or {}).get('base_url'),
+            'nlp_provider_order': (MODEL_API_CONFIG or {}).get('nlp_provider_order', []),
+        }
+
+        warnings = []
+        if not rag_file_exists:
+            warnings.append('RAG integration file missing; regulation enrichment may be reduced')
+        if queue_data.get('available') and not queue_data.get('worker_running'):
+            warnings.append('Queue available but worker thread is not running')
+        if queue_data.get('queue_size', 0) and queue_data.get('worker_running'):
+            warnings.append('Queue has pending work; report generation may be delayed')
+
+        return jsonify({
+            'timestamp_utc': datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+            'status': 'ok',
+            'storage_configured': storage_manager is not None,
+            'database_configured': db_manager is not None,
+            'pipeline_components': {
+                'caption_generator': caption_generator is not None,
+                'report_generator': report_generator is not None,
+            },
+            'queue': queue_data,
+            'providers': provider_settings,
+            'rag_file_exists': rag_file_exists,
+            'warnings': warnings,
+        })
+    except Exception as e:
+        logger.error(f"Error building health summary: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+
 # =========================================================================
 # ERROR HANDLERS
 # =========================================================================
@@ -2301,6 +3525,8 @@ def system_info():
 def not_found(e):
     """Handle 404 errors."""
     if request.path.startswith('/api/'):
+        return jsonify({'error': 'Not found'}), 404
+    if not SERVE_FRONTEND:
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory('frontend', 'index.html')
 
@@ -2321,7 +3547,9 @@ def cleanup():
     global active_camera
     
     with camera_lock:
-        stop_live_sources_locked()
+        if active_camera is not None:
+            active_camera.release()
+            active_camera = None
     
     cv2.destroyAllWindows()
 
@@ -2338,7 +3566,10 @@ if __name__ == '__main__':
     logger.info("LUNA PPE SAFETY MONITOR - Unified Application Server")
     logger.info("=" * 80)
     logger.info("")
-    logger.info("🚀 Server starting at: http://localhost:5000")
+    port = int(os.getenv('PORT', '5000'))
+    logger.info(f"🚀 Server starting at: http://localhost:{port}")
+    logger.info(f"🧭 Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
+    logger.info(f"🌐 Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
     logger.info("")
     logger.info("📊 Features:")
     logger.info("   - Modern web interface")
@@ -2347,7 +3578,7 @@ if __name__ == '__main__':
     logger.info("   - Violation reports and analytics")
     logger.info("")
     logger.info("🔗 Endpoints:")
-    logger.info("   GET  /                          - Main frontend")
+    logger.info("   GET  /                          - Main frontend or API status")
     logger.info("   GET  /api/violations            - List violations")
     logger.info("   GET  /api/stats                 - Statistics")
     logger.info("   GET  /api/live/stream           - Live video stream")
@@ -2379,7 +3610,6 @@ if __name__ == '__main__':
         logger.warning("⚠️  Flask debug mode is ENABLED - This should ONLY be used for local development!")
         logger.warning("⚠️  NEVER enable debug mode in production as it allows arbitrary code execution!")
     
-    port = int(os.getenv('PORT', 5000))
     app.run(
         host='0.0.0.0',
         port=port,

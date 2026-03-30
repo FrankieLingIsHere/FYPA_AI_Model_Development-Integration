@@ -119,12 +119,14 @@ LLAVA_CONFIG = {
 # =========================================================================
 
 OLLAMA_CONFIG = {
-    'base_url': 'http://localhost:11434',
-    'model': 'llama3',
-    'timeout': 1200,  # 20 minutes (Practically unlimited, but prevents indefinite deadlocks)
-    'use_local_model': False,
-    'temperature': 0.7,
-    'max_tokens': 800
+    'base_url': os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
+    'api_url': os.getenv('OLLAMA_API_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/generate"),
+    'embeddings_url': os.getenv('OLLAMA_EMBEDDINGS_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/embeddings"),
+    'model': os.getenv('OLLAMA_MODEL', 'llama3'),
+    'timeout': int(os.getenv('OLLAMA_TIMEOUT', '1200')),  # 20 minutes (Practically unlimited, but prevents indefinite deadlocks)
+    'use_local_model': os.getenv('USE_LOCAL_MODEL', 'false').lower() == 'true',
+    'temperature': float(os.getenv('OLLAMA_TEMPERATURE', '0.7')),
+    'max_tokens': int(os.getenv('OLLAMA_MAX_TOKENS', '800'))
 }
 
 # =========================================================================
@@ -133,13 +135,43 @@ OLLAMA_CONFIG = {
 
 GEMINI_CONFIG = {
     'api_key': os.getenv('GEMINI_API_KEY', ''),
-    'model': 'gemini-2.0-flash',
-    'temperature': 0.4,
-    'max_tokens': 2000,
-    'timeout': 120,
-    'max_retries': 3,
-    'min_interval': 4.0,  # Seconds between API calls (free tier: 15 RPM)
-    'enabled': True,  # Set to False to fall back to Ollama
+    'model': os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'),
+    'temperature': float(os.getenv('GEMINI_TEMPERATURE', '0.4')),
+    'max_tokens': int(os.getenv('GEMINI_MAX_TOKENS', '2000')),
+    'timeout': int(os.getenv('GEMINI_TIMEOUT', '120')),
+    'max_retries': int(os.getenv('GEMINI_MAX_RETRIES', '3')),
+    'min_interval': float(os.getenv('GEMINI_MIN_INTERVAL', '4.0')),  # Seconds between API calls (free tier: 15 RPM)
+    'enabled': os.getenv('GEMINI_ENABLED', 'true').lower() == 'true',
+}
+
+# =========================================================================
+# MODEL API ROUTING (Provider switching)
+# =========================================================================
+
+def _split_csv(value: str) -> list:
+    return [item.strip().lower() for item in value.split(',') if item.strip()]
+
+
+MODEL_API_CONFIG = {
+    # Set MODEL_API_ENABLED=true to enable direct provider APIs (OpenAI-compatible endpoints)
+    'enabled': os.getenv('MODEL_API_ENABLED', 'false').lower() == 'true',
+
+    # Provider order controls fallback chain for each task.
+    # Supported entries: model_api, gemini, ollama, local
+    'nlp_provider_order': _split_csv(os.getenv('NLP_PROVIDER_ORDER', 'model_api,gemini,ollama,local')),
+    'embedding_provider_order': _split_csv(os.getenv('EMBEDDING_PROVIDER_ORDER', 'model_api,ollama')),
+
+    # NLP endpoint (for Llama/Qwen/etc.)
+    # Expected OpenAI-compatible /chat/completions API
+    'nlp_api_url': os.getenv('NLP_API_URL', ''),
+    'nlp_api_key': os.getenv('NLP_API_KEY', ''),
+    'nlp_model': os.getenv('NLP_API_MODEL', 'meta-llama/Meta-Llama-3-8B-Instruct'),
+
+    # Embeddings endpoint
+    # Expected OpenAI-compatible /embeddings API
+    'embedding_api_url': os.getenv('EMBEDDING_API_URL', ''),
+    'embedding_api_key': os.getenv('EMBEDDING_API_KEY', ''),
+    'embedding_model': os.getenv('EMBEDDING_API_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
 }
 
 # =========================================================================

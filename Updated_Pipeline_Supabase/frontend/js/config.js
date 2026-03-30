@@ -3,7 +3,7 @@
 // or set window.PPE_API_URL before this script loads for custom backend URL.
 // For Vercel deployment, set PPE_API_URL to your backend server's public URL.
 const API_CONFIG = {
-    BASE_URL: window.PPE_API_URL || '',
+    BASE_URL: window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '',
     ENDPOINTS: {
         VIOLATIONS: '/api/violations',
         REPORT: (id) => `/report/${id}`,
@@ -17,7 +17,10 @@ const API_CONFIG = {
         LIVE_DEPTH_STATUS: '/api/live/depth/status',
         LIVE_DEPTH_PREVIEW: '/api/live/depth/preview',
         UPLOAD_INFERENCE: '/api/inference/upload',
-        SYSTEM_INFO: '/api/system/info'
+        SYSTEM_INFO: '/api/system/info',
+        RELIABILITY_STATS: '/api/reliability/stats',
+        REALTIME_STREAM: '/api/realtime/stream',
+        REALTIME_SNAPSHOT: '/api/realtime/snapshot'
     }
 };
 

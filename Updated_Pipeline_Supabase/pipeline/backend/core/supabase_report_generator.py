@@ -92,6 +92,23 @@ class SupabaseReportGenerator(ReportGenerator):
         """
         report_id = report_data.get('report_id')
         logger.info(f"Generating Supabase-backed report: {report_id}")
+
+        def _safe_update_progress(stage: str):
+            """Update progress if supported, otherwise keep status at generating."""
+            try:
+                if hasattr(self.db_manager, 'update_progress'):
+                    self.db_manager.update_progress(report_id, stage)
+                elif hasattr(self.db_manager, 'update_detection_status'):
+                    self.db_manager.update_detection_status(report_id, 'generating')
+            except Exception as progress_error:
+                logger.debug(f"Progress update skipped ({stage}): {progress_error}")
+
+        # Clear any stale aborted transaction state before DB operations.
+        try:
+            if getattr(self.db_manager, 'conn', None) is not None:
+                self.db_manager.conn.rollback()
+        except Exception:
+            pass
         
         # Step 1: Generate local files using parent class
         result = super().generate_report(report_data)
@@ -123,20 +140,36 @@ class SupabaseReportGenerator(ReportGenerator):
             logger.error(f"Error validating caption: {e}")
             # Continue anyway
         
-        # Step 2: Insert detection event in Supabase Postgres
+        # Step 2: Ensure detection event exists in Supabase Postgres
         try:
             timestamp = report_data.get('timestamp', datetime.now())
             person_count = report_data.get('person_count', 0)
             violation_count = report_data.get('violation_count', 0)
             severity = report_data.get('severity', 'HIGH')
-            
-            detection_result = self.db_manager.insert_detection_event(
-                report_id=report_id,
-                timestamp=timestamp,
-                person_count=person_count,
-                violation_count=violation_count,
-                severity=severity
-            )
+
+            existing_event = None
+            if hasattr(self.db_manager, 'get_detection_event'):
+                existing_event = self.db_manager.get_detection_event(report_id)
+
+            if existing_event:
+                detection_result = report_id
+                if hasattr(self.db_manager, 'update_detection_event'):
+                    self.db_manager.update_detection_event(
+                        report_id=report_id,
+                        person_count=person_count,
+                        violation_count=violation_count,
+                        severity=severity,
+                        status='generating'
+                    )
+            else:
+                detection_result = self.db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=timestamp,
+                    person_count=person_count,
+                    violation_count=violation_count,
+                    severity=severity,
+                    status='generating'
+                )
             
             if not detection_result:
                 logger.error(f"Failed to insert detection event: {report_id}")
@@ -145,7 +178,7 @@ class SupabaseReportGenerator(ReportGenerator):
                 logger.info(f"Inserted detection event: {report_id}")
                 
             # --- START PROGRESS TRACKING ---
-            self.db_manager.update_progress(report_id, 'analyzing_scene')
+            _safe_update_progress('analyzing_scene')
 
         except Exception as e:
             logger.error(f"Error inserting detection event: {e}")
@@ -154,7 +187,7 @@ class SupabaseReportGenerator(ReportGenerator):
         # Step 3: Upload artifacts to Supabase Storage
         storage_keys = {}
         try:
-            self.db_manager.update_progress(report_id, 'uploading_images')
+            _safe_update_progress('uploading_images')
             
             original_image_path = report_data.get('original_image_path')
             annotated_image_path = report_data.get('annotated_image_path')
@@ -175,7 +208,7 @@ class SupabaseReportGenerator(ReportGenerator):
             )
             storage_keys.update(upload_results)
             
-            self.db_manager.update_progress(report_id, 'generating_report')
+            _safe_update_progress('generating_report')
 
             # --- Now generate report content (NLP/HTML) ---
             # NOTE: parent generate_report is already called at Step 1, 
@@ -198,7 +231,7 @@ class SupabaseReportGenerator(ReportGenerator):
                 if value is not None:
                     storage_keys[key] = value
             
-            self.db_manager.update_progress(report_id, 'finalizing')
+            _safe_update_progress('finalizing')
             logger.info(f"Uploaded artifacts to Supabase Storage: {report_id}")
             
         except Exception as e:

@@ -11,7 +11,7 @@ Usage:
     Then open browser to: http://localhost:5001
 """
 
-from flask import Flask, render_template, send_from_directory, jsonify, abort, Response, redirect
+from flask import Flask, render_template, render_template_string, send_from_directory, jsonify, abort, Response, redirect
 from pathlib import Path
 import json
 from datetime import datetime

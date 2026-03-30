@@ -12,6 +12,8 @@ const RealtimeSync = {
     reportStatusCache: {},
     pendingSnapshotFetch: false,
     lastSnapshotAt: 0,
+    supabaseFailureCount: 0,
+    supabaseDisabledUntil: 0,
 
     start() {
         if (this.started) return;
@@ -85,7 +87,23 @@ const RealtimeSync = {
 
     shouldUseSupabaseRealtime() {
         const cfg = API.getSupabaseRealtimeConfig();
+        if (Date.now() < this.supabaseDisabledUntil) {
+            return false;
+        }
         return !!(window.supabase && cfg.url && cfg.anonKey);
+    },
+
+    fallbackToSSE(reason) {
+        console.warn(`Supabase realtime unavailable (${reason}). Falling back to SSE.`);
+        this.supabaseFailureCount += 1;
+
+        if (this.supabaseFailureCount >= 2) {
+            this.supabaseDisabledUntil = Date.now() + (5 * 60 * 1000);
+        }
+
+        this.disconnectSupabase();
+        this.disconnectSSEOnly();
+        this.connectSSE();
     },
 
     connectSupabaseRealtime() {
@@ -129,6 +147,8 @@ const RealtimeSync = {
                 .subscribe((status) => {
                     const normalized = String(status || '').toUpperCase();
                     if (normalized === 'SUBSCRIBED') {
+                        this.supabaseFailureCount = 0;
+                        this.supabaseDisabledUntil = 0;
                         this.reconnectDelayMs = 2000;
                         this.setConnectionState(true, 'connected');
                         this.updateTransportHint('Supabase WS');
@@ -138,7 +158,7 @@ const RealtimeSync = {
 
                     if (normalized === 'CHANNEL_ERROR' || normalized === 'TIMED_OUT' || normalized === 'CLOSED') {
                         this.setConnectionState(false, 'reconnecting');
-                        this.safeReconnect();
+                        this.fallbackToSSE(normalized);
                     }
                 });
 
@@ -147,6 +167,10 @@ const RealtimeSync = {
             console.error('Supabase realtime init failed:', error);
             this.disconnectSupabase();
             this.mode = 'offline';
+            this.supabaseFailureCount += 1;
+            if (this.supabaseFailureCount >= 2) {
+                this.supabaseDisabledUntil = Date.now() + (5 * 60 * 1000);
+            }
             return false;
         }
     },

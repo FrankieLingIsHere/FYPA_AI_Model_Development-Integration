@@ -835,8 +835,8 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
         
         last_violation_time = current_time
         
-            # Check for violations using unified matcher (same logic as upload/live paths)
-            violation_detections = _extract_violation_detections(detections)
+        # Check for violations using unified matcher (same logic as upload/live paths)
+        violation_detections = _extract_violation_detections(detections)
         
         if not violation_detections:
             logger.warning("No violations found in detections")
@@ -1234,8 +1234,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         last_violation_time = current_time
         
-            # Check for violations using unified matcher (same logic as upload/live paths)
-            violation_detections = _extract_violation_detections(detections)
+        # Check for violations using unified matcher (same logic as upload/live paths)
+        violation_detections = _extract_violation_detections(detections)
         
         if not violation_detections:
             logger.warning("No violations found in detections")

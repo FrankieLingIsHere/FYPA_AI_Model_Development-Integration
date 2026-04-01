@@ -60,6 +60,27 @@ report_progress = {
 }
 report_progress_lock = Lock()
 
+# Global startup/readiness tracking for frontend loading gate
+startup_state_lock = Lock()
+startup_thread = None
+startup_state = {
+    'status': 'idle',  # idle, running, ready, error
+    'ready': False,
+    'progress': 0,
+    'current_step': 'Waiting to initialize',
+    'error_message': None,
+    'started_at': None,
+    'updated_at': None,
+    'checks': {
+        'pipeline_imports': {'label': 'Pipeline modules', 'status': 'pending', 'detail': None},
+        'yolo_model': {'label': 'YOLO model warm-up', 'status': 'pending', 'detail': None},
+        'pipeline_components': {'label': 'Pipeline components', 'status': 'pending', 'detail': None},
+        'supabase_database': {'label': 'Supabase database', 'status': 'pending', 'detail': None},
+        'supabase_storage': {'label': 'Supabase storage', 'status': 'pending', 'detail': None},
+        'queue_worker': {'label': 'Queue worker', 'status': 'pending', 'detail': None}
+    }
+}
+
 # Import pipeline components for violation handling
 try:
     from pipeline.backend.core.violation_detector import ViolationDetector
@@ -148,6 +169,16 @@ def _handle_preflight():
 def _add_cors_headers(response):
     """Apply CORS headers to outgoing responses."""
     return _apply_cors_headers(response)
+
+
+@app.before_request
+def _ensure_startup_sequence_running():
+    """Kick off startup checks on first meaningful request."""
+    path = request.path or ''
+    if path.startswith('/static/') or path == '/favicon.ico':
+        return None
+    ensure_startup_thread()
+    return None
 
 # Directories
 VIOLATIONS_DIR = Path('pipeline/violations')
@@ -267,6 +298,174 @@ def reset_report_progress():
             'current_step': '',
             'error_message': None
         }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_startup_step(step_key: str, step_status: str, detail: str = None):
+    """Update a startup check step status in a thread-safe manner."""
+    with startup_state_lock:
+        checks = startup_state.get('checks', {})
+        if step_key in checks:
+            checks[step_key]['status'] = step_status
+            if detail is not None:
+                checks[step_key]['detail'] = detail
+
+
+def _set_startup_progress(progress: int, current_step: str):
+    """Update startup progress and status text."""
+    with startup_state_lock:
+        startup_state['status'] = 'running'
+        startup_state['ready'] = False
+        startup_state['progress'] = max(0, min(100, int(progress)))
+        startup_state['current_step'] = str(current_step)
+        startup_state['updated_at'] = _utc_now_iso()
+
+
+def _set_startup_error(message: str):
+    """Mark startup as failed and keep UI locked behind loader."""
+    with startup_state_lock:
+        startup_state['status'] = 'error'
+        startup_state['ready'] = False
+        startup_state['error_message'] = str(message)
+        startup_state['updated_at'] = _utc_now_iso()
+
+
+def _set_startup_ready():
+    """Mark startup as fully ready."""
+    with startup_state_lock:
+        startup_state['status'] = 'ready'
+        startup_state['ready'] = True
+        startup_state['progress'] = 100
+        startup_state['current_step'] = 'System ready'
+        startup_state['error_message'] = None
+        startup_state['updated_at'] = _utc_now_iso()
+
+
+def get_startup_state_snapshot() -> Dict[str, Any]:
+    with startup_state_lock:
+        checks = startup_state.get('checks', {})
+        completed_checks = sum(1 for c in checks.values() if c.get('status') == 'ok')
+        total_checks = len(checks)
+        return {
+            'status': startup_state.get('status', 'idle'),
+            'ready': bool(startup_state.get('ready', False)),
+            'progress': int(startup_state.get('progress', 0)),
+            'current_step': startup_state.get('current_step', ''),
+            'error_message': startup_state.get('error_message'),
+            'started_at': startup_state.get('started_at'),
+            'updated_at': startup_state.get('updated_at'),
+            'checks': checks,
+            'checks_completed': completed_checks,
+            'checks_total': total_checks
+        }
+
+
+def _run_startup_sequence():
+    """Background startup sequence so frontend can show setup progress."""
+    try:
+        with startup_state_lock:
+            startup_state['status'] = 'running'
+            startup_state['ready'] = False
+            startup_state['progress'] = 0
+            startup_state['current_step'] = 'Starting setup checks'
+            startup_state['error_message'] = None
+            startup_state['started_at'] = _utc_now_iso()
+            startup_state['updated_at'] = startup_state['started_at']
+            for key in startup_state.get('checks', {}):
+                startup_state['checks'][key]['status'] = 'pending'
+                startup_state['checks'][key]['detail'] = None
+
+        _set_startup_progress(8, 'Checking pipeline modules')
+        if not FULL_PIPELINE_AVAILABLE:
+            _set_startup_step('pipeline_imports', 'error', 'Required pipeline modules failed to import')
+            raise RuntimeError('Pipeline modules are unavailable. Check environment dependencies and imports.')
+        _set_startup_step('pipeline_imports', 'ok', 'Pipeline modules imported successfully')
+
+        _set_startup_progress(24, 'Loading YOLO model')
+        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        _ = predict_image(dummy, conf=0.25)
+        _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
+
+        _set_startup_progress(50, 'Initializing detection and report pipeline')
+        init_success = initialize_pipeline_components()
+        if not init_success:
+            _set_startup_step('pipeline_components', 'error', 'Component initialization returned failure')
+            raise RuntimeError('Pipeline components failed to initialize')
+        _set_startup_step('pipeline_components', 'ok', 'Core components initialized')
+
+        _set_startup_progress(68, 'Verifying Supabase database connection')
+        if db_manager is None:
+            _set_startup_step('supabase_database', 'error', 'Database manager is unavailable')
+            raise RuntimeError('Supabase database manager is not available')
+
+        try:
+            db_manager._ensure_connection()
+            with db_manager.conn.cursor() as cur:
+                cur.execute('SELECT 1 AS startup_ok')
+                _ = cur.fetchone()
+            _set_startup_step('supabase_database', 'ok', 'Database query test passed')
+        except Exception as db_exc:
+            _set_startup_step('supabase_database', 'error', str(db_exc))
+            raise RuntimeError(f'Supabase database check failed: {db_exc}')
+
+        _set_startup_progress(82, 'Verifying Supabase storage connection')
+        if storage_manager is None:
+            _set_startup_step('supabase_storage', 'error', 'Storage manager is unavailable')
+            raise RuntimeError('Supabase storage manager is not available')
+
+        try:
+            _ = storage_manager.client.storage.list_buckets()
+            _set_startup_step('supabase_storage', 'ok', 'Storage buckets reachable')
+        except Exception as storage_exc:
+            _set_startup_step('supabase_storage', 'error', str(storage_exc))
+            raise RuntimeError(f'Supabase storage check failed: {storage_exc}')
+
+        _set_startup_progress(93, 'Checking background queue worker')
+        if not queue_worker_running:
+            _set_startup_step('queue_worker', 'error', 'Queue worker is not running')
+            raise RuntimeError('Queue worker failed to start')
+        _set_startup_step('queue_worker', 'ok', 'Queue worker is running')
+
+        _set_startup_progress(99, 'Finalizing startup')
+        _set_startup_ready()
+        logger.info('✅ Startup sequence completed. System is ready.')
+
+    except Exception as e:
+        logger.error(f'❌ Startup sequence failed: {e}', exc_info=True)
+        _set_startup_error(str(e))
+
+
+def ensure_startup_thread():
+    """Ensure startup sequence is running (or already completed)."""
+    global startup_thread
+
+    with startup_state_lock:
+        if startup_state.get('ready'):
+            return
+        if startup_state.get('status') == 'running' and startup_thread and startup_thread.is_alive():
+            return
+
+    startup_thread = Thread(target=_run_startup_sequence, daemon=True, name='startup-sequence')
+    startup_thread.start()
+
+
+def _startup_gate_response():
+    """Return 503 until startup checks are fully ready."""
+    ensure_startup_thread()
+    snapshot = get_startup_state_snapshot()
+    if snapshot.get('ready'):
+        return None
+
+    status_code = 500 if snapshot.get('status') == 'error' else 503
+    message = 'System setup failed' if status_code == 500 else 'System setup in progress'
+    return jsonify({
+        'success': False,
+        'error': message,
+        'startup': snapshot
+    }), status_code
 
 def format_violation_type(class_name: str) -> str:
     """
@@ -1117,6 +1316,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 @app.route('/')
 def index():
     """Serve frontend (unified mode) or a backend status payload (API-only mode)."""
+    ensure_startup_thread()
     if not SERVE_FRONTEND:
         return jsonify({
             'service': 'LUNA PPE API',
@@ -1125,6 +1325,19 @@ def index():
             'message': 'Frontend is deployed separately. Use this host for API requests only.'
         })
     return send_from_directory('frontend', 'index.html')
+
+
+@app.route('/api/system/startup-status', methods=['GET'])
+def api_startup_status():
+    """Expose startup progress so frontend can block UI until system is fully ready."""
+    ensure_startup_thread()
+    snapshot = get_startup_state_snapshot()
+    status_code = 200
+    if snapshot.get('status') == 'error':
+        status_code = 500
+    elif not snapshot.get('ready'):
+        status_code = 202
+    return jsonify(snapshot), status_code
 
 
 @app.route('/favicon.ico')
@@ -1662,6 +1875,9 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
 @app.route('/api/realtime/stream', methods=['GET'])
 def api_realtime_stream():
     """Server-Sent Events stream for live UI updates without manual refresh."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
 
     def _event_stream():
         last_signature = None
@@ -1701,6 +1917,10 @@ def api_realtime_stream():
 @app.route('/api/realtime/snapshot', methods=['GET'])
 def api_realtime_snapshot():
     """Lightweight realtime snapshot endpoint for websocket-triggered UI refresh."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
     limit_raw = request.args.get('limit', '30')
     try:
         limit = max(1, min(100, int(limit_raw)))
@@ -3146,6 +3366,10 @@ def generate_frames(conf=0.25):
 @app.route('/api/live/stream')
 def live_stream():
     """Live webcam stream with YOLO detection."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
     conf = float(request.args.get('conf', 0.10))
     return Response(
         generate_frames(conf=conf),
@@ -3156,6 +3380,10 @@ def live_stream():
 @app.route('/api/live/start', methods=['POST'])
 def start_live():
     """Start live monitoring."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
     global active_camera
     
     with camera_lock:
@@ -3199,6 +3427,10 @@ def live_status():
 @app.route('/api/inference/upload', methods=['POST'])
 def upload_inference():
     """Run inference on uploaded image and generate report if violations detected."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
     
@@ -3589,19 +3821,10 @@ if __name__ == '__main__':
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 80)
     
-    # Initialize pipeline components on startup (not just when camera starts)
-    logger.info("🔧 Initializing pipeline components...")
-    if FULL_PIPELINE_AVAILABLE:
-        init_success = initialize_pipeline_components()
-        if init_success:
-            logger.info("✓ Pipeline components initialized successfully")
-            logger.info(f"  - Queue worker: {'Running' if queue_worker_running else 'Stopped'}")
-            logger.info(f"  - Caption generator: {'Available' if caption_generator else 'Not available'}")
-            logger.info(f"  - Report generator: {'Available' if report_generator else 'Not available'}")
-        else:
-            logger.error("✗ Pipeline initialization failed")
-    else:
-        logger.warning("⚠️  Pipeline components not available (check imports)")
+    # Kick off startup checks asynchronously so frontend can display live progress.
+    logger.info("🔧 Starting startup sequence thread...")
+    ensure_startup_thread()
+    logger.info("ℹ️  Visit /api/system/startup-status to track readiness progress")
     logger.info("")
     
     # Debug mode should ONLY be enabled for local development, NEVER in production

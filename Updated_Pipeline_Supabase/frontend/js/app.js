@@ -1,77 +1,150 @@
+const STARTUP_STATUS_ENDPOINT = '/api/system/startup-status';
+const STARTUP_POLL_INTERVAL_MS = 1200;
+let appBootstrapped = false;
+
 // Main Application Entry Point
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 PPE Safety Monitor - Initializing...');
+    initializeWithStartupGate();
+});
+
+async function initializeWithStartupGate() {
+    const body = document.body;
+    const retryButton = document.getElementById('startupRetryBtn');
+
+    if (retryButton && !retryButton.dataset.bound) {
+        retryButton.dataset.bound = 'true';
+        retryButton.addEventListener('click', async () => {
+            retryButton.hidden = true;
+            await initializeWithStartupGate();
+        });
+    }
+
+    body.classList.add('startup-loading');
+    updateStartupUi({
+        progress: 0,
+        current_step: 'Contacting backend startup service...'
+    });
+
+    try {
+        await waitForStartupReady();
+    } catch (error) {
+        showStartupError(error.message || 'Startup validation failed.');
+        return;
+    }
+
+    if (appBootstrapped) {
+        body.classList.remove('startup-loading');
+        return;
+    }
 
     setupResponsiveMobileUX();
 
-    // Register all routes
     Router.register('home', HomePage);
     Router.register('live', LivePage);
     Router.register('reports', ReportsPage);
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);
-
-    // Initialize router
     Router.init();
 
-    // Initialize timezone selector (Malaysian Time as default)
     if (typeof TimezoneManager !== 'undefined') {
         TimezoneManager.initSelector('timezoneSelector');
         console.log('🌏 Timezone set to:', TimezoneManager.getTimezoneLabel());
     }
 
-    console.log('✅ Application ready!');
-
     if (typeof RealtimeSync !== 'undefined' && RealtimeSync.start) {
         RealtimeSync.start();
     }
 
-    // Check backend connection
-    checkBackendConnection();
-});
+    appBootstrapped = true;
+    body.classList.remove('startup-loading');
+    console.log('✅ Application ready!');
+}
 
-// Check if backend is running
-async function checkBackendConnection() {
-    try {
-        const response = await fetch(`${API_CONFIG.BASE_URL}/api/violations`);
-        if (response.ok) {
-            console.log('✅ Backend server connected');
-        } else {
-            showBackendWarning();
+async function waitForStartupReady() {
+    const timeoutAt = Date.now() + (10 * 60 * 1000);
+
+    while (Date.now() < timeoutAt) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}${STARTUP_STATUS_ENDPOINT}`, { cache: 'no-store' });
+            const payload = await response.json();
+            updateStartupUi(payload || {});
+
+            if (payload && payload.ready) {
+                updateStartupUi({
+                    ...payload,
+                    progress: 100,
+                    current_step: 'Startup checks completed. Launching interface...'
+                });
+                await sleep(320);
+                return;
+            }
+
+            if (response.status >= 500 || (payload && payload.status === 'error')) {
+                const failureReason = (payload && payload.error_message) || 'Startup setup failed on backend.';
+                throw new Error(failureReason);
+            }
+        } catch (error) {
+            updateStartupUi({
+                progress: 5,
+                current_step: 'Waiting for backend startup checks to respond...'
+            });
         }
-    } catch (error) {
-        showBackendWarning();
+
+        await sleep(STARTUP_POLL_INTERVAL_MS);
+    }
+
+    throw new Error('Startup timed out. Please verify model files and Supabase connectivity, then retry.');
+}
+
+function updateStartupUi(payload) {
+    const currentStep = document.getElementById('startupCurrentStep');
+    const progressFill = document.getElementById('startupProgressFill');
+    const progressPercent = document.getElementById('startupProgressPercent');
+    const progressBar = document.querySelector('.startup-loader-progress');
+    const checklist = document.getElementById('startupChecklist');
+    const errorBox = document.getElementById('startupError');
+
+    const progress = Math.max(0, Math.min(100, Number(payload.progress || 0)));
+    const step = payload.current_step || 'Preparing startup checks...';
+
+    if (currentStep) currentStep.textContent = step;
+    if (progressFill) progressFill.style.width = `${progress}%`;
+    if (progressPercent) progressPercent.textContent = `${progress}%`;
+    if (progressBar) progressBar.setAttribute('aria-valuenow', `${progress}`);
+
+    if (errorBox) {
+        errorBox.hidden = true;
+        errorBox.textContent = '';
+    }
+
+    if (checklist && payload.checks) {
+        const items = Object.values(payload.checks)
+            .map((item) => {
+                const state = item.status || 'pending';
+                const label = item.label || 'Unknown check';
+                const detail = item.detail ? ` - ${item.detail}` : '';
+                return `<li class="${state}">${label}: ${state.toUpperCase()}${detail}</li>`;
+            })
+            .join('');
+        checklist.innerHTML = items;
     }
 }
 
-// Show warning if backend is not running
-function showBackendWarning() {
-    console.warn('⚠️ Backend server not detected');
+function showStartupError(message) {
+    const errorBox = document.getElementById('startupError');
+    const retryButton = document.getElementById('startupRetryBtn');
+    if (errorBox) {
+        errorBox.textContent = `Startup blocked: ${message}`;
+        errorBox.hidden = false;
+    }
+    if (retryButton) {
+        retryButton.hidden = false;
+    }
+}
 
-    // Add warning banner
-    const banner = document.createElement('div');
-    banner.className = 'alert alert-warning';
-    banner.style.cssText = 'position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 999; max-width: 600px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);';
-    banner.innerHTML = `
-        <i class="fas fa-exclamation-triangle"></i>
-        <div>
-            <strong>Backend Not Running</strong><br>
-            <small>Start the backend server: <code>python luna_app.py</code></small>
-        </div>
-        <button onclick="this.parentElement.remove()" style="margin-left: auto; background: none; border: none; cursor: pointer; font-size: 1.2rem;">×</button>
-    `;
-    banner.style.display = 'flex';
-    banner.style.alignItems = 'center';
-    banner.style.gap = '1rem';
-
-    document.body.appendChild(banner);
-
-    // Auto-dismiss after 10 seconds
-    setTimeout(() => {
-        if (banner.parentElement) {
-            banner.remove();
-        }
-    }, 10000);
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function setupResponsiveMobileUX() {

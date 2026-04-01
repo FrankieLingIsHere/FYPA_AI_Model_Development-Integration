@@ -52,10 +52,16 @@ violations.db
 
 # Model weights (large files - not committed to repo)
 # Users should copy from Updated_Pipeline/Results/ or train their own model
-Results/
+Results/*
+!Results/ppe_yolov86/
+Results/ppe_yolov86/*
+!Results/ppe_yolov86/weights/
+Results/ppe_yolov86/weights/*
+!Results/ppe_yolov86/weights/best.pt
 *.pt
 *.pth
 *.onnx
+!Results/ppe_yolov86/weights/best.pt
 
 # Temporary files
 tmp/
@@ -67,6 +73,9 @@ temp/
 !README.md
 !INSTALL.md
 !QUICKSTART.md
+# Keep personal/session logs local only
+docs/WORKLOG_*.md
+docs/MASTER_TRACK_*.md
 *.txt
 !requirements.txt
 

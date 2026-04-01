@@ -48,13 +48,7 @@ load_dotenv(override=True)
 
 # Import project modules
 from infer_image import predict_image
-
-try:
-    from pipeline.backend.core.realsense_source import RealSenseSource
-    REALSENSE_SOURCE_AVAILABLE = True
-except Exception:
-    RealSenseSource = None
-    REALSENSE_SOURCE_AVAILABLE = False
+from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
 
 # Global progress tracking for report generation
 report_progress = {
@@ -234,179 +228,48 @@ VIOLATIONS_DIR = Path('pipeline/violations')
 VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Thread-safe camera access
-camera_lock = Lock()
-active_camera = None
-active_camera_source = 'webcam'
-active_realsense_source = None
+live_source_adapter = LiveSourceAdapter()
+camera_lock = live_source_adapter.lock
 
 
 def _is_active_live_source_locked() -> bool:
-    """Return whether the currently selected live source is active (lock must be held)."""
-    if active_camera_source == 'realsense':
-        return active_realsense_source is not None and active_realsense_source.pipeline is not None
-    return active_camera is not None and active_camera.isOpened()
+    """Return whether currently selected live source is active (lock must be held)."""
+    return live_source_adapter.is_active_locked()
 
 
 def _stop_live_source_locked() -> None:
     """Stop whichever live source is active (lock must be held)."""
-    global active_camera, active_realsense_source, active_camera_source
-
-    if active_camera is not None:
-        try:
-            active_camera.release()
-        except Exception:
-            pass
-        active_camera = None
-
-    if active_realsense_source is not None:
-        try:
-            active_realsense_source.stop()
-        except Exception:
-            pass
-
-    active_camera_source = 'webcam'
+    live_source_adapter.stop_locked()
 
 
 def _get_realsense_probe_source():
-    """Return a RealSenseSource instance for capability probes."""
-    if not REALSENSE_SOURCE_AVAILABLE:
-        return None
-    if active_realsense_source is not None:
-        return active_realsense_source
-    try:
-        return RealSenseSource()
-    except Exception:
-        return None
+    """Compatibility wrapper retained for existing call sites."""
+    return None
 
 
 def _get_realsense_snapshot() -> Dict[str, Any]:
     """Collect RealSense availability/capabilities in a uniform format."""
-    source = _get_realsense_probe_source()
-    if source is None:
-        return {
-            'realsense_available': False,
-            'realsense_device_name': None,
-            'realsense_capabilities': {
-                'depth_stream': False,
-                'color_stream': False,
-                'imu': False,
-                'resolution': '640x480',
-                'fps': 60,
-                'device_available': False,
-                'sdk_available': False,
-                'reason': 'RealSense source unavailable'
-            }
-        }
-
-    status = source.get_status()
-    caps = source.get_capabilities()
-    return {
-        'realsense_available': bool(status.get('device_available')),
-        'realsense_device_name': status.get('device_name'),
-        'realsense_capabilities': caps
-    }
+    return live_source_adapter.get_realsense_snapshot()
 
 
 def _get_default_live_source() -> str:
     """Pick default source based on currently available hardware."""
-    snapshot = _get_realsense_snapshot()
-    return 'realsense' if snapshot['realsense_available'] else 'webcam'
+    return live_source_adapter.get_default_source()
 
 
 def _start_live_source_locked(requested_source: str) -> Dict[str, Any]:
     """Start requested source with graceful fallback behavior (lock must be held)."""
-    global active_camera, active_realsense_source, active_camera_source
-
-    source = (requested_source or 'webcam').strip().lower()
-    if source not in ('webcam', 'realsense'):
-        source = 'webcam'
-
-    if _is_active_live_source_locked() and active_camera_source == source:
-        return {
-            'success': True,
-            'source': active_camera_source,
-            'fallback_to_webcam': False,
-            'message': f'Live monitoring already active on {active_camera_source}'
-        }
-
-    _stop_live_source_locked()
-
-    if source == 'realsense':
-        if not REALSENSE_SOURCE_AVAILABLE:
-            source = 'webcam'
-            fallback_message = 'RealSense SDK is unavailable; switched to webcam.'
-        else:
-            try:
-                active_realsense_source = RealSenseSource()
-                started, error_message = active_realsense_source.start()
-            except Exception as exc:
-                started = False
-                error_message = str(exc)
-
-            if started:
-                active_camera_source = 'realsense'
-                return {
-                    'success': True,
-                    'source': 'realsense',
-                    'fallback_to_webcam': False,
-                    'message': 'Live monitoring started (RealSense)'
-                }
-
-            source = 'webcam'
-            fallback_message = f'RealSense unavailable ({error_message}); switched to webcam.'
-
-    active_camera = cv2.VideoCapture(0)
-    if not active_camera.isOpened():
-        active_camera = None
-        return {
-            'success': False,
-            'source': 'webcam',
-            'fallback_to_webcam': False,
-            'message': 'Failed to open webcam'
-        }
-
-    active_camera_source = 'webcam'
-    return {
-        'success': True,
-        'source': 'webcam',
-        'fallback_to_webcam': source != 'webcam',
-        'message': 'Live monitoring started (webcam)' if source == 'webcam' else fallback_message
-    }
+    return live_source_adapter.start_locked(requested_source)
 
 
 def _read_active_frame_locked():
     """Read one frame from current source (lock must be held)."""
-    if active_camera_source == 'realsense':
-        if active_realsense_source is None:
-            return False, None, 'RealSense source is not initialized'
-        return active_realsense_source.read()
-
-    if active_camera is None or not active_camera.isOpened():
-        return False, None, 'Webcam is not opened'
-
-    ok, frame = active_camera.read()
-    if not ok:
-        return False, None, 'Failed to read webcam frame'
-    return True, frame, None
+    return live_source_adapter.read_frame_locked()
 
 
 def _build_live_state_payload() -> Dict[str, Any]:
     """Build live state payload consumed by frontend controls."""
-    with camera_lock:
-        is_active = _is_active_live_source_locked()
-        source = active_camera_source
-
-    rs_snapshot = _get_realsense_snapshot()
-    default_source = 'realsense' if rs_snapshot['realsense_available'] else 'webcam'
-    return {
-        'active': is_active,
-        'source': source if is_active else default_source,
-        'default_source': default_source,
-        'camera_index': 0 if is_active and source == 'webcam' else None,
-        'realsense_available': rs_snapshot['realsense_available'],
-        'realsense_device_name': rs_snapshot['realsense_device_name'],
-        'realsense_capabilities': rs_snapshot['realsense_capabilities']
-    }
+    return live_source_adapter.build_state_payload()
 
 # Violation detection state
 violation_detector = None
@@ -3500,7 +3363,7 @@ def generate_frames(conf=0.25):
             if not start_result.get('success'):
                 logger.error(start_result.get('message') or 'Failed to initialize live source')
                 return
-        source_name = active_camera_source
+        source_name = live_source_adapter.current_source
     
     logger.info(f"Starting live frame generation from source: {source_name}")
     logger.info("=" * 80)
@@ -3662,16 +3525,7 @@ def live_depth_status():
     payload = _build_live_state_payload()
 
     with camera_lock:
-        if active_camera_source == 'realsense' and active_realsense_source is not None:
-            depth_telemetry = active_realsense_source.get_depth_telemetry()
-        else:
-            depth_telemetry = {
-                'center_distance_m': None,
-                'min_distance_m': None,
-                'max_distance_m': None,
-                'valid_depth_ratio': 0.0,
-                'depth_available': False
-            }
+        depth_telemetry = live_source_adapter.get_depth_telemetry_locked()
 
     payload['depth_telemetry'] = depth_telemetry
     return jsonify(payload)
@@ -3681,9 +3535,7 @@ def live_depth_status():
 def live_depth_preview():
     """Return RealSense depth preview image if available."""
     with camera_lock:
-        if active_camera_source != 'realsense' or active_realsense_source is None:
-            return Response(status=204)
-        preview = active_realsense_source.get_depth_preview_jpeg()
+        preview = live_source_adapter.get_depth_preview_locked()
 
     if not preview:
         return Response(status=204)

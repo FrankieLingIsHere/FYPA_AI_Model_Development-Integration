@@ -670,6 +670,7 @@ const LivePage = {
         let realsenseDeviceName = 'Intel RealSense';
         let realsenseCapabilities = {};
         const isPhoneDevice = document.body.classList.contains('is-phone-device');
+        const browserCameraSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const phoneCameraSupported = !!(isPhoneDevice && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
@@ -777,7 +778,11 @@ const LivePage = {
             return sources;
         };
 
-        const shouldUsePhoneSource = () => selectedSource === 'phone' && phoneCameraSupported;
+        const shouldUseBrowserCaptureSource = () => {
+            if (!browserCameraSupported) return false;
+            if (selectedSource === 'phone') return phoneCameraSupported;
+            return selectedSource === 'webcam';
+        };
 
         const capturePhoneFrameForInference = async () => {
             if (!this.phoneCameraStream || !phoneCameraPreview) return;
@@ -1156,7 +1161,7 @@ const LivePage = {
         // Live stream functions
         async function stopLiveStream() {
             try {
-                if (shouldUsePhoneSource()) {
+                if (shouldUseBrowserCaptureSource()) {
                     stopPhoneInferenceLoop();
                     stopPhoneCameraTrack();
                 } else {
@@ -1190,27 +1195,39 @@ const LivePage = {
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
 
-                if (shouldUsePhoneSource()) {
+                if (shouldUseBrowserCaptureSource()) {
                     if (APP_STATE.liveStreamActive) {
                         startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                         return;
                     }
 
-                    phonePermissionState = 'prompt';
-                    updatePhonePermissionBadge();
+                    const usingPhoneSource = selectedSource === 'phone';
+                    if (usingPhoneSource) {
+                        phonePermissionState = 'prompt';
+                        updatePhonePermissionBadge();
+                    }
 
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: {
+                    const videoConstraints = usingPhoneSource
+                        ? {
                             facingMode: { ideal: 'environment' },
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
-                        },
+                        }
+                        : {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        };
+
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: videoConstraints,
                         audio: false
                     });
 
                     this.phoneCameraStream = stream;
-                    phonePermissionState = 'granted';
-                    updatePhonePermissionBadge();
+                    if (usingPhoneSource) {
+                        phonePermissionState = 'granted';
+                        updatePhonePermissionBadge();
+                    }
 
                     if (phoneCameraPreview) {
                         phoneCameraPreview.srcObject = stream;
@@ -1221,7 +1238,9 @@ const LivePage = {
                     placeholder.style.display = 'none';
                     streamImg.style.display = 'none';
                     statusIndicator.style.display = 'block';
-                    statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE';
+                    statusIndicator.innerHTML = usingPhoneSource
+                        ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'
+                        : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> CAMERA LIVE';
 
                     stopBtn.disabled = false;
                     startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
@@ -1233,7 +1252,12 @@ const LivePage = {
                     this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 3500);
                     await capturePhoneFrameForInference();
 
-                    showNotification('Phone camera access granted and monitoring started', 'success');
+                    showNotification(
+                        usingPhoneSource
+                            ? 'Phone camera access granted and monitoring started'
+                            : 'Webcam access granted and monitoring started',
+                        'success'
+                    );
                     return;
                 }
 
@@ -1283,23 +1307,30 @@ const LivePage = {
             } catch (error) {
                 console.error('Error starting live stream:', error);
 
-                if (shouldUsePhoneSource()) {
+                if (shouldUseBrowserCaptureSource()) {
+                    const usingPhoneSource = selectedSource === 'phone';
                     const isPermissionDenied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
                     const isCameraMissing = error && error.name === 'NotFoundError';
                     if (isPermissionDenied) {
-                        phonePermissionState = 'denied';
-                        updatePhonePermissionBadge();
+                        if (usingPhoneSource) {
+                            phonePermissionState = 'denied';
+                            updatePhonePermissionBadge();
+                        }
                         alert('Camera permission was denied. Please allow camera access in your browser settings and try again.');
                     } else if (isCameraMissing) {
-                        phonePermissionState = 'unavailable';
-                        updatePhonePermissionBadge();
-                        alert('No usable phone camera was found.');
+                        if (usingPhoneSource) {
+                            phonePermissionState = 'unavailable';
+                            updatePhonePermissionBadge();
+                            alert('No usable phone camera was found.');
+                        } else {
+                            alert('No usable webcam was found.');
+                        }
                     } else {
-                        if (phonePermissionState !== 'denied') {
+                        if (usingPhoneSource && phonePermissionState !== 'denied') {
                             phonePermissionState = 'prompt';
                             updatePhonePermissionBadge();
                         }
-                        alert('Failed to start phone camera. Please check browser camera permissions and HTTPS access.');
+                        alert('Failed to start camera. Please check browser camera permissions and HTTPS access.');
                     }
                     stopPhoneInferenceLoop();
                     stopPhoneCameraTrack();

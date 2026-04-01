@@ -63,11 +63,13 @@ async function initializeWithStartupGate() {
 
 async function waitForStartupReady() {
     const timeoutAt = Date.now() + (10 * 60 * 1000);
+    let consecutiveFetchFailures = 0;
 
     while (Date.now() < timeoutAt) {
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}${STARTUP_STATUS_ENDPOINT}`, { cache: 'no-store' });
             const payload = await response.json();
+            consecutiveFetchFailures = 0;
             updateStartupUi(payload || {});
 
             if (payload && payload.ready) {
@@ -85,10 +87,17 @@ async function waitForStartupReady() {
                 throw new Error(failureReason);
             }
         } catch (error) {
+            consecutiveFetchFailures += 1;
             updateStartupUi({
                 progress: 5,
                 current_step: 'Waiting for backend startup checks to respond...'
             });
+
+            if (consecutiveFetchFailures >= 8) {
+                throw new Error(
+                    'Unable to reach backend startup API. Check Railway backend URL and CORS ALLOWED_ORIGINS settings.'
+                );
+            }
         }
 
         await sleep(STARTUP_POLL_INTERVAL_MS);

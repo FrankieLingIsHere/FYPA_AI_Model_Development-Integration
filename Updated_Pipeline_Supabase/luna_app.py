@@ -125,6 +125,13 @@ SERVE_FRONTEND = os.getenv('SERVE_FRONTEND', 'true').lower() == 'true'
 ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv('ALLOWED_ORIGINS', '*').split(',') if origin.strip()
 ]
+ALLOWED_ORIGINS = [o.strip().strip('"').strip("'") for o in ALLOWED_ORIGINS if o.strip().strip('"').strip("'")]
+
+STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
+    'STARTUP_MODEL_WARMUP_ENABLED',
+    'true' if SERVE_FRONTEND else 'false'
+).lower() == 'true'
+STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
 
 
 def _is_origin_allowed(origin: str) -> bool:
@@ -133,6 +140,16 @@ def _is_origin_allowed(origin: str) -> bool:
         return False
     if '*' in ALLOWED_ORIGINS:
         return True
+    for allowed in ALLOWED_ORIGINS:
+        # Allow wildcard subdomains, e.g. https://*.vercel.app
+        if allowed.startswith('https://*.'):
+            suffix = allowed[len('https://*'):]
+            if origin.startswith('https://') and origin.endswith(suffix):
+                return True
+        if allowed.startswith('http://*.'):
+            suffix = allowed[len('http://*'):]
+            if origin.startswith('http://') and origin.endswith(suffix):
+                return True
     return origin in ALLOWED_ORIGINS
 
 
@@ -145,15 +162,40 @@ def _apply_cors_headers(response):
     if not should_apply:
         return response
 
-    if '*' in ALLOWED_ORIGINS and not origin:
-        response.headers['Access-Control-Allow-Origin'] = '*'
+    allow_origin = None
+    if '*' in ALLOWED_ORIGINS:
+        allow_origin = origin or '*'
     elif _is_origin_allowed(origin):
-        response.headers['Access-Control-Allow-Origin'] = origin
+        allow_origin = origin
+
+    if allow_origin:
+        response.headers['Access-Control-Allow-Origin'] = allow_origin
 
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
     response.headers['Vary'] = 'Origin'
     return response
+
+
+def _run_with_timeout(task_fn, timeout_seconds: int, task_name: str):
+    """Run a blocking startup task with timeout and bubble up errors."""
+    result = {'value': None, 'error': None}
+
+    def _worker():
+        try:
+            result['value'] = task_fn()
+        except Exception as e:
+            result['error'] = e
+
+    worker = Thread(target=_worker, daemon=True, name=f'startup-{task_name}')
+    worker.start()
+    worker.join(max(1, int(timeout_seconds)))
+
+    if worker.is_alive():
+        raise TimeoutError(f"{task_name} timed out after {timeout_seconds}s")
+    if result['error'] is not None:
+        raise result['error']
+    return result['value']
 
 
 @app.before_request
@@ -384,10 +426,26 @@ def _run_startup_sequence():
             raise RuntimeError('Pipeline modules are unavailable. Check environment dependencies and imports.')
         _set_startup_step('pipeline_imports', 'ok', 'Pipeline modules imported successfully')
 
-        _set_startup_progress(24, 'Loading YOLO model')
-        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-        _ = predict_image(dummy, conf=0.25)
-        _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
+        if STARTUP_MODEL_WARMUP_ENABLED:
+            _set_startup_progress(24, 'Loading YOLO model')
+
+            def _warmup_yolo():
+                dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+                return predict_image(dummy, conf=0.25)
+
+            _run_with_timeout(
+                _warmup_yolo,
+                STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS,
+                'yolo-warmup'
+            )
+            _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
+        else:
+            _set_startup_progress(24, 'Skipping YOLO warm-up for this deployment')
+            _set_startup_step(
+                'yolo_model',
+                'ok',
+                'Skipped by STARTUP_MODEL_WARMUP_ENABLED=false'
+            )
 
         _set_startup_progress(50, 'Initializing detection and report pipeline')
         init_success = initialize_pipeline_components()

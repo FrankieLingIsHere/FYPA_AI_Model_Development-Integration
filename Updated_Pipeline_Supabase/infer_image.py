@@ -42,12 +42,14 @@ _cached_model_path = None
 def resolve_model_path(model_path: str = None) -> str:
     """Resolve YOLO weights path across local/hosted working-directory layouts."""
     script_dir = Path(__file__).resolve().parent
+    nested_default = Path('Updated_Pipeline_Supabase') / DEFAULT_MODEL_PATH
 
     explicit_env_path = os.getenv('YOLO_MODEL_PATH', '').strip()
     candidate_strings = [
         model_path or '',
         explicit_env_path,
         DEFAULT_MODEL_PATH,
+        str(nested_default),
     ]
 
     candidates = []
@@ -61,6 +63,7 @@ def resolve_model_path(model_path: str = None) -> str:
             candidates.append(Path.cwd() / path_obj)
             candidates.append(script_dir / path_obj)
             candidates.append(script_dir.parent / path_obj)
+            candidates.append(script_dir.parent / 'Updated_Pipeline_Supabase' / path_obj)
 
     seen = set()
     unique_candidates = []

@@ -72,6 +72,12 @@ async function waitForStartupReady() {
             consecutiveFetchFailures = 0;
             updateStartupUi(payload || {});
 
+            const failedCheck = findFailedStartupCheck(payload);
+            if (failedCheck) {
+                const detail = failedCheck.detail ? `: ${failedCheck.detail}` : '';
+                throw new Error(`${failedCheck.label || 'Startup check failed'}${detail}`);
+            }
+
             if (payload && payload.ready) {
                 updateStartupUi({
                     ...payload,
@@ -87,6 +93,9 @@ async function waitForStartupReady() {
                 throw new Error(failureReason);
             }
         } catch (error) {
+            if (error && error.message && /startup check failed|startup setup failed|yolo|model path|pipeline|supabase/i.test(error.message)) {
+                throw error;
+            }
             consecutiveFetchFailures += 1;
             updateStartupUi({
                 progress: 5,
@@ -104,6 +113,16 @@ async function waitForStartupReady() {
     }
 
     throw new Error('Startup timed out. Please verify model files and Supabase connectivity, then retry.');
+}
+
+function findFailedStartupCheck(payload) {
+    if (!payload || !payload.checks || typeof payload.checks !== 'object') {
+        return null;
+    }
+
+    const checks = Object.values(payload.checks);
+    const failed = checks.find((item) => item && item.status === 'error');
+    return failed || null;
 }
 
 function updateStartupUi(payload) {

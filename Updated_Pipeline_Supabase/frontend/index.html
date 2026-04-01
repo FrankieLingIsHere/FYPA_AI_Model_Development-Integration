@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -10,7 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
-<body>
+<body class="startup-loading">`r`n    <div id="startupLoader" class="startup-loader" aria-live="polite" aria-busy="true">`r`n        <div class="startup-loader-card">`r`n            <div class="startup-loader-icon" aria-hidden="true"></div>`r`n            <h1>Preparing PPE Safety Monitor</h1>`r`n            <p id="startupCurrentStep" class="startup-loader-step">Starting setup checks...</p>`r`n            <div class="startup-loader-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">`r`n                <div id="startupProgressFill" class="startup-loader-progress-fill"></div>`r`n            </div>`r`n            <div class="startup-loader-meta">`r`n                <span>Environment setup progress</span>`r`n                <span id="startupProgressPercent">0%</span>`r`n            </div>`r`n            <ul id="startupChecklist" class="startup-checklist"></ul>`r`n            <div id="startupError" class="startup-loader-error" hidden></div>`r`n            <button id="startupRetryBtn" type="button" class="btn btn-primary" hidden>`r`n                <i class="fas fa-rotate-right"></i> Retry Startup Checks`r`n            </button>`r`n        </div>`r`n    </div>
     <!-- Navigation -->
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -73,7 +73,7 @@
             </div>
 
             <button id="enableVoice" class="btn btn-danger sidebar-voice-btn">
-                🔊 <span>Voice Alerts</span>
+                ðŸ”Š <span>Voice Alerts</span>
             </button>
         </div>
 
@@ -91,7 +91,7 @@
         <div class="footer-content">
             <p>&copy; 2025 PPE Safety Monitor. AI-Powered Workplace Safety System.</p>
             <p class="footer-tech">
-                Powered by YOLOv8 • LLaVA • Llama3 • Computer Vision
+                Powered by YOLOv8 â€¢ LLaVA â€¢ Llama3 â€¢ Computer Vision
             </p>
         </div>
     </footer>
@@ -309,7 +309,7 @@
                     <h4 style="margin-bottom: 0.75rem;"><i class="fas fa-list-ol"
                             style="color: var(--secondary-color);"></i> How to Use</h4>
                     <ol style="margin-left: 1.25rem; line-height: 2; margin-bottom: 1rem;">
-                        <li>Go to <strong>Live Monitor</strong> → Click <strong>Analyze Image</strong> tab</li>
+                        <li>Go to <strong>Live Monitor</strong> â†’ Click <strong>Analyze Image</strong> tab</li>
                         <li>Drag and drop an image or click to browse files</li>
                         <li>Supported formats: <strong>JPG, PNG</strong> (max 10MB)</li>
                         <li>Click <strong>Analyze for PPE Violations</strong></li>
@@ -431,7 +431,7 @@
                         <div>
                             <h4 style="margin: 0 0 0.25rem 0;">Enable Voice Alerts</h4>
                             <p style="margin: 0; font-size: 0.9rem; color: #7f8c8d;">
-                                Click the <strong>🔊 Voice Alerts</strong> button in the sidebar to toggle audio
+                                Click the <strong>ðŸ”Š Voice Alerts</strong> button in the sidebar to toggle audio
                                 notifications on/off.
                             </p>
                         </div>
@@ -509,7 +509,7 @@
                             <i class="fas fa-chevron-down"></i>
                         </div>
                         <div class="faq-answer">
-                            <p style="padding-top: 0.75rem;">Yes! Click the <strong>🔊 Voice Alerts</strong> button
+                            <p style="padding-top: 0.75rem;">Yes! Click the <strong>ðŸ”Š Voice Alerts</strong> button
                                 in the sidebar to toggle audio notifications on/off. The button will change color to
                                 indicate the current state.</p>
                         </div>
@@ -547,7 +547,7 @@
                             <i class="fas fa-chevron-down"></i>
                         </div>
                         <div class="faq-answer">
-                            <p style="padding-top: 0.75rem;">Go to <strong>Live Monitor</strong> →
+                            <p style="padding-top: 0.75rem;">Go to <strong>Live Monitor</strong> â†’
                                 <strong>Processing Settings</strong> tab. Use the slider to adjust the cooldown
                                 between 1-30 seconds. Lower values capture more violations, higher values prevent
                                 duplicate captures of the same scene.

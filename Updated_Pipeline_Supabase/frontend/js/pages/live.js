@@ -822,11 +822,19 @@ const LivePage = {
                 }
 
                 const result = await response.json();
+                if (result && result.annotated_image && streamImg) {
+                    streamImg.src = result.annotated_image;
+                    streamImg.style.display = 'block';
+                }
                 if (result && result.violations_detected) {
                     const now = Date.now();
                     if (now - this.phoneLastViolationNoticeAt > 10000) {
                         this.phoneLastViolationNoticeAt = now;
                         showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
+                    }
+                    if (result.report_queued === false) {
+                        const reason = result.report_queue_reason || 'queue_unavailable';
+                        showNotification(`Violation detected but report not queued (${reason})`, 'warning');
                     }
                 }
             } catch (error) {
@@ -1232,11 +1240,12 @@ const LivePage = {
                     if (phoneCameraPreview) {
                         phoneCameraPreview.srcObject = stream;
                         await phoneCameraPreview.play();
-                        phoneCameraPreview.style.display = 'block';
+                        phoneCameraPreview.style.display = 'none';
                     }
 
                     placeholder.style.display = 'none';
-                    streamImg.style.display = 'none';
+                    streamImg.style.display = 'block';
+                    streamImg.src = '';
                     statusIndicator.style.display = 'block';
                     statusIndicator.innerHTML = usingPhoneSource
                         ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'

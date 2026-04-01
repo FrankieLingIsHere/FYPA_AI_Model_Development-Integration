@@ -271,6 +271,29 @@ def _build_live_state_payload() -> Dict[str, Any]:
     """Build live state payload consumed by frontend controls."""
     return live_source_adapter.build_state_payload()
 
+
+def _normalize_label(value: str) -> str:
+    """Normalize class labels for robust keyword matching across naming styles."""
+    if not value:
+        return ''
+    normalized = str(value).strip().lower().replace('_', '-').replace(' ', '-')
+    normalized = re.sub(r'-+', '-', normalized)
+    return normalized
+
+
+def _is_violation_label(class_name: str) -> bool:
+    """Return True if class name indicates missing PPE."""
+    normalized = _normalize_label(class_name)
+    return (
+        normalized.startswith('no-')
+        or normalized in {'without-hardhat', 'without-mask', 'without-goggles', 'without-gloves', 'without-safety-vest'}
+    )
+
+
+def _extract_violation_detections(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter detections to likely PPE-violation classes."""
+    return [d for d in detections if _is_violation_label(d.get('class_name', ''))]
+
 # Violation detection state
 violation_detector = None
 caption_generator = None
@@ -3403,20 +3426,10 @@ def generate_frames(conf=0.25):
                 
                 # Check for violations in background thread (non-blocking)
                 if detections and FULL_PIPELINE_AVAILABLE:
-                    # Check for ANY PPE violations (match actual model class names)
-                    violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
-                                         'no-mask', 'no-goggles']
-                    
-                    has_violation = any(
-                        any(keyword in d['class_name'].lower() for keyword in violation_keywords)
-                        for d in detections
-                    )
-                    
-                    if has_violation:
+                    violation_detections = _extract_violation_detections(detections)
+                    if violation_detections:
                         # Log detected violations
-                        violation_classes = [d['class_name'] for d in detections 
-                                           if any(keyword in d['class_name'].lower() 
-                                                 for keyword in violation_keywords)]
+                        violation_classes = [d.get('class_name') for d in violation_detections]
                         logger.info("=" * 80)
                         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
                         logger.info(f"Caption generator available: {caption_generator is not None}")
@@ -3577,12 +3590,10 @@ def upload_inference():
         detections, annotated = predict_image(frame, conf=conf)
         
         # Check for violations
-        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest',
-                             'no-mask', 'no-goggles']
-        
-        violation_detections = [d for d in detections 
-                               if any(keyword in d['class_name'].lower() 
-                                     for keyword in violation_keywords)]
+        violation_detections = _extract_violation_detections(detections)
+        report_queued = False
+        report_queue_reason = None
+        queued_report_id = None
         
         # If violations detected, use queue system (consistent with live camera)
         if violation_detections and FULL_PIPELINE_AVAILABLE:
@@ -3592,8 +3603,15 @@ def upload_inference():
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            report_id = enqueue_violation(frame_copy, detections_copy)
-            logger.info(f"📥 Violation queued for processing: {report_id}")
+            queued_report_id = enqueue_violation(frame_copy, detections_copy)
+            report_queued = queued_report_id is not None
+            if report_queued:
+                logger.info(f"📥 Violation queued for processing: {queued_report_id}")
+            else:
+                report_queue_reason = 'cooldown_or_already_processing'
+                logger.info("📭 Violation not queued (cooldown or already processing)")
+        elif violation_detections and not FULL_PIPELINE_AVAILABLE:
+            report_queue_reason = 'pipeline_components_unavailable'
         
         # Encode annotated image to base64
         _, buffer = cv2.imencode('.jpg', annotated)
@@ -3605,7 +3623,10 @@ def upload_inference():
             'annotated_image': f'data:image/jpeg;base64,{img_base64}',
             'count': len(detections),
             'violations_detected': len(violation_detections) > 0,
-            'violation_count': len(violation_detections)
+            'violation_count': len(violation_detections),
+            'report_queued': report_queued,
+            'report_queue_reason': report_queue_reason,
+            'report_id': queued_report_id
         })
         
     except Exception as e:

@@ -10,7 +10,26 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
-<body class="startup-loading">`r`n    <div id="startupLoader" class="startup-loader" aria-live="polite" aria-busy="true">`r`n        <div class="startup-loader-card">`r`n            <div class="startup-loader-icon" aria-hidden="true"></div>`r`n            <h1>Preparing PPE Safety Monitor</h1>`r`n            <p id="startupCurrentStep" class="startup-loader-step">Starting setup checks...</p>`r`n            <div class="startup-loader-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">`r`n                <div id="startupProgressFill" class="startup-loader-progress-fill"></div>`r`n            </div>`r`n            <div class="startup-loader-meta">`r`n                <span>Environment setup progress</span>`r`n                <span id="startupProgressPercent">0%</span>`r`n            </div>`r`n            <ul id="startupChecklist" class="startup-checklist"></ul>`r`n            <div id="startupError" class="startup-loader-error" hidden></div>`r`n            <button id="startupRetryBtn" type="button" class="btn btn-primary" hidden>`r`n                <i class="fas fa-rotate-right"></i> Retry Startup Checks`r`n            </button>`r`n        </div>`r`n    </div>
+<body class="startup-loading">
+    <div id="startupLoader" class="startup-loader" aria-live="polite" aria-busy="true">
+        <div class="startup-loader-card">
+            <div class="startup-loader-icon" aria-hidden="true"></div>
+            <h1>Preparing PPE Safety Monitor</h1>
+            <p id="startupCurrentStep" class="startup-loader-step">Starting setup checks...</p>
+            <div class="startup-loader-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="startupProgressFill" class="startup-loader-progress-fill"></div>
+            </div>
+            <div class="startup-loader-meta">
+                <span>Environment setup progress</span>
+                <span id="startupProgressPercent">0%</span>
+            </div>
+            <ul id="startupChecklist" class="startup-checklist"></ul>
+            <div id="startupError" class="startup-loader-error" hidden></div>
+            <button id="startupRetryBtn" type="button" class="btn btn-primary" hidden>
+                <i class="fas fa-rotate-right"></i> Retry Startup Checks
+            </button>
+        </div>
+    </div>
     <!-- Navigation -->
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -597,3 +616,4 @@
 </body>
 
 </html>
+

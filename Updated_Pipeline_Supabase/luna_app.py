@@ -835,13 +835,8 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
         
         last_violation_time = current_time
         
-        # Check for violations
-        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 
-                             'no-mask', 'no-goggles']
-        
-        violation_detections = [d for d in detections 
-                               if any(keyword in d['class_name'].lower() 
-                                     for keyword in violation_keywords)]
+            # Check for violations using unified matcher (same logic as upload/live paths)
+            violation_detections = _extract_violation_detections(detections)
         
         if not violation_detections:
             logger.warning("No violations found in detections")
@@ -1239,13 +1234,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         last_violation_time = current_time
         
-        # Check for ANY PPE violations (match actual model class names)
-        violation_keywords = ['no-hardhat', 'no-gloves', 'no-safety vest', 
-                             'no-mask', 'no-goggles']
-        
-        violation_detections = [d for d in detections 
-                               if any(keyword in d['class_name'].lower() 
-                                     for keyword in violation_keywords)]
+            # Check for violations using unified matcher (same logic as upload/live paths)
+            violation_detections = _extract_violation_detections(detections)
         
         if not violation_detections:
             logger.warning("No violations found in detections")

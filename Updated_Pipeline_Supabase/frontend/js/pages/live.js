@@ -58,6 +58,7 @@ const LivePage = {
                             </div>
                             <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
                             <video id="phoneCameraPreview" autoplay playsinline muted style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;"></video>
+                            <canvas id="liveOverlayCanvas" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
                             <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #4CAF50; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: none;">
                                 <i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE
                             </div>
@@ -634,6 +635,7 @@ const LivePage = {
         const phoneCameraPermissionBadge = document.getElementById('phoneCameraPermissionBadge');
         const streamImg = document.getElementById('liveStream');
         const phoneCameraPreview = document.getElementById('phoneCameraPreview');
+        const liveOverlayCanvas = document.getElementById('liveOverlayCanvas');
         const placeholder = document.getElementById('streamPlaceholder');
         const statusIndicator = document.getElementById('streamStatus');
         const capabilitiesContainer = document.getElementById('realsenseCapabilities');
@@ -756,14 +758,32 @@ const LivePage = {
 
         const stopPhoneCameraTrack = () => {
             if (this.phoneCameraStream) {
-                this.phoneCameraStream.getTracks().forEach((track) => track.stop());
+                this.phoneCameraStream.getTracks().forEach((track) => {
+                    try {
+                        track.stop();
+                    } catch (error) {
+                        console.warn('Track stop failed:', error);
+                    }
+                });
                 this.phoneCameraStream = null;
             }
 
             if (phoneCameraPreview) {
-                phoneCameraPreview.pause();
+                try {
+                    phoneCameraPreview.pause();
+                } catch (error) {
+                    console.warn('Video pause failed:', error);
+                }
                 phoneCameraPreview.srcObject = null;
                 phoneCameraPreview.style.display = 'none';
+            }
+
+            if (liveOverlayCanvas) {
+                const ctx = liveOverlayCanvas.getContext('2d');
+                if (ctx) {
+                    ctx.clearRect(0, 0, liveOverlayCanvas.width || 0, liveOverlayCanvas.height || 0);
+                }
+                liveOverlayCanvas.style.display = 'none';
             }
         };
 
@@ -810,7 +830,7 @@ const LivePage = {
             try {
                 const formData = new FormData();
                 formData.append('image', blob, 'phone_live.jpg');
-                formData.append('conf', '0.10');
+                formData.append('conf', '0.05');
 
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
                     method: 'POST',
@@ -822,8 +842,38 @@ const LivePage = {
                 }
 
                 const result = await response.json();
-                if (result && result.annotated_image && streamImg) {
-                    streamImg.src = result.annotated_image;
+                if (result && Array.isArray(result.detections) && liveOverlayCanvas && phoneCameraPreview) {
+                    const ctx = liveOverlayCanvas.getContext('2d');
+                    const videoW = phoneCameraPreview.videoWidth || width;
+                    const videoH = phoneCameraPreview.videoHeight || height;
+                    liveOverlayCanvas.width = videoW;
+                    liveOverlayCanvas.height = videoH;
+                    liveOverlayCanvas.style.display = 'block';
+
+                    if (ctx) {
+                        ctx.clearRect(0, 0, videoW, videoH);
+                        ctx.lineWidth = 2;
+                        ctx.font = '14px sans-serif';
+
+                        result.detections.forEach((det) => {
+                            const bbox = det.bbox || [];
+                            if (bbox.length !== 4) return;
+                            const [x1, y1, x2, y2] = bbox;
+                            const label = `${det.class_name || 'obj'} ${(Number(det.score || 0) * 100).toFixed(1)}%`;
+                            const isViolation = String(det.class_name || '').toLowerCase().includes('no-');
+                            const color = isViolation ? '#ff5252' : '#4caf50';
+
+                            ctx.strokeStyle = color;
+                            ctx.strokeRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
+
+                            const textWidth = ctx.measureText(label).width;
+                            const labelY = Math.max(16, y1 - 6);
+                            ctx.fillStyle = color;
+                            ctx.fillRect(x1, labelY - 14, textWidth + 8, 18);
+                            ctx.fillStyle = '#000';
+                            ctx.fillText(label, x1 + 4, labelY);
+                        });
+                    }
                 }
                 if (result && result.violations_detected) {
                     const now = Date.now();
@@ -1167,6 +1217,7 @@ const LivePage = {
         
         // Live stream functions
         async function stopLiveStream() {
+            stopBtn.disabled = true;
             try {
                 if (shouldUseBrowserCaptureSource()) {
                     stopPhoneInferenceLoop();
@@ -1191,6 +1242,18 @@ const LivePage = {
             } catch (error) {
                 console.error('Error stopping live stream:', error);
                 showNotification('Failed to stop live monitoring cleanly', 'error');
+            } finally {
+                stopPhoneInferenceLoop();
+                stopPhoneCameraTrack();
+                streamImg.src = '';
+                streamImg.style.display = 'none';
+                placeholder.style.display = 'block';
+                statusIndicator.style.display = 'none';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                APP_STATE.liveStreamActive = false;
+                renderSourceToggle();
+                hideDepthWidgets();
             }
         }
         
@@ -1257,7 +1320,7 @@ const LivePage = {
                     renderSourceToggle();
 
                     stopPhoneInferenceLoop();
-                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 3500);
+                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 1200);
                     await capturePhoneFrameForInference();
 
                     showNotification(

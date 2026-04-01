@@ -1030,10 +1030,11 @@ RESPONSE FORMAT (JSON):
                 break
         
         if not nlp_analysis:
-            if self.strict_report_generation:
-                detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
+            detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
+            allow_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            if self.strict_report_generation and not allow_fallback:
                 raise RuntimeError(f"NLP analysis failed: {detail}")
-            logger.warning("NLP analysis failed, using fallback")
+            logger.warning(f"NLP analysis failed ({detail}), using fallback")
             nlp_analysis = self._generate_fallback_analysis(report_data)
         else:
             # Post-NLP validation: Enhance NLP output with fallback data for better specificity

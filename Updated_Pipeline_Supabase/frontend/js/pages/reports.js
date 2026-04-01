@@ -15,6 +15,7 @@ const ReportsPage = {
         pollTimer: null,
         cooldownTimer: null,
         retryCount: 0,
+        quotaPromptedForReport: null,
         cooldownUntil: 0,
         pollStartedAt: 0,
         maxRetries: 5,
@@ -452,6 +453,7 @@ const ReportsPage = {
             this.stopModalCooldown();
             this.modalRuntime.reportId = reportId;
             this.modalRuntime.retryCount = 0;
+            this.modalRuntime.quotaPromptedForReport = null;
             this.modalRuntime.cooldownUntil = 0;
             this.modalRuntime.pollStartedAt = 0;
         }
@@ -528,6 +530,81 @@ const ReportsPage = {
         el.textContent = message;
     },
 
+    async promptQuotaRecovery(reportId, sourceError = '') {
+        const runtime = this.ensureModalRuntime(reportId);
+        if (runtime.quotaPromptedForReport === reportId) {
+            return;
+        }
+        runtime.quotaPromptedForReport = reportId;
+
+        const options = await API.getReportRecoveryOptions();
+        if (!options || options.success === false) {
+            this.setModalStatusText('Quota recovery options unavailable. You can retry manually.');
+            return;
+        }
+
+        const local = options.local || {};
+        const counts = options.counts || {};
+        const localReady = !!local.local_mode_possible;
+        const pullHint = local.pull_command || 'ollama pull llama3';
+        const startHint = local.start_command || 'ollama serve';
+
+        const localQuestion = localReady
+            ? `Provider quota is exhausted. Pending candidates: ${counts.total_candidates || 0}.\n\nUse LOCAL mode first to keep report quality similar?\n\nOK = Try Local Mode first\nCancel = Choose failover options`
+            : `Provider quota is exhausted. Local mode is not ready on this backend.\n\nTo prepare local mode (if feasible), run:\n1) ${startHint}\n2) ${pullHint}\n\nPress OK to continue with failover pipeline, or Cancel to stop.`;
+
+        const chooseLocal = localReady ? window.confirm(localQuestion) : false;
+
+        if (chooseLocal) {
+            this.setModalStatusText('Applying LOCAL mode and re-queuing pending/quota-failed reports...');
+            const res = await API.executeReportRecovery('local');
+            if (res && res.success) {
+                this.notify(`Local recovery started: ${res.enqueued}/${res.total_candidates} queued`, 'success');
+                this.setProviderWarning('Local mode recovery approved. Monitoring queue progress...');
+                await this.refreshReports();
+                this.startModalPolling(reportId, { autoOpen: true });
+                return;
+            }
+
+            const err = String((res && res.error) || sourceError || 'Local recovery failed');
+            const continueFailover = window.confirm(
+                `Local mode could not be started: ${err}\n\nRun failover pipeline for pending reports now?`
+            );
+            if (!continueFailover) {
+                this.setModalStatusText('Recovery paused. You can retry after preparing local mode.');
+                return;
+            }
+        } else if (!localReady) {
+            const proceedFailoverNoLocal = window.confirm(localQuestion);
+            if (!proceedFailoverNoLocal) {
+                this.setModalStatusText('Recovery paused. Prepare local mode and retry when ready.');
+                return;
+            }
+        }
+
+        const approveFailover = window.confirm(
+            'Proceed with failover pipeline for pending/quota-failed reports?\n\nThis keeps generation running after your approval.'
+        );
+        if (!approveFailover) {
+            this.setModalStatusText('Failover not approved. Report remains pending/manual retry.');
+            return;
+        }
+
+        this.setModalStatusText('Applying FAILOVER mode and re-queuing pending/quota-failed reports...');
+        const failoverRes = await API.executeReportRecovery('failover');
+        if (failoverRes && failoverRes.success) {
+            this.notify(`Failover recovery started: ${failoverRes.enqueued}/${failoverRes.total_candidates} queued`, 'success');
+            this.setProviderWarning('Failover recovery approved. Monitoring queue progress...');
+            await this.refreshReports();
+            this.startModalPolling(reportId, { autoOpen: true });
+            return;
+        }
+
+        const failoverError = String((failoverRes && failoverRes.error) || 'Failover recovery failed');
+        this.setModalStatusText(failoverError);
+        this.notify(failoverError, 'error');
+    },
+
     stopModalPolling() {
         if (this.modalRuntime.pollTimer) {
             clearInterval(this.modalRuntime.pollTimer);
@@ -578,6 +655,9 @@ const ReportsPage = {
 
         if (this.isQuotaOrRateLimitError(providerError)) {
             this.setProviderWarning('Provider quota/rate limit detected. Generation is waiting on provider availability.');
+            if (status === 'failed') {
+                await this.promptQuotaRecovery(reportId, providerError);
+            }
         } else {
             this.setProviderWarning('');
         }
@@ -703,7 +783,8 @@ const ReportsPage = {
                 const errorText = String(result?.error || 'Failed to prioritize report generation');
                 const queueBusy = /queue|busy|rate|limit|full|capacity|409|429|503/i.test(errorText);
                 if (this.isQuotaOrRateLimitError(errorText)) {
-                    this.setProviderWarning('Provider quota/rate limit detected. Retry after quota reset or switch provider routing.');
+                    this.setProviderWarning('Provider quota/rate limit detected. Awaiting your approval for local-first recovery.');
+                    await this.promptQuotaRecovery(reportId, errorText);
                 }
                 if (queueBusy) {
                     this.setModalStatusText(`Queue busy: ${errorText}`);

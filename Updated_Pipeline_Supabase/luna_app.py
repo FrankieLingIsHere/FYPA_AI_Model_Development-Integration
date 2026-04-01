@@ -41,6 +41,7 @@ import numpy as np
 from PIL import Image
 import io
 import base64
+import requests
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -2163,6 +2164,122 @@ def _normalize_provider_order(raw_value, default_order):
     return filtered if filtered else list(default_order)
 
 
+def _is_quota_related_error(message: str) -> bool:
+    text = str(message or '').lower()
+    if not text:
+        return False
+    return (
+        'resource_exhausted' in text
+        or 'quota' in text
+        or 'rate limit' in text
+        or '429' in text
+        or 'exceeded your current quota' in text
+    )
+
+
+def _get_local_mode_diagnostics() -> Dict[str, Any]:
+    ollama_base_url = str(
+        os.getenv('OLLAMA_BASE_URL')
+        or (OLLAMA_CONFIG or {}).get('base_url')
+        or 'http://localhost:11434'
+    ).rstrip('/')
+    ollama_model = str(
+        os.getenv('OLLAMA_MODEL')
+        or (OLLAMA_CONFIG or {}).get('model')
+        or 'llama3'
+    ).strip()
+
+    tags_url = f"{ollama_base_url}/api/tags"
+    ollama_running = False
+    model_available = False
+    probe_error = None
+
+    try:
+        resp = requests.get(tags_url, timeout=4)
+        ollama_running = resp.ok
+        if resp.ok:
+            payload = resp.json() if resp.content else {}
+            models = payload.get('models', []) if isinstance(payload, dict) else []
+            names = []
+            for item in models:
+                if isinstance(item, dict):
+                    name = str(item.get('name') or item.get('model') or '').strip()
+                    if name:
+                        names.append(name)
+            model_available = any(
+                name == ollama_model
+                or name.startswith(f"{ollama_model}:")
+                or name.split(':', 1)[0] == ollama_model
+                for name in names
+            )
+        else:
+            probe_error = f"Ollama tags request failed ({resp.status_code})"
+    except Exception as e:
+        probe_error = str(e)
+
+    return {
+        'ollama_base_url': ollama_base_url,
+        'ollama_model': ollama_model,
+        'ollama_running': ollama_running,
+        'model_available': model_available,
+        'local_mode_possible': bool(ollama_running and model_available),
+        'pull_command': f"ollama pull {ollama_model}",
+        'start_command': 'ollama serve',
+        'error': probe_error
+    }
+
+
+def _apply_nlp_provider_order(order: List[str]) -> List[str]:
+    normalized = _normalize_provider_order(order, MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']))
+    MODEL_API_CONFIG['nlp_provider_order'] = normalized
+    os.environ['NLP_PROVIDER_ORDER'] = ','.join(normalized)
+
+    if report_generator is not None:
+        try:
+            report_generator.nlp_provider_order = normalized
+        except Exception:
+            pass
+
+    return normalized
+
+
+def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
+    if db_manager is None:
+        return []
+
+    rows = []
+    try:
+        if hasattr(db_manager, 'get_all_violations_with_status'):
+            rows = db_manager.get_all_violations_with_status(limit=limit) or []
+        elif hasattr(db_manager, 'get_pending_reports'):
+            rows = db_manager.get_pending_reports(limit=limit) or []
+    except Exception as e:
+        logger.warning(f"Failed collecting recovery candidates: {e}")
+        rows = []
+
+    candidates = []
+    for row in rows:
+        status = str((row or {}).get('status') or '').strip().lower()
+        error_message = str((row or {}).get('error_message') or '').strip()
+        report_id = (row or {}).get('report_id')
+        if not report_id:
+            continue
+
+        pending_like = status in ('pending', 'queued', 'processing', 'generating')
+        quota_failed = status == 'failed' and _is_quota_related_error(error_message)
+        if not (pending_like or quota_failed):
+            continue
+
+        candidates.append({
+            'report_id': report_id,
+            'status': status,
+            'error_message': error_message,
+            'device_id': (row or {}).get('device_id')
+        })
+
+    return candidates
+
+
 def _current_provider_settings():
     """Return current runtime provider routing settings."""
     try:
@@ -2284,6 +2401,136 @@ def api_provider_routing_settings():
     except Exception as e:
         logger.error(f"Error updating provider routing settings: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/reports/recovery/options', methods=['GET'])
+def api_report_recovery_options():
+    """Provide quota-recovery options before failover is executed."""
+    diagnostics = _get_local_mode_diagnostics()
+    candidates = _collect_recovery_candidates(limit=300)
+    quota_failed = [c for c in candidates if c.get('status') == 'failed']
+    pending_like = [c for c in candidates if c.get('status') in ('pending', 'queued', 'processing', 'generating')]
+
+    return jsonify({
+        'success': True,
+        'local': diagnostics,
+        'counts': {
+            'total_candidates': len(candidates),
+            'pending_like': len(pending_like),
+            'quota_failed': len(quota_failed)
+        },
+        'current_nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+    })
+
+
+@app.route('/api/reports/recovery/execute', methods=['POST'])
+def api_report_recovery_execute():
+    """Run approved recovery action: local-first or failover for pending/quota-failed reports."""
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get('mode') or '').strip().lower()
+    if mode not in ('local', 'failover'):
+        return jsonify({'success': False, 'error': 'mode must be either "local" or "failover"'}), 400
+
+    if db_manager is None:
+        return jsonify({'success': False, 'error': 'Database not available'}), 503
+    if violation_queue is None:
+        return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
+
+    if mode == 'local':
+        diagnostics = _get_local_mode_diagnostics()
+        if not diagnostics.get('local_mode_possible'):
+            return jsonify({
+                'success': False,
+                'error': 'Local mode is not currently feasible on this backend host.',
+                'local': diagnostics
+            }), 400
+
+    if not queue_worker_running:
+        start_queue_worker()
+
+    selected_order = ['local', 'ollama', 'model_api', 'gemini'] if mode == 'local' else ['model_api', 'ollama', 'local', 'gemini']
+    applied_order = _apply_nlp_provider_order(selected_order)
+
+    candidates = _collect_recovery_candidates(limit=300)
+    requested_report_ids = payload.get('report_ids')
+    if isinstance(requested_report_ids, list) and requested_report_ids:
+        requested_set = {str(r).strip() for r in requested_report_ids if str(r).strip()}
+        candidates = [c for c in candidates if c.get('report_id') in requested_set]
+
+    enqueued_count = 0
+    skipped_count = 0
+    errors = []
+
+    for item in candidates:
+        report_id = item.get('report_id')
+        try:
+            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+            violation_dir = VIOLATIONS_DIR.absolute() / report_id
+            original_path = violation_dir / 'original.jpg'
+            annotated_path = violation_dir / 'annotated.jpg'
+
+            if not original_path.exists() or event is None:
+                skipped_count += 1
+                continue
+
+            detections = []
+            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            if violation and isinstance(violation.get('detection_data'), dict):
+                detections = violation['detection_data'].get('detections', []) or []
+
+            violation_types = [
+                d.get('class_name', '') for d in detections
+                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
+            ]
+
+            if not annotated_path.exists():
+                try:
+                    frame = cv2.imread(str(original_path))
+                    if frame is not None:
+                        _, annotated = predict_image(frame, conf=0.25)
+                        cv2.imwrite(str(annotated_path), annotated)
+                except Exception:
+                    pass
+
+            violation_data = {
+                'report_id': report_id,
+                'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
+                'detections': detections,
+                'violation_types': violation_types,
+                'violation_count': len(violation_types),
+                'original_image_path': str(original_path),
+                'annotated_image_path': str(annotated_path),
+                'violation_dir': str(violation_dir)
+            }
+
+            enqueued = violation_queue.enqueue(
+                violation_data=violation_data,
+                device_id=(event.get('device_id') if isinstance(event, dict) else None) or 'recovery_pipeline',
+                report_id=report_id,
+                severity='CRITICAL'
+            )
+
+            if not enqueued:
+                skipped_count += 1
+                continue
+
+            db_manager.update_detection_status(report_id, 'pending')
+            enqueued_count += 1
+
+        except Exception as e:
+            errors.append(f"{report_id}: {e}")
+            skipped_count += 1
+
+    return jsonify({
+        'success': True,
+        'mode': mode,
+        'applied_nlp_provider_order': applied_order,
+        'total_candidates': len(candidates),
+        'enqueued': enqueued_count,
+        'skipped': skipped_count,
+        'errors': errors[:10],
+        'worker_running': queue_worker_running
+    })
 
 
 @app.route('/api/fix-stuck-reports', methods=['POST'])

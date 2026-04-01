@@ -155,6 +155,120 @@ class GeminiClient:
         except Exception as e:
             logger.error(f"Failed to load image {image_path}: {e}")
             return None
+
+    def _extract_balanced_json_object(self, text: str) -> Optional[str]:
+        """Extract the first balanced JSON object from text, ignoring braces inside strings."""
+        start = text.find('{')
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for i in range(start, len(text)):
+            ch = text[i]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == '\\':
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+        return None
+
+    def _parse_json_from_response_text(self, raw_text: str) -> Optional[Dict[str, Any]]:
+        """Parse model output into JSON dict using progressive recovery strategies."""
+        # 1) Strict JSON response
+        try:
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        # 2) Markdown fenced payloads
+        fenced_match = re.search(r"```json\s*(.*?)\s*```", raw_text, flags=re.IGNORECASE | re.DOTALL)
+        if fenced_match:
+            candidate = fenced_match.group(1).strip()
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        generic_fence = re.search(r"```\s*(.*?)\s*```", raw_text, flags=re.DOTALL)
+        if generic_fence:
+            candidate = generic_fence.group(1).strip()
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        # 3) Balanced object extraction from mixed text
+        candidate = self._extract_balanced_json_object(raw_text)
+        if candidate:
+            cleaned = candidate
+            cleaned = re.sub(r"^\ufeff", "", cleaned)
+            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+            cleaned = cleaned.strip()
+            try:
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
+    def _repair_json_with_gemini(self, malformed_text: str) -> Optional[Dict[str, Any]]:
+        """Ask Gemini to repair malformed JSON into strict JSON object output."""
+        try:
+            repair_prompt = (
+                "You are a JSON repair tool.\n"
+                "Return exactly one valid JSON object and nothing else.\n"
+                "Rules:\n"
+                "- Preserve keys and values where possible.\n"
+                "- If fields are truncated/missing, infer safe placeholder values.\n"
+                "- Do not include markdown fences.\n\n"
+                "Malformed input:\n"
+                f"{malformed_text}"
+            )
+
+            repair_response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[repair_prompt],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=min(self.max_tokens, 1600),
+                    response_mime_type="application/json",
+                )
+            )
+
+            if not repair_response or not repair_response.text:
+                return None
+
+            return self._parse_json_from_response_text(repair_response.text.strip())
+        except Exception as e:
+            logger.warning(f"Gemini JSON repair attempt failed: {e}")
+            return None
     
     # =========================================================================
     # IMAGE CAPTIONING
@@ -288,43 +402,20 @@ class GeminiClient:
                 
                 if response and response.text:
                     raw_text = response.text.strip()
-                    
-                    # Parse JSON
-                    try:
-                        result = json.loads(raw_text)
+                    result = self._parse_json_from_response_text(raw_text)
+                    if result is not None:
                         logger.info("✓ NLP report JSON generated successfully")
                         self.last_error = None
                         return result
-                    except json.JSONDecodeError:
-                        # Try to extract JSON from markdown code blocks
-                        if '```json' in raw_text:
-                            json_str = raw_text.split('```json')[1].split('```')[0].strip()
-                            result = json.loads(json_str)
-                            logger.info("✓ NLP report JSON extracted from code block")
-                            self.last_error = None
-                            return result
-                        elif '```' in raw_text:
-                            json_str = raw_text.split('```')[1].split('```')[0].strip()
-                            result = json.loads(json_str)
-                            self.last_error = None
-                            return result
-                        else:
-                            # Fallback: recover the largest JSON-like object and clean trailing commas
-                            first_brace = raw_text.find('{')
-                            last_brace = raw_text.rfind('}')
-                            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-                                json_candidate = raw_text[first_brace:last_brace + 1]
-                                cleaned = re.sub(r',\s*([}\]])', r'\1', json_candidate)
-                                try:
-                                    result = json.loads(cleaned)
-                                    logger.info("✓ NLP report JSON recovered from mixed response")
-                                    self.last_error = None
-                                    return result
-                                except json.JSONDecodeError:
-                                    pass
 
-                                self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
-                                logger.error(self.last_error)
+                    repaired = self._repair_json_with_gemini(raw_text)
+                    if repaired is not None:
+                        logger.info("✓ NLP report JSON repaired successfully")
+                        self.last_error = None
+                        return repaired
+
+                    self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
+                    logger.error(self.last_error)
                 else:
                             self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
                             logger.warning(self.last_error)

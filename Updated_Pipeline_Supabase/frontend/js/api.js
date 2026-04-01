@@ -394,6 +394,41 @@ const API = {
         }
     },
 
+    async getReportRecoveryOptions() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/options`);
+            if (!response.ok) throw new Error('Failed to fetch recovery options');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching report recovery options:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async executeReportRecovery(mode, reportIds = null) {
+        try {
+            const payload = { mode };
+            if (Array.isArray(reportIds) && reportIds.length > 0) {
+                payload.report_ids = reportIds;
+            }
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to execute report recovery');
+            }
+            return data;
+        } catch (error) {
+            console.error('Error executing report recovery:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
     getRealtimeStreamUrl() {
         return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REALTIME_STREAM}`;
     },

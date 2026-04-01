@@ -21,3 +21,7 @@ pipeline/backend/chroma_db/
 .idea/
 .env
 .env.local
+!Results/
+!Results/ppe_yolov86/
+!Results/ppe_yolov86/weights/
+!Results/ppe_yolov86/weights/best.pt

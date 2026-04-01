@@ -14,3 +14,7 @@
 **/*.log
 **/*.sqlite3
 **/.env
+!Updated_Pipeline_Supabase/Results/
+!Updated_Pipeline_Supabase/Results/ppe_yolov86/
+!Updated_Pipeline_Supabase/Results/ppe_yolov86/weights/
+!Updated_Pipeline_Supabase/Results/ppe_yolov86/weights/best.pt

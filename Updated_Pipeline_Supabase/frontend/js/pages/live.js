@@ -824,7 +824,6 @@ const LivePage = {
                 const result = await response.json();
                 if (result && result.annotated_image && streamImg) {
                     streamImg.src = result.annotated_image;
-                    streamImg.style.display = 'block';
                 }
                 if (result && result.violations_detected) {
                     const now = Date.now();
@@ -1240,11 +1239,11 @@ const LivePage = {
                     if (phoneCameraPreview) {
                         phoneCameraPreview.srcObject = stream;
                         await phoneCameraPreview.play();
-                        phoneCameraPreview.style.display = 'none';
+                        phoneCameraPreview.style.display = 'block';
                     }
 
                     placeholder.style.display = 'none';
-                    streamImg.style.display = 'block';
+                    streamImg.style.display = 'none';
                     streamImg.src = '';
                     statusIndicator.style.display = 'block';
                     statusIndicator.innerHTML = usingPhoneSource

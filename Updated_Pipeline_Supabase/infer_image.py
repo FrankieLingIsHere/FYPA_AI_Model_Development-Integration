@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
+from pathlib import Path
 
 # Default model path used in the project
 DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt')
@@ -36,6 +37,49 @@ DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt'
 # Cache the model to avoid reloading
 _cached_model = None
 _cached_model_path = None
+
+
+def resolve_model_path(model_path: str = None) -> str:
+    """Resolve YOLO weights path across local/hosted working-directory layouts."""
+    script_dir = Path(__file__).resolve().parent
+
+    explicit_env_path = os.getenv('YOLO_MODEL_PATH', '').strip()
+    candidate_strings = [
+        model_path or '',
+        explicit_env_path,
+        DEFAULT_MODEL_PATH,
+    ]
+
+    candidates = []
+    for raw in candidate_strings:
+        if not raw:
+            continue
+        path_obj = Path(raw)
+        if path_obj.is_absolute():
+            candidates.append(path_obj)
+        else:
+            candidates.append(Path.cwd() / path_obj)
+            candidates.append(script_dir / path_obj)
+            candidates.append(script_dir.parent / path_obj)
+
+    seen = set()
+    unique_candidates = []
+    for candidate in candidates:
+        normalized = str(candidate.resolve()) if candidate.exists() else str(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_candidates.append(candidate)
+
+    for candidate in unique_candidates:
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+
+    searched = '\n'.join(f"- {str(c)}" for c in unique_candidates)
+    raise FileNotFoundError(
+        "YOLO model weights not found. Set YOLO_MODEL_PATH or place weights at one of:\n"
+        f"{searched}"
+    )
 
 
 def _read_image(input_image: Union[str, bytes, np.ndarray]):
@@ -76,13 +120,12 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
     
     img = _read_image(input_image)
 
-    if model_path is None:
-        model_path = DEFAULT_MODEL_PATH
+    resolved_model_path = resolve_model_path(model_path)
 
     # Use cached model if same path, otherwise load new one
-    if _cached_model is None or _cached_model_path != model_path:
-        _cached_model = YOLO(model_path)
-        _cached_model_path = model_path
+    if _cached_model is None or _cached_model_path != resolved_model_path:
+        _cached_model = YOLO(resolved_model_path)
+        _cached_model_path = resolved_model_path
 
     model = _cached_model
 

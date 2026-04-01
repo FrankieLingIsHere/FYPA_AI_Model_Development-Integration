@@ -47,7 +47,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # Import project modules
-from infer_image import predict_image
+from infer_image import predict_image, resolve_model_path
 from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
 
 # Global progress tracking for report generation
@@ -505,11 +505,16 @@ def _run_startup_sequence():
             _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
         else:
             _set_startup_progress(24, 'Skipping YOLO warm-up for this deployment')
-            _set_startup_step(
-                'yolo_model',
-                'ok',
-                'Skipped by STARTUP_MODEL_WARMUP_ENABLED=false'
-            )
+            try:
+                resolved_path = resolve_model_path()
+                _set_startup_step(
+                    'yolo_model',
+                    'ok',
+                    f'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false), model found at {resolved_path}'
+                )
+            except Exception as yolo_path_exc:
+                _set_startup_step('yolo_model', 'error', str(yolo_path_exc))
+                raise RuntimeError(f'YOLO model path check failed: {yolo_path_exc}')
 
         _set_startup_progress(50, 'Initializing detection and report pipeline')
         init_success = initialize_pipeline_components()
@@ -3811,13 +3816,22 @@ def api_reliability_stats():
 def system_info():
     """Get system information."""
     import torch
+
+    try:
+        resolved_model_path = resolve_model_path()
+        model_exists = True
+    except Exception:
+        resolved_model_path = None
+        model_exists = False
     
     info = {
         'python_version': sys.version,
         'cuda_available': torch.cuda.is_available(),
         'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         'violations_count': len(list(VIOLATIONS_DIR.iterdir())) if VIOLATIONS_DIR.exists() else 0,
-        'model_path': 'Results/ppe_yolov86/weights/best.pt'
+        'model_path': 'Results/ppe_yolov86/weights/best.pt',
+        'resolved_model_path': resolved_model_path,
+        'model_exists': model_exists
     }
     
     return jsonify(info)

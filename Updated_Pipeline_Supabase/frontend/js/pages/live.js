@@ -1322,10 +1322,8 @@ const LivePage = {
                         ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'
                         : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> CAMERA LIVE';
 
-                    stopBtn.disabled = false;
-                    startBtn.disabled = true;
+                    setLiveControlState(true);
                     startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
-                    APP_STATE.liveStreamActive = true;
                     hideDepthWidgets();
                     renderSourceToggle();
 
@@ -1430,6 +1428,15 @@ const LivePage = {
 
         // Handle stream errors
         streamImg.addEventListener('error', () => {
+            if (!APP_STATE.liveStreamActive) {
+                return;
+            }
+
+            // Browser capture mode uses <video>, not <img>; ignore incidental img errors.
+            if (shouldUseBrowserCaptureSource()) {
+                return;
+            }
+
             console.error('Stream error');
             placeholder.style.display = 'block';
             streamImg.style.display = 'none';

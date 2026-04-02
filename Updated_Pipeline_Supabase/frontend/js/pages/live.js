@@ -560,6 +560,9 @@ const LivePage = {
                     z-index: 1400;
                     padding: 1rem;
                     overscroll-behavior: contain;
+                    isolation: isolate;
+                    transform: translateZ(0);
+                    will-change: opacity;
                 }
 
                 .settings-modal.open {
@@ -576,6 +579,12 @@ const LivePage = {
                     overflow: hidden;
                     display: flex;
                     flex-direction: column;
+                    position: relative;
+                    z-index: 1401;
+                    transform: translateZ(0);
+                    will-change: transform;
+                    backface-visibility: hidden;
+                    contain: layout paint;
                 }
 
                 .settings-window.expanded {
@@ -599,6 +608,18 @@ const LivePage = {
                 .settings-window-content {
                     padding: 1rem 1.1rem 1.15rem;
                     overflow: auto;
+                    position: relative;
+                    z-index: 1;
+                }
+
+                #liveStreamContainer {
+                    isolation: isolate;
+                    contain: paint;
+                }
+
+                #liveStream {
+                    transform: translateZ(0);
+                    backface-visibility: hidden;
                 }
 
                 .settings-window-content .grid.grid-2 {
@@ -1420,6 +1441,15 @@ const LivePage = {
                 }
 
                 // Start monitoring on backend
+                // Ensure no stale backend camera session is holding the device.
+                try {
+                    await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STOP}`, {
+                        method: 'POST'
+                    });
+                } catch (cleanupError) {
+                    // Safe to ignore: start call below remains authoritative.
+                }
+
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_START}`, {
                     method: 'POST',
                     headers: {
@@ -1506,7 +1536,7 @@ const LivePage = {
         stopBtn.addEventListener('click', stopLiveStream);
 
         // Handle stream errors
-        streamImg.addEventListener('error', () => {
+        streamImg.addEventListener('error', async () => {
             if (!APP_STATE.liveStreamActive) {
                 return;
             }
@@ -1514,6 +1544,14 @@ const LivePage = {
             // Browser capture mode uses <video>, not <img>; ignore incidental img errors.
             if (shouldUseBrowserCaptureSource()) {
                 return;
+            }
+
+            try {
+                await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STOP}`, {
+                    method: 'POST'
+                });
+            } catch (stopError) {
+                console.warn('Failed to stop backend stream after stream error:', stopError);
             }
 
             console.error('Stream error');

@@ -7,13 +7,16 @@ const AnalyticsPage = {
 
     render() {
         return `
-            <div class="page">
+            <div class="page analytics-dashboard">
                 <div class="card mb-4">
                     <div class="card-header">
                         <span><i class="fas fa-chart-line"></i> Safety Analytics Dashboard</span>
                     </div>
                     <div class="card-content">
                         <div id="analytics-stats" class="grid grid-4 mb-4">
+                            <div class="spinner"></div>
+                        </div>
+                        <div id="analytics-insights" class="analytics-insights-grid">
                             <div class="spinner"></div>
                         </div>
                     </div>
@@ -37,7 +40,7 @@ const AnalyticsPage = {
                         <div class="card-header">
                             <span><i class="fas fa-pie-chart"></i> Violation Types</span>
                         </div>
-                        <div class="card-content" id="violation-types">
+                        <div class="card-content" id="analytics-violation-types">
                             <div class="spinner"></div>
                         </div>
                     </div>
@@ -47,7 +50,7 @@ const AnalyticsPage = {
                         <div class="card-header">
                             <span><i class="fas fa-clock"></i> Time Distribution</span>
                         </div>
-                        <div class="card-content" id="time-distribution">
+                        <div class="card-content" id="analytics-time-distribution">
                             <div class="spinner"></div>
                         </div>
                     </div>
@@ -142,6 +145,7 @@ const AnalyticsPage = {
             ]);
 
             this.renderStats(stats);
+            this.renderInsights(stats, violations);
             this.renderTrendsChart(violations);
             this.renderViolationTypes(stats);
             this.renderTimeDistribution(violations);
@@ -173,6 +177,35 @@ const AnalyticsPage = {
             <div class="stat-card success">
                 <h3>${stats.severity.low}</h3>
                 <p>Low Severity</p>
+            </div>
+        `;
+    },
+
+    renderInsights(stats, violations) {
+        const container = document.getElementById('analytics-insights');
+        if (!container) return;
+
+        const breakdown = stats.breakdown || {};
+        const sorted = Object.entries(breakdown).sort((a, b) => Number(b[1]) - Number(a[1]));
+        const topType = sorted.length > 0 ? `${sorted[0][0]} (${sorted[0][1]})` : 'No violations yet';
+
+        const lastViolation = (violations || [])
+            .map((v) => new Date(v.timestamp || 0))
+            .filter((d) => !Number.isNaN(d.getTime()))
+            .sort((a, b) => b.getTime() - a.getTime())[0];
+
+        container.innerHTML = `
+            <div class="analytics-insight-card">
+                <div class="label">Top Violation Type</div>
+                <div class="value">${topType}</div>
+            </div>
+            <div class="analytics-insight-card">
+                <div class="label">Pending Reports</div>
+                <div class="value">${stats.pending || 0}</div>
+            </div>
+            <div class="analytics-insight-card">
+                <div class="label">Last Violation Seen</div>
+                <div class="value">${lastViolation ? lastViolation.toLocaleString() : 'No data'}</div>
             </div>
         `;
     },
@@ -256,7 +289,7 @@ const AnalyticsPage = {
     },
 
     renderViolationTypes(stats) {
-        const container = document.getElementById('violation-types');
+        const container = document.getElementById('analytics-violation-types');
         const breakdown = stats.breakdown || {};
         const types = [
             { name: 'Missing Hardhat', count: breakdown['NO-Hardhat'] || 0, color: 'var(--error-color)' },
@@ -287,7 +320,7 @@ const AnalyticsPage = {
     },
 
     renderTimeDistribution(violations) {
-        const container = document.getElementById('time-distribution');
+        const container = document.getElementById('analytics-time-distribution');
 
         // Calculate time distribution
         const distribution = {

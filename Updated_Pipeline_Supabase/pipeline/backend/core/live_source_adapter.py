@@ -140,6 +140,15 @@ class LiveSourceAdapter:
                 'message': 'Failed to open webcam'
             }
 
+        # Keep webcam buffer small to avoid stale-frame lag in annotated stream.
+        try:
+            self.active_camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.active_camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.active_camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            self.active_camera.set(cv2.CAP_PROP_FPS, 30)
+        except Exception:
+            pass
+
         self.active_camera_source = 'webcam'
         return {
             'success': True,

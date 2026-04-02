@@ -413,6 +413,56 @@ body:not(.startup-loading) .startup-loader {
     gap: 0.7rem;
 }
 
+/* Device-driven phone layout should apply even when landscape width exceeds media breakpoints. */
+body.is-phone-device .nav-container {
+    height: auto;
+    min-height: 64px;
+    padding: 0.65rem 0.8rem;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    position: relative;
+}
+
+body.is-phone-device .nav-toggle,
+body.is-phone-device .nav-more-toggle {
+    display: inline-flex;
+}
+
+body.is-phone-device .nav-toggle {
+    margin-left: auto;
+}
+
+body.is-phone-device .nav-menu {
+    order: 3;
+    width: 100%;
+    display: none;
+    flex-direction: column;
+    gap: 0.4rem;
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 10px;
+    padding: 0.55rem;
+    max-height: 42vh;
+    overflow-y: auto;
+}
+
+body.is-phone-device.nav-open .nav-menu {
+    display: flex;
+}
+
+body.is-phone-device .nav-right-tools {
+    order: 2;
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+}
+
+body.is-phone-device .main-content {
+    padding: 0.75rem;
+    margin-left: 0;
+    max-width: 100%;
+}
+
 .nav-timezone {
     display: flex;
     align-items: center;
@@ -457,6 +507,44 @@ body:not(.startup-loading) .startup-loader {
 }
 
 .realtime-offline {
+    color: #b71c1c;
+    background: rgba(255, 205, 210, 0.45);
+    border-color: rgba(244, 67, 54, 0.45);
+}
+
+.reports-provider-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.74rem;
+    font-weight: 700;
+    border: 1px solid transparent;
+    line-height: 1;
+    background: rgba(236, 240, 241, 0.5);
+    color: #2c3e50;
+}
+
+.reports-provider-badge.state-info {
+    color: #35536b;
+    background: rgba(53, 152, 219, 0.15);
+    border-color: rgba(53, 152, 219, 0.35);
+}
+
+.reports-provider-badge.state-ok {
+    color: #1b5e20;
+    background: rgba(129, 199, 132, 0.3);
+    border-color: rgba(76, 175, 80, 0.45);
+}
+
+.reports-provider-badge.state-warn {
+    color: #7a4f00;
+    background: rgba(255, 224, 178, 0.45);
+    border-color: rgba(255, 167, 38, 0.45);
+}
+
+.reports-provider-badge.state-error {
     color: #b71c1c;
     background: rgba(255, 205, 210, 0.45);
     border-color: rgba(244, 67, 54, 0.45);
@@ -1705,6 +1793,51 @@ body.is-phone-device .handbook-content {
     gap: 0.5rem;
 }
 
+.home-violation-card {
+    border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.home-violation-content {
+    padding-top: calc(var(--spacing-lg) + 0.25rem);
+    padding-bottom: calc(var(--spacing-lg) + 0.25rem);
+}
+
+.home-violation-list .violation-stat-row {
+    padding: 0.65rem 0.7rem;
+    border-radius: 10px;
+    background: #f7f9fc;
+    border: 1px solid #e6ecf3;
+}
+
+.analytics-dashboard .grid.grid-2 {
+    align-items: stretch;
+}
+
+.analytics-insights-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.analytics-insight-card {
+    border: 1px solid #dde5ee;
+    border-radius: 10px;
+    padding: 0.7rem 0.85rem;
+    background: linear-gradient(180deg, #ffffff, #f7fafc);
+}
+
+.analytics-insight-card .label {
+    font-size: 0.8rem;
+    color: #6b7b8f;
+    margin-bottom: 0.25rem;
+}
+
+.analytics-insight-card .value {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #243447;
+}
+
 
 /* Reports list compact cards */
 .reports-grid {
@@ -1760,6 +1893,10 @@ body.is-phone-device .handbook-content {
 
 @media (max-width: 1024px) {
     .home-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .analytics-insights-grid {
         grid-template-columns: 1fr;
     }
 }

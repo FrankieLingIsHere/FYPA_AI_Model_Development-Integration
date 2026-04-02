@@ -3,6 +3,7 @@ const LivePage = {
     queueRefreshInterval: null,
     reliabilityRefreshInterval: null,
     depthStatusInterval: null,
+    providerRuntimeInterval: null,
     settingsKeydownHandler: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
@@ -399,6 +400,11 @@ const LivePage = {
                                     </button>
                                 </div>
                                 <div id="providerRoutingStatus" style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);"></div>
+                                <div id="providerRuntimePanel" style="margin-top: 0.7rem; border: 1px solid var(--border-color); border-radius: 8px; background: #fff; padding: 0.65rem 0.75rem;">
+                                    <div style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Runtime Provider Status</div>
+                                    <div id="providerRuntimeActive" style="font-size: 0.9rem; color: var(--text-color);">Active provider: -</div>
+                                    <div id="providerRuntimeCapacity" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">Estimated remaining reports: -</div>
+                                </div>
                             </div>
                                     </div>
                                 </div>
@@ -677,6 +683,15 @@ const LivePage = {
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
         const phoneCaptureCanvas = document.createElement('canvas');
+        const providerRuntimeActive = document.getElementById('providerRuntimeActive');
+        const providerRuntimeCapacity = document.getElementById('providerRuntimeCapacity');
+
+        const setLiveControlState = (isActive) => {
+            APP_STATE.liveStreamActive = !!isActive;
+            if (startBtn) startBtn.disabled = !!isActive;
+            if (stopBtn) stopBtn.disabled = !isActive;
+            renderSourceToggle();
+        };
 
         const updatePhonePermissionBadge = () => {
             if (!phoneCameraPermissionBadge) return;
@@ -1233,10 +1248,7 @@ const LivePage = {
                 placeholder.style.display = 'block';
                 statusIndicator.style.display = 'none';
                 if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
-                stopBtn.disabled = true;
-                startBtn.disabled = false;
-                APP_STATE.liveStreamActive = false;
-                renderSourceToggle();
+                setLiveControlState(false);
                 hideDepthWidgets();
                 showNotification('Live monitoring stopped', 'info');
             } catch (error) {
@@ -1249,10 +1261,7 @@ const LivePage = {
                 streamImg.style.display = 'none';
                 placeholder.style.display = 'block';
                 statusIndicator.style.display = 'none';
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-                APP_STATE.liveStreamActive = false;
-                renderSourceToggle();
+                setLiveControlState(false);
                 hideDepthWidgets();
             }
         }
@@ -1314,13 +1323,14 @@ const LivePage = {
                         : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> CAMERA LIVE';
 
                     stopBtn.disabled = false;
+                    startBtn.disabled = true;
                     startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                     APP_STATE.liveStreamActive = true;
                     hideDepthWidgets();
                     renderSourceToggle();
 
                     stopPhoneInferenceLoop();
-                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 1200);
+                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 850);
                     await capturePhoneFrameForInference();
 
                     showNotification(
@@ -1362,6 +1372,7 @@ const LivePage = {
 
                 // Enable stop button
                 stopBtn.disabled = false;
+                startBtn.disabled = true;
                 startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                 
                 // Update state
@@ -1423,10 +1434,7 @@ const LivePage = {
             placeholder.style.display = 'block';
             streamImg.style.display = 'none';
             statusIndicator.style.display = 'none';
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            APP_STATE.liveStreamActive = false;
-            renderSourceToggle();
+            setLiveControlState(false);
             hideDepthWidgets();
         });
 
@@ -1486,9 +1494,7 @@ const LivePage = {
                 statusIndicator.style.display = 'block';
                 statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
                 streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
-                stopBtn.disabled = false;
-                startBtn.disabled = true;
-                APP_STATE.liveStreamActive = true;
+                setLiveControlState(true);
             }
 
             renderCapabilities();
@@ -1683,6 +1689,50 @@ const LivePage = {
             }
         }
 
+        function renderProviderRuntimeStatus(data) {
+            if (!providerRuntimeActive || !providerRuntimeCapacity) return;
+
+            const runtime = (data && data.runtime) || {};
+            const nlp = runtime.nlp || {};
+            const capacity = (data && data.capacity) || {};
+
+            const provider = nlp.last_provider || 'unknown';
+            const model = nlp.last_model || '-';
+            const fallbackReason = nlp.last_fallback_reason ? ` (reason: ${nlp.last_fallback_reason})` : '';
+            providerRuntimeActive.textContent = `Active provider: ${provider} | model: ${model}${fallbackReason}`;
+
+            const estimate = capacity.estimate_reports_remaining;
+            const estimateText = estimate == null ? 'unbounded/unknown' : String(estimate);
+            const confidence = capacity.confidence || 'low';
+            const message = capacity.message || 'No capacity telemetry available.';
+            providerRuntimeCapacity.textContent = `Estimated remaining reports: ${estimateText} (confidence: ${confidence}) - ${message}`;
+
+            if ((capacity.status || '') === 'depleted') {
+                providerRuntimeCapacity.style.color = 'var(--error-color)';
+            } else if ((capacity.status || '') === 'limited') {
+                providerRuntimeCapacity.style.color = 'var(--warning-color)';
+            } else {
+                providerRuntimeCapacity.style.color = 'var(--text-secondary)';
+            }
+        }
+
+        async function updateProviderRuntimeStatus() {
+            try {
+                const data = await API.getProviderRuntimeStatus();
+                if (!data || data.success === false) {
+                    throw new Error((data && data.error) || 'Failed to load provider runtime');
+                }
+                renderProviderRuntimeStatus(data);
+            } catch (error) {
+                console.error('Error loading provider runtime status:', error);
+                if (providerRuntimeActive) providerRuntimeActive.textContent = 'Active provider: unavailable';
+                if (providerRuntimeCapacity) {
+                    providerRuntimeCapacity.textContent = 'Estimated remaining reports: unavailable';
+                    providerRuntimeCapacity.style.color = 'var(--error-color)';
+                }
+            }
+        }
+
         // Function to fetch current settings
         async function loadCurrentSettings() {
             try {
@@ -1704,6 +1754,7 @@ const LivePage = {
             // Also update queue status
             await updateQueueStatus();
             await updateReliabilityStatus();
+            await updateProviderRuntimeStatus();
             await loadProviderRoutingSettings();
         }
 
@@ -1771,6 +1822,7 @@ const LivePage = {
                     setProviderStatus('Provider routing updated successfully', 'success');
                     showNotification('Provider routing updated', 'success');
                     await loadProviderRoutingSettings();
+                    await updateProviderRuntimeStatus();
                 } else {
                     const errorMessage = (result && result.error) ? result.error : 'Failed to update provider settings';
                     setProviderStatus(errorMessage, 'error');
@@ -1971,10 +2023,11 @@ const LivePage = {
             
             await updateQueueStatus();
             await updateReliabilityStatus();
+            await updateProviderRuntimeStatus();
             
             refreshQueueBtn.disabled = false;
             refreshQueueBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Status';
-            showNotification('Queue and reliability status refreshed', 'info');
+            showNotification('Queue, reliability, and provider status refreshed', 'info');
         });
 
         if (refreshReliabilityBtn) {
@@ -2000,6 +2053,7 @@ const LivePage = {
                 reloadProviderRoutingBtn.disabled = true;
                 reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reloading...';
                 await loadProviderRoutingSettings();
+                await updateProviderRuntimeStatus();
                 reloadProviderRoutingBtn.disabled = false;
                 reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Reload Provider Settings';
                 showNotification('Provider routing settings reloaded', 'info');
@@ -2089,9 +2143,11 @@ const LivePage = {
         updatePhonePermissionBadge();
         await initPhonePermissionWatcher();
         await loadCurrentSettings();
+        await updateProviderRuntimeStatus();
 
         const depthStatusInterval = setInterval(refreshDepthStatus, 1500);
         this.depthStatusInterval = depthStatusInterval;
+        this.providerRuntimeInterval = setInterval(updateProviderRuntimeStatus, 15000);
 
         // Realtime-first: only use polling if realtime stream is unavailable.
         this.realtimeConnectionHandler();
@@ -2100,6 +2156,7 @@ const LivePage = {
         window._livePageQueueInterval = this.queueRefreshInterval;
         window._livePageReliabilityInterval = this.reliabilityRefreshInterval;
         window._liveDepthStatusInterval = depthStatusInterval;
+        window._liveProviderRuntimeInterval = this.providerRuntimeInterval;
     },
 
     unmount() {
@@ -2128,6 +2185,11 @@ const LivePage = {
             this.depthStatusInterval = null;
         }
 
+        if (this.providerRuntimeInterval) {
+            clearInterval(this.providerRuntimeInterval);
+            this.providerRuntimeInterval = null;
+        }
+
         if (this.settingsKeydownHandler) {
             document.removeEventListener('keydown', this.settingsKeydownHandler);
             this.settingsKeydownHandler = null;
@@ -2154,6 +2216,10 @@ const LivePage = {
         if (window._liveDepthStatusInterval) {
             clearInterval(window._liveDepthStatusInterval);
             window._liveDepthStatusInterval = null;
+        }
+        if (window._liveProviderRuntimeInterval) {
+            clearInterval(window._liveProviderRuntimeInterval);
+            window._liveProviderRuntimeInterval = null;
         }
     }
 };

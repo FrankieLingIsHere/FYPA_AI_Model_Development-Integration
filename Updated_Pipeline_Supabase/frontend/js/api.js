@@ -394,6 +394,17 @@ const API = {
         }
     },
 
+    async getProviderRuntimeStatus() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.PROVIDER_RUNTIME_STATUS}`);
+            if (!response.ok) throw new Error('Failed to fetch provider runtime status');
+            return await response.json();
+        } catch (error) {
+            console.error('Error fetching provider runtime status:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
     async getReportRecoveryOptions() {
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/options`);

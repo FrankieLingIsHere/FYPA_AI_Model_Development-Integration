@@ -40,11 +40,11 @@ const HomePage = {
                 </div>
 
                 <!-- VIOLATION TYPES -->
-                <div class="card">
+                <div class="card home-violation-card">
                     <div class="card-header">
                         <span><i class="fas fa-pie-chart"></i> Violation Types</span>
                     </div>
-                    <div class="card-content" id="violation-types">
+                    <div class="card-content home-violation-content" id="violation-types">
                         <div class="spinner"></div>
                     </div>
                 </div>
@@ -231,7 +231,7 @@ const HomePage = {
         const totalViolations = types.reduce((sum, t) => sum + t.count, 0);
 
         container.innerHTML = `
-            <div style="display:flex;flex-direction:column;gap:1rem;">
+            <div class="home-violation-list" style="display:flex;flex-direction:column;gap:1.15rem;">
                 ${types.map(t => `
                     <div class="violation-stat-row">
                         <div style="display:flex;justify-content:space-between;margin-bottom:0.25rem;">

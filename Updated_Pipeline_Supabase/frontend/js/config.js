@@ -19,6 +19,7 @@ const API_CONFIG = {
         UPLOAD_INFERENCE: '/api/inference/upload',
         SYSTEM_INFO: '/api/system/info',
         RELIABILITY_STATS: '/api/reliability/stats',
+        PROVIDER_RUNTIME_STATUS: '/api/providers/runtime-status',
         REALTIME_STREAM: '/api/realtime/stream',
         REALTIME_SNAPSHOT: '/api/realtime/snapshot'
     }

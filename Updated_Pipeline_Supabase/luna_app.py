@@ -2297,6 +2297,9 @@ def _current_provider_settings():
     return {
         'model_api_enabled': bool(MODEL_API_CONFIG.get('enabled', False)),
         'gemini_enabled': bool(GEMINI_CONFIG.get('enabled', True)),
+        'gemini_daily_budget_usd': float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0),
+        'gemini_monthly_budget_usd': float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0),
+        'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900),
         'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
         'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama']),
         'vision_provider_order': vision_settings.get('vision_provider_order', ['model_api', 'gemini', 'ollama']),
@@ -2307,6 +2310,147 @@ def _current_provider_settings():
         'ollama_vision_model': vision_settings.get('ollama_vision_model', 'qwen2.5vl'),
         'gemini_model': GEMINI_CONFIG.get('model', 'gemini-2.5-flash'),
         'gemini_vision_model': vision_settings.get('gemini_vision_model', GEMINI_CONFIG.get('model', 'gemini-2.5-flash'))
+    }
+
+
+def _get_provider_runtime_snapshot() -> Dict[str, Any]:
+    """Collect runtime provider diagnostics from NLP + vision modules."""
+    nlp_runtime = {
+        'provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
+        'last_provider': None,
+        'last_model': None,
+        'last_error': None,
+        'last_fallback_reason': None,
+        'last_completed_at': None,
+        'gemini_budget': {
+            'enabled': bool(
+                float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0) > 0
+                or float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0) > 0
+            ),
+            'daily_limit_usd': float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0),
+            'monthly_limit_usd': float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0),
+            'daily_spend_usd': 0.0,
+            'monthly_spend_usd': 0.0,
+            'daily_calls': 0,
+            'monthly_calls': 0,
+            'last_block_reason': None,
+            'enforced_max_output_tokens': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900),
+        },
+    }
+
+    if report_generator is not None and hasattr(report_generator, 'get_runtime_provider_diagnostics'):
+        try:
+            nlp_runtime = report_generator.get_runtime_provider_diagnostics() or nlp_runtime
+        except Exception as e:
+            logger.warning(f"Unable to fetch NLP runtime diagnostics: {e}")
+
+    vision_runtime = {
+        'vision_provider_order': [],
+        'last_provider_used': None,
+        'recent_failures': [],
+        'gemini_quota_cooldown_remaining_s': 0,
+        'gemini_model': None,
+        'ollama_model': None,
+        'vision_api_model': None,
+    }
+
+    try:
+        from caption_image import get_runtime_provider_diagnostics
+        payload = get_runtime_provider_diagnostics()
+        if isinstance(payload, dict):
+            vision_runtime = payload
+    except Exception as e:
+        logger.warning(f"Unable to fetch vision runtime diagnostics: {e}")
+
+    return {
+        'nlp': nlp_runtime,
+        'vision': vision_runtime,
+    }
+
+
+def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runtime_snapshot: Dict[str, Any], local_diag: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort remaining report capacity estimate for UX visibility."""
+    nlp_runtime = runtime_snapshot.get('nlp', {}) if isinstance(runtime_snapshot, dict) else {}
+    vision_runtime = runtime_snapshot.get('vision', {}) if isinstance(runtime_snapshot, dict) else {}
+    gemini_budget = nlp_runtime.get('gemini_budget', {}) if isinstance(nlp_runtime, dict) else {}
+
+    local_mode_possible = bool((local_diag or {}).get('local_mode_possible'))
+    gemini_enabled = bool(provider_settings.get('gemini_enabled', True))
+    model_api_enabled = bool(provider_settings.get('model_api_enabled', False))
+    nlp_order = [str(p).lower() for p in provider_settings.get('nlp_provider_order', [])]
+
+    nlp_last_error = str(nlp_runtime.get('last_error') or '')
+    vision_failures = vision_runtime.get('recent_failures') or []
+    gemini_quota_cooldown_remaining = int(vision_runtime.get('gemini_quota_cooldown_remaining_s') or 0)
+    daily_limit = float(gemini_budget.get('daily_limit_usd', 0.0) or 0.0)
+    monthly_limit = float(gemini_budget.get('monthly_limit_usd', 0.0) or 0.0)
+    daily_spend = float(gemini_budget.get('daily_spend_usd', 0.0) or 0.0)
+    monthly_spend = float(gemini_budget.get('monthly_spend_usd', 0.0) or 0.0)
+    budget_exhausted = (
+        (daily_limit > 0 and daily_spend >= daily_limit)
+        or (monthly_limit > 0 and monthly_spend >= monthly_limit)
+    )
+    budget_blocked = 'budget guardrail hit' in nlp_last_error.lower() or bool(gemini_budget.get('last_block_reason'))
+
+    gemini_quota_signals = [
+        'quota' in nlp_last_error.lower(),
+        'resource_exhausted' in nlp_last_error.lower(),
+        gemini_quota_cooldown_remaining > 0,
+        any('quota' in str(item.get('reason', '')).lower() for item in vision_failures if isinstance(item, dict)),
+    ]
+    gemini_likely_limited = any(gemini_quota_signals)
+
+    if local_mode_possible and ('ollama' in nlp_order or 'local' in nlp_order):
+        return {
+            'estimate_reports_remaining': None,
+            'confidence': 'medium',
+            'status': 'sustainable',
+            'message': 'Local fallback is available; capacity is effectively bounded by local compute rather than API quota.'
+        }
+
+    if model_api_enabled and ('model_api' in nlp_order):
+        return {
+            'estimate_reports_remaining': None,
+            'confidence': 'low',
+            'status': 'unknown',
+            'message': 'Primary model API is enabled; remaining capacity depends on external account quota and cannot be measured precisely from runtime telemetry.'
+        }
+
+    if gemini_enabled and (budget_exhausted or budget_blocked):
+        if daily_limit > 0 and daily_spend >= daily_limit:
+            budget_message = f"Gemini daily budget reached ({daily_spend:.4f}/{daily_limit:.4f} USD)."
+        elif monthly_limit > 0 and monthly_spend >= monthly_limit:
+            budget_message = f"Gemini monthly budget reached ({monthly_spend:.4f}/{monthly_limit:.4f} USD)."
+        else:
+            budget_message = 'Gemini budget guardrail is currently blocking new cloud requests.'
+        return {
+            'estimate_reports_remaining': 0,
+            'confidence': 'high',
+            'status': 'depleted',
+            'message': f"{budget_message} Routing should continue via lower-cost/local fallback providers."
+        }
+
+    if gemini_enabled and gemini_likely_limited:
+        return {
+            'estimate_reports_remaining': 0,
+            'confidence': 'medium',
+            'status': 'depleted',
+            'message': 'Gemini appears quota-limited right now and no durable cloud fallback is currently guaranteed.'
+        }
+
+    if gemini_enabled:
+        return {
+            'estimate_reports_remaining': 5,
+            'confidence': 'low',
+            'status': 'limited',
+            'message': 'Gemini is enabled with no hard quota signal yet; conservative estimate assumes only a small remaining burst on free/shared quota.'
+        }
+
+    return {
+        'estimate_reports_remaining': 0,
+        'confidence': 'medium',
+        'status': 'depleted',
+        'message': 'No enabled cloud provider is currently visible for report NLP generation.'
     }
 
 
@@ -2321,8 +2465,23 @@ def api_provider_routing_settings():
     try:
         data = request.get_json(silent=True) or {}
 
+        def _to_float(value, default=0.0):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float(default)
+
+        def _to_int(value, default=0):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return int(default)
+
         model_api_enabled = bool(data.get('model_api_enabled', MODEL_API_CONFIG.get('enabled', False)))
         gemini_enabled = bool(data.get('gemini_enabled', GEMINI_CONFIG.get('enabled', True)))
+        gemini_daily_budget_usd = max(0.0, _to_float(data.get('gemini_daily_budget_usd', os.getenv('GEMINI_DAILY_BUDGET_USD', '0')), 0.0))
+        gemini_monthly_budget_usd = max(0.0, _to_float(data.get('gemini_monthly_budget_usd', os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0')), 0.0))
+        gemini_max_output_tokens_per_report = max(1, _to_int(data.get('gemini_max_output_tokens_per_report', os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900')), 900))
 
         nlp_provider_order = _normalize_provider_order(
             data.get('nlp_provider_order'),
@@ -2357,6 +2516,9 @@ def api_provider_routing_settings():
         # Persist to environment for module consumers
         os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
         os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
+        os.environ['GEMINI_DAILY_BUDGET_USD'] = str(gemini_daily_budget_usd)
+        os.environ['GEMINI_MONTHLY_BUDGET_USD'] = str(gemini_monthly_budget_usd)
+        os.environ['GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT'] = str(gemini_max_output_tokens_per_report)
         os.environ['NLP_PROVIDER_ORDER'] = ','.join(nlp_provider_order)
         os.environ['EMBEDDING_PROVIDER_ORDER'] = ','.join(embedding_provider_order)
         os.environ['VISION_PROVIDER_ORDER'] = ','.join(vision_provider_order)
@@ -2391,6 +2553,14 @@ def api_provider_routing_settings():
             report_generator.embedding_api_model = MODEL_API_CONFIG.get('embedding_model', report_generator.embedding_model)
             report_generator.use_gemini = GEMINI_CONFIG.get('enabled', True) and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
             report_generator.model = OLLAMA_CONFIG.get('model', report_generator.model)
+            report_generator.gemini_daily_budget_usd = gemini_daily_budget_usd
+            report_generator.gemini_monthly_budget_usd = gemini_monthly_budget_usd
+            report_generator.gemini_max_output_tokens_per_report = gemini_max_output_tokens_per_report
+            if getattr(report_generator, 'gemini_client', None) is not None:
+                report_generator.gemini_client.max_tokens = min(
+                    report_generator.gemini_client.max_tokens,
+                    gemini_max_output_tokens_per_report
+                )
 
         return jsonify({
             'success': True,
@@ -2400,6 +2570,27 @@ def api_provider_routing_settings():
 
     except Exception as e:
         logger.error(f"Error updating provider routing settings: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/providers/runtime-status', methods=['GET'])
+def api_provider_runtime_status():
+    """Expose active provider/model, failover reason, and capacity estimate for UX."""
+    try:
+        settings = _current_provider_settings()
+        runtime_snapshot = _get_provider_runtime_snapshot()
+        local_diag = _get_local_mode_diagnostics()
+        capacity = _estimate_remaining_report_capacity(settings, runtime_snapshot, local_diag)
+
+        return jsonify({
+            'success': True,
+            'settings': settings,
+            'runtime': runtime_snapshot,
+            'local': local_diag,
+            'capacity': capacity,
+        })
+    except Exception as e:
+        logger.error(f"Error building provider runtime status: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -3692,7 +3883,7 @@ def generate_frames(conf=0.25):
                             logger.debug("Violation not queued (cooldown or already processing)")
                 
                 # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if not ret:
                     continue
                 

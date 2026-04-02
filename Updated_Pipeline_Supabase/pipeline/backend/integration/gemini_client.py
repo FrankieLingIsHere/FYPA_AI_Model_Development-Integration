@@ -70,6 +70,19 @@ class GeminiClient:
 
         self.api_key = _clean_key(gemini_config.get('api_key')) or _clean_key(os.getenv('GEMINI_API_KEY', ''))
         self.model_name = gemini_config.get('model', 'gemini-2.0-flash')
+        candidate_text = str(
+            gemini_config.get(
+                'model_candidates',
+                os.getenv('GEMINI_MODEL_CANDIDATES', f"{self.model_name},gemini-2.5-flash-lite,gemini-1.5-flash")
+            )
+        )
+        parsed_candidates = [item.strip() for item in candidate_text.split(',') if item.strip()]
+        deduped_candidates = []
+        for candidate in [self.model_name, *parsed_candidates]:
+            if candidate and candidate not in deduped_candidates:
+                deduped_candidates.append(candidate)
+        self.model_candidates = deduped_candidates
+        self.last_model_switch_reason = None
         self.temperature = gemini_config.get('temperature', 0.4)
         self.max_tokens = gemini_config.get('max_tokens', 2000)
         self.timeout = gemini_config.get('timeout', 120)
@@ -116,6 +129,26 @@ class GeminiClient:
             logger.debug(f"Rate limiting: waiting {wait:.1f}s")
             time.sleep(wait)
         self._last_call_time = time.time()
+
+    def _try_switch_to_next_model(self, reason: str) -> bool:
+        """Switch to next configured Gemini model candidate when current one is exhausted."""
+        if not self.model_candidates:
+            return False
+
+        try:
+            current_index = self.model_candidates.index(self.model_name)
+        except ValueError:
+            current_index = -1
+
+        next_index = current_index + 1
+        if next_index >= len(self.model_candidates):
+            return False
+
+        previous = self.model_name
+        self.model_name = self.model_candidates[next_index]
+        self.last_model_switch_reason = reason
+        logger.warning(f"Switching Gemini model from {previous} to {self.model_name} due to: {reason}")
+        return True
     
     def _load_image_as_part(self, image_path: str) -> Optional[Any]:
         """
@@ -373,6 +406,8 @@ class GeminiClient:
             logger.error("Gemini not available for report generation")
             self.last_error = "Gemini client not available for report generation"
             return None
+
+        self.last_model_switch_reason = None
         
         # Build content parts
         contents = [prompt]
@@ -433,6 +468,9 @@ class GeminiClient:
                 # Fail fast on quota/resource exhaustion to avoid long stuck generation windows.
                 upper = err_text.upper()
                 if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    switched = self._try_switch_to_next_model('quota/resource exhaustion')
+                    if switched:
+                        continue
                     break
 
                 if attempt < self.max_retries - 1:
@@ -452,6 +490,8 @@ class GeminiClient:
             'sdk_installed': GEMINI_AVAILABLE,
             'api_key_set': bool(self.api_key),
             'model': self.model_name,
+            'model_candidates': self.model_candidates,
+            'last_model_switch_reason': self.last_model_switch_reason,
             'backend': 'Google Gemini API',
             'error': GEMINI_ERROR if not GEMINI_AVAILABLE else None
         }

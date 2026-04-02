@@ -1,6 +1,7 @@
 // Reports Page Component
 const ReportsPage = {
     violations: [],
+    providerRuntimeInterval: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     realtimeRefreshTimer: null,
@@ -30,7 +31,10 @@ const ReportsPage = {
             <div class="page">
                 <div class="card mb-4">
                     <div class="card-header">
-                        <span><i class="fas fa-file-alt"></i> Violation Reports</span>
+                        <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+                            <span><i class="fas fa-file-alt"></i> Violation Reports</span>
+                            <span id="reportsProviderBadge" class="reports-provider-badge">Provider: loading...</span>
+                        </div>
                         <button class="btn btn-primary" onclick="ReportsPage.refreshReports()" style="padding: 0.5rem 1rem;">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
@@ -79,6 +83,8 @@ const ReportsPage = {
 
     async mount() {
         await this.loadReports();
+        await this.updateProviderRuntimeBadge();
+        this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
         this.syncFallbackPolling();
 
         this.realtimeHandler = () => {
@@ -98,6 +104,10 @@ const ReportsPage = {
         this.stopAutoRefresh();
         this.stopModalPolling();
         this.stopModalCooldown();
+        if (this.providerRuntimeInterval) {
+            clearInterval(this.providerRuntimeInterval);
+            this.providerRuntimeInterval = null;
+        }
         if (this.realtimeHandler) {
             window.removeEventListener('ppe-realtime:update', this.realtimeHandler);
             this.realtimeHandler = null;
@@ -149,6 +159,46 @@ const ReportsPage = {
         const list = document.getElementById('reports-list');
         list.innerHTML = '<div class="spinner"></div>';
         await this.loadReports();
+        await this.updateProviderRuntimeBadge();
+    },
+
+    setProviderBadgeText(text, state = 'info') {
+        const badge = document.getElementById('reportsProviderBadge');
+        if (!badge) return;
+
+        badge.textContent = text;
+        badge.classList.remove('state-info', 'state-ok', 'state-warn', 'state-error');
+        if (state === 'ok') badge.classList.add('state-ok');
+        else if (state === 'warn') badge.classList.add('state-warn');
+        else if (state === 'error') badge.classList.add('state-error');
+        else badge.classList.add('state-info');
+    },
+
+    async updateProviderRuntimeBadge() {
+        try {
+            const data = await API.getProviderRuntimeStatus();
+            if (!data || data.success === false) {
+                throw new Error((data && data.error) || 'runtime unavailable');
+            }
+
+            const runtime = data.runtime || {};
+            const nlp = runtime.nlp || {};
+            const capacity = data.capacity || {};
+
+            const provider = nlp.last_provider || 'unknown';
+            const model = nlp.last_model || '-';
+            const estimate = capacity.estimate_reports_remaining;
+            const estimateText = estimate == null ? 'unknown' : String(estimate);
+
+            let state = 'info';
+            if (capacity.status === 'depleted') state = 'error';
+            else if (capacity.status === 'limited') state = 'warn';
+            else if (capacity.status === 'sustainable') state = 'ok';
+
+            this.setProviderBadgeText(`Provider: ${provider} (${model}) | Remaining: ${estimateText}`, state);
+        } catch (error) {
+            this.setProviderBadgeText('Provider: unavailable', 'error');
+        }
     },
 
     handleSearch(event) {

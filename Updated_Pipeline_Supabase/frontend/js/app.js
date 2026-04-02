@@ -198,11 +198,15 @@ function setupResponsiveMobileUX() {
 
     const isTouchPhone = () => {
         const ua = (navigator.userAgent || '').toLowerCase();
+        const uaDataMobile = !!(navigator.userAgentData && navigator.userAgentData.mobile);
         const mobileUA = /android|iphone|ipod|blackberry|windows phone|mobile/i.test(ua);
+        const iPadLike = /ipad/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
         const touchCapable = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches;
-        const narrowViewport = window.matchMedia('(max-width: 900px)').matches;
-        const tabletUA = /ipad|tablet/i.test(ua);
-        return touchCapable && (mobileUA || (narrowViewport && !tabletUA));
+        const narrowViewport = window.matchMedia('(max-width: 1024px)').matches;
+        const shortestSide = Math.min(window.screen?.width || 0, window.screen?.height || 0);
+        const phoneLikeScreen = shortestSide > 0 && shortestSide <= 540;
+        const phoneHeuristic = (mobileUA || uaDataMobile || phoneLikeScreen || narrowViewport) && !iPadLike;
+        return touchCapable && phoneHeuristic;
     };
 
     const isPortrait = () => {

@@ -52,6 +52,7 @@ GEMINI_QUOTA_COOLDOWN_SECONDS = int(os.getenv('GEMINI_QUOTA_COOLDOWN_SECONDS', '
 _VISION_RESPONSE_CACHE = {}
 _LAST_PROVIDER_FAILURES = []
 _gemini_quota_backoff_until = 0.0
+_LAST_PROVIDER_USED = None
 # ---------------------------
 
 
@@ -117,6 +118,20 @@ def _build_user_facing_failure_message() -> str:
         "ALERT_PROVIDER_UNAVAILABLE: All configured caption providers are currently unavailable. "
         "Please retry later or adjust provider routing."
     )
+
+
+def get_runtime_provider_diagnostics() -> dict:
+    """Return runtime diagnostics for vision provider routing and cooldown state."""
+    cooldown_remaining = max(0, int(_gemini_quota_backoff_until - time.time()))
+    return {
+        'vision_provider_order': list(VISION_PROVIDER_ORDER),
+        'last_provider_used': _LAST_PROVIDER_USED,
+        'recent_failures': list(_LAST_PROVIDER_FAILURES[-6:]),
+        'gemini_quota_cooldown_remaining_s': cooldown_remaining,
+        'gemini_model': GEMINI_VISION_MODEL,
+        'ollama_model': OLLAMA_MODEL_NAME,
+        'vision_api_model': VISION_API_MODEL,
+    }
 
 
 def get_runtime_provider_settings():
@@ -335,7 +350,9 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
 
 def _generate_vision_response(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 300) -> str:
     """Try providers in configured order until one returns a response."""
+    global _LAST_PROVIDER_USED
     _LAST_PROVIDER_FAILURES.clear()
+    _LAST_PROVIDER_USED = None
 
     cache_key = _compute_cache_key(prompt, image_base64, temperature, max_tokens)
     cached = _get_cached_response(cache_key)
@@ -355,6 +372,7 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
 
         if output:
             print(f"Using vision provider: {provider}")
+            _LAST_PROVIDER_USED = provider
             _set_cached_response(cache_key, output)
             return output
 

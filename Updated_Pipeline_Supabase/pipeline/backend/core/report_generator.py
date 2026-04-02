@@ -18,6 +18,7 @@ import json
 import csv
 import os
 import requests
+import threading
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -70,7 +71,28 @@ class ReportGenerator:
         """
         self.config = config
         self.last_nlp_error = None
+        self.last_nlp_provider = None
+        self.last_nlp_model = None
+        self.last_nlp_fallback_reason = None
+        self.last_nlp_completed_at = None
+        self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
+
+        # Gemini spend guardrails (all USD values; set to 0 to disable a limit)
+        self.gemini_daily_budget_usd = float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0)
+        self.gemini_monthly_budget_usd = float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0)
+        self.gemini_cost_per_1m_input_tokens = float(os.getenv('GEMINI_COST_PER_1M_INPUT_TOKENS', '0.30') or 0.30)
+        self.gemini_cost_per_1m_output_tokens = float(os.getenv('GEMINI_COST_PER_1M_OUTPUT_TOKENS', '2.50') or 2.50)
+        self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '900') or 900)
+        self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900)
+        self.gemini_budget_state_path = Path(
+            os.getenv(
+                'GEMINI_BUDGET_STATE_PATH',
+                str(Path(__file__).resolve().parents[3] / 'pipeline' / 'backend' / 'data' / 'gemini_budget_state.json')
+            )
+        )
+        self._gemini_budget_lock = threading.Lock()
+        self._gemini_budget_state = self._load_gemini_budget_state()
         
         # =====================================================================
         # GEMINI (Primary AI provider)
@@ -83,6 +105,11 @@ class ReportGenerator:
             try:
                 self.gemini_client = GeminiClient(config)
                 if self.gemini_client.is_available:
+                    if self.gemini_max_output_tokens_per_report > 0:
+                        self.gemini_client.max_tokens = min(
+                            self.gemini_client.max_tokens,
+                            self.gemini_max_output_tokens_per_report
+                        )
                     logger.info("✓ Gemini client initialized for NLP report generation")
                 else:
                     logger.warning("Gemini client not available, falling back to Ollama")
@@ -193,6 +220,143 @@ class ReportGenerator:
         
         ai_provider = ' -> '.join(self.nlp_provider_order)
         logger.info(f"Report Generator initialized (NLP provider order: {ai_provider})")
+
+    def get_runtime_provider_diagnostics(self) -> Dict[str, Any]:
+        """Expose NLP routing runtime details for operator visibility."""
+        with self._gemini_budget_lock:
+            self._rotate_gemini_budget_windows_locked()
+            state = dict(self._gemini_budget_state)
+
+        budget_enabled = self.gemini_daily_budget_usd > 0 or self.gemini_monthly_budget_usd > 0
+        return {
+            'provider_order': list(self.nlp_provider_order or []),
+            'last_provider': self.last_nlp_provider,
+            'last_model': self.last_nlp_model,
+            'last_error': self.last_nlp_error,
+            'last_fallback_reason': self.last_nlp_fallback_reason,
+            'last_completed_at': self.last_nlp_completed_at,
+            'gemini_budget': {
+                'enabled': budget_enabled,
+                'daily_limit_usd': self.gemini_daily_budget_usd,
+                'monthly_limit_usd': self.gemini_monthly_budget_usd,
+                'daily_spend_usd': round(float(state.get('daily_spend_usd', 0.0) or 0.0), 6),
+                'monthly_spend_usd': round(float(state.get('monthly_spend_usd', 0.0) or 0.0), 6),
+                'daily_calls': int(state.get('daily_calls', 0) or 0),
+                'monthly_calls': int(state.get('monthly_calls', 0) or 0),
+                'last_block_reason': self.last_gemini_budget_block_reason,
+                'enforced_max_output_tokens': self.gemini_max_output_tokens_per_report,
+            },
+        }
+
+    def _utc_day_key(self, now: Optional[datetime] = None) -> str:
+        dt = now or datetime.utcnow()
+        return dt.strftime('%Y-%m-%d')
+
+    def _utc_month_key(self, now: Optional[datetime] = None) -> str:
+        dt = now or datetime.utcnow()
+        return dt.strftime('%Y-%m')
+
+    def _default_gemini_budget_state(self) -> Dict[str, Any]:
+        return {
+            'day_key': self._utc_day_key(),
+            'month_key': self._utc_month_key(),
+            'daily_spend_usd': 0.0,
+            'monthly_spend_usd': 0.0,
+            'daily_calls': 0,
+            'monthly_calls': 0,
+            'updated_at': datetime.utcnow().isoformat() + 'Z',
+        }
+
+    def _load_gemini_budget_state(self) -> Dict[str, Any]:
+        state = self._default_gemini_budget_state()
+        try:
+            if self.gemini_budget_state_path.exists():
+                loaded = json.loads(self.gemini_budget_state_path.read_text(encoding='utf-8'))
+                if isinstance(loaded, dict):
+                    state.update(loaded)
+        except Exception as e:
+            logger.warning(f"Could not load Gemini budget state: {e}")
+        return state
+
+    def _save_gemini_budget_state_locked(self):
+        try:
+            self.gemini_budget_state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = dict(self._gemini_budget_state)
+            payload['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+            tmp_path = self.gemini_budget_state_path.with_suffix('.tmp')
+            tmp_path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+            tmp_path.replace(self.gemini_budget_state_path)
+        except Exception as e:
+            logger.warning(f"Could not persist Gemini budget state: {e}")
+
+    def _rotate_gemini_budget_windows_locked(self):
+        current_day = self._utc_day_key()
+        current_month = self._utc_month_key()
+        changed = False
+
+        if self._gemini_budget_state.get('day_key') != current_day:
+            self._gemini_budget_state['day_key'] = current_day
+            self._gemini_budget_state['daily_spend_usd'] = 0.0
+            self._gemini_budget_state['daily_calls'] = 0
+            changed = True
+
+        if self._gemini_budget_state.get('month_key') != current_month:
+            self._gemini_budget_state['month_key'] = current_month
+            self._gemini_budget_state['monthly_spend_usd'] = 0.0
+            self._gemini_budget_state['monthly_calls'] = 0
+            changed = True
+
+        if changed:
+            self._save_gemini_budget_state_locked()
+
+    def _estimate_text_tokens(self, text: str) -> int:
+        # Simple approximation: ~4 chars/token for English text.
+        return max(1, int(len(text or '') / 4))
+
+    def _estimate_gemini_call_cost_usd(self, prompt: str) -> Tuple[float, int, int]:
+        input_tokens = self._estimate_text_tokens(prompt)
+        output_tokens = max(1, int(self.gemini_est_output_tokens_per_report))
+        in_cost = (input_tokens / 1_000_000.0) * self.gemini_cost_per_1m_input_tokens
+        out_cost = (output_tokens / 1_000_000.0) * self.gemini_cost_per_1m_output_tokens
+        return in_cost + out_cost, input_tokens, output_tokens
+
+    def _can_spend_gemini_budget(self, estimated_cost_usd: float) -> Tuple[bool, Optional[str]]:
+        if estimated_cost_usd <= 0:
+            return True, None
+
+        with self._gemini_budget_lock:
+            self._rotate_gemini_budget_windows_locked()
+            day_spend = float(self._gemini_budget_state.get('daily_spend_usd', 0.0) or 0.0)
+            month_spend = float(self._gemini_budget_state.get('monthly_spend_usd', 0.0) or 0.0)
+
+            if self.gemini_daily_budget_usd > 0 and day_spend + estimated_cost_usd > self.gemini_daily_budget_usd:
+                reason = (
+                    f"Gemini daily budget guardrail hit ({day_spend:.4f}/{self.gemini_daily_budget_usd:.4f} USD used). "
+                    "Falling back to next provider."
+                )
+                self.last_gemini_budget_block_reason = reason
+                return False, reason
+
+            if self.gemini_monthly_budget_usd > 0 and month_spend + estimated_cost_usd > self.gemini_monthly_budget_usd:
+                reason = (
+                    f"Gemini monthly budget guardrail hit ({month_spend:.4f}/{self.gemini_monthly_budget_usd:.4f} USD used). "
+                    "Falling back to next provider."
+                )
+                self.last_gemini_budget_block_reason = reason
+                return False, reason
+
+        return True, None
+
+    def _record_gemini_spend(self, estimated_cost_usd: float):
+        if estimated_cost_usd <= 0:
+            return
+        with self._gemini_budget_lock:
+            self._rotate_gemini_budget_windows_locked()
+            self._gemini_budget_state['daily_spend_usd'] = float(self._gemini_budget_state.get('daily_spend_usd', 0.0) or 0.0) + estimated_cost_usd
+            self._gemini_budget_state['monthly_spend_usd'] = float(self._gemini_budget_state.get('monthly_spend_usd', 0.0) or 0.0) + estimated_cost_usd
+            self._gemini_budget_state['daily_calls'] = int(self._gemini_budget_state.get('daily_calls', 0) or 0) + 1
+            self._gemini_budget_state['monthly_calls'] = int(self._gemini_budget_state.get('monthly_calls', 0) or 0) + 1
+            self._save_gemini_budget_state_locked()
 
     def _normalize_openai_base_url(self, raw_url: str, endpoint_suffix: str) -> str:
         """Normalize OpenAI-compatible base URL so callers can pass either base URL or full endpoint."""
@@ -998,6 +1162,10 @@ RESPONSE FORMAT (JSON):
         image_path_str = str(image_path) if image_path else None
 
         self.last_nlp_error = None
+        self.last_nlp_provider = None
+        self.last_nlp_model = None
+        self.last_nlp_fallback_reason = None
+        self.last_gemini_budget_block_reason = None
         for provider in self.nlp_provider_order:
             if nlp_analysis:
                 break
@@ -1006,26 +1174,44 @@ RESPONSE FORMAT (JSON):
             if provider_name == 'model_api':
                 logger.info("Trying model-specific cloud NLP API...")
                 nlp_analysis = self._call_model_api_nlp(prompt)
+                self.last_nlp_model = self.nlp_model
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'model_api did not return valid NLP JSON'
             elif provider_name == 'gemini':
                 if self.use_gemini:
+                    est_cost, _, _ = self._estimate_gemini_call_cost_usd(prompt)
+                    allowed, guardrail_reason = self._can_spend_gemini_budget(est_cost)
+                    if not allowed:
+                        logger.warning(guardrail_reason)
+                        self.last_nlp_error = guardrail_reason
+                        self.last_nlp_fallback_reason = guardrail_reason
+                        continue
+
                     logger.info("Trying Gemini NLP API...")
                     nlp_analysis = self._call_gemini_api(prompt, image_path=image_path_str)
+                    if self.gemini_client is not None:
+                        self.last_nlp_model = getattr(self.gemini_client, 'model_name', None)
                     if not nlp_analysis:
                         self.last_nlp_error = self.last_nlp_error or 'Gemini NLP provider failed'
+                    else:
+                        self._record_gemini_spend(est_cost)
             elif provider_name == 'ollama':
                 logger.info("Trying Ollama NLP API...")
                 nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=False)
+                self.last_nlp_model = self.model
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Ollama NLP provider failed'
             elif provider_name == 'local':
                 logger.info("Trying local Llama fallback...")
                 nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=True)
+                self.last_nlp_model = self.model if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
 
             if nlp_analysis:
+                self.last_nlp_provider = provider_name
+                self.last_nlp_fallback_reason = None
+                self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
                 logger.info(f"NLP analysis succeeded with provider: {provider_name}")
                 break
         
@@ -1036,6 +1222,10 @@ RESPONSE FORMAT (JSON):
                 raise RuntimeError(f"NLP analysis failed: {detail}")
             logger.warning(f"NLP analysis failed ({detail}), using fallback")
             nlp_analysis = self._generate_fallback_analysis(report_data)
+            self.last_nlp_provider = 'fallback'
+            self.last_nlp_model = 'rule-based-fallback'
+            self.last_nlp_fallback_reason = detail
+            self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
         else:
             # Post-NLP validation: Enhance NLP output with fallback data for better specificity
             detections = report_data.get('detections', [])

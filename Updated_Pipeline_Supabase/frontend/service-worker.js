@@ -1,7 +1,7 @@
 // PPE Safety Monitor - Service Worker
 // Provides offline caching and PWA functionality
 
-const CACHE_NAME = 'ppe-monitor-v1';
+const CACHE_NAME = 'ppe-monitor-v2';
 const STATIC_ASSETS = [
   '/',
   '/static/css/style.css',

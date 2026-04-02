@@ -553,12 +553,13 @@ const LivePage = {
                 .settings-modal {
                     position: fixed;
                     inset: 0;
-                    background: rgba(0, 0, 0, 0.45);
+                    background: rgba(2, 6, 23, 0.8);
                     display: none;
                     align-items: center;
                     justify-content: center;
                     z-index: 1400;
                     padding: 1rem;
+                    overscroll-behavior: contain;
                 }
 
                 .settings-modal.open {
@@ -566,8 +567,8 @@ const LivePage = {
                 }
 
                 .settings-window {
-                    width: min(1080px, 94vw);
-                    max-height: 88vh;
+                    width: min(1280px, 96vw);
+                    max-height: 92vh;
                     background: #ffffff;
                     border-radius: 12px;
                     border: 1px solid var(--border-color);
@@ -578,8 +579,8 @@ const LivePage = {
                 }
 
                 .settings-window.expanded {
-                    width: min(1320px, 98vw);
-                    max-height: 94vh;
+                    width: min(1520px, 99vw);
+                    max-height: 96vh;
                 }
 
                 .settings-window-header {
@@ -590,11 +591,20 @@ const LivePage = {
                     padding: 0.9rem 1rem;
                     background: linear-gradient(180deg, #fff, #f8f9fb);
                     border-bottom: 1px solid var(--border-color);
+                    position: sticky;
+                    top: 0;
+                    z-index: 2;
                 }
 
                 .settings-window-content {
-                    padding: 1rem;
+                    padding: 1rem 1.1rem 1.15rem;
                     overflow: auto;
+                }
+
+                .settings-window-content .grid.grid-2 {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    align-items: start;
+                    gap: 1rem;
                 }
 
                 .settings-tabs {
@@ -627,6 +637,12 @@ const LivePage = {
 
                 .settings-section.active {
                     display: block;
+                }
+
+                @media (max-width: 1280px) {
+                    .settings-window-content .grid.grid-2 {
+                        grid-template-columns: 1fr;
+                    }
                 }
 
                 @media (max-width: 768px) {
@@ -1077,17 +1093,17 @@ const LivePage = {
 
         function openSettingsWindow() {
             if (!settingsModal) return;
+            if (settingsModal.classList.contains('open')) return;
             settingsModal.classList.add('open');
             settingsModal.setAttribute('aria-hidden', 'false');
-            document.body.style.overflow = 'hidden';
-            showNotification('Settings window opened', 'info');
+            document.body.classList.add('settings-modal-open');
         }
 
         function closeSettingsWindow() {
             if (!settingsModal) return;
             settingsModal.classList.remove('open');
             settingsModal.setAttribute('aria-hidden', 'true');
-            document.body.style.overflow = '';
+            document.body.classList.remove('settings-modal-open');
         }
 
         function toggleSettingsWindowSize() {
@@ -1099,7 +1115,6 @@ const LivePage = {
             toggleSettingsWindowSizeBtn.title = expanded
                 ? 'Return to compact size'
                 : 'Enlarge settings window';
-            showNotification(expanded ? 'Settings window enlarged' : 'Settings window set to compact size', 'info');
         }
 
         settingsTabs.forEach(tab => {
@@ -2222,6 +2237,12 @@ const LivePage = {
             });
         }
 
+        if (settingsWindow) {
+            settingsWindow.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+        }
+
         const onSettingsKeydown = (event) => {
             if (event.key === 'Escape' && settingsModal && settingsModal.classList.contains('open')) {
                 closeSettingsWindow();
@@ -2336,6 +2357,8 @@ const LivePage = {
             document.removeEventListener('keydown', this.settingsKeydownHandler);
             this.settingsKeydownHandler = null;
         }
+
+        document.body.classList.remove('settings-modal-open');
 
         if (this.realtimeHandler) {
             window.removeEventListener('ppe-realtime:update', this.realtimeHandler);

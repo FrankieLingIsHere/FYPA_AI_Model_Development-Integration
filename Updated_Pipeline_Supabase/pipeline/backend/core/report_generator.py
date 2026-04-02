@@ -2580,9 +2580,9 @@ RESPONSE FORMAT (JSON):
         </script>
         
         <div class="footer">
-            <p>PPE Safety Monitor - AI-Powered Workplace Safety System</p>
+            <p>CASM PPE Safety Monitor - FYPA AI Model Development & Integration</p>
             <p style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">
-                Powered by YOLOv8 • LLaVA • Llama3 • Computer Vision
+                Powered by YOLO PPE Detection • Local + Cloud AI Routing • Supabase-backed Report Pipeline
             </p>
         </div>
     </div>

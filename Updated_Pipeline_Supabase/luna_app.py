@@ -3590,13 +3590,26 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
 
     if (backBtn) {{
         backBtn.addEventListener('click', () => {{
+            const reportsHash = '#/reports';
+            const reportsUrl = `${{window.location.origin}}/${{reportsHash}}`;
+
+            if (window.opener && !window.opener.closed) {{
+                try {{
+                    window.opener.location.hash = reportsHash;
+                    window.opener.focus();
+                    window.close();
+                    return;
+                }} catch (e) {{
+                    // Fall through to local navigation when opener is not accessible.
+                }}
+            }}
+
             if (window.history.length > 1) {{
                 window.history.back();
-            }} else if (document.referrer) {{
-                window.location.href = document.referrer;
-            }} else {{
-                window.location.href = '/';
+                return;
             }}
+
+            window.location.href = reportsUrl;
         }});
     }}
 
@@ -3851,6 +3864,31 @@ def generate_frames(conf=0.25):
             # Run YOLO detection
             try:
                 detections, annotated = predict_image(frame, conf=conf)
+                violation_detections = _extract_violation_detections(detections) if detections else []
+
+                # Keep a persistent on-frame status HUD so users always see live YOLO state,
+                # even when there are no current violation boxes.
+                cv2.rectangle(annotated, (10, 10), (390, 72), (0, 0, 0), -1)
+                cv2.putText(
+                    annotated,
+                    f"YOLO active | detections: {len(detections)}",
+                    (18, 36),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.62,
+                    (80, 255, 120),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    annotated,
+                    f"violations: {len(violation_detections)}",
+                    (18, 62),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.56,
+                    (0, 220, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
                 
                 # Log all detections for debugging
                 if detections:
@@ -3859,7 +3897,6 @@ def generate_frames(conf=0.25):
                 
                 # Check for violations in background thread (non-blocking)
                 if detections and FULL_PIPELINE_AVAILABLE:
-                    violation_detections = _extract_violation_detections(detections)
                     if violation_detections:
                         # Log detected violations
                         violation_classes = [d.get('class_name') for d in violation_detections]

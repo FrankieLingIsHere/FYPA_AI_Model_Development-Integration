@@ -19,6 +19,7 @@ import csv
 import os
 import requests
 import threading
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -75,8 +76,12 @@ class ReportGenerator:
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_nlp_completed_at = None
+        self.sticky_nlp_provider = None
+        self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
+        self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
+        self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
 
         # Gemini spend guardrails (all USD values; set to 0 to disable a limit)
         self.gemini_daily_budget_usd = float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0)
@@ -235,6 +240,8 @@ class ReportGenerator:
             'last_error': self.last_nlp_error,
             'last_fallback_reason': self.last_nlp_fallback_reason,
             'last_completed_at': self.last_nlp_completed_at,
+            'sticky_provider': self.sticky_nlp_provider,
+            'sticky_provider_remaining_s': max(0, int(self.sticky_nlp_provider_until_epoch - time.time())),
             'gemini_budget': {
                 'enabled': budget_enabled,
                 'daily_limit_usd': self.gemini_daily_budget_usd,
@@ -1166,7 +1173,21 @@ RESPONSE FORMAT (JSON):
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_gemini_budget_block_reason = None
-        for provider in self.nlp_provider_order:
+
+        effective_provider_order = list(self.nlp_provider_order or [])
+        sticky_active = (
+            self.sticky_nlp_provider_enabled
+            and self.sticky_nlp_provider
+            and self.sticky_nlp_provider_until_epoch > time.time()
+            and self.sticky_nlp_provider in effective_provider_order
+        )
+        if sticky_active:
+            effective_provider_order = [
+                self.sticky_nlp_provider,
+                *[p for p in effective_provider_order if p != self.sticky_nlp_provider]
+            ]
+
+        for provider in effective_provider_order:
             if nlp_analysis:
                 break
 
@@ -1212,6 +1233,9 @@ RESPONSE FORMAT (JSON):
                 self.last_nlp_provider = provider_name
                 self.last_nlp_fallback_reason = None
                 self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
+                if self.sticky_nlp_provider_enabled:
+                    self.sticky_nlp_provider = provider_name
+                    self.sticky_nlp_provider_until_epoch = time.time() + max(30, self.sticky_nlp_provider_ttl_seconds)
                 logger.info(f"NLP analysis succeeded with provider: {provider_name}")
                 break
         

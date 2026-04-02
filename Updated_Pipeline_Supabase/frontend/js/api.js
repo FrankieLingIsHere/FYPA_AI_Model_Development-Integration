@@ -10,22 +10,21 @@ const API = {
             .replace(/\s+/g, ' ')
             .replace(/^NO\s+/, 'NO-');
 
-        const mapping = {
-            'NO-HARDHAT': 'NO-Hardhat',
-            'NO-HARD HAT': 'NO-Hardhat',
-            'NO-SAFETY VEST': 'NO-Safety Vest',
-            'NO-VEST': 'NO-Safety Vest',
-            'NO-GLOVES': 'NO-Gloves',
-            'NO-MASK': 'NO-Mask',
-            'NO-GOGGLES': 'NO-Goggles',
-            'NO-SAFETY SHOES': 'NO-Safety Shoes'
-        };
+        const simplified = normalized
+            .replace(/^MISSING\s+/, '')
+            .replace(/^WITHOUT\s+/, '')
+            .replace(/^NO[-\s]+/, '')
+            .replace(/[\s_-]+/g, ' ')
+            .trim();
 
-        if (mapping[normalized]) {
-            return mapping[normalized];
-        }
+        if (/HARD ?HAT|HELMET/.test(simplified)) return 'NO-Hardhat';
+        if (/SAFETY ?VEST|HI ?VIS|HIGH ?VIS|VEST/.test(simplified)) return 'NO-Safety Vest';
+        if (/GLOVE/.test(simplified)) return 'NO-Gloves';
+        if (/MASK|RESPIRATOR/.test(simplified)) return 'NO-Mask';
+        if (/GOGGLE|EYE/.test(simplified)) return 'NO-Goggles';
+        if (/SAFETY ?SHOE|SAFETY ?BOOT|FOOTWEAR|BOOT/.test(simplified)) return 'NO-Safety Shoes';
 
-        return normalized.startsWith('NO-') ? rawKey : null;
+        return null;
     },
 
     extractViolationKeys(violation) {
@@ -52,9 +51,42 @@ const API = {
                 const key = this.canonicalViolationKey(m.trim());
                 if (key) keys.push(key);
             });
+
+            const missingMatches = summary.match(/Missing\s+[A-Za-z\s-]+/gi) || [];
+            missingMatches.forEach((m) => {
+                const key = this.canonicalViolationKey(m.trim());
+                if (key) keys.push(key);
+            });
         }
 
         return keys;
+    },
+
+    computeSafetyCompliance(stats) {
+        const severity = stats?.severity || {};
+        const high = Number(severity.high || 0);
+        const medium = Number(severity.medium || 0);
+        const low = Number(severity.low || 0);
+        const total = Math.max(1, Number(stats?.total || (high + medium + low) || 0));
+        const today = Number(stats?.today || 0);
+
+        // Benchmark-inspired leading indicator proxy:
+        // severity-weighted non-compliance burden + short-term frequency pressure.
+        const weightedBurden = (high * 1.0) + (medium * 0.6) + (low * 0.3);
+        const severityPenalty = (weightedBurden / total) * 45;
+        const frequencyPenalty = Math.min(30, today * 2.5);
+        const complianceScore = Math.round(Math.max(0, Math.min(100, 100 - severityPenalty - frequencyPenalty)));
+
+        let benchmarkBand = 'critical';
+        if (complianceScore >= 95) benchmarkBand = 'best-practice';
+        else if (complianceScore >= 85) benchmarkBand = 'acceptable';
+        else if (complianceScore >= 70) benchmarkBand = 'watchlist';
+
+        return {
+            score: complianceScore,
+            benchmarkBand,
+            benchmarkNote: 'Benchmark-inspired leading indicator aligned with construction PPE audit practice (95%+ is commonly targeted).'
+        };
     },
 
     buildBreakdown(violations) {

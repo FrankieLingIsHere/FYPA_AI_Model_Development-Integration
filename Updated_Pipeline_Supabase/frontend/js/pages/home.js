@@ -40,7 +40,7 @@ const HomePage = {
                 </div>
 
                 <!-- VIOLATION TYPES -->
-                <div class="card home-violation-card">
+                <div class="card home-violation-card home-violation-types-card">
                     <div class="card-header">
                         <span><i class="fas fa-pie-chart"></i> Violation Types</span>
                     </div>
@@ -79,11 +79,12 @@ const HomePage = {
                         <p style="color:#7f8c8d;margin-top:1rem;font-size:0.9rem;">
                             Based on violation frequency and severity
                         </p>
+                        <p id="safety-benchmark-note" style="color:#6b7280;margin-top:0.35rem;font-size:0.82rem;"></p>
                     </div>
                 </div>
 
                 <!-- RECENT VIOLATIONS -->
-                <div class="card">
+                <div class="card home-violation-card home-recent-violations-card">
                     <div class="recent-header">
                         <span><i class="fas fa-exclamation-triangle"></i> Recent Violations</span>
                         <button class="btn btn-secondary"
@@ -91,7 +92,7 @@ const HomePage = {
                             View All
                         </button>
                     </div>
-                    <div id="recent-violations" class="recent-content">
+                    <div id="recent-violations" class="recent-content home-recent-content">
                         <div class="spinner"></div>
                     </div>
                 </div>
@@ -189,13 +190,18 @@ const HomePage = {
     /* ================= SAFETY SCORE ================= */
 
     calculateSafetyScore(stats) {
-        const score = Math.max(0, Math.min(100, 100 - stats.today * 10));
+        const safety = API.computeSafetyCompliance(stats || {});
+        const score = safety.score;
 
         const scoreEl = document.getElementById("safety-score");
         const barEl = document.getElementById("safety-bar");
+        const benchmarkEl = document.getElementById("safety-benchmark-note");
 
         scoreEl.textContent = `${score}%`;
         barEl.style.width = `${score}%`;
+        if (benchmarkEl) {
+            benchmarkEl.textContent = safety.benchmarkNote;
+        }
 
         if (score >= 80) {
             scoreEl.style.color = 'var(--success-color)';

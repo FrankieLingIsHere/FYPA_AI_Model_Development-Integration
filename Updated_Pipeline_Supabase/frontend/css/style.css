@@ -1797,9 +1797,21 @@ body.is-phone-device .handbook-content {
     border: 1px solid rgba(0, 0, 0, 0.04);
 }
 
+.home-violation-types-card {
+    margin-bottom: 0.2rem;
+}
+
+.home-recent-violations-card {
+    margin-top: 0.95rem;
+}
+
 .home-violation-content {
     padding-top: calc(var(--spacing-lg) + 0.25rem);
     padding-bottom: calc(var(--spacing-lg) + 0.25rem);
+}
+
+.home-recent-content {
+    padding-top: calc(var(--spacing-sm) + 0.2rem);
 }
 
 .home-violation-list .violation-stat-row {

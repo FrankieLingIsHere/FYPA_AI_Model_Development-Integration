@@ -185,7 +185,8 @@ const ReportsPage = {
             const nlp = runtime.nlp || {};
             const capacity = data.capacity || {};
 
-            const provider = nlp.last_provider || 'unknown';
+            const rawProvider = (nlp.last_provider || '').trim();
+            const provider = rawProvider || 'awaiting-first-success';
             const model = nlp.last_model || '-';
             const estimate = capacity.estimate_reports_remaining;
             const estimateText = estimate == null ? 'unknown' : String(estimate);
@@ -195,7 +196,10 @@ const ReportsPage = {
             else if (capacity.status === 'limited') state = 'warn';
             else if (capacity.status === 'sustainable') state = 'ok';
 
-            this.setProviderBadgeText(`Provider: ${provider} (${model}) | Remaining: ${estimateText}`, state);
+            const providerLabel = rawProvider
+                ? provider
+                : 'awaiting first successful generation';
+            this.setProviderBadgeText(`Provider: ${providerLabel} (${model}) | Remaining: ${estimateText}`, state);
         } catch (error) {
             this.setProviderBadgeText('Provider: unavailable', 'error');
         }
@@ -599,11 +603,13 @@ const ReportsPage = {
         const pullHint = local.pull_command || 'ollama pull llama3';
         const startHint = local.start_command || 'ollama serve';
 
-        const localQuestion = localReady
-            ? `Provider quota is exhausted. Pending candidates: ${counts.total_candidates || 0}.\n\nUse LOCAL mode first to keep report quality similar?\n\nOK = Try Local Mode first\nCancel = Choose failover options`
-            : `Provider quota is exhausted. Local mode is not ready on this backend.\n\nTo prepare local mode (if feasible), run:\n1) ${startHint}\n2) ${pullHint}\n\nPress OK to continue with failover pipeline, or Cancel to stop.`;
-
-        const chooseLocal = localReady ? window.confirm(localQuestion) : false;
+        let chooseLocal = false;
+        if (localReady) {
+            const recoveryChoice = window.confirm(
+                `Provider quota is exhausted. Pending candidates: ${counts.total_candidates || 0}.\n\nRecommended: use FAILOVER pipeline now for highest chance of completion.\n\nOK = Use failover pipeline now\nCancel = Try Local mode first`
+            );
+            chooseLocal = !recoveryChoice;
+        }
 
         if (chooseLocal) {
             this.setModalStatusText('Applying LOCAL mode and re-queuing pending/quota-failed reports...');
@@ -625,7 +631,9 @@ const ReportsPage = {
                 return;
             }
         } else if (!localReady) {
-            const proceedFailoverNoLocal = window.confirm(localQuestion);
+            const proceedFailoverNoLocal = window.confirm(
+                `Provider quota is exhausted and Local mode is not ready on this backend.\n\nTo prepare local mode later (optional):\n1) ${startHint}\n2) ${pullHint}\n\nProceed with failover pipeline now?`
+            );
             if (!proceedFailoverNoLocal) {
                 this.setModalStatusText('Recovery paused. Prepare local mode and retry when ready.');
                 return;
@@ -833,7 +841,7 @@ const ReportsPage = {
                 const errorText = String(result?.error || 'Failed to prioritize report generation');
                 const queueBusy = /queue|busy|rate|limit|full|capacity|409|429|503/i.test(errorText);
                 if (this.isQuotaOrRateLimitError(errorText)) {
-                    this.setProviderWarning('Provider quota/rate limit detected. Awaiting your approval for local-first recovery.');
+                    this.setProviderWarning('Provider quota/rate limit detected. Awaiting your recovery choice.');
                     await this.promptQuotaRecovery(reportId, errorText);
                 }
                 if (queueBusy) {

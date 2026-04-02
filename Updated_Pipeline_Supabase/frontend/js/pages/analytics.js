@@ -75,6 +75,7 @@ const AnalyticsPage = {
                             <p style="color: #7f8c8d; margin-top: 1rem; font-size: 0.9rem;">
                                 Based on violation frequency and severity
                             </p>
+                            <p id="analytics-safety-benchmark-note" style="color:#6b7280; margin-top: 0.35rem; font-size: 0.82rem;"></p>
                         </div>
                     </div>
                 </div>
@@ -360,15 +361,18 @@ const AnalyticsPage = {
     },
 
     calculateSafetyScore(stats) {
-        // Simple safety score calculation
-        // 100% - (violations_today * 10)
-        const score = Math.max(0, Math.min(100, 100 - (stats.today * 10)));
+        const safety = API.computeSafetyCompliance(stats || {});
+        const score = safety.score;
 
         const scoreElement = document.getElementById('safety-score');
         const barElement = document.getElementById('safety-bar');
+        const benchmarkEl = document.getElementById('analytics-safety-benchmark-note');
 
         scoreElement.textContent = `${score}%`;
         barElement.style.width = `${score}%`;
+        if (benchmarkEl) {
+            benchmarkEl.textContent = safety.benchmarkNote;
+        }
 
         // Change color based on score
         if (score >= 80) {

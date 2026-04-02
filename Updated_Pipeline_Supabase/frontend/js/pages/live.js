@@ -269,6 +269,27 @@ const LivePage = {
                                 </button>
                             </div>
 
+                            <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px; border: 1px solid var(--border-color);">
+                                <h4 style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.45rem;">
+                                    <i class="fas fa-gauge-high" style="color: var(--primary-color);"></i>
+                                    Live Performance Profile
+                                </h4>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.75rem;">
+                                    Applies to laptop and phone live monitoring. You can switch while streaming.
+                                </p>
+                                <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+                                    <select id="livePerformanceProfile" class="provider-input" style="width: 220px; margin-bottom: 0;">
+                                        <option value="smooth">Smooth (lowest latency)</option>
+                                        <option value="balanced" selected>Balanced (recommended)</option>
+                                        <option value="detail">High Detail (best quality)</option>
+                                    </select>
+                                    <button id="applyLivePerformanceProfileBtn" class="btn btn-primary">
+                                        <i class="fas fa-sliders-h"></i> Apply Profile
+                                    </button>
+                                    <span id="livePerformanceProfileStatus" style="font-size: 0.84rem; color: var(--text-secondary);">Profile: balanced</span>
+                                </div>
+                            </div>
+
                             <div style="margin-top: 1rem; padding: 1rem; background: var(--background-color); border-radius: 8px;">
                                 <h4 style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.45rem;">
                                     <i id="reliabilityHeadingIcon" class="fas fa-shield-alt" style="color: var(--success-color);"></i>
@@ -683,8 +704,42 @@ const LivePage = {
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
         const phoneCaptureCanvas = document.createElement('canvas');
+        const laptopLiveStreamConfig = {
+            conf: 0.10,
+            fps: 14,
+            quality: 72
+        };
+        const phoneInferenceConfig = {
+            intervalMs: 320,
+            conf: 0.08,
+            jpegQuality: 0.72
+        };
+        const LIVE_PROFILE_STORAGE_KEY = 'live_performance_profile_v1';
+        const LIVE_PERFORMANCE_PROFILES = {
+            smooth: {
+                laptop: { conf: 0.12, fps: 16, quality: 64 },
+                phone: { intervalMs: 240, conf: 0.10, jpegQuality: 0.65 }
+            },
+            balanced: {
+                laptop: { conf: 0.10, fps: 14, quality: 72 },
+                phone: { intervalMs: 320, conf: 0.08, jpegQuality: 0.72 }
+            },
+            detail: {
+                laptop: { conf: 0.08, fps: 12, quality: 82 },
+                phone: { intervalMs: 420, conf: 0.07, jpegQuality: 0.83 }
+            }
+        };
         const providerRuntimeActive = document.getElementById('providerRuntimeActive');
         const providerRuntimeCapacity = document.getElementById('providerRuntimeCapacity');
+
+        const buildLiveStreamUrl = () => {
+            const streamUrl = new URL(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}`, window.location.origin);
+            streamUrl.searchParams.set('t', Date.now().toString());
+            streamUrl.searchParams.set('conf', String(laptopLiveStreamConfig.conf));
+            streamUrl.searchParams.set('fps', String(laptopLiveStreamConfig.fps));
+            streamUrl.searchParams.set('quality', String(laptopLiveStreamConfig.quality));
+            return streamUrl.toString();
+        };
 
         const setLiveControlState = (isActive) => {
             APP_STATE.liveStreamActive = !!isActive;
@@ -815,8 +870,7 @@ const LivePage = {
 
         const shouldUseBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
-            if (selectedSource === 'phone') return phoneCameraSupported;
-            return selectedSource === 'webcam';
+            return selectedSource === 'phone' && phoneCameraSupported;
         };
 
         const capturePhoneFrameForInference = async () => {
@@ -836,7 +890,7 @@ const LivePage = {
             ctx.drawImage(phoneCameraPreview, 0, 0, width, height);
 
             const blob = await new Promise((resolve) => {
-                phoneCaptureCanvas.toBlob(resolve, 'image/jpeg', 0.85);
+                phoneCaptureCanvas.toBlob(resolve, 'image/jpeg', phoneInferenceConfig.jpegQuality);
             });
             if (!blob) return;
 
@@ -845,7 +899,7 @@ const LivePage = {
             try {
                 const formData = new FormData();
                 formData.append('image', blob, 'phone_live.jpg');
-                formData.append('conf', '0.05');
+                formData.append('conf', String(phoneInferenceConfig.conf));
 
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
                     method: 'POST',
@@ -874,7 +928,8 @@ const LivePage = {
                             const bbox = det.bbox || [];
                             if (bbox.length !== 4) return;
                             const [x1, y1, x2, y2] = bbox;
-                            const label = `${det.class_name || 'obj'} ${(Number(det.score || 0) * 100).toFixed(1)}%`;
+                            const confidence = Number(det.score ?? det.confidence ?? 0);
+                            const label = `${det.class_name || 'obj'} ${(confidence * 100).toFixed(1)}%`;
                             const isViolation = String(det.class_name || '').toLowerCase().includes('no-');
                             const color = isViolation ? '#ff5252' : '#4caf50';
 
@@ -888,6 +943,15 @@ const LivePage = {
                             ctx.fillStyle = '#000';
                             ctx.fillText(label, x1 + 4, labelY);
                         });
+
+                        const detectionCount = result.detections.length;
+                        const hudLabel = `YOLO active | detections: ${detectionCount}`;
+                        const hudWidth = Math.max(210, ctx.measureText(hudLabel).width + 14);
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.66)';
+                        ctx.fillRect(10, 10, hudWidth, 24);
+                        ctx.fillStyle = '#7CFF8A';
+                        ctx.font = '13px sans-serif';
+                        ctx.fillText(hudLabel, 17, 27);
                     }
                 }
                 if (result && result.violations_detected) {
@@ -1328,7 +1392,7 @@ const LivePage = {
                     renderSourceToggle();
 
                     stopPhoneInferenceLoop();
-                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, 850);
+                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, phoneInferenceConfig.intervalMs);
                     await capturePhoneFrameForInference();
 
                     showNotification(
@@ -1366,7 +1430,7 @@ const LivePage = {
                 statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
 
                 // Set stream source
-                streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
+                streamImg.src = buildLiveStreamUrl();
 
                 // Enable stop button
                 stopBtn.disabled = false;
@@ -1500,7 +1564,7 @@ const LivePage = {
                 streamImg.style.display = 'block';
                 statusIndicator.style.display = 'block';
                 statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
-                streamImg.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}?t=${Date.now()}`;
+                streamImg.src = buildLiveStreamUrl();
                 setLiveControlState(true);
             }
 
@@ -1544,6 +1608,9 @@ const LivePage = {
         const reliabilityHardFailed = document.getElementById('reliabilityHardFailed');
         const reliabilityConsidered = document.getElementById('reliabilityConsidered');
         const reliabilityFailureCauses = document.getElementById('reliabilityFailureCauses');
+        const livePerformanceProfile = document.getElementById('livePerformanceProfile');
+        const applyLivePerformanceProfileBtn = document.getElementById('applyLivePerformanceProfileBtn');
+        const livePerformanceProfileStatus = document.getElementById('livePerformanceProfileStatus');
         const RECOMMENDED_SETTINGS = {
             environment_validation_enabled: true,
             cooldown_seconds: 3,
@@ -1571,6 +1638,59 @@ const LivePage = {
             gemini_model: 'gemini-2.5-flash'
         };
 
+        const updateLiveProfileStatusText = (profileKey) => {
+            if (!livePerformanceProfileStatus) return;
+            const key = LIVE_PERFORMANCE_PROFILES[profileKey] ? profileKey : 'balanced';
+            const phoneMs = phoneInferenceConfig.intervalMs;
+            livePerformanceProfileStatus.textContent = `Profile: ${key} | laptop ${laptopLiveStreamConfig.fps}fps @ q${laptopLiveStreamConfig.quality} | phone ${phoneMs}ms`;
+        };
+
+        const applyLivePerformanceProfile = async (profileKey, options = {}) => {
+            const silent = !!options.silent;
+            const selected = LIVE_PERFORMANCE_PROFILES[profileKey] || LIVE_PERFORMANCE_PROFILES.balanced;
+            const key = LIVE_PERFORMANCE_PROFILES[profileKey] ? profileKey : 'balanced';
+
+            Object.assign(laptopLiveStreamConfig, selected.laptop);
+            Object.assign(phoneInferenceConfig, selected.phone);
+
+            if (livePerformanceProfile) {
+                livePerformanceProfile.value = key;
+            }
+
+            updateLiveProfileStatusText(key);
+
+            try {
+                localStorage.setItem(LIVE_PROFILE_STORAGE_KEY, key);
+            } catch (error) {
+                console.warn('Could not persist live profile selection:', error);
+            }
+
+            if (APP_STATE.liveStreamActive) {
+                if (shouldUseBrowserCaptureSource()) {
+                    stopPhoneInferenceLoop();
+                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, phoneInferenceConfig.intervalMs);
+                    await capturePhoneFrameForInference();
+                } else if (streamImg && streamImg.style.display !== 'none') {
+                    streamImg.src = buildLiveStreamUrl();
+                }
+            }
+
+            if (!silent) {
+                showNotification(`Applied ${key} live profile`, 'success');
+            }
+        };
+
+        const restoreLivePerformanceProfile = async () => {
+            let storedProfile = 'balanced';
+            try {
+                storedProfile = localStorage.getItem(LIVE_PROFILE_STORAGE_KEY) || 'balanced';
+            } catch (error) {
+                storedProfile = 'balanced';
+            }
+
+            await applyLivePerformanceProfile(storedProfile, { silent: true });
+        };
+
         // Function to update environment validation status display
         function updateEnvValidationStatus(enabled) {
             if (enabled) {
@@ -1591,6 +1711,21 @@ const LivePage = {
                 envValidationStatus.style.border = '1px solid var(--warning-color)';
             }
         }
+
+        if (applyLivePerformanceProfileBtn) {
+            applyLivePerformanceProfileBtn.addEventListener('click', async () => {
+                const selectedProfile = livePerformanceProfile ? livePerformanceProfile.value : 'balanced';
+                await applyLivePerformanceProfile(selectedProfile);
+            });
+        }
+
+        if (livePerformanceProfile) {
+            livePerformanceProfile.addEventListener('change', async () => {
+                await applyLivePerformanceProfile(livePerformanceProfile.value);
+            });
+        }
+
+        await restoreLivePerformanceProfile();
 
         // Function to fetch and update queue status
         async function updateQueueStatus() {

@@ -417,15 +417,16 @@ def caption_image_llava(image_path):
     # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
     prompt = """You are a workplace visual analyst. Write a factual caption from this image only.
 
-Output requirements (single paragraph, 4-6 sentences):
+Output requirements (single paragraph, 6-10 sentences):
 1) Start with total visible people count and scene type (residential, office, warehouse, roadside, construction, etc.).
 2) For each visible person, describe:
     - what the person is doing (action/posture/interaction)
     - which body region is visible (full body / upper body / head only)
     - the person's situation/context (near vehicle, near machinery, indoors at home, standing idle, using phone, etc.)
-3) Mention PPE only when clearly visible and certain.
-4) If PPE region is not visible, explicitly say it is not visible instead of guessing.
-5) End with concise safety context based on visible facts only.
+3) Describe specific nearby objects/conditions that affect safety context (machines, traffic lane, material stacks, wet floor, barricades, tools).
+4) Mention PPE only when clearly visible and certain.
+5) If PPE region is not visible, explicitly say it is not visible instead of guessing.
+6) End with concise safety context based on visible facts only.
 
 Strict grounding rules:
 - Do NOT invent tools, hazards, or PPE that are not clearly visible.
@@ -452,7 +453,7 @@ Style:
             prompt=prompt,
             image_base64=image_base64,
             temperature=0.6,
-            max_tokens=380
+            max_tokens=650
         )
         
         if caption:

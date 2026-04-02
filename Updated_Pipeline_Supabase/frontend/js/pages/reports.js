@@ -599,9 +599,13 @@ const ReportsPage = {
 
         const local = options.local || {};
         const counts = options.counts || {};
-        const localReady = !!local.local_mode_possible;
+        let localReady = !!local.local_mode_possible;
         const pullHint = local.pull_command || 'ollama pull llama3';
         const startHint = local.start_command || 'ollama serve';
+        const installUrl = local.install_url || 'https://ollama.com/download';
+        const installCommands = Array.isArray(local.install_commands) && local.install_commands.length
+            ? local.install_commands.join('\n- ')
+            : 'winget install Ollama.Ollama';
 
         let chooseLocal = false;
         if (localReady) {
@@ -609,9 +613,63 @@ const ReportsPage = {
                 `Provider quota is exhausted. Pending candidates: ${counts.total_candidates || 0}.\n\nRecommended: use FAILOVER pipeline now for highest chance of completion.\n\nOK = Use failover pipeline now\nCancel = Try Local mode first`
             );
             chooseLocal = !recoveryChoice;
+        } else {
+            const tryAutoSetup = window.confirm(
+                `Provider quota is exhausted and Local mode is not ready yet.\n\nTry automatic setup now?\nThis will attempt to:\n1) start Ollama if installed\n2) pull required model\n3) switch provider routing to local-first\n\nOK = Try automatic setup\nCancel = Skip and use failover`
+            );
+
+            if (tryAutoSetup) {
+                this.setModalStatusText('Preparing LOCAL mode (auto-start + model setup)...');
+                const prep = await API.prepareLocalMode({
+                    autoPull: true,
+                    setLocalFirst: true,
+                    waitSeconds: 10,
+                    pullTimeoutSeconds: 900
+                });
+
+                if (prep && prep.success === true) {
+                    localReady = true;
+                    chooseLocal = true;
+                } else {
+                    const prepErr = String((prep && prep.error) || (prep && prep.message) || 'Local mode bootstrap failed');
+                    const after = (prep && prep.after) || {};
+                    const missingInstall = after.ollama_installed === false || local.ollama_installed === false;
+                    const installHelp = missingInstall
+                        ? `\n\nOllama appears not installed on this machine.\nInstall from: ${installUrl}\n\nOr run:\n- ${installCommands}\n\nThen reopen app and retry automatic setup.`
+                        : '';
+
+                    const continueFailoverAfterPrepFail = window.confirm(
+                        `Automatic local setup failed: ${prepErr}${installHelp}\n\nRun failover pipeline for pending reports now?`
+                    );
+
+                    if (!continueFailoverAfterPrepFail) {
+                        this.setModalStatusText('Recovery paused. You can retry automatic local setup from the report modal.');
+                        return;
+                    }
+                }
+            }
         }
 
         if (chooseLocal) {
+            this.setModalStatusText('Preparing LOCAL mode (starting Ollama / pulling model if needed)...');
+            const prep = await API.prepareLocalMode({
+                autoPull: true,
+                setLocalFirst: true,
+                waitSeconds: 8,
+                pullTimeoutSeconds: 600
+            });
+
+            if (!prep || prep.success !== true) {
+                const prepErr = String((prep && prep.error) || (prep && prep.message) || 'Local mode bootstrap failed');
+                const continueFailoverAfterPrepFail = window.confirm(
+                    `Automatic local-mode setup failed: ${prepErr}\n\nRun failover pipeline for pending reports now?`
+                );
+                if (!continueFailoverAfterPrepFail) {
+                    this.setModalStatusText('Recovery paused. You can retry local setup from the report modal.');
+                    return;
+                }
+            }
+
             this.setModalStatusText('Applying LOCAL mode and re-queuing pending/quota-failed reports...');
             const res = await API.executeReportRecovery('local');
             if (res && res.success) {
@@ -632,7 +690,7 @@ const ReportsPage = {
             }
         } else if (!localReady) {
             const proceedFailoverNoLocal = window.confirm(
-                `Provider quota is exhausted and Local mode is not ready on this backend.\n\nTo prepare local mode later (optional):\n1) ${startHint}\n2) ${pullHint}\n\nProceed with failover pipeline now?`
+                `Provider quota is exhausted and Local mode is not ready on this backend.\n\nTo prepare local mode later:\n1) ${startHint}\n2) ${pullHint}\n\nIf Ollama is not installed:\n- Download: ${installUrl}\n- Command: ${installCommands}\n\nProceed with failover pipeline now?`
             );
             if (!proceedFailoverNoLocal) {
                 this.setModalStatusText('Recovery paused. Prepare local mode and retry when ready.');
@@ -710,6 +768,7 @@ const ReportsPage = {
         const data = await API.getReportStatus(reportId);
         const status = String((data && data.status) || '').toLowerCase();
         const providerError = data && data.error_message ? String(data.error_message) : '';
+        const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
 
         if (this.isQuotaOrRateLimitError(providerError)) {
             this.setProviderWarning('Provider quota/rate limit detected. Generation is waiting on provider availability.');
@@ -728,7 +787,10 @@ const ReportsPage = {
 
         if (status === 'generating' || status === 'processing') {
             this.setModalStage('generating');
-            this.setModalStatusText('AI is generating your report...');
+            this.setModalStatusText((data && data.message) || 'AI is generating your report...');
+            if (alertMessage) {
+                this.setProviderWarning(alertMessage);
+            }
             return false;
         }
 

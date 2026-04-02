@@ -171,9 +171,13 @@ const API = {
     },
 
     // Fetch all violations with status info
-    async getViolations() {
+    async getViolations(options = {}) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}`);
+            const requestedLimit = Number(options.limit);
+            const safeLimit = Number.isFinite(requestedLimit)
+                ? Math.max(1, Math.min(Math.floor(requestedLimit), 5000))
+                : 1000;
+            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`);
             if (!response.ok) throw new Error('Failed to fetch violations');
             return await response.json();
         } catch (error) {
@@ -235,7 +239,8 @@ const API = {
                     return data;
                 }
 
-                const violations = await this.getViolations();
+                const targetLimit = Math.max(Number(data.total || 0), 1000);
+                const violations = await this.getViolations({ limit: targetLimit });
                 return this.enrichStatsWithViolations(data, violations);
             }
         } catch (e) {
@@ -243,7 +248,7 @@ const API = {
         }
 
         try {
-            const violations = await this.getViolations();
+            const violations = await this.getViolations({ limit: 1000 });
 
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -468,6 +473,36 @@ const API = {
             return data;
         } catch (error) {
             console.error('Error executing report recovery:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async prepareLocalMode(options = {}) {
+        try {
+            const payload = {
+                auto_pull: options.autoPull !== false,
+                set_local_first: options.setLocalFirst !== false,
+                wait_seconds: Number(options.waitSeconds || 8),
+                pull_timeout_seconds: Number(options.pullTimeoutSeconds || 600)
+            };
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/prepare`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    error: data.error || data.message || 'Failed to prepare local mode'
+                };
+            }
+            return data;
+        } catch (error) {
+            console.error('Error preparing local mode:', error);
             return { success: false, error: error.message };
         }
     },

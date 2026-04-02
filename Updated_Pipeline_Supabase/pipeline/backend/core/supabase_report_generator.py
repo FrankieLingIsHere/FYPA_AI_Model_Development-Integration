@@ -270,6 +270,9 @@ class SupabaseReportGenerator(ReportGenerator):
                 metadata = {
                     'detections': detection_data
                 }
+                nlp_integrity = result.get('nlp_integrity')
+                if isinstance(nlp_integrity, dict):
+                    metadata['nlp_integrity'] = nlp_integrity
                 if validation_result:
                     metadata['caption_validation'] = {
                         'is_valid': validation_result['is_valid'],

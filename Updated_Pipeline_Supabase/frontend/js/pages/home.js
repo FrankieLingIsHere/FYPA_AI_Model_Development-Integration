@@ -229,8 +229,9 @@ const HomePage = {
             { name: "Missing Hardhat", count: breakdown['NO-Hardhat'] || 0, color: "var(--error-color)" },
             { name: "Missing Vest", count: breakdown['NO-Safety Vest'] || 0, color: "var(--warning-color)" },
             { name: "Missing Gloves", count: breakdown['NO-Gloves'] || 0, color: "var(--info-color)" },
-            { name: "Missing Mask", count: breakdown['NO-Mask'] || 0, color: "#9b59b6" }, // Added Mask styling
-            { name: "Missing Goggles", count: breakdown['NO-Goggles'] || 0, color: "#e67e22" }
+            { name: "Missing Mask", count: breakdown['NO-Mask'] || 0, color: "#9b59b6" },
+            { name: "Missing Goggles", count: breakdown['NO-Goggles'] || 0, color: "#e67e22" },
+            { name: "Missing Safety Shoes", count: breakdown['NO-Safety Shoes'] || 0, color: "#16a085" }
         ];
 
         // Calculate total for percentages

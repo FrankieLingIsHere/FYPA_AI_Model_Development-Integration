@@ -23,6 +23,7 @@ import sys
 import logging
 import re
 import shutil
+import subprocess
 import html
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -1473,6 +1474,9 @@ def favicon():
 @app.route('/api/violations')
 def api_violations():
     """Get all violations with details from Supabase."""
+    requested_limit = request.args.get('limit', 1000, type=int)
+    limit = max(1, min(requested_limit or 1000, 5000))
+
     if db_manager is None:
         # Fallback to local filesystem
         violations = []
@@ -1525,9 +1529,9 @@ def api_violations():
     try:
         # Use the new method that includes pending detection events
         if hasattr(db_manager, 'get_all_violations_with_status'):
-            violations = db_manager.get_all_violations_with_status(limit=100)
+            violations = db_manager.get_all_violations_with_status(limit=limit)
         else:
-            violations = db_manager.get_recent_violations(limit=100)
+            violations = db_manager.get_recent_violations(limit=limit)
         
         # Format violations for API response
         formatted_violations = []
@@ -1830,7 +1834,9 @@ def api_report_status(report_id):
                     'device_id': (event or {}).get('device_id'),
                     'error_message': (event or {}).get('error_message'),
                     'timestamp': (event or {}).get('timestamp'),
-                    'updated_at': (event or {}).get('updated_at')
+                    'updated_at': (event or {}).get('updated_at'),
+                    'long_running_notice': False,
+                    'alert_message': None,
                 }
 
                 # If generation is stale with no report output, surface a real failure reason.
@@ -1850,14 +1856,39 @@ def api_report_status(report_id):
                             dt_obj = dt_obj.replace(tzinfo=timezone.utc)
                         age_seconds = (datetime.now(timezone.utc) - dt_obj).total_seconds()
                         if age_seconds > 120:
-                            timeout_reason = 'Report generation timed out without producing report output.'
-                            status_info['status'] = 'failed'
-                            status_info['error_message'] = timeout_reason
-                            if hasattr(db_manager, 'update_detection_status'):
+                            provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+                            if not isinstance(provider_order, list):
+                                provider_order = ['model_api', 'gemini', 'ollama', 'local']
+
+                            def _provider_rank(name: str) -> int:
                                 try:
-                                    db_manager.update_detection_status(report_id, 'failed', timeout_reason)
-                                except Exception:
-                                    pass
+                                    return provider_order.index(name)
+                                except ValueError:
+                                    return 999
+
+                            local_rank = min(_provider_rank('local'), _provider_rank('ollama'))
+                            cloud_rank = min(_provider_rank('model_api'), _provider_rank('gemini'))
+                            local_preferred = local_rank < cloud_rank
+
+                            local_diag = _get_local_mode_diagnostics()
+                            local_ready = bool(local_diag.get('ollama_running') and local_diag.get('model_available'))
+
+                            if local_preferred and local_ready:
+                                status_info['status'] = 'generating'
+                                status_info['long_running_notice'] = True
+                                status_info['alert_message'] = (
+                                    'Local model generation is taking longer than expected on this machine. '
+                                    'The report is still processing and will complete when ready.'
+                                )
+                            else:
+                                timeout_reason = 'Report generation timed out without producing report output.'
+                                status_info['status'] = 'failed'
+                                status_info['error_message'] = timeout_reason
+                                if hasattr(db_manager, 'update_detection_status'):
+                                    try:
+                                        db_manager.update_detection_status(report_id, 'failed', timeout_reason)
+                                    except Exception:
+                                        pass
 
                 # Do not surface stale old error text once report artifact exists.
                 if status_info.get('has_report') and status_info.get('status') == 'completed':
@@ -1870,9 +1901,14 @@ def api_report_status(report_id):
             })
         
         status = status_info.get('status', 'unknown')
+        generating_message = (
+            status_info.get('alert_message')
+            if status_info.get('long_running_notice')
+            else 'AI is analyzing the violation and generating the report'
+        )
         messages = {
             'pending': 'Report is queued for processing',
-            'generating': 'AI is analyzing the violation and generating the report',
+            'generating': generating_message,
             'completed': 'Report is ready to view',
             'failed': f"Report generation failed: {status_info.get('error_message', 'Unknown error')}",
             'partial': 'Report was partially generated',
@@ -1886,6 +1922,7 @@ def api_report_status(report_id):
             'has_annotated': status_info.get('has_annotated', False),
             'device_id': status_info.get('device_id'),
             'error_message': status_info.get('error_message'),
+            'alert_message': status_info.get('alert_message'),
             'message': messages.get(status, 'Status unknown')
         })
         
@@ -2177,6 +2214,87 @@ def _is_quota_related_error(message: str) -> bool:
     )
 
 
+def _detect_ollama_executable() -> str:
+    """Return best-effort Ollama executable path, including common non-PATH installs."""
+    from_path = shutil.which('ollama')
+    if from_path:
+        return from_path
+
+    candidates = []
+    if os.name == 'nt':
+        local_app_data = os.getenv('LOCALAPPDATA', '')
+        program_files = os.getenv('ProgramFiles', '')
+        program_files_x86 = os.getenv('ProgramFiles(x86)', '')
+        candidates.extend([
+            os.path.join(local_app_data, 'Programs', 'Ollama', 'ollama.exe'),
+            os.path.join(local_app_data, 'Programs', 'Ollama', 'Ollama app.exe'),
+            os.path.join(program_files, 'Ollama', 'ollama.exe'),
+            os.path.join(program_files, 'Ollama', 'Ollama app.exe'),
+            os.path.join(program_files_x86, 'Ollama', 'ollama.exe'),
+            os.path.join(program_files_x86, 'Ollama', 'Ollama app.exe'),
+        ])
+    elif sys.platform == 'darwin':
+        candidates.extend([
+            '/Applications/Ollama.app/Contents/MacOS/Ollama',
+            '/opt/homebrew/bin/ollama',
+            '/usr/local/bin/ollama',
+        ])
+    else:
+        candidates.extend([
+            '/usr/local/bin/ollama',
+            '/usr/bin/ollama',
+            '/snap/bin/ollama',
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return ''
+
+
+def _get_ollama_install_guidance() -> Dict[str, Any]:
+    """Build OS-specific install guidance for Ollama onboarding UX."""
+    if os.name == 'nt':
+        return {
+            'install_url': 'https://ollama.com/download/windows',
+            'install_commands': [
+                'winget install Ollama.Ollama',
+                'choco install ollama -y'
+            ],
+            'post_install_steps': [
+                'Start Ollama app once after install.',
+                'If needed, run: ollama serve',
+                'Pull required model: ollama pull llama3'
+            ]
+        }
+
+    if sys.platform == 'darwin':
+        return {
+            'install_url': 'https://ollama.com/download/mac',
+            'install_commands': [
+                'brew install --cask ollama'
+            ],
+            'post_install_steps': [
+                'Open Ollama app.',
+                'If needed, run: ollama serve',
+                'Pull required model: ollama pull llama3'
+            ]
+        }
+
+    return {
+        'install_url': 'https://ollama.com/download/linux',
+        'install_commands': [
+            'curl -fsSL https://ollama.com/install.sh | sh'
+        ],
+        'post_install_steps': [
+            'Start Ollama service/app.',
+            'If needed, run: ollama serve',
+            'Pull required model: ollama pull llama3'
+        ]
+    }
+
+
 def _get_local_mode_diagnostics() -> Dict[str, Any]:
     ollama_base_url = str(
         os.getenv('OLLAMA_BASE_URL')
@@ -2188,6 +2306,8 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
         or (OLLAMA_CONFIG or {}).get('model')
         or 'llama3'
     ).strip()
+    ollama_executable = _detect_ollama_executable()
+    install_guidance = _get_ollama_install_guidance()
 
     tags_url = f"{ollama_base_url}/api/tags"
     ollama_running = False
@@ -2220,13 +2340,139 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     return {
         'ollama_base_url': ollama_base_url,
         'ollama_model': ollama_model,
+        'ollama_executable': ollama_executable or None,
+        'ollama_installed': bool(ollama_executable),
         'ollama_running': ollama_running,
         'model_available': model_available,
         'local_mode_possible': bool(ollama_running and model_available),
         'pull_command': f"ollama pull {ollama_model}",
-        'start_command': 'ollama serve',
-        'error': probe_error
+        'start_command': f'"{ollama_executable}" serve' if ollama_executable else 'ollama serve',
+        'install_url': install_guidance.get('install_url'),
+        'install_commands': install_guidance.get('install_commands', []),
+        'post_install_steps': install_guidance.get('post_install_steps', []),
+        'error': probe_error,
     }
+
+
+def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
+    """Best-effort start of Ollama service when not already running."""
+    before = _get_local_mode_diagnostics()
+    if before.get('ollama_running'):
+        return {
+            'attempted': False,
+            'started': False,
+            'already_running': True,
+            'error': None,
+        }
+
+    ollama_cmd = _detect_ollama_executable()
+    if not ollama_cmd:
+        guidance = _get_ollama_install_guidance()
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': 'Ollama executable not found in PATH.',
+            'install_url': guidance.get('install_url'),
+            'install_commands': guidance.get('install_commands', []),
+        }
+
+    try:
+        kwargs = {
+            'stdout': subprocess.DEVNULL,
+            'stderr': subprocess.DEVNULL,
+            'stdin': subprocess.DEVNULL,
+        }
+
+        if os.name == 'nt':
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        else:
+            kwargs['start_new_session'] = True
+
+        cmd_lower = os.path.basename(ollama_cmd).lower()
+        if cmd_lower == 'ollama app.exe':
+            subprocess.Popen([ollama_cmd], **kwargs)
+        else:
+            subprocess.Popen([ollama_cmd, 'serve'], **kwargs)
+
+        deadline = time.time() + max(1, int(wait_seconds))
+        while time.time() < deadline:
+            probe = _get_local_mode_diagnostics()
+            if probe.get('ollama_running'):
+                return {
+                    'attempted': True,
+                    'started': True,
+                    'already_running': False,
+                    'error': None,
+                    'start_command': f'"{ollama_cmd}" serve' if cmd_lower != 'ollama app.exe' else f'"{ollama_cmd}"',
+                }
+            time.sleep(1)
+
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': 'Ollama did not become reachable in time.',
+            'start_command': f'"{ollama_cmd}" serve' if cmd_lower != 'ollama app.exe' else f'"{ollama_cmd}"',
+        }
+    except Exception as e:
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': str(e),
+            'start_command': f'"{ollama_cmd}" serve' if 'ollama_cmd' in locals() else 'ollama serve',
+        }
+
+
+def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_seconds: int = 600) -> Dict[str, Any]:
+    """Best-effort pull of required Ollama model when missing."""
+    diag = _get_local_mode_diagnostics()
+    if diag.get('model_available'):
+        return {
+            'attempted': False,
+            'pulled': False,
+            'already_available': True,
+            'error': None,
+        }
+
+    if not diag.get('ollama_running'):
+        return {
+            'attempted': False,
+            'pulled': False,
+            'already_available': False,
+            'error': 'Ollama is not running; cannot pull model yet.',
+        }
+
+    pull_url = f"{str(ollama_base_url).rstrip('/')}/api/pull"
+    try:
+        response = requests.post(
+            pull_url,
+            json={'model': model_name, 'stream': False},
+            timeout=max(60, int(timeout_seconds))
+        )
+        if not response.ok:
+            return {
+                'attempted': True,
+                'pulled': False,
+                'already_available': False,
+                'error': f"Model pull failed (HTTP {response.status_code})",
+            }
+
+        post_diag = _get_local_mode_diagnostics()
+        return {
+            'attempted': True,
+            'pulled': bool(post_diag.get('model_available')),
+            'already_available': False,
+            'error': None if post_diag.get('model_available') else 'Model pull request returned without model availability confirmation.',
+        }
+    except Exception as e:
+        return {
+            'attempted': True,
+            'pulled': False,
+            'already_available': False,
+            'error': str(e),
+        }
 
 
 def _apply_nlp_provider_order(order: List[str]) -> List[str]:
@@ -2241,6 +2487,62 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
             pass
 
     return normalized
+
+
+@app.route('/api/local-mode/prepare', methods=['POST'])
+def api_prepare_local_mode():
+    """One-click local mode bootstrap: start Ollama, pull model if needed, and optionally switch local-first routing."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        auto_pull = bool(payload.get('auto_pull', True))
+        set_local_first = bool(payload.get('set_local_first', True))
+        wait_seconds = int(payload.get('wait_seconds', 8) or 8)
+        pull_timeout_seconds = int(payload.get('pull_timeout_seconds', 600) or 600)
+
+        before = _get_local_mode_diagnostics()
+        actions = {
+            'start_service': _start_ollama_service_if_needed(wait_seconds=wait_seconds),
+            'pull_model': {
+                'attempted': False,
+                'pulled': False,
+                'already_available': bool(before.get('model_available')),
+                'error': None,
+            },
+            'provider_order': {
+                'applied': False,
+                'order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+            }
+        }
+
+        mid = _get_local_mode_diagnostics()
+        if auto_pull and mid.get('ollama_running') and not mid.get('model_available'):
+            actions['pull_model'] = _pull_ollama_model_if_needed(
+                ollama_base_url=mid.get('ollama_base_url') or before.get('ollama_base_url') or 'http://localhost:11434',
+                model_name=mid.get('ollama_model') or before.get('ollama_model') or 'llama3',
+                timeout_seconds=pull_timeout_seconds,
+            )
+
+        after = _get_local_mode_diagnostics()
+
+        if set_local_first and after.get('local_mode_possible'):
+            applied_order = _apply_nlp_provider_order(['local', 'ollama', 'model_api', 'gemini'])
+            actions['provider_order'] = {
+                'applied': True,
+                'order': applied_order,
+            }
+
+        ready = bool(after.get('local_mode_possible'))
+
+        return jsonify({
+            'success': ready,
+            'message': 'Local mode is ready.' if ready else 'Local mode is not ready yet.',
+            'before': before,
+            'after': after,
+            'actions': actions,
+        }), 200
+    except Exception as e:
+        logger.error(f"Error preparing local mode: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
@@ -3162,6 +3464,105 @@ def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
         }
 
 
+def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve best-effort model/provider provenance for caption + report generation."""
+        detection_data = detection_data if isinstance(detection_data, dict) else {}
+        nlp_analysis = nlp_analysis if isinstance(nlp_analysis, dict) else {}
+
+        caption_provider = None
+        caption_model = None
+        caption_source = None
+
+        history = detection_data.get('caption_history')
+        if isinstance(history, list):
+            history_entries = [entry for entry in history if isinstance(entry, dict)]
+            if history_entries:
+                latest = history_entries[-1]
+                model_from_history = latest.get('model')
+                if model_from_history:
+                    caption_model = str(model_from_history)
+                    caption_provider = str(latest.get('provider') or 'historical_record')
+                    caption_source = 'detection_data.caption_history[-1]'
+
+        if caption_model is None:
+            for model_key in ('caption_model', 'vision_model', 'generation_model', 'model_used'):
+                value = detection_data.get(model_key)
+                if value:
+                    caption_model = str(value)
+                    caption_source = f'detection_data.{model_key}'
+                    break
+
+        if caption_provider is None:
+            for provider_key in ('caption_provider', 'vision_provider', 'generation_provider', 'provider_used'):
+                value = detection_data.get(provider_key)
+                if value:
+                    caption_provider = str(value)
+                    caption_source = caption_source or f'detection_data.{provider_key}'
+                    break
+
+        report_provider = None
+        report_model = None
+        report_source = None
+
+        for provider_key in ('provider', 'generation_provider', 'report_provider', 'model_provider'):
+            value = nlp_analysis.get(provider_key)
+            if value:
+                report_provider = str(value)
+                report_source = f'nlp_analysis.{provider_key}'
+                break
+
+        for model_key in ('model', 'generation_model', 'report_model', 'model_used'):
+            value = nlp_analysis.get(model_key)
+            if value:
+                report_model = str(value)
+                report_source = report_source or f'nlp_analysis.{model_key}'
+                break
+
+        runtime_snapshot = _get_provider_runtime_snapshot()
+        nlp_runtime = runtime_snapshot.get('nlp', {}) if isinstance(runtime_snapshot, dict) else {}
+        vision_runtime = runtime_snapshot.get('vision', {}) if isinstance(runtime_snapshot, dict) else {}
+
+        if report_provider is None and isinstance(nlp_runtime, dict):
+            if nlp_runtime.get('last_provider'):
+                report_provider = str(nlp_runtime.get('last_provider'))
+                report_source = 'runtime.nlp.last_provider'
+
+        if report_model is None and isinstance(nlp_runtime, dict):
+            if nlp_runtime.get('last_model'):
+                report_model = str(nlp_runtime.get('last_model'))
+                report_source = report_source or 'runtime.nlp.last_model'
+
+        if caption_provider is None and isinstance(vision_runtime, dict):
+            if vision_runtime.get('last_provider_used'):
+                caption_provider = str(vision_runtime.get('last_provider_used'))
+                caption_source = 'runtime.vision.last_provider_used'
+
+        if caption_model is None and isinstance(vision_runtime, dict):
+            provider_key = (caption_provider or '').strip().lower()
+            provider_to_model = {
+                'gemini': vision_runtime.get('gemini_model'),
+                'ollama': vision_runtime.get('ollama_model'),
+                'model_api': vision_runtime.get('vision_api_model'),
+            }
+            inferred_model = provider_to_model.get(provider_key) or vision_runtime.get('vision_api_model')
+            if inferred_model:
+                caption_model = str(inferred_model)
+                caption_source = caption_source or 'runtime.vision.provider_model_map'
+
+        return {
+            'caption_generation': {
+                'provider': caption_provider,
+                'model': caption_model,
+                'source': caption_source,
+            },
+            'report_generation': {
+                'provider': report_provider,
+                'model': report_model,
+                'source': report_source,
+            },
+        }
+
+
 def _looks_like_fallback_template_html(html_content: str) -> bool:
         """Detect legacy fallback report templates that should not be served as final reports."""
         lowered = str(html_content or '').lower()
@@ -3416,6 +3817,9 @@ def _build_traceability_payload(
         violation_status = str(violation.get('status') or '').strip().lower() or None
 
         caption_validation = detection_data.get('caption_validation') if isinstance(detection_data, dict) else None
+        nlp_integrity = detection_data.get('nlp_integrity') if isinstance(detection_data, dict) else None
+        nlp_analysis = _safe_parse_json_like(violation.get('nlp_analysis'))
+        generation_models = _extract_generation_model_info(detection_data, nlp_analysis)
 
         detections = []
         if isinstance(detection_data, dict):
@@ -3466,6 +3870,8 @@ def _build_traceability_payload(
                         'preview': placeholder['preview'],
                 },
                 'caption_validation': caption_validation,
+                'nlp_integrity': nlp_integrity,
+                'generation_models': generation_models,
                 'person_count': person_count,
                 'violation_count': violation_count,
                 'severity': violation.get('severity'),
@@ -3495,9 +3901,11 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
 </div>
 <style>
     .report-back-btn {{
-        position: fixed;
-        top: 8px;
-        left: 8px;
+        position: fixed !important;
+        top: 8px !important;
+        left: 8px !important;
+        right: auto !important;
+        bottom: auto !important;
         z-index: 2147483647;
         border: 2px solid #1f2937;
         background: #111827;
@@ -3509,16 +3917,21 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
         letter-spacing: 0.4px;
         cursor: pointer;
         box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+        transform: none !important;
+        transition: background 0.15s ease;
     }}
     .report-back-btn:hover {{
         background: #374151;
     }}
     .traceability-widget {{
-        position: fixed;
-        top: 8px;
-        right: 8px;
+        position: fixed !important;
+        top: 8px !important;
+        right: 8px !important;
+        left: auto !important;
+        bottom: auto !important;
         z-index: 2147483647;
         font-family: Consolas, 'Courier New', monospace;
+        transform: none !important;
     }}
     .traceability-toggle {{
         border: 2px solid #7c2d12;
@@ -3531,6 +3944,8 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
         letter-spacing: 0.4px;
         cursor: pointer;
         box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+        transform: none !important;
+        transition: background 0.15s ease;
     }}
     .traceability-toggle:hover {{
         background: #fbbf24;
@@ -3590,12 +4005,8 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
 
     if (backBtn) {{
         backBtn.addEventListener('click', () => {{
-            const reportsHash = '#/reports';
-            const reportsUrl = `${{window.location.origin}}/${{reportsHash}}`;
-
             if (window.opener && !window.opener.closed) {{
                 try {{
-                    window.opener.location.hash = reportsHash;
                     window.opener.focus();
                     window.close();
                     return;
@@ -3604,12 +4015,16 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
                 }}
             }}
 
+            // Try closing current tab even without opener (works only if browser permits).
+            window.close();
+            if (window.closed) return;
+
             if (window.history.length > 1) {{
                 window.history.back();
                 return;
             }}
 
-            window.location.href = reportsUrl;
+            // Final fallback: stay on the report page (avoid forcing homepage redirect).
         }});
     }}
 
@@ -3823,7 +4238,7 @@ def get_image(report_id, filename):
 # API ENDPOINTS - LIVE STREAMING
 # =========================================================================
 
-def generate_frames(conf=0.25):
+def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
     """Generate frames from active live source with YOLO detection and violation processing."""
 
     with camera_lock:
@@ -3851,6 +4266,9 @@ def generate_frames(conf=0.25):
     
     logger.info("=" * 80)
     
+    frame_interval = 1.0 / max(1, int(target_fps))
+    last_yield_ts = 0.0
+
     try:
         while True:
             with camera_lock:
@@ -3920,15 +4338,22 @@ def generate_frames(conf=0.25):
                             logger.debug("Violation not queued (cooldown or already processing)")
                 
                 # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
                 if not ret:
                     continue
                 
+                # Pace stream frames to keep latency predictable on slower machines/networks.
+                now = time.monotonic()
+                wait_s = frame_interval - (now - last_yield_ts)
+                if wait_s > 0:
+                    time.sleep(wait_s)
+
                 frame_bytes = buffer.tobytes()
                 
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                last_yield_ts = time.monotonic()
                 
             except Exception as e:
                 logger.error(f"Error processing frame: {e}")
@@ -3949,9 +4374,18 @@ def live_stream():
     if startup_gate is not None:
         return startup_gate
 
-    conf = float(request.args.get('conf', 0.10))
+    def _to_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    conf = max(0.01, min(0.90, _to_float(request.args.get('conf', 0.10), 0.10)))
+    target_fps = int(max(5, min(30, _to_float(request.args.get('fps', 14), 14))))
+    jpeg_quality = int(max(45, min(90, _to_float(request.args.get('quality', 72), 72))))
+
     return Response(
-        generate_frames(conf=conf),
+        generate_frames(conf=conf, target_fps=target_fps, jpeg_quality=jpeg_quality),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 

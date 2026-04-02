@@ -17,6 +17,7 @@ import logging
 import json
 import csv
 import os
+import html
 import requests
 import threading
 import time
@@ -1251,112 +1252,37 @@ RESPONSE FORMAT (JSON):
             self.last_nlp_fallback_reason = detail
             self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
         else:
-            # Post-NLP validation: Enhance NLP output with fallback data for better specificity
+            # Model-first policy: only patch critical missing fields, avoid broad deterministic overrides.
             detections = report_data.get('detections', [])
             has_violations = any(d.get('class_name', '').startswith('NO-') for d in detections)
-            
+
+            fallback = None
             if has_violations:
-                # Generate fallback data with specific JKR/BOWEC/OSHA regulations
-                fallback = self._generate_fallback_analysis(report_data)
-                
-                # Always use fallback DOSH regulations (they have specific citations)
-                # NLP often returns generic text like "All workers must wear PPE"
-                logger.info("Using fallback DOSH regulations for specific JKR/BOWEC/OSHA citations")
-                nlp_analysis['dosh_regulations_cited'] = fallback.get('dosh_regulations_cited', [])
-                
-                # ALWAYS extract environment from VLM caption and override NLP (ROOT CAUSE FIX)
-                # Llama 3 hallucinates "ROADSIDE" for indoor scenes because NO-Safety Vest
-                # triggers its "roadside" bias. VLM caption keywords are more reliable.
-                caption = report_data.get('caption', '')
-                detected_env = self._extract_environment_from_caption(caption)
-                nlp_env = nlp_analysis.get('environment_type', 'Unknown')
-                
-                if detected_env != 'General Workspace':
-                    # VLM found a specific environment match - trust it over NLP
-                    if detected_env.lower() != nlp_env.lower():
-                        logger.warning(f"Environment OVERRIDE: NLP said '{nlp_env}' but VLM caption matched '{detected_env}'. Using VLM.")
-                        
-                        # Build professional scene description from VLM caption + environment
-                        nlp_analysis['visual_evidence'] = self._build_scene_description(
-                            caption, detected_env, report_data.get('detections', [])
-                        )
-                        
-                        # Patch summary to replace wrong scene class
-                        summary = nlp_analysis.get('summary', '')
-                        if summary and nlp_env.upper() in summary.upper():
-                            nlp_analysis['summary'] = summary.replace(nlp_env, detected_env).replace(nlp_env.upper(), detected_env)
-                    
-                    nlp_analysis['environment_type'] = detected_env
-                elif nlp_env.lower() == 'unknown':
-                    # NLP returned Unknown and VLM had no specific match either
-                    logger.info(f"Environment type was 'Unknown' - using fallback '{detected_env}'")
-                    nlp_analysis['environment_type'] = detected_env
-                
-                # Get per-person actions based on their specific PPE violations
-                # Map violation types to specific corrective actions
-                VIOLATION_ACTIONS = {
-                    'hardhat': 'Stop work immediately. Issue MS 183:2001 certified safety helmet. Verify chin strap is fastened.',
-                    'safety vest': 'Ensure high-visibility vest (Neon Yellow/Orange - MS 1731) is worn as outermost layer.',
-                    'mask': 'Provide MS 2323:2010 particulate respirator (N95/P2) or specific chem-hazard mask.',
-                    'gloves': 'Provide task-specific hand protection (cut-resistant for rebar, chemical-resistant for wet works).',
-                    'goggles': 'Mandate MS 2050 compliant eye protection appropriate for the specific task.',
-                    'footwear': 'Enforce MS ISO 20345 Safety Boots usage (Steel toe/midsole protection).'
-                }
-                
-                # Get detected violations
-                detected_violations = [d.get('class_name', '').lower().replace('no-', '') 
-                                       for d in detections if d.get('class_name', '').startswith('NO-')]
-                # Get specific corrective actions from fallback
-                fallback_actions = fallback.get('suggested_actions', [])
-                
-                # If persons array is empty, use fallback persons
-                if not nlp_analysis.get('persons'):
-                    logger.warning("NLP returned empty persons array - using fallback persons data")
+                needs_persons = not isinstance(nlp_analysis.get('persons'), list) or len(nlp_analysis.get('persons', [])) == 0
+                needs_regulation = not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0
+                needs_environment = not str(nlp_analysis.get('environment_type', '')).strip()
+
+                if needs_persons or needs_regulation or needs_environment:
+                    fallback = self._generate_fallback_analysis(report_data)
+
+                if needs_regulation and fallback is not None:
+                    logger.info("NLP output missing regulation citations; injecting fallback citations only")
+                    nlp_analysis['dosh_regulations_cited'] = fallback.get('dosh_regulations_cited', [])
+
+                if needs_environment and fallback is not None:
+                    caption = report_data.get('caption', '')
+                    detected_env = self._extract_environment_from_caption(caption)
+                    nlp_analysis['environment_type'] = detected_env if detected_env else fallback.get('environment_type', 'General Workspace')
+
+                if needs_persons and fallback is not None:
+                    logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
-                
-                # Enforce person count from YOLO (prevents hallucinations)
-                # If YOLO detected 2 people, but LLM imagined 6, we truncate to 2
-                yolo_person_count = report_data.get('person_count', 0)
-                
-                # If YOLO count is 0 but we have violations, assume at least 1 person responsible
-                if yolo_person_count == 0 and has_violations:
-                    yolo_person_count = 1
-                
-                nlp_persons = nlp_analysis.get('persons', [])
-                if len(nlp_persons) > yolo_person_count:
-                    logger.warning(f"NLP hallucinated {len(nlp_persons)} persons, but YOLO detection count is {yolo_person_count}. Truncating.")
-                    nlp_analysis['persons'] = nlp_persons[:yolo_person_count]
-                elif len(nlp_persons) < yolo_person_count:
-                    logger.warning(f"NLP Under-Count: {len(nlp_persons)} vs YOLO {yolo_person_count}. Appending fallback data.")
-                    fallback_persons = fallback.get('persons', [])
-                    # Append missing persons from fallback
-                    if len(fallback_persons) >= yolo_person_count:
-                        nlp_analysis['persons'].extend(fallback_persons[len(nlp_persons):yolo_person_count])
-                    else:
-                        nlp_analysis['persons'].extend(fallback_persons[len(nlp_persons):])
 
-                # Enhance each person with specific actions for THEIR PPE violations
-                for person in nlp_analysis.get('persons', []):
-                    ppe_status = person.get('ppe', {})
-                    person_actions = []
-                    
-                    # Check each PPE item for this person
-                    for ppe_key, action in VIOLATION_ACTIONS.items():
-                        ppe_field = ppe_key.replace(' ', '_')
-                        status = str(ppe_status.get(ppe_field, '')).lower()
-                        
-                        # If this person's PPE is missing, add the specific action
-                        if status == 'missing' or ppe_key.replace('_', ' ') in detected_violations:
-                            person_actions.append(action)
-                    
-                    # If no specific actions, use general ones
-                    if not person_actions:
-                        person_actions = fallback.get('suggested_actions', ['Conduct safety inspection'])
-                    
-                    # Set both action fields
-                    person['actions'] = person_actions
-                    person['corrective_actions'] = person_actions
-
+            # Normalize structure once so all sections (including hidden expanded parts)
+            # consume consistent model-aligned data shapes.
+            raw_nlp_analysis = json.loads(json.dumps(nlp_analysis)) if isinstance(nlp_analysis, (dict, list)) else nlp_analysis
+            nlp_analysis = self._sanitize_nlp_analysis(nlp_analysis)
+            nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
 
         
@@ -1373,7 +1299,9 @@ RESPONSE FORMAT (JSON):
         return {
             'html': html_path,
             'pdf': pdf_path,
-            'nlp_analysis': nlp_analysis
+            'nlp_analysis': nlp_analysis,
+            'nlp_analysis_raw': raw_nlp_analysis,
+            'nlp_integrity': nlp_integrity,
         }
     
     def _generate_fallback_analysis(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2166,6 +2094,15 @@ RESPONSE FORMAT (JSON):
         .likelihood-medium .bar-fill {{
             background-color: #ffc107;
         }}
+
+        .likelihood-low {{
+             background-color: #d1ecf1;
+             color: #0c5460;
+             border-color: #bee5eb;
+        }}
+        .likelihood-low .bar-fill {{
+            background-color: #17a2b8;
+        }}
         
         .risk-grid, .action-grid {{
             display: flex;
@@ -2676,44 +2613,71 @@ RESPONSE FORMAT (JSON):
         import re
 
         summary_text = str(nlp_analysis.get('summary', 'Analysis in progress...') or 'Analysis in progress...')
-        # Get count from report_data (YOLO) if possible for accuracy
-        violation_count = 0
-        person_count = 0
-        if report_data:
-            person_count = report_data.get('person_count', 0)
-            violation_count = report_data.get('violation_count', 0)
-            
-            # User Preference: Strict Person Count. 
-            # Do NOT force count to 1 even if violations exist. 
-            # Person count must rely ONLY on 'person' class detections.
-            
-            # CRITICAL LOGIC FIX: 'violation_count' in report_data is ITEMS (e.g. 3 items missing).
-            # But the summary display needs PEOPLE count.
-            # If we have violations, at least 1 person is non-compliant.
-            # We assume worst case: All violations belong to as few people as possible?
-            # Actually, usually 1 person = 1 violation in the summary sense?
-            # Let's use logic: If violations > 0, then non_compliant_people must be at least 1.
-            # We bound it by person_count.
-            
-            violation_refers_to_people = violation_count
-            if violation_count > 0:
-                 # If we have violations, we have at least 1 non-compliant person.
-                 # If we have 1 person total, then 1 person is non-compliant.
-                 violation_refers_to_people = min(person_count, violation_count)
-                 # Ensure at least 1 if violations exist
-                 if violation_refers_to_people == 0 and violation_count > 0:
-                      violation_refers_to_people = 1
-            
-            violation_count = violation_refers_to_people
-        else:
-            persons = nlp_analysis.get('persons', [])
-            person_count = len(persons)
-            violation_count = len(persons) # Fallback
+        persons = nlp_analysis.get('persons', [])
+        if not isinstance(persons, list):
+            persons = []
 
-        compliant_count = max(0, person_count - violation_count)
-        
-        # Display logic: "19 Scanned (5 Violations / 14 Compliant)"
-        count_display = f"{person_count} Scanned ({violation_count} Violations / {compliant_count} Compliant)"
+        # WHO should reflect model output first; detector stats are context only.
+        model_person_rows: List[str] = []
+        model_non_compliant_count = 0
+
+        for idx, person in enumerate(persons):
+            if not isinstance(person, dict):
+                continue
+
+            person_id = str(person.get('id') or f'Person {idx + 1}').strip()
+            person_desc = str(person.get('description') or '').strip()
+
+            ppe = person.get('ppe', {})
+            missing_items: List[str] = []
+            if isinstance(ppe, dict):
+                for item_name, status in ppe.items():
+                    status_text = str(status or '').strip().lower()
+                    if 'missing' in status_text or status_text.startswith('no '):
+                        missing_items.append(str(item_name).replace('_', ' '))
+
+            hazards = person.get('hazards_faced', [])
+            risks = person.get('risks', [])
+            has_risk_signal = bool(missing_items) or bool(hazards) or bool(risks)
+            if has_risk_signal:
+                model_non_compliant_count += 1
+
+            if missing_items:
+                detail = f"missing {', '.join(missing_items[:3])}"
+                if len(missing_items) > 3:
+                    detail += f" +{len(missing_items) - 3} more"
+            elif person_desc:
+                detail = person_desc.split('. ')[0]
+            else:
+                detail = 'PPE/risk observation recorded by model'
+
+            model_person_rows.append(f"• {person_id}: {detail}")
+
+        model_person_count = len(model_person_rows)
+
+        detected_person_count = int((report_data or {}).get('person_count', 0) or 0)
+        detected_violation_items = int((report_data or {}).get('violation_count', 0) or 0)
+
+        if model_person_count > 0:
+            preview_rows = model_person_rows[:4]
+            if model_person_count > 4:
+                preview_rows.append(f"• +{model_person_count - 4} more model-identified person entries")
+
+            who_header = (
+                f"Model identified {model_person_count} person(s), "
+                f"{model_non_compliant_count} with non-compliance signals."
+            )
+            detector_context = (
+                f"Detector context: {detected_person_count} persons scanned, "
+                f"{detected_violation_items} violation item(s)."
+            )
+            count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}<br><span style='color:#7f8c8d;'>{detector_context}</span>"
+        else:
+            compliant_count = max(0, detected_person_count - min(detected_person_count, detected_violation_items))
+            count_display = (
+                f"{detected_person_count} Scanned "
+                f"({detected_violation_items} Violation Items / {compliant_count} Compliant)"
+            )
         
         # Extract environment/risk keywords
         env_type = nlp_analysis.get('environment_type', 'Unknown')
@@ -2760,7 +2724,7 @@ RESPONSE FORMAT (JSON):
                 <table style="width: 100%; border-collapse: collapse;">
                     <tr style="border-bottom: 1px solid #eee;">
                         <td style="padding: 12px; font-weight: bold; width: 15%; background: #f9f9f9;">WHO</td>
-                        <td style="padding: 12px;">{count_display}</td>
+                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{count_display}</td>
                     </tr>
                     <tr style="border-bottom: 1px solid #eee;">
                         <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">WHAT</td>
@@ -2799,6 +2763,166 @@ RESPONSE FORMAT (JSON):
             
         return [str(data)]
 
+    def _sanitize_nlp_analysis(self, nlp_analysis: Any) -> Dict[str, Any]:
+        """Normalize model output into a stable schema for robust rendering."""
+        if not isinstance(nlp_analysis, dict):
+            nlp_analysis = {}
+
+        def _as_clean_str(value: Any) -> str:
+            return str(value or '').strip()
+
+        def _as_list(value: Any) -> List[Any]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return value
+            return [value]
+
+        normalized: Dict[str, Any] = dict(nlp_analysis)
+        normalized['summary'] = _as_clean_str(nlp_analysis.get('summary'))
+        normalized['visual_evidence'] = _as_clean_str(nlp_analysis.get('visual_evidence'))
+        normalized['environment_type'] = _as_clean_str(nlp_analysis.get('environment_type'))
+        normalized['environment_assessment'] = _as_clean_str(nlp_analysis.get('environment_assessment'))
+        normalized['hazards_detected'] = [
+            _as_clean_str(item) for item in self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', [])) if _as_clean_str(item)
+        ]
+        normalized['suggested_actions'] = [
+            _as_clean_str(item) for item in self._ensure_list_of_strings(nlp_analysis.get('suggested_actions', [])) if _as_clean_str(item)
+        ]
+
+        # Regulations: list[dict|str] with consistent string fields.
+        regs_out: List[Any] = []
+        seen_regs = set()
+        for reg in _as_list(nlp_analysis.get('dosh_regulations_cited', [])):
+            if isinstance(reg, dict):
+                reg_obj = {
+                    'regulation': _as_clean_str(reg.get('regulation') or reg.get('technical_standard')),
+                    'requirement': _as_clean_str(reg.get('requirement')),
+                    'penalty': _as_clean_str(reg.get('penalty') or reg.get('legal_regulatory_consequences')),
+                    'technical_standard': _as_clean_str(reg.get('technical_standard')),
+                    'legal_regulatory_consequences': _as_clean_str(reg.get('legal_regulatory_consequences')),
+                }
+                reg_key = reg_obj['regulation'].lower()
+                if reg_obj['regulation'] and reg_key not in seen_regs:
+                    seen_regs.add(reg_key)
+                    regs_out.append(reg_obj)
+            else:
+                reg_text = _as_clean_str(reg)
+                reg_key = reg_text.lower()
+                if reg_text and reg_key not in seen_regs:
+                    seen_regs.add(reg_key)
+                    regs_out.append(reg_text)
+        normalized['dosh_regulations_cited'] = regs_out
+
+        # Persons: enforce list[dict] and normalize nested structures used by hidden sections.
+        persons_out: List[Dict[str, Any]] = []
+        for idx, person in enumerate(_as_list(nlp_analysis.get('persons', []))):
+            if not isinstance(person, dict):
+                continue
+
+            person_id = _as_clean_str(person.get('id')) or f'Person {idx + 1}'
+            person_desc = _as_clean_str(person.get('description'))
+            person_compliance = _as_clean_str(person.get('compliance_status'))
+
+            ppe_obj: Dict[str, str] = {}
+            ppe_raw = person.get('ppe', {})
+            if isinstance(ppe_raw, dict):
+                for key, value in ppe_raw.items():
+                    key_str = _as_clean_str(key)
+                    val_str = _as_clean_str(value)
+                    if key_str and val_str:
+                        ppe_obj[key_str] = val_str
+
+            hazards_out: List[Any] = []
+            for hazard in _as_list(person.get('hazards_faced', [])):
+                if isinstance(hazard, dict):
+                    hz_type = _as_clean_str(hazard.get('type') or hazard.get('hazard'))
+                    hz_source = _as_clean_str(hazard.get('source'))
+                    hz_severity = _as_clean_str(hazard.get('severity'))
+                    if hz_type or hz_source or hz_severity:
+                        hazards_out.append({
+                            'type': hz_type,
+                            'source': hz_source,
+                            'severity': hz_severity,
+                        })
+                else:
+                    hz_text = _as_clean_str(hazard)
+                    if hz_text:
+                        hazards_out.append(hz_text)
+
+            risks_out: List[Any] = []
+            for risk in _as_list(person.get('risks', [])):
+                if isinstance(risk, dict):
+                    risk_obj = {
+                        'risk': _as_clean_str(risk.get('risk') or risk.get('description')),
+                        'likelihood': _as_clean_str(risk.get('likelihood')),
+                        'regulation_citation': _as_clean_str(risk.get('regulation_citation')),
+                        'legal_regulatory_consequences': _as_clean_str(risk.get('legal_regulatory_consequences')),
+                    }
+                    if any(risk_obj.values()):
+                        risks_out.append(risk_obj)
+                else:
+                    risk_text = _as_clean_str(risk)
+                    if risk_text:
+                        risks_out.append(risk_text)
+
+            actions_source = person.get('corrective_actions', []) or person.get('actions', [])
+            actions_out = [_as_clean_str(a) for a in self._ensure_list_of_strings(actions_source) if _as_clean_str(a)]
+
+            persons_out.append({
+                'id': person_id,
+                'description': person_desc,
+                'compliance_status': person_compliance,
+                'ppe': ppe_obj,
+                'hazards_faced': hazards_out,
+                'risks': risks_out,
+                'corrective_actions': actions_out,
+                'actions': actions_out,
+            })
+
+        normalized['persons'] = persons_out
+        return normalized
+
+    def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
+        """Build compact diagnostics comparing raw model payload and sanitized structure."""
+        raw_dict = raw_nlp if isinstance(raw_nlp, dict) else {}
+        sanitized_dict = sanitized_nlp if isinstance(sanitized_nlp, dict) else {}
+
+        raw_keys = set(raw_dict.keys())
+        sanitized_keys = set(sanitized_dict.keys())
+
+        def _safe_len_list(value: Any) -> int:
+            return len(value) if isinstance(value, list) else 0
+
+        raw_person_count = _safe_len_list(raw_dict.get('persons'))
+        sanitized_person_count = _safe_len_list(sanitized_dict.get('persons'))
+        raw_reg_count = _safe_len_list(raw_dict.get('dosh_regulations_cited'))
+        sanitized_reg_count = _safe_len_list(sanitized_dict.get('dosh_regulations_cited'))
+
+        return {
+            'sanitizer_version': 'v1',
+            'raw_top_level_key_count': len(raw_keys),
+            'sanitized_top_level_key_count': len(sanitized_keys),
+            'dropped_top_level_keys': sorted(list(raw_keys - sanitized_keys)),
+            'added_top_level_keys': sorted(list(sanitized_keys - raw_keys)),
+            'raw_person_count': raw_person_count,
+            'sanitized_person_count': sanitized_person_count,
+            'raw_regulation_count': raw_reg_count,
+            'sanitized_regulation_count': sanitized_reg_count,
+            'person_count_delta': sanitized_person_count - raw_person_count,
+            'regulation_count_delta': sanitized_reg_count - raw_reg_count,
+            'summary_length_raw': len(str(raw_dict.get('summary') or '')),
+            'summary_length_sanitized': len(str(sanitized_dict.get('summary') or '')),
+            'visual_evidence_length_raw': len(str(raw_dict.get('visual_evidence') or '')),
+            'visual_evidence_length_sanitized': len(str(sanitized_dict.get('visual_evidence') or '')),
+        }
+
+    def _to_safe_html_text(self, value: Any) -> str:
+        """Escape user/model text for safe HTML rendering and preserve line breaks."""
+        if value is None:
+            return ""
+        return html.escape(str(value), quote=True).replace('\n', '<br>')
+
     def _generate_caption_history_section(self, report_data: Dict[str, Any]) -> str:
         """Generate caption history section if available."""
         history = report_data.get('caption_history', [])
@@ -2833,14 +2957,14 @@ RESPONSE FORMAT (JSON):
             items.append(f"""
                 <div class="card" style="margin-bottom: 1rem; border-left: 4px solid var(--secondary-color);">
                     <div class="card-header" style="background: var(--background); color: var(--text-color); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-weight: 600;"><i class="fas fa-code-branch"></i> Version {version}</span>
+                        <span style="font-weight: 600;"><i class="fas fa-code-branch"></i> Version {self._to_safe_html_text(version)}</span>
                         <div style="display: flex; gap: 1rem; align-items: center;">
-                            <span class="badge" style="background: #e1e8ed; color: #34495e;">{model}</span>
-                            <span style="font-size: 0.85rem; opacity: 0.7;">{ts_str}</span>
+                            <span class="badge" style="background: #e1e8ed; color: #34495e;">{self._to_safe_html_text(model)}</span>
+                            <span style="font-size: 0.85rem; opacity: 0.7;">{self._to_safe_html_text(ts_str)}</span>
                         </div>
                     </div>
                     <div class="card-content">
-                        <p style="margin: 0; white-space: pre-wrap;">{caption}</p>
+                        <p style="margin: 0; white-space: pre-wrap; word-break: break-word;">{self._to_safe_html_text(caption)}</p>
                     </div>
                 </div>
             """)
@@ -2863,7 +2987,7 @@ RESPONSE FORMAT (JSON):
         if not hazards:
             return ""
         
-        items = "".join([f"<li>{h}</li>" for h in hazards])
+        items = "".join([f"<li style=\"white-space: normal; word-break: break-word;\">{self._to_safe_html_text(h)}</li>" for h in hazards if str(h).strip()])
         return f"""
             <div class="section">
                 <h2 class="section-title">⚠️ Hazards Detected</h2>
@@ -2875,37 +2999,46 @@ RESPONSE FORMAT (JSON):
     
     def _generate_dosh_regulations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate DOSH regulations section with cited regulations (Text Only - No External Links)."""
-        regulations = nlp_analysis.get('dosh_regulations_cited', [])
-        if not regulations:
+        regulations_raw = nlp_analysis.get('dosh_regulations_cited', [])
+        if not regulations_raw:
             return ""
+
+        regulations = regulations_raw if isinstance(regulations_raw, list) else [regulations_raw]
         
         reg_items = []
         seen_regulations = set()
 
-        for i, reg in enumerate(regulations, 1):
-            regulation = reg.get('regulation', 'N/A')
+        for reg in regulations:
+            if isinstance(reg, dict):
+                regulation = str(reg.get('regulation') or reg.get('technical_standard') or '').strip()
+                requirement = str(reg.get('requirement') or '').strip()
+                penalty = str(reg.get('penalty') or reg.get('legal_regulatory_consequences') or '').strip()
+            else:
+                regulation = str(reg).strip()
+                requirement = ""
+                penalty = ""
+
+            if not regulation:
+                continue
             
             # Deduplication
             reg_key = regulation.strip().lower()
             if reg_key in seen_regulations:
                 continue
             seen_regulations.add(reg_key)
-            requirement = reg.get('requirement', 'N/A')
-            penalty = reg.get('penalty', '')
-            
-            # If no specific penalty field, try to separate if combined? 
-            # (Assuming new data structure is present)
+
+            safe_regulation = self._inject_interactive_tooltips(self._to_safe_html_text(regulation))
+            safe_requirement = self._inject_interactive_tooltips(self._to_safe_html_text(requirement))
+            safe_penalty = self._to_safe_html_text(penalty)
             
             reg_items.append(f"""
                 <div class="card" style="margin-bottom: 1rem;">
                     <div class="card-header" style="background: linear-gradient(135deg, #e67e22, #d35400); color: white;">
-                        <i class="fas fa-book-open"></i> {regulation}
+                        <i class="fas fa-book-open"></i> {safe_regulation}
                     </div>
                     <div class="card-content">
-                        <p style="margin-bottom: 0;"><strong>Requirement:</strong> {self._inject_interactive_tooltips(requirement)}</p>
-                        <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555;">
-                            <strong>📖 Legal Backing (Penalty):</strong> {penalty if penalty else f"Cited under {regulation}."}
-                        </div>
+                        {f'<p style="margin-bottom: 0; white-space: normal; word-break: break-word;"><strong>Requirement:</strong> {safe_requirement}</p>' if safe_requirement else ''}
+                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong>📖 Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
                     </div>
                 </div>
             """)
@@ -2926,312 +3059,122 @@ RESPONSE FORMAT (JSON):
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
         """Generate per-person analysis cards (inspired by NLP_Luna)."""
         persons = nlp_analysis.get('persons', [])
+        if not isinstance(persons, list):
+            persons = []
+        persons = [p for p in persons if isinstance(p, dict)]
+
         if not persons:
             return """
             <div class="section">
                 <h2 class="section-title">👥 Individual Analysis</h2>
                 <div class="card">
                     <div class="card-content">
-                        <p>No persons detected in the scene.</p>
+                        <p>No person-level analysis returned by model.</p>
                     </div>
                 </div>
             </div>
             """
-        
-        # End of person cards section HTML generation
-        # Person cards loop continues below
-
-        # If this prompt is meant to be inserted into the HTML output, it's syntactically incorrect here.
-        # Based on the instruction, it seems to be a code edit, not an HTML content edit.
-        # I will insert it as a code block, assuming it's part of a larger method that uses this string.
-        # However, the instruction places it *inside* the `_generate_person_cards_section` method,
-        # right after the `if not persons:` return statement. This is an unusual place for a prompt definition
-        # that would typically be used to *call* the NLP analysis, not *display* it.
-        # Given the strict instruction to "make the change faithfully and without making any unrelated edits",
-        # I will place it exactly where indicated, even if it seems out of place for a prompt definition.
-        # It's possible this is a temporary placement or part of a larger refactoring not fully shown.
-        
-        # Placeholder for where the prompt would be defined if it were part of the NLP call logic
-        # For the purpose of this edit, I'm inserting it as requested.
-        # If this prompt is intended to be used *before* nlp_analysis is available,
-        # its placement here is incorrect. Assuming it's a code snippet to be added.
-        # The instruction implies this prompt is being defined *within* this method,
-        # which is highly unusual for a prompt that would generate the `nlp_analysis` itself.
-        # I will assume the user intends to add this string definition here.
-        # The `dosh_text`, `context_text`, `caption`, `person_count`, `violation_count` variables
-        # would need to be defined or passed into this scope for this prompt to be valid.
-        # Since they are not, this prompt definition would cause a NameError if executed.
-        # I will add it as requested, acknowledging the potential for runtime errors
-        # due to undefined variables if this code were to be executed as is.
-        
-        # The instruction's `{{ ... }}` markers indicate the prompt should be inserted here.
-        # This is a code block, not HTML.
-        # I will insert the prompt string definition here.
-        # Note: `dosh_text`, `context_text`, `caption`, `person_count`, `violation_count` are not defined in this scope.
-        # This code would cause a NameError if executed as is.
-        # I am making the change faithfully as instructed.
-        # The prompt itself is a string, so it doesn't break HTML syntax.
-        # It's a Python string definition.
-        # The indentation suggests it's at the same level as `persons = nlp_analysis.get('persons', [])`.
-        # However, the instruction shows it indented further. I will follow the instruction's indentation.
-        # The instruction shows it after the `return """..."""` block.
-        # Let's re-check the indentation in the instruction.
-        # It's indented 10 spaces, which is the same as the `return` statement.
-        # So it should be at the same level as `persons = nlp_analysis.get('persons', [])`.
-        # No, the instruction shows it indented 10 spaces, which is the same as the `return` statement's content.
-        # The `return` statement itself is indented 8 spaces.
-        # The instruction shows `          prompt = f"""..."""`. This is 10 spaces.
-        # This means it's inside the `if not persons:` block, which is incorrect.
-        # It should be outside the `if not persons:` block.
-        # The `{{ ... }}` markers are confusing.
-        # Let's assume the `prompt = f"""..."""` is meant to be at the same level as `persons = nlp_analysis.get('persons', [])`.
-        # This would be 8 spaces.
-        # The instruction's `{{ ... }}` implies it's after the `return` statement.
-        # If it's after the `return` statement, it will never be reached.
-        # This is a very tricky instruction due to the context.
-        # The instruction shows:
-        # ```
-        #             </div>
-        #           prompt = f"""You are an expert JKR-certified AI Safety Officer.
-        # ```
-        # This `prompt` definition is *outside* the `_generate_person_cards_section` method based on indentation.
-        # But the `{{ ... }}` markers imply it's *inside* the method.
-        # The first `{{ ... }}` is before `</div>` which is part of the HTML string.
-        # The second `{{ ... }}` is after `ppe_items = []`.
-        # This means the `prompt` definition is *between* the HTML string and the rest of the Python code.
-        # This is syntactically impossible. A Python string cannot be defined directly after an HTML string
-        # that is returned by a function, and then followed by more Python code in the same function.
-        # The instruction is asking to insert a Python code block (`prompt = f"""..."""`)
-        # into a place that is syntactically invalid if taken literally with the `{{ ... }}` markers.
-        #
-        # Let's re-read the instruction carefully:
-        # "Update the prompt to demand a paragraph summary, specific person counts, estimated likelihoods, and detailed regulatory penalties."
-        # "Code Edit: ```{{ ... }} <insertion point> {{ ... }}```"
-        # The code edit *is* the `prompt = f"""..."""` block.
-        # The `{{ ... }}` are context markers.
-        # The first `{{ ... }}` ends with:
-        # ```
-        #                     <div class="card-content">
-        #                         <p>No persons detected in the scene.</p>
-        #                     </div>
-        #                 </div>
-        #             </div>
-        # ```
-        # This is the end of the `if not persons:` block's return value.
-        # The second `{{ ... }}` starts with:
-        # ```
-        #     description = person.get('description', 'No description')
-        #             compliance = person.get('compliance_status', 'Unknown')
-        #
-        #             # PPE status grid - Override with YOLO detections
-        #             ppe = person.get('ppe', {})
-        #             ppe_items = []
-        # ```
-        # This is the start of the loop *after* the `if not persons:` block.
-        #
-        # So the instruction is asking to insert the `prompt = f"""..."""` *between* the `if not persons:` block's return
-        # and the `for person in persons:` loop.
-        # This is still syntactically invalid. If `if not persons:` returns, the code after it is not executed.
-        # If `persons` is not empty, the `if` block is skipped, and the `prompt` definition would be executed.
-        #
-        # The only way this makes sense is if the `prompt` definition is *not* part of the `_generate_person_cards_section` method,
-        # but rather a separate code block that was intended to be placed elsewhere, perhaps in a method that *calls* the NLP.
-        #
-        # However, I must follow the instruction faithfully. The instruction shows the `prompt` definition *between*
-        # the `if not persons:` return statement and the `for person in persons:` loop.
-        # This means the `prompt` definition is *inside* the `_generate_person_cards_section` method.
-        #
-        # I will place it at the indentation level shown in the instruction, which is 10 spaces.
-        # This means it's inside the `if not persons:` block, which is definitely wrong.
-        #
-        # Let's assume the indentation in the instruction is misleading and it should be at the same level as `persons = ...`.
-        # That would be 8 spaces.
-        #
-        # The instruction's `Code Edit:` block is the *content to be inserted*.
-        # The `{{ ... }}` are *context*.
-        #
-        # The context shows:
-        # ```
-        #             </div>
-        #             """
-        #         # This is the end of the `if not persons:` block.
-        #         # The next line in the original code is:
-        #         # `        # Generate card for each person`
-        #         # `        person_cards = []`
-        #         # `        for person in persons:`
-        #         # `            person_id = person.get('id', 'Unknown')`
-        #         # `            description = person.get('description', 'No description')`
-        # ```
-        # Extract missing PPE from YOLO detections using GEOMETRIC MATCHING
-        # This fixes the issue where one person's violation was applied to everyone.
-        detections = report_data.get('detections', [])
-        
-        # 1. Separate Persons and Violations
-        yolo_persons = []
-        yolo_items = []
-        for det in detections:
-            if det.get('class_name', '').lower() == 'person':
-                yolo_persons.append(det)
-            elif 'no-' in det.get('class_name', '').lower():
-                yolo_items.append(det)
-        
-        # 2. Sort persons left-to-right (x1 coordinate) to match NLP reading order heuristic
-        yolo_persons.sort(key=lambda x: x.get('bbox', [0])[0] if x.get('bbox') else 0)
-        
-        # 3. Map violations to persons
-        person_violations = {} # Index -> Set of missing PPE
-        
-        for p_idx, person_det in enumerate(yolo_persons):
-            person_violations[p_idx] = set()
-            p_box = person_det.get('bbox') # [x1, y1, x2, y2]
-            if not p_box: continue
-            
-            px1, py1, px2, py2 = p_box
-            
-            for item in yolo_items:
-                i_box = item.get('bbox')
-                if not i_box: continue
-                
-                # Check overlap or containment
-                ix1, iy1, ix2, iy2 = i_box
-                icx = (ix1 + ix2) / 2
-                icy = (iy1 + iy2) / 2
-                
-                # Logic 1: Center of item is inside person box
-                center_inside = (px1 <= icx <= px2) and (py1 <= icy <= py2)
-                
-                # Logic 2: Intersection over Union (IoU) > 0 (Overlap)
-                # Simple overlap check:
-                overlap = not (ix2 < px1 or ix1 > px2 or iy2 < py1 or iy1 > py2)
-                
-                if center_inside or overlap:
-                    # Map class name to standard PPE key
-                    class_name = item.get('class_name', '').lower()
-                    item_name = class_name.replace('no-', '')
-                    
-                    mapping = {
-                        'hardhat': 'hardhat',
-                        'mask': 'mask',
-                        'safety vest': 'safety_vest',
-                        'vest': 'safety_vest',
-                        'gloves': 'gloves',
-                        'safety shoes': 'footwear',
-                        'shoes': 'footwear',
-                        'goggles': 'goggles'
-                    }
-                    
-                    for k, v in mapping.items():
-                        if k in item_name:
-                            person_violations[p_idx].add(v)
-                            break
 
         # Generate card for each person
         person_cards = []
         for i, person in enumerate(persons):
-            person_id = str(person.get('id', 'Unknown')).replace('Person ', '').replace('Personnel ', '').strip()
-            description = person.get('description', 'No description')
-            compliance = person.get('compliance_status', 'Unknown')
-            
-            # PPE status grid - Override with YOLO detections
+            person_id_raw = str(person.get('id') or f'Person {i + 1}').strip()
+            description = self._to_safe_html_text(person.get('description') or '')
+            compliance = str(person.get('compliance_status') or '').strip()
+
+            # PPE status grid from model output only (no detector override).
             ppe = person.get('ppe', {})
+            if not isinstance(ppe, dict):
+                ppe = {}
             ppe_items = []
             has_missing_ppe = False
-            
-            # Get geometric violations for this specific person (by index)
-            # If NLP has more persons than YOLO, the extras get no auto-violations (safe default)
-            specific_missing = person_violations.get(i, set())
-            
-            # Define standard PPE items
-            standard_ppe = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
-            for ppe_type in standard_ppe:
-                # Override status if YOLO detected missing PPE for THIS person
-                if ppe_type in specific_missing:
-                    status = 'Missing'
-                    has_missing_ppe = True
-                else:
-                    status = ppe.get(ppe_type, 'Not Mentioned')
-                
-                # User Improvement: Change 'Not Required' to 'Not Mentioned' for clarity
-                if status == 'Not Required':
-                    status = 'Not Mentioned'
-                
-                # Determine status class
-                if status == 'Missing':
+
+            ppe_keys_order = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
+            ppe_keys = [k for k in ppe_keys_order if k in ppe] + [k for k in ppe.keys() if k not in ppe_keys_order]
+
+            for ppe_type in ppe_keys:
+                status = str(ppe.get(ppe_type, '') or '').strip() or 'Not specified'
+                status_lower = status.lower()
+
+                if 'missing' in status_lower or status_lower.startswith('no '):
                     status_class = 'ppe-status-missing'
-                    has_missing_ppe = True # Double check
-                elif status == 'Mentioned':
+                    has_missing_ppe = True
+                elif 'mention' in status_lower or 'present' in status_lower or 'wear' in status_lower:
                     status_class = 'ppe-status-mentioned'
                 else:
                     status_class = 'ppe-status-not-mentioned'
-                
+                    
                 ppe_label = ppe_type.replace('_', ' ').title()
                 ppe_items.append(f"""
                     <div class="ppe-item">
-                        <span class="ppe-label">{ppe_label}:</span>
-                        <span class="ppe-status {status_class}">{status}</span>
+                        <span class="ppe-label">{self._to_safe_html_text(ppe_label)}:</span>
+                        <span class="ppe-status {status_class}">{self._to_safe_html_text(status)}</span>
                     </div>
                 """)
 
-            # Recalculate compliance based on findings
-            if has_missing_ppe:
+            if not ppe_items:
+                ppe_items.append("""
+                    <div class="ppe-item">
+                        <span class="ppe-label">PPE:</span>
+                        <span class="ppe-status ppe-status-not-mentioned">No PPE status provided by model</span>
+                    </div>
+                """)
+
+            # Keep model compliance when provided; infer only when absent.
+            if not compliance and has_missing_ppe:
                 compliance = 'Non-Compliant'
-            elif compliance == 'Unknown':
-                # If no missing PPE found and status was unknown, assume Compliant
-                compliance = 'Compliant'
+            elif not compliance:
+                compliance = 'Not Specified'
             
             # Build Hazards Faced HTML (hazard-chip style)
             hazards_faced = person.get('hazards_faced', [])
+            if not isinstance(hazards_faced, list):
+                hazards_faced = [hazards_faced]
             hazards_html = ""
             if hazards_faced:
                 for h in hazards_faced:
                     if isinstance(h, dict):
-                        hazard_text = h.get('type', h.get('hazard', 'Unknown Hazard'))
-                        source = h.get('source', '')
+                        hazard_text = str(h.get('type') or h.get('hazard') or '').strip()
+                        source = str(h.get('source') or '').strip()
                         if source:
                             hazard_text += f" - {source}"
                     else:
-                        hazard_text = str(h)
-                    hazards_html += f'<div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> {hazard_text}</div>'
+                        hazard_text = str(h).strip()
+                    if hazard_text:
+                        hazards_html += f'<div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> {self._to_safe_html_text(hazard_text)}</div>'
             else:
-                hazards_html = '<div class="hazard-chip">No specific hazards identified</div>'
+                hazards_html = '<div class="hazard-chip">No hazards provided by model</div>'
             
             # Risks list - Use _format_risk_item style (likelihood badge)
             risks = person.get('risks', [])
+            if not isinstance(risks, list):
+                risks = [risks]
             risks_html = ""
             if risks:
                 for r in risks:
                     if isinstance(r, dict):
-                        risk_desc = r.get('risk', r.get('description', 'Unknown Risk'))
-                        # Improved robustness: Try to parse likelihood from description if missing in dict
-                        likelihood = r.get('likelihood')
-                        if not likelihood:
-                            # Try to find it in the description
-                            import re
-                            match = re.search(r'Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?', risk_desc, re.IGNORECASE)
-                            if match:
-                                likelihood = match.group(1).title()
-                                # Clean description
-                                risk_desc = re.sub(r'\(?Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?\)?[\.]?', '', risk_desc, flags=re.IGNORECASE).strip()
-                            else:
-                                likelihood = 'High' # Default
-                        
-                        # Determine likelihood class and bar width (case-insensitive)
+                        risk_desc = str(r.get('risk') or r.get('description') or '').strip()
+                        likelihood = str(r.get('likelihood') or '').strip() or 'Not specified'
+
                         lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
                         bar_width = '60%'
-                        if 'high' in lik_lower:
+                        if 'very high' in lik_lower or lik_lower == 'high':
                             lik_class = 'likelihood-high'
                             bar_width = '100%'
-                        elif 'low' in lik_lower:
+                        elif lik_lower == 'low':
                             lik_class = 'likelihood-low'
                             bar_width = '30%'
+                        elif 'not specified' in lik_lower:
+                            lik_class = 'likelihood-medium'
+                            bar_width = '45%'
                         
                         risks_html += f"""
             <div class="risk-item">
-                <div class="risk-content">{risk_desc}</div>
+                <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
                 <div class="likelihood-badge {lik_class}">
                     <span class="likelihood-label">Likelihood</span>
-                    <span class="likelihood-value">{likelihood}</span>
+                    <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
                     <div class="likelihood-bar">
                         <div class="bar-fill" style="width: {bar_width}"></div>
                     </div>
@@ -3242,7 +3185,7 @@ RESPONSE FORMAT (JSON):
                         # Use _format_risk_item to always show likelihood badge
                         risks_html += self._format_risk_item(str(r))
             else:
-                risks_html = '<div class="risk-item"><div class="risk-content">No specific risks identified</div></div>'
+                risks_html = '<div class="risk-item"><div class="risk-content">No risks provided by model</div></div>'
 
             # Correction Actions - Use action-chip style (check both 'corrective_actions' and 'actions')
             actions = self._ensure_list_of_strings(
@@ -3251,9 +3194,9 @@ RESPONSE FORMAT (JSON):
             actions_html = ""
             if actions:
                 for a in actions:
-                    actions_html += f'<div class="action-chip"><i class="fas fa-check"></i> {a}</div>'
+                    actions_html += f'<div class="action-chip"><i class="fas fa-check"></i> {self._to_safe_html_text(a)}</div>'
             else:
-                actions_html = '<div class="action-chip" style="background-color: #f8f9fa; color: #6c757d;">No actions specified</div>'
+                actions_html = '<div class="action-chip" style="background-color: #f8f9fa; color: #6c757d;">No actions provided by model</div>'
 
             # Determine compliance badge style
             comp_lower = compliance.lower()
@@ -3262,15 +3205,18 @@ RESPONSE FORMAT (JSON):
             elif 'compliant' in comp_lower or 'pass' in comp_lower:
                 comp_badge = '<span class="badge badge-success">✓ Compliant</span>'
             else:
-                comp_badge = f'<span class="badge badge-warning">{compliance}</span>'
+                comp_badge = f'<span class="badge badge-warning">{self._to_safe_html_text(compliance)}</span>'
 
             # Create the Person Card HTML (matching reference structure exactly)
+            person_id_display = self._to_safe_html_text(
+                person_id_raw.replace('Person ', '').replace('Personnel ', '').strip() or str(i + 1)
+            )
             person_cards.append(f"""
                 <div class="person-card">
                     <div class="person-header">
                         <div>
-                            <h3>👤 Person {person_id}</h3>
-                            <p>{description}</p>
+                            <h3>👤 Person {person_id_display}</h3>
+                            <p style="white-space: normal; word-break: break-word;">{description or 'No description provided by model'}</p>
                         </div>
                         {comp_badge}
                     </div>
@@ -3321,7 +3267,10 @@ RESPONSE FORMAT (JSON):
         if not recommendations:
             return ""
         
-        items = "".join([f"<li>{self._inject_interactive_tooltips(r)}</li>" for r in recommendations])
+        items = "".join([
+            f"<li style=\"white-space: normal; word-break: break-word;\">{self._inject_interactive_tooltips(self._to_safe_html_text(r))}</li>"
+            for r in recommendations if str(r).strip()
+        ])
         return f"""
             <div class="section">
                 <h2 class="section-title">✅ Recommended Actions</h2>
@@ -3336,7 +3285,7 @@ RESPONSE FORMAT (JSON):
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
-        likelihood = 'High'  # Default to High for safety violation risks
+        likelihood = 'Not specified'
         risk_desc = risk_text
         
         # Parse likelihood
@@ -3363,12 +3312,12 @@ RESPONSE FORMAT (JSON):
             
         return f"""
             <div class="risk-item">
-                <div class="risk-content">{risk_desc}</div>
+                <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
                 <div class="likelihood-badge {badge_class}">
                     <span class="likelihood-label">Likelihood</span>
-                    <span class="likelihood-value">{likelihood}</span>
+                    <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
                     <div class="likelihood-bar">
-                        <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%'}"></div>
+                        <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%' if 'low' in likelihood.lower() else '45%'}"></div>
                     </div>
                 </div>
             </div>

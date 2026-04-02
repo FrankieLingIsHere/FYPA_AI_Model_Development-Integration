@@ -132,7 +132,7 @@ const NotificationManager = {
                 ${titleHtml}
                 <div style="color: #7f8c8d; font-size: 13px; word-wrap: break-word; line-height: 1.4;">${message}</div>
                 ${options.action ? `
-                    <button onclick="${options.action.onClick}; event.stopPropagation();" style="
+                    <button class="notification-action-btn" style="
                         margin-top: 8px;
                         padding: 5px 10px;
                         background: ${colors[type]};
@@ -146,7 +146,7 @@ const NotificationManager = {
                     </button>
                 ` : ''}
             </div>
-            <button onclick="event.stopPropagation(); NotificationManager.dismiss('${id}')" style="
+            <button class="notification-close-btn" style="
                 background: none;
                 border: none;
                 color: #bdc3c7;
@@ -158,6 +158,27 @@ const NotificationManager = {
                 <i class="fas fa-times"></i>
             </button>
         `;
+
+        const closeBtn = notification.querySelector('.notification-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this.dismiss(id);
+            });
+        }
+
+        const actionBtn = notification.querySelector('.notification-action-btn');
+        if (actionBtn && options.action && options.action.onClick) {
+            actionBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                try {
+                    const fn = new Function(options.action.onClick);
+                    fn();
+                } catch (err) {
+                    console.error('Notification action failed:', err);
+                }
+            });
+        }
 
         // Click anywhere to dismiss
         notification.addEventListener('click', (e) => {

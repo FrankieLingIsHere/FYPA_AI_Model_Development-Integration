@@ -482,6 +482,19 @@ body.is-phone-device .main-content {
     max-width: 180px;
 }
 
+.nav-live-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    white-space: nowrap;
+}
+
+body.is-phone-device .nav-more-panel .nav-live-settings-btn {
+    width: 100%;
+    justify-content: center;
+}
+
 .realtime-badge {
     display: inline-flex;
     align-items: center;

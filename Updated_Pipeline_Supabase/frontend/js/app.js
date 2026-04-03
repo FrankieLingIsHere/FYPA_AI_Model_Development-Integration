@@ -48,8 +48,11 @@ async function initializeWithStartupGate() {
     Router.init();
 
     if (typeof TimezoneManager !== 'undefined') {
-        TimezoneManager.initSelector('timezoneSelector');
-        console.log('🌏 Timezone set to:', TimezoneManager.getTimezoneLabel());
+        TimezoneManager.initSelector('timezone-selector');
+        console.log('Timezone set to:', TimezoneManager.getTimezoneLabel());
+    } else if (typeof TimezoneUtils !== 'undefined' && typeof TimezoneUtils.updateAllTimestamps === 'function') {
+        TimezoneUtils.updateAllTimestamps();
+        console.log('Timezone utility initialized.');
     }
 
     if (typeof RealtimeSync !== 'undefined' && RealtimeSync.start) {

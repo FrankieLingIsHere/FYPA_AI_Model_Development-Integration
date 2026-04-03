@@ -5,6 +5,7 @@ const LivePage = {
     depthStatusInterval: null,
     providerRuntimeInterval: null,
     settingsKeydownHandler: null,
+    globalSettingsClickHandler: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     phoneCameraStream: null,
@@ -32,9 +33,6 @@ const LivePage = {
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
                             <span id="phoneCameraPermissionBadge" style="display: none; margin-right: 10px; font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; vertical-align: middle;"></span>
-                            <button id="openSettingsWindowBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Open monitoring settings">
-                                <i class="fas fa-cog"></i> Settings
-                            </button>
                             <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
@@ -126,7 +124,7 @@ const LivePage = {
                                 <div>
                                     <h3 style="margin: 0 0 0.4rem 0;"><i class="fas fa-sliders-h"></i> Monitoring Settings</h3>
                                     <p style="margin: 0; color: var(--text-secondary); font-size: 0.92rem;">
-                                        Use the Settings button near Start/Stop to open the full configuration window.
+                                        Use the Settings button at the top-right toolbar to open the full configuration window.
                                     </p>
                                 </div>
                                 <button id="quickRecommendedSettingsBtn" class="btn btn-primary">
@@ -693,7 +691,7 @@ const LivePage = {
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
         const sourceToggleBtn = document.getElementById('sourceToggleBtn');
-        const openSettingsWindowBtn = document.getElementById('openSettingsWindowBtn');
+        const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');
         const startBtn = document.getElementById('startLiveBtn');
         const stopBtn = document.getElementById('stopLiveBtn');
         const phoneCameraPermissionBadge = document.getElementById('phoneCameraPermissionBadge');
@@ -907,7 +905,10 @@ const LivePage = {
 
         const shouldUseBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
-            return selectedSource === 'phone' && phoneCameraSupported;
+            if (selectedSource === 'phone') {
+                return phoneCameraSupported;
+            }
+            return selectedSource === 'webcam';
         };
 
         const capturePhoneFrameForInference = async () => {
@@ -1083,7 +1084,7 @@ const LivePage = {
             } else if (selectedSource === 'phone') {
                 sourceToggleBtn.innerHTML = '<i class="fas fa-mobile-alt"></i> Source: Phone Camera';
             } else {
-                sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam';
+                sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam (Browser)';
             }
 
             const canToggle = getAvailableSources().length > 1 && !APP_STATE.liveStreamActive;
@@ -1101,8 +1102,8 @@ const LivePage = {
                 sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
                 sourceToggleBtn.title = phoneCameraSupported
-                    ? 'Click to switch Webcam / RealSense / Phone Camera'
-                    : 'Click to switch webcam/RealSense';
+                    ? 'Click to switch Webcam (Browser) / RealSense / Phone Camera'
+                    : 'Click to switch Webcam (Browser)/RealSense';
                 sourceToggleBtn.style.opacity = '1';
                 sourceToggleBtn.style.cursor = 'pointer';
             }
@@ -1136,6 +1137,15 @@ const LivePage = {
             toggleSettingsWindowSizeBtn.title = expanded
                 ? 'Return to compact size'
                 : 'Enlarge settings window';
+        }
+
+        if (globalLiveSettingsBtn) {
+            globalLiveSettingsBtn.style.display = 'inline-flex';
+            const onGlobalSettingsClick = () => {
+                openSettingsWindow();
+            };
+            globalLiveSettingsBtn.addEventListener('click', onGlobalSettingsClick);
+            this.globalSettingsClickHandler = onGlobalSettingsClick;
         }
 
         settingsTabs.forEach(tab => {
@@ -1420,7 +1430,7 @@ const LivePage = {
                     statusIndicator.style.display = 'block';
                     statusIndicator.innerHTML = usingPhoneSource
                         ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'
-                        : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> CAMERA LIVE';
+                        : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> WEBCAM LIVE';
 
                     setLiveControlState(true);
                     startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
@@ -1434,7 +1444,7 @@ const LivePage = {
                     showNotification(
                         usingPhoneSource
                             ? 'Phone camera access granted and monitoring started'
-                            : 'Webcam access granted and monitoring started',
+                            : 'Webcam access granted and monitoring started (browser capture mode)',
                         'success'
                     );
                     return;
@@ -2255,10 +2265,6 @@ const LivePage = {
             });
         }
 
-        if (openSettingsWindowBtn) {
-            openSettingsWindowBtn.addEventListener('click', openSettingsWindow);
-        }
-
         if (closeSettingsWindowBtn) {
             closeSettingsWindowBtn.addEventListener('click', closeSettingsWindow);
         }
@@ -2394,6 +2400,13 @@ const LivePage = {
         if (this.settingsKeydownHandler) {
             document.removeEventListener('keydown', this.settingsKeydownHandler);
             this.settingsKeydownHandler = null;
+        }
+
+        const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');
+        if (globalLiveSettingsBtn && this.globalSettingsClickHandler) {
+            globalLiveSettingsBtn.removeEventListener('click', this.globalSettingsClickHandler);
+            globalLiveSettingsBtn.style.display = 'none';
+            this.globalSettingsClickHandler = null;
         }
 
         document.body.classList.remove('settings-modal-open');

@@ -13,6 +13,18 @@ function setTimezoneOffset(offset) {
     localStorage.setItem('timezoneOffset', offset.toString());
 }
 
+function getTimezoneLabel() {
+    const selector = document.getElementById('timezone-selector');
+    if (!selector) {
+        const offset = getTimezoneOffset();
+        const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
+        return `UTC${offsetStr}`;
+    }
+
+    const selectedOption = selector.options[selector.selectedIndex];
+    return selectedOption ? selectedOption.textContent.trim() : 'UTC+8';
+}
+
 // Convert UTC timestamp to selected timezone
 function convertToLocalTime(utcTimestamp) {
     const offset = getTimezoneOffset();
@@ -71,6 +83,45 @@ function getRelativeTime(timestamp) {
     return formatTimestamp(timestamp, 'date');
 }
 
+function formatDateTime(timestamp) {
+    return formatTimestamp(timestamp, 'datetime');
+}
+
+function formatDate(timestamp) {
+    return formatTimestamp(timestamp, 'date');
+}
+
+function formatTime(timestamp) {
+    return formatTimestamp(timestamp, 'time');
+}
+
+function notifyTimezoneChange(message) {
+    if (typeof NotificationManager !== 'undefined') {
+        NotificationManager.info(message);
+        return;
+    }
+    if (typeof showNotification === 'function') {
+        showNotification(message, 'info');
+        return;
+    }
+    console.log(message);
+}
+
+function bindTimezoneSelector(selector) {
+    if (!selector) return;
+    if (selector.dataset.timezoneBound === 'true') return;
+
+    selector.dataset.timezoneBound = 'true';
+    selector.addEventListener('change', (e) => {
+        const newOffset = parseFloat(e.target.value);
+        setTimezoneOffset(newOffset);
+
+        const offsetStr = newOffset >= 0 ? `+${newOffset}` : newOffset;
+        notifyTimezoneChange(`Timezone changed to UTC${offsetStr}`);
+        updateAllTimestamps();
+    });
+}
+
 // Initialize timezone selector
 function initTimezoneSelector() {
     const selector = document.getElementById('timezone-selector');
@@ -79,23 +130,20 @@ function initTimezoneSelector() {
     // Load saved timezone
     const savedOffset = getTimezoneOffset();
     selector.value = savedOffset;
-    
-    // Handle timezone change
-    selector.addEventListener('change', (e) => {
-        const newOffset = parseFloat(e.target.value);
-        setTimezoneOffset(newOffset);
-        
-        // Show notification
-        const offsetStr = newOffset >= 0 ? `+${newOffset}` : newOffset;
-        showNotification(`Timezone changed to UTC${offsetStr}`, 'info');
-        
-        // Refresh current page to update timestamps
-        if (typeof window.currentPage !== 'undefined' && window.loadPage) {
-            window.loadPage(window.currentPage);
-        }
-    });
+
+    bindTimezoneSelector(selector);
     
     // Update all timestamps on page
+    updateAllTimestamps();
+}
+
+function initSelector(selectorId = 'timezone-selector') {
+    const selector = document.getElementById(selectorId);
+    if (!selector) return;
+
+    const savedOffset = getTimezoneOffset();
+    selector.value = String(savedOffset);
+    bindTimezoneSelector(selector);
     updateAllTimestamps();
 }
 
@@ -124,8 +172,27 @@ if (document.readyState === 'loading') {
 window.TimezoneUtils = {
     getTimezoneOffset,
     setTimezoneOffset,
+    getTimezoneLabel,
     convertToLocalTime,
     formatTimestamp,
+    formatDateTime,
+    formatDate,
+    formatTime,
+    initSelector,
+    getRelativeTime,
+    updateAllTimestamps
+};
+
+window.TimezoneManager = {
+    getTimezoneOffset,
+    setTimezoneOffset,
+    getTimezoneLabel,
+    convertToLocalTime,
+    formatTimestamp,
+    formatDateTime,
+    formatDate,
+    formatTime,
+    initSelector,
     getRelativeTime,
     updateAllTimestamps
 };

@@ -2370,7 +2370,9 @@ const LivePage = {
         this.providerRuntimeInterval = setInterval(updateProviderRuntimeStatus, 15000);
 
         // Realtime-first: only use polling if realtime stream is unavailable.
-        this.realtimeConnectionHandler();
+        if (typeof this.realtimeConnectionHandler === 'function') {
+            this.realtimeConnectionHandler();
+        }
 
         // Clean up interval when leaving page (store for cleanup)
         window._livePageQueueInterval = this.queueRefreshInterval;

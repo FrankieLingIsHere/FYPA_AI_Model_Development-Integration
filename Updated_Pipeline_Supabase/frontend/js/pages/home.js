@@ -168,13 +168,19 @@ const HomePage = {
         const todayDelta = stats.todayDelta !== undefined ? stats.todayDelta : 0;
         const weekDelta = stats.weekDelta !== undefined ? stats.weekDelta : 0;
 
-        document.getElementById("todayCount").textContent = stats.today;
-        document.getElementById("weekCount").textContent = stats.thisWeek;
-        document.getElementById("highSeverityCount").textContent =
-            stats.severity?.high ?? 0;
-
+        const todayCountEl = document.getElementById("todayCount");
+        const weekCountEl = document.getElementById("weekCount");
+        const highSeverityCountEl = document.getElementById("highSeverityCount");
         const todayDeltaEl = document.getElementById("todayDelta");
         const weekDeltaEl = document.getElementById("weekDelta");
+
+        if (!todayCountEl || !weekCountEl || !highSeverityCountEl || !todayDeltaEl || !weekDeltaEl) {
+            return;
+        }
+
+        todayCountEl.textContent = stats.today;
+        weekCountEl.textContent = stats.thisWeek;
+        highSeverityCountEl.textContent = stats.severity?.high ?? 0;
 
         todayDeltaEl.textContent =
             todayDelta > 0 ? `+${todayDelta}` : `${todayDelta}`;
@@ -196,6 +202,10 @@ const HomePage = {
         const scoreEl = document.getElementById("safety-score");
         const barEl = document.getElementById("safety-bar");
         const benchmarkEl = document.getElementById("safety-benchmark-note");
+
+        if (!scoreEl || !barEl) {
+            return;
+        }
 
         scoreEl.textContent = `${score}%`;
         barEl.style.width = `${score}%`;
@@ -222,6 +232,7 @@ const HomePage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById("violation-types");
+        if (!container) return;
         const breakdown = stats.breakdown || {};
 
         // Data mapping
@@ -263,6 +274,7 @@ const HomePage = {
 
     renderRecentViolations(violations) {
         const container = document.getElementById("recent-violations");
+        if (!container) return;
 
         if (!violations.length) {
             container.innerHTML = `

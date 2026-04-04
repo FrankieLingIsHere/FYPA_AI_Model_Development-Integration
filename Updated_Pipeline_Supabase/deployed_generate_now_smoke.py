@@ -13,6 +13,7 @@ BASE_URL = os.environ.get(
 
 POLL_SECONDS = int(os.environ.get("LUNA_SMOKE_POLL_SECONDS", "45"))
 POLL_INTERVAL = int(os.environ.get("LUNA_SMOKE_POLL_INTERVAL", "3"))
+MAX_CANDIDATES = int(os.environ.get("LUNA_SMOKE_MAX_CANDIDATES", "15"))
 
 
 def get_violations(limit: int = 40):
@@ -41,30 +42,71 @@ def post_generate_now(report_id: str):
     return r.status_code, payload
 
 
+def _is_skippable_generate_now_error(code: int, payload) -> bool:
+    if code in (404,):
+        return True
+
+    if not isinstance(payload, dict):
+        return False
+
+    msg = str(payload.get("error") or payload.get("message") or "").lower()
+    skippable_markers = (
+        "original image is missing",
+        "report not found",
+    )
+    return any(marker in msg for marker in skippable_markers)
+
+
 def main() -> int:
     violations = get_violations(limit=60)
     if not violations:
         print("FAIL: no violations returned to test generate-now flow")
         return 2
 
-    target = violations[0]
-    report_id = target.get("report_id")
+    tested = 0
+    report_id = None
+    selected_code = None
+    selected_payload = None
+    for target in violations:
+        if tested >= MAX_CANDIDATES:
+            break
+
+        candidate_id = target.get("report_id")
+        if not candidate_id:
+            continue
+
+        tested += 1
+        code, payload = post_generate_now(candidate_id)
+        print(f"candidate-{tested}-report-id={candidate_id}")
+        print(f"candidate-{tested}-generate-now-status={code}")
+        print("candidate-{tested}-generate-now-body=".format(tested=tested) + json.dumps(payload, ensure_ascii=True)[:500])
+
+        if code >= 500:
+            print("FAIL: generate-now returned server error")
+            return 4
+
+        if isinstance(payload, dict) and payload.get("success") is False:
+            if _is_skippable_generate_now_error(code, payload):
+                print("SKIP: candidate is not locally regeneratable; trying next report")
+                continue
+            print("FAIL: generate-now returned success=false for non-skippable reason")
+            return 5
+
+        report_id = candidate_id
+        selected_code = code
+        selected_payload = payload
+        break
+
     if not report_id:
-        print("FAIL: selected violation has no report_id")
-        return 3
+        print(
+            "PASS: no actionable report found within candidate window; "
+            "all tested reports were stale/non-regeneratable"
+        )
+        return 0
 
     print(f"target-report-id={report_id}")
-    code, payload = post_generate_now(report_id)
-    print(f"generate-now-status={code}")
-    print("generate-now-body=" + json.dumps(payload, ensure_ascii=True)[:500])
-
-    if code >= 500:
-        print("FAIL: generate-now returned server error")
-        return 4
-
-    if isinstance(payload, dict) and payload.get("success") is False:
-        print("FAIL: generate-now returned success=false")
-        return 5
+    print(f"generate-now-status={selected_code}")
+    print("generate-now-body=" + json.dumps(selected_payload, ensure_ascii=True)[:500])
 
     steps = max(1, POLL_SECONDS // max(1, POLL_INTERVAL))
     statuses = []

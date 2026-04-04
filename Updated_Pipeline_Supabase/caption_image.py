@@ -378,6 +378,50 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
 
     return _build_user_facing_failure_message()
 
+
+def _normalize_caption_text(caption: str) -> str:
+    """Remove model meta sections and return a concise natural-language caption."""
+    if not caption:
+        return ''
+
+    text = str(caption).strip()
+    lines = [ln.strip() for ln in text.replace('\r', '\n').split('\n') if ln.strip()]
+    filtered = []
+    skip_prefixes = (
+        'confidence score',
+        'mental sandbox',
+        'initial thought',
+        'revised thought',
+        'final answer',
+        'reasoning',
+    )
+    for ln in lines:
+        low = ln.lower().strip(' *-')
+        if any(low.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        filtered.append(ln.strip(' *'))
+
+    text = ' '.join(filtered).strip()
+    text = text.replace('  ', ' ')
+    return text
+
+
+def _caption_needs_expansion(caption: str) -> bool:
+    """Heuristic to trigger a richer-caption retry when output is too short/generic."""
+    if not caption:
+        return True
+    lowered = caption.lower()
+    if len(caption) < 120:
+        return True
+    generic_markers = (
+        'person is visible',
+        'indoor setting',
+        'outdoor setting',
+        'a person is visible',
+        'people are visible',
+    )
+    return any(marker in lowered for marker in generic_markers)
+
 def check_ollama_running():
     """Check if Ollama is running."""
     try:
@@ -457,6 +501,29 @@ Style:
         )
         
         if caption:
+            caption = _normalize_caption_text(caption)
+
+            if _caption_needs_expansion(caption) and not caption.startswith('ALERT_'):
+                expansion_prompt = """Rewrite the caption with richer factual detail from the image only.
+
+Requirements:
+- Single paragraph, 6-10 sentences.
+- State people count and environment first.
+- For each visible person: action, posture, and context near objects.
+- Mention nearby objects/hazards only if visible.
+- Mention PPE only when clearly visible; if not visible, state not visible.
+- No bullet points, no markdown, no meta commentary.
+"""
+                expanded = _generate_vision_response(
+                    prompt=expansion_prompt,
+                    image_base64=image_base64,
+                    temperature=0.4,
+                    max_tokens=750
+                )
+                expanded = _normalize_caption_text(expanded)
+                if expanded and not expanded.startswith('ALERT_'):
+                    caption = expanded
+
             # Clean up common prefixes
             prefixes_to_remove = [
                 "In the image, ",

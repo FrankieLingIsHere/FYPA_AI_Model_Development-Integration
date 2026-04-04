@@ -6,7 +6,7 @@ const LivePage = {
     providerRuntimeInterval: null,
     settingsKeydownHandler: null,
     globalSettingsClickHandler: null,
-    inlineSettingsClickHandler: null,
+    toolbarSettingsClickHandler: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     phoneCameraStream: null,
@@ -19,14 +19,25 @@ const LivePage = {
             <div class="page">
                 <!-- Mode Tabs -->
                 <div style="margin-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
-                    <div style="display: flex; gap: 0.5rem;">
-                        <button id="liveModeBtn" class="mode-tab active">
-                            <i class="fas fa-video"></i> Camera Stream
-                        </button>
-                        <button id="uploadModeBtn" class="mode-tab">
-                            <i class="fas fa-image"></i> Analyze Image
-                        </button>
+                    <div style="display: flex; justify-content: flex-start; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button id="liveModeBtn" class="mode-tab active">
+                                <i class="fas fa-video"></i> Camera Stream
+                            </button>
+                            <button id="uploadModeBtn" class="mode-tab">
+                                <i class="fas fa-image"></i> Analyze Image
+                            </button>
+                        </div>
                     </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 0.9rem; border: 1px solid var(--border-color); border-radius: 10px; background: linear-gradient(180deg, #ffffff, #f8fbff);">
+                    <p style="margin: 0; color: var(--text-secondary); font-size: 0.9rem;">
+                        System controls are outside the live monitor card for easier access.
+                    </p>
+                    <button id="liveToolbarSettingsBtn" class="btn btn-secondary" title="Open monitoring settings">
+                        <i class="fas fa-cog"></i> Open Settings
+                    </button>
                 </div>
 
                 <div class="card mb-4">
@@ -34,9 +45,6 @@ const LivePage = {
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
                             <span id="phoneCameraPermissionBadge" style="display: none; margin-right: 10px; font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; vertical-align: middle;"></span>
-                            <button id="liveInlineSettingsBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Open monitoring settings">
-                                <i class="fas fa-cog"></i> Settings
-                            </button>
                             <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
@@ -372,45 +380,70 @@ const LivePage = {
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
-                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Provider Order</label>
-                                        <input id="nlpProviderOrderInput" class="provider-input" type="text" value="model_api,gemini,ollama,local" />
-                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, gemini, ollama, local</small>
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Routing Mode</label>
+                                        <select id="nlpProviderOrderSelect" class="provider-input">
+                                            <option value="model_api,gemini,ollama,local">API first (cloud preferred)</option>
+                                            <option value="gemini,model_api,ollama,local">Gemini first (cost-balanced cloud)</option>
+                                            <option value="ollama,local,model_api,gemini">Local first (offline resilience)</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Click to choose provider priority.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
-                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Provider Order</label>
-                                        <input id="visionProviderOrderInput" class="provider-input" type="text" value="model_api,gemini,ollama" />
-                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, gemini, ollama</small>
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Routing Mode</label>
+                                        <select id="visionProviderOrderSelect" class="provider-input">
+                                            <option value="model_api,gemini,ollama">API first</option>
+                                            <option value="gemini,model_api,ollama">Gemini first</option>
+                                            <option value="ollama,model_api,gemini">Local first</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Click to choose captioning fallback order.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
-                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Provider Order</label>
-                                        <input id="embeddingProviderOrderInput" class="provider-input" type="text" value="model_api,ollama" />
-                                        <small style="color: var(--text-secondary);">Comma-separated: model_api, ollama</small>
+                                        <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Routing Mode</label>
+                                        <select id="embeddingProviderOrderSelect" class="provider-input">
+                                            <option value="model_api,ollama">API first</option>
+                                            <option value="ollama,model_api">Local first</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Click to choose embeddings fallback order.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Model</label>
-                                        <input id="nlpModelInput" class="provider-input" type="text" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" />
-                                        <small style="color: var(--text-secondary);">Cloud NLP model identifier</small>
+                                        <select id="nlpModelSelect" class="provider-input">
+                                            <option value="meta-llama/Meta-Llama-3-8B-Instruct">Meta-Llama-3-8B-Instruct</option>
+                                            <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral-7B-Instruct-v0.3</option>
+                                            <option value="deepseek-ai/DeepSeek-R1-Distill-Llama-8B">DeepSeek-R1-Distill-Llama-8B</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Choose from tested NLP model presets.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Model</label>
-                                        <input id="visionModelInput" class="provider-input" type="text" placeholder="Qwen/Qwen2.5-VL-7B-Instruct" />
-                                        <small style="color: var(--text-secondary);">Cloud vision model identifier</small>
+                                        <select id="visionModelSelect" class="provider-input">
+                                            <option value="Qwen/Qwen2.5-VL-7B-Instruct">Qwen2.5-VL-7B-Instruct</option>
+                                            <option value="Qwen/Qwen2-VL-7B-Instruct">Qwen2-VL-7B-Instruct</option>
+                                            <option value="llava:13b">LLaVA 13B (local)</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Choose from tested vision model presets.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Model</label>
-                                        <input id="embeddingModelInput" class="provider-input" type="text" placeholder="nomic-ai/nomic-embed-text-v1.5" />
-                                        <small style="color: var(--text-secondary);">Cloud embedding model identifier</small>
+                                        <select id="embeddingModelSelect" class="provider-input">
+                                            <option value="nomic-ai/nomic-embed-text-v1.5">nomic-embed-text-v1.5</option>
+                                            <option value="sentence-transformers/all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Choose from tested embedding models.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Gemini Model</label>
-                                        <input id="geminiModelInput" class="provider-input" type="text" placeholder="gemini-2.5-flash" />
-                                        <small style="color: var(--text-secondary);">Fallback Gemini text model</small>
+                                        <select id="geminiModelSelect" class="provider-input">
+                                            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                                        </select>
+                                        <small style="color: var(--text-secondary);">Click to choose Gemini fallback model.</small>
                                     </div>
                                 </div>
 
@@ -695,7 +728,7 @@ const LivePage = {
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
         const sourceToggleBtn = document.getElementById('sourceToggleBtn');
-        const liveInlineSettingsBtn = document.getElementById('liveInlineSettingsBtn');
+        const liveToolbarSettingsBtn = document.getElementById('liveToolbarSettingsBtn');
         const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');
         const startBtn = document.getElementById('startLiveBtn');
         const stopBtn = document.getElementById('stopLiveBtn');
@@ -1153,12 +1186,12 @@ const LivePage = {
             this.globalSettingsClickHandler = onGlobalSettingsClick;
         }
 
-        if (liveInlineSettingsBtn) {
-            const onInlineSettingsClick = () => {
+        if (liveToolbarSettingsBtn) {
+            const onToolbarSettingsClick = () => {
                 openSettingsWindow();
             };
-            liveInlineSettingsBtn.addEventListener('click', onInlineSettingsClick);
-            this.inlineSettingsClickHandler = onInlineSettingsClick;
+            liveToolbarSettingsBtn.addEventListener('click', onToolbarSettingsClick);
+            this.toolbarSettingsClickHandler = onToolbarSettingsClick;
         }
 
         settingsTabs.forEach(tab => {
@@ -1665,13 +1698,13 @@ const LivePage = {
         const refreshQueueBtn = document.getElementById('refreshQueueBtn');
         const modelApiToggle = document.getElementById('modelApiToggle');
         const geminiToggle = document.getElementById('geminiToggle');
-        const nlpProviderOrderInput = document.getElementById('nlpProviderOrderInput');
-        const visionProviderOrderInput = document.getElementById('visionProviderOrderInput');
-        const embeddingProviderOrderInput = document.getElementById('embeddingProviderOrderInput');
-        const nlpModelInput = document.getElementById('nlpModelInput');
-        const visionModelInput = document.getElementById('visionModelInput');
-        const embeddingModelInput = document.getElementById('embeddingModelInput');
-        const geminiModelInput = document.getElementById('geminiModelInput');
+        const nlpProviderOrderSelect = document.getElementById('nlpProviderOrderSelect');
+        const visionProviderOrderSelect = document.getElementById('visionProviderOrderSelect');
+        const embeddingProviderOrderSelect = document.getElementById('embeddingProviderOrderSelect');
+        const nlpModelSelect = document.getElementById('nlpModelSelect');
+        const visionModelSelect = document.getElementById('visionModelSelect');
+        const embeddingModelSelect = document.getElementById('embeddingModelSelect');
+        const geminiModelSelect = document.getElementById('geminiModelSelect');
         const applyProviderRoutingBtn = document.getElementById('applyProviderRoutingBtn');
         const reloadProviderRoutingBtn = document.getElementById('reloadProviderRoutingBtn');
         const providerRoutingStatus = document.getElementById('providerRoutingStatus');
@@ -1991,6 +2024,22 @@ const LivePage = {
             }
         }
 
+        function setSelectValueOrInject(selectEl, value, customPrefix) {
+            if (!selectEl) return;
+            const normalizedValue = String(value || '').trim();
+            if (!normalizedValue) return;
+            const existing = Array.from(selectEl.options).find(opt => opt.value === normalizedValue);
+            if (existing) {
+                selectEl.value = normalizedValue;
+                return;
+            }
+            const injectedOption = document.createElement('option');
+            injectedOption.value = normalizedValue;
+            injectedOption.textContent = `${customPrefix}: ${normalizedValue}`;
+            selectEl.appendChild(injectedOption);
+            selectEl.value = normalizedValue;
+        }
+
         async function loadProviderRoutingSettings() {
             try {
                 setProviderStatus('Loading provider settings...');
@@ -2003,13 +2052,13 @@ const LivePage = {
 
                 if (modelApiToggle) modelApiToggle.checked = !!settings.model_api_enabled;
                 if (geminiToggle) geminiToggle.checked = !!settings.gemini_enabled;
-                if (nlpProviderOrderInput) nlpProviderOrderInput.value = (settings.nlp_provider_order || []).join(',');
-                if (visionProviderOrderInput) visionProviderOrderInput.value = (settings.vision_provider_order || []).join(',');
-                if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = (settings.embedding_provider_order || []).join(',');
-                if (nlpModelInput) nlpModelInput.value = settings.nlp_model || '';
-                if (visionModelInput) visionModelInput.value = settings.vision_model || '';
-                if (embeddingModelInput) embeddingModelInput.value = settings.embedding_model || '';
-                if (geminiModelInput) geminiModelInput.value = settings.gemini_model || '';
+                setSelectValueOrInject(nlpProviderOrderSelect, (settings.nlp_provider_order || []).join(','), 'Current order');
+                setSelectValueOrInject(visionProviderOrderSelect, (settings.vision_provider_order || []).join(','), 'Current order');
+                setSelectValueOrInject(embeddingProviderOrderSelect, (settings.embedding_provider_order || []).join(','), 'Current order');
+                setSelectValueOrInject(nlpModelSelect, settings.nlp_model || '', 'Current model');
+                setSelectValueOrInject(visionModelSelect, settings.vision_model || '', 'Current model');
+                setSelectValueOrInject(embeddingModelSelect, settings.embedding_model || '', 'Current model');
+                setSelectValueOrInject(geminiModelSelect, settings.gemini_model || '', 'Current model');
 
                 setProviderStatus('Provider settings loaded');
             } catch (error) {
@@ -2026,13 +2075,13 @@ const LivePage = {
                 const payload = {
                     model_api_enabled: !!modelApiToggle.checked,
                     gemini_enabled: !!geminiToggle.checked,
-                    nlp_provider_order: (nlpProviderOrderInput.value || '').trim(),
-                    vision_provider_order: (visionProviderOrderInput.value || '').trim(),
-                    embedding_provider_order: (embeddingProviderOrderInput.value || '').trim(),
-                    nlp_model: (nlpModelInput.value || '').trim(),
-                    vision_model: (visionModelInput.value || '').trim(),
-                    embedding_model: (embeddingModelInput.value || '').trim(),
-                    gemini_model: (geminiModelInput.value || '').trim()
+                    nlp_provider_order: (nlpProviderOrderSelect.value || '').trim(),
+                    vision_provider_order: (visionProviderOrderSelect.value || '').trim(),
+                    embedding_provider_order: (embeddingProviderOrderSelect.value || '').trim(),
+                    nlp_model: (nlpModelSelect.value || '').trim(),
+                    vision_model: (visionModelSelect.value || '').trim(),
+                    embedding_model: (embeddingModelSelect.value || '').trim(),
+                    gemini_model: (geminiModelSelect.value || '').trim()
                 };
 
                 const result = await API.updateProviderRoutingSettings(payload);
@@ -2064,13 +2113,13 @@ const LivePage = {
             const routing = RECOMMENDED_SETTINGS.provider_routing;
             if (modelApiToggle) modelApiToggle.checked = !!routing.model_api_enabled;
             if (geminiToggle) geminiToggle.checked = !!routing.gemini_enabled;
-            if (nlpProviderOrderInput) nlpProviderOrderInput.value = routing.nlp_provider_order;
-            if (visionProviderOrderInput) visionProviderOrderInput.value = routing.vision_provider_order;
-            if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = routing.embedding_provider_order;
-            if (nlpModelInput) nlpModelInput.value = routing.nlp_model;
-            if (visionModelInput) visionModelInput.value = routing.vision_model;
-            if (embeddingModelInput) embeddingModelInput.value = routing.embedding_model;
-            if (geminiModelInput) geminiModelInput.value = routing.gemini_model;
+            setSelectValueOrInject(nlpProviderOrderSelect, routing.nlp_provider_order, 'Current order');
+            setSelectValueOrInject(visionProviderOrderSelect, routing.vision_provider_order, 'Current order');
+            setSelectValueOrInject(embeddingProviderOrderSelect, routing.embedding_provider_order, 'Current order');
+            setSelectValueOrInject(nlpModelSelect, routing.nlp_model, 'Current model');
+            setSelectValueOrInject(visionModelSelect, routing.vision_model, 'Current model');
+            setSelectValueOrInject(embeddingModelSelect, routing.embedding_model, 'Current model');
+            setSelectValueOrInject(geminiModelSelect, routing.gemini_model, 'Current model');
 
             updateEnvValidationStatus(!!RECOMMENDED_SETTINGS.environment_validation_enabled);
             setProviderStatus('Recommended values loaded. Click apply buttons or use the recommended action again to save.', 'info');
@@ -2079,13 +2128,13 @@ const LivePage = {
         function applyApiModeValuesToForm() {
             if (modelApiToggle) modelApiToggle.checked = !!API_MODE_SETTINGS.model_api_enabled;
             if (geminiToggle) geminiToggle.checked = !!API_MODE_SETTINGS.gemini_enabled;
-            if (nlpProviderOrderInput) nlpProviderOrderInput.value = API_MODE_SETTINGS.nlp_provider_order;
-            if (visionProviderOrderInput) visionProviderOrderInput.value = API_MODE_SETTINGS.vision_provider_order;
-            if (embeddingProviderOrderInput) embeddingProviderOrderInput.value = API_MODE_SETTINGS.embedding_provider_order;
-            if (nlpModelInput) nlpModelInput.value = API_MODE_SETTINGS.nlp_model;
-            if (visionModelInput) visionModelInput.value = API_MODE_SETTINGS.vision_model;
-            if (embeddingModelInput) embeddingModelInput.value = API_MODE_SETTINGS.embedding_model;
-            if (geminiModelInput) geminiModelInput.value = API_MODE_SETTINGS.gemini_model;
+            setSelectValueOrInject(nlpProviderOrderSelect, API_MODE_SETTINGS.nlp_provider_order, 'Current order');
+            setSelectValueOrInject(visionProviderOrderSelect, API_MODE_SETTINGS.vision_provider_order, 'Current order');
+            setSelectValueOrInject(embeddingProviderOrderSelect, API_MODE_SETTINGS.embedding_provider_order, 'Current order');
+            setSelectValueOrInject(nlpModelSelect, API_MODE_SETTINGS.nlp_model, 'Current model');
+            setSelectValueOrInject(visionModelSelect, API_MODE_SETTINGS.vision_model, 'Current model');
+            setSelectValueOrInject(embeddingModelSelect, API_MODE_SETTINGS.embedding_model, 'Current model');
+            setSelectValueOrInject(geminiModelSelect, API_MODE_SETTINGS.gemini_model, 'Current model');
         }
 
         async function applyApiModeSettings() {
@@ -2424,10 +2473,10 @@ const LivePage = {
             this.globalSettingsClickHandler = null;
         }
 
-        const liveInlineSettingsBtn = document.getElementById('liveInlineSettingsBtn');
-        if (liveInlineSettingsBtn && this.inlineSettingsClickHandler) {
-            liveInlineSettingsBtn.removeEventListener('click', this.inlineSettingsClickHandler);
-            this.inlineSettingsClickHandler = null;
+        const liveToolbarSettingsBtn = document.getElementById('liveToolbarSettingsBtn');
+        if (liveToolbarSettingsBtn && this.toolbarSettingsClickHandler) {
+            liveToolbarSettingsBtn.removeEventListener('click', this.toolbarSettingsClickHandler);
+            this.toolbarSettingsClickHandler = null;
         }
 
         document.body.classList.remove('settings-modal-open');

@@ -205,6 +205,22 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         logger.info("🎨 Re-generating caption with updated prompts...")
         caption = caption_image_llava(str(temp_image))
         logger.info(f"   Caption length: {len(caption) if caption else 0} chars")
+
+        caption_provider = None
+        caption_model = None
+        try:
+            from caption_image import get_runtime_provider_diagnostics
+            vision_diag = get_runtime_provider_diagnostics() or {}
+            caption_provider = vision_diag.get('last_provider_used')
+            provider_key = str(caption_provider or '').strip().lower()
+            provider_to_model = {
+                'gemini': vision_diag.get('gemini_model'),
+                'ollama': vision_diag.get('ollama_model'),
+                'model_api': vision_diag.get('vision_api_model'),
+            }
+            caption_model = provider_to_model.get(provider_key) or vision_diag.get('vision_api_model')
+        except Exception:
+            pass
         
         # 6. Extract violation types
         violation_detections = [d for d in detections if 'no-' in d['class_name'].lower()]
@@ -233,6 +249,8 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             'violation_count': len(violation_types),
             'caption': caption,
             'image_caption': caption,
+            'caption_provider': caption_provider,
+            'caption_model': caption_model,
             'original_image_path': str(temp_image),
             'annotated_image_path': str(annotated_path),
             'location': violation.get('device_id', 'Reprocessed'),
@@ -255,13 +273,23 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
                 'reprocessed': True,
                 'reprocess_date': datetime.now().isoformat()
             }
+            if caption_provider:
+                metadata['caption_provider'] = caption_provider
+            if caption_model:
+                metadata['caption_model'] = caption_model
+            nlp_analysis = result.get('nlp_analysis', {}) or {}
+            if isinstance(nlp_analysis, dict):
+                if nlp_analysis.get('provider'):
+                    metadata['generation_provider'] = nlp_analysis.get('provider')
+                if nlp_analysis.get('model'):
+                    metadata['generation_model'] = nlp_analysis.get('model')
             
             # Update violation record
             success = db_manager.update_violation(
                 report_id=report_id,
                 violation_summary=report_data['violation_summary'],
                 caption=caption,
-                nlp_analysis=result.get('nlp_analysis', {}),
+                nlp_analysis=nlp_analysis,
                 detection_data=metadata,
                 original_image_key=result.get('storage_keys', {}).get('original_image_key'),
                 annotated_image_key=result.get('storage_keys', {}).get('annotated_image_key'),

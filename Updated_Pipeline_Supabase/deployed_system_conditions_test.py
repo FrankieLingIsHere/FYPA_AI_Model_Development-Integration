@@ -14,6 +14,8 @@ BASE_URL = os.environ.get(
 POLL_SECONDS = int(os.environ.get("LUNA_CONDITIONS_POLL_SECONDS", "30"))
 POLL_INTERVAL = int(os.environ.get("LUNA_CONDITIONS_POLL_INTERVAL", "3"))
 MAX_REPORT_IDS = int(os.environ.get("LUNA_CONDITIONS_MAX_REPORT_IDS", "15"))
+ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("LUNA_PROVIDER_MODE_MATRIX", "1") != "0"
+PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
 
 ALLOWED_REPORT_STATUSES = {
     "pending",
@@ -25,6 +27,54 @@ ALLOWED_REPORT_STATUSES = {
     "not_found",
     "unknown",
 }
+
+PROVIDER_MODE_MATRIX = [
+    {
+        "name": "api-first",
+        "payload": {
+            "model_api_enabled": True,
+            "gemini_enabled": True,
+            "nlp_provider_order": "model_api,gemini,ollama,local",
+            "vision_provider_order": "model_api,gemini,ollama",
+            "embedding_provider_order": "model_api,ollama",
+        },
+        "expect": {
+            "model_api_enabled": True,
+            "gemini_enabled": True,
+            "nlp_first": "model_api",
+        },
+    },
+    {
+        "name": "local-first",
+        "payload": {
+            "model_api_enabled": False,
+            "gemini_enabled": False,
+            "nlp_provider_order": "ollama,local,model_api,gemini",
+            "vision_provider_order": "ollama,model_api,gemini",
+            "embedding_provider_order": "ollama,model_api",
+        },
+        "expect": {
+            "model_api_enabled": False,
+            "gemini_enabled": False,
+            "nlp_first": "ollama",
+        },
+    },
+    {
+        "name": "hybrid-fallback",
+        "payload": {
+            "model_api_enabled": True,
+            "gemini_enabled": True,
+            "nlp_provider_order": "gemini,model_api,ollama,local",
+            "vision_provider_order": "gemini,model_api,ollama",
+            "embedding_provider_order": "model_api,ollama",
+        },
+        "expect": {
+            "model_api_enabled": True,
+            "gemini_enabled": True,
+            "nlp_first": "gemini",
+        },
+    },
+]
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -52,6 +102,160 @@ def require_json_dict(path: str, name: str):
         raise RuntimeError(f"{name} expected JSON object, got: {text}")
     print(f"PASS: {name}")
     return payload
+
+
+def normalize_provider_order(value):
+    if isinstance(value, str):
+        return [x.strip().lower() for x in value.split(",") if x.strip()]
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if item is None:
+                continue
+            item_text = str(item).strip().lower()
+            if item_text:
+                out.append(item_text)
+        return out
+    return []
+
+
+def is_skippable_generate_now_error(code: int, payload) -> bool:
+    if code in (404,):
+        return True
+    if not isinstance(payload, dict):
+        return False
+    msg = str(payload.get("error") or payload.get("message") or "").lower()
+    return "original image is missing" in msg or "report not found" in msg
+
+
+def build_restore_payload(current_settings: dict) -> dict:
+    restore_payload = {}
+    known_keys = (
+        "model_api_enabled",
+        "gemini_enabled",
+        "nlp_provider_order",
+        "vision_provider_order",
+        "embedding_provider_order",
+        "nlp_model",
+        "vision_model",
+        "embedding_model",
+        "gemini_model",
+        "gemini_vision_model",
+        "ollama_nlp_model",
+        "ollama_vision_model",
+        "gemini_daily_budget_usd",
+        "gemini_monthly_budget_usd",
+        "gemini_max_output_tokens_per_report",
+    )
+    for key in known_keys:
+        if key in current_settings:
+            restore_payload[key] = current_settings.get(key)
+    return restore_payload
+
+
+def run_provider_mode_matrix_probe(report_ids):
+    settings_before = require_json_dict("/api/settings/provider-routing", "provider-routing-initial")
+    restore_payload = build_restore_payload(settings_before)
+    probe_report_id = report_ids[0] if report_ids else None
+
+    try:
+        for mode in PROVIDER_MODE_MATRIX:
+            mode_name = mode["name"]
+            payload = dict(mode["payload"])
+
+            for model_key in ("nlp_model", "vision_model", "embedding_model", "gemini_model"):
+                if model_key in settings_before and model_key not in payload:
+                    payload[model_key] = settings_before.get(model_key)
+
+            code, mode_result, mode_text = request_json(
+                "POST",
+                "/api/settings/provider-routing",
+                json=payload,
+                timeout=45,
+            )
+            if code >= 500:
+                raise RuntimeError(f"provider mode {mode_name} update failed ({code}): {mode_text}")
+            if not isinstance(mode_result, dict):
+                raise RuntimeError(f"provider mode {mode_name} returned non-JSON payload")
+            if mode_result.get("success") is False:
+                raise RuntimeError(
+                    f"provider mode {mode_name} returned success=false: {json.dumps(mode_result)[:350]}"
+                )
+
+            settings_after = mode_result.get("settings") if isinstance(mode_result.get("settings"), dict) else None
+            if not settings_after:
+                settings_after = require_json_dict("/api/settings/provider-routing", f"provider-routing-{mode_name}")
+
+            expected = mode["expect"]
+            if bool(settings_after.get("model_api_enabled")) != bool(expected["model_api_enabled"]):
+                raise RuntimeError(
+                    f"provider mode {mode_name} model_api_enabled mismatch: {settings_after.get('model_api_enabled')}"
+                )
+            if bool(settings_after.get("gemini_enabled")) != bool(expected["gemini_enabled"]):
+                raise RuntimeError(
+                    f"provider mode {mode_name} gemini_enabled mismatch: {settings_after.get('gemini_enabled')}"
+                )
+
+            nlp_order = normalize_provider_order(settings_after.get("nlp_provider_order"))
+            if not nlp_order or nlp_order[0] != expected["nlp_first"]:
+                raise RuntimeError(
+                    f"provider mode {mode_name} nlp order mismatch: got {nlp_order}, expected first={expected['nlp_first']}"
+                )
+
+            runtime_code, runtime_payload, runtime_text = request_json(
+                "GET",
+                "/api/providers/runtime-status",
+                timeout=30,
+            )
+            if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                raise RuntimeError(
+                    f"provider runtime status failed in mode {mode_name} ({runtime_code}): {runtime_text}"
+                )
+            if runtime_payload.get("success") is False:
+                raise RuntimeError(f"provider runtime status unsuccessful in mode {mode_name}")
+
+            if PROVIDER_MODE_GENERATE_PROBE and probe_report_id:
+                g_code, g_payload, g_text = request_json(
+                    "POST",
+                    f"/api/report/{probe_report_id}/generate-now",
+                    json={"force": False},
+                    timeout=45,
+                )
+                if g_code >= 500:
+                    raise RuntimeError(
+                        f"generate-now server error in mode {mode_name} for {probe_report_id}: {g_code} {g_text}"
+                    )
+                if isinstance(g_payload, dict) and g_payload.get("success") is False:
+                    if is_skippable_generate_now_error(g_code, g_payload):
+                        print(
+                            f"INFO: mode {mode_name} generate-now skipped for {probe_report_id}: "
+                            f"{json.dumps(g_payload)[:260]}"
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"generate-now rejected in mode {mode_name}: {json.dumps(g_payload)[:350]}"
+                        )
+                else:
+                    print(
+                        f"PASS: mode {mode_name} generate-now accepted for {probe_report_id} "
+                        f"(status={g_code})"
+                    )
+
+            print(f"PASS: provider mode probe {mode_name}")
+    finally:
+        if restore_payload:
+            r_code, r_payload, r_text = request_json(
+                "POST",
+                "/api/settings/provider-routing",
+                json=restore_payload,
+                timeout=45,
+            )
+            if r_code >= 400 or not isinstance(r_payload, dict) or r_payload.get("success") is False:
+                raise RuntimeError(
+                    f"failed to restore provider routing settings ({r_code}): "
+                    f"{json.dumps(r_payload)[:320] if isinstance(r_payload, dict) else r_text}"
+                )
+            print("PASS: provider routing settings restored")
 
 
 def main() -> int:
@@ -176,6 +380,11 @@ def main() -> int:
                     f"{progression_candidate} remained queued/pending across polling window",
                     16,
                 )
+
+        if ENABLE_PROVIDER_MODE_MATRIX:
+            run_provider_mode_matrix_probe(report_ids)
+        else:
+            print("INFO: provider mode matrix probe disabled via LUNA_PROVIDER_MODE_MATRIX=0")
 
         print("PASS: deployed conditions matrix")
         print("observed-conditions=" + json.dumps(conditions, ensure_ascii=True))

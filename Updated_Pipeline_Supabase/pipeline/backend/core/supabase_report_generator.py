@@ -270,6 +270,20 @@ class SupabaseReportGenerator(ReportGenerator):
                 metadata = {
                     'detections': detection_data
                 }
+                caption_provider = report_data.get('caption_provider')
+                caption_model = report_data.get('caption_model')
+                if caption_provider:
+                    metadata['caption_provider'] = caption_provider
+                if caption_model:
+                    metadata['caption_model'] = caption_model
+
+                if isinstance(nlp_analysis, dict):
+                    report_provider = nlp_analysis.get('provider')
+                    report_model = nlp_analysis.get('model')
+                    if report_provider:
+                        metadata['generation_provider'] = report_provider
+                    if report_model:
+                        metadata['generation_model'] = report_model
                 nlp_integrity = result.get('nlp_integrity')
                 if isinstance(nlp_integrity, dict):
                     metadata['nlp_integrity'] = nlp_integrity

@@ -78,7 +78,7 @@ def navigate_and_measure(page, page_name: str, ready_selector: str):
 
 
 def find_visible_settings_trigger(page):
-    selectors = ("#liveInlineSettingsBtn", "#globalLiveSettingsBtn")
+    selectors = ("#liveToolbarSettingsBtn", "#globalLiveSettingsBtn")
     for _ in range(12):
         for selector in selectors:
             loc = page.locator(selector)

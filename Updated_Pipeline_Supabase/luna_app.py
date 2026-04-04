@@ -1259,6 +1259,22 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     # Generate report
     report_created = False
     failure_reason = None
+    caption_provider = None
+    caption_model = None
+    try:
+        from caption_image import get_runtime_provider_diagnostics
+        vision_diag = get_runtime_provider_diagnostics() or {}
+        caption_provider = vision_diag.get('last_provider_used')
+        provider_key = str(caption_provider or '').strip().lower()
+        provider_to_model = {
+            'gemini': vision_diag.get('gemini_model'),
+            'ollama': vision_diag.get('ollama_model'),
+            'model_api': vision_diag.get('vision_api_model'),
+        }
+        caption_model = provider_to_model.get(provider_key) or vision_diag.get('vision_api_model')
+    except Exception:
+        pass
+
     if report_generator:
         try:
             # Update progress
@@ -1280,6 +1296,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'violation_count': len(violation_types_formatted),
                 'caption': caption,
                 'image_caption': caption,
+                'caption_provider': caption_provider,
+                'caption_model': caption_model,
                 'original_image_path': str(original_path),
                 'annotated_image_path': str(annotated_path),
                 'location': 'Live Stream Monitor',
@@ -1512,6 +1530,21 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         # Generate report if available
         report_created = False
         logger.info(f"Report generator status: {report_generator is not None}")
+        caption_provider = None
+        caption_model = None
+        try:
+            from caption_image import get_runtime_provider_diagnostics
+            vision_diag = get_runtime_provider_diagnostics() or {}
+            caption_provider = vision_diag.get('last_provider_used')
+            provider_key = str(caption_provider or '').strip().lower()
+            provider_to_model = {
+                'gemini': vision_diag.get('gemini_model'),
+                'ollama': vision_diag.get('ollama_model'),
+                'model_api': vision_diag.get('vision_api_model'),
+            }
+            caption_model = provider_to_model.get(provider_key) or vision_diag.get('vision_api_model')
+        except Exception:
+            pass
         
         if report_generator:
             try:
@@ -1533,6 +1566,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'violation_count': len(violation_detections),
                     'caption': caption,
                     'image_caption': caption,
+                    'caption_provider': caption_provider,
+                    'caption_model': caption_model,
                     'original_image_path': str(original_path),
                     'annotated_image_path': str(annotated_path),
                     'location': 'Live Stream Monitor',

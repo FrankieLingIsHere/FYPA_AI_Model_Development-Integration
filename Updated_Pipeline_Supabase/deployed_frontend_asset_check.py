@@ -27,9 +27,12 @@ def main() -> int:
         "const phoneHeuristic = (strongPhoneSignal || (mobileUA && narrowViewport)) && !iPadLike;",
     ]
     required_live_markers = [
-        "id=\"liveInlineSettingsBtn\"",
-        "inlineSettingsClickHandler",
-        "liveInlineSettingsBtn.addEventListener('click'",
+        "id=\"liveToolbarSettingsBtn\"",
+        "toolbarSettingsClickHandler",
+        "liveToolbarSettingsBtn.addEventListener('click'",
+        "id=\"nlpProviderOrderSelect\"",
+        "id=\"visionProviderOrderSelect\"",
+        "id=\"embeddingProviderOrderSelect\"",
     ]
 
     missing = []

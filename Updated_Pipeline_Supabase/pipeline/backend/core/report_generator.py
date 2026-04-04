@@ -1278,10 +1278,37 @@ RESPONSE FORMAT (JSON):
                     logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
 
+        if isinstance(nlp_analysis, dict):
+            if self.last_nlp_provider and not nlp_analysis.get('provider'):
+                nlp_analysis['provider'] = self.last_nlp_provider
+            if self.last_nlp_model and not nlp_analysis.get('model'):
+                nlp_analysis['model'] = self.last_nlp_model
+
         # Normalize structure once so all sections (including hidden expanded parts)
         # consume consistent model-aligned data shapes.
         raw_nlp_analysis = json.loads(json.dumps(nlp_analysis)) if isinstance(nlp_analysis, (dict, list)) else nlp_analysis
         nlp_analysis = self._sanitize_nlp_analysis(nlp_analysis)
+
+        caption_for_quality = str(report_data.get('caption', '') or '').strip()
+        visual_evidence = str(nlp_analysis.get('visual_evidence', '') or '').strip()
+        generic_markers = (
+            'person is visible',
+            'people are visible',
+            'indoor environment',
+            'outdoor environment',
+        )
+        if visual_evidence and (
+            len(visual_evidence) < 120
+            or any(marker in visual_evidence.lower() for marker in generic_markers)
+        ):
+            rebuilt = self._build_scene_description(
+                caption_for_quality,
+                nlp_analysis.get('environment_type', 'General Workspace'),
+                report_data.get('detections', []),
+            )
+            if rebuilt and len(rebuilt) > len(visual_evidence):
+                nlp_analysis['visual_evidence'] = rebuilt
+
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
 
@@ -2853,9 +2880,19 @@ RESPONSE FORMAT (JSON):
             risks_out: List[Any] = []
             for risk in _as_list(person.get('risks', [])):
                 if isinstance(risk, dict):
+                    risk_text = _as_clean_str(risk.get('risk') or risk.get('description'))
+                    likelihood_text = _as_clean_str(risk.get('likelihood'))
+                    if not likelihood_text:
+                        risk_l = risk_text.lower()
+                        if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
+                            likelihood_text = 'High (inferred)'
+                        elif any(tok in risk_l for tok in ('minor', 'unlikely', 'low probability')):
+                            likelihood_text = 'Low (inferred)'
+                        else:
+                            likelihood_text = 'Medium (inferred)'
                     risk_obj = {
-                        'risk': _as_clean_str(risk.get('risk') or risk.get('description')),
-                        'likelihood': _as_clean_str(risk.get('likelihood')),
+                        'risk': risk_text,
+                        'likelihood': likelihood_text,
                         'regulation_citation': _as_clean_str(risk.get('regulation_citation')),
                         'legal_regulatory_consequences': _as_clean_str(risk.get('legal_regulatory_consequences')),
                     }
@@ -3154,7 +3191,15 @@ RESPONSE FORMAT (JSON):
                 for r in risks:
                     if isinstance(r, dict):
                         risk_desc = str(r.get('risk') or r.get('description') or '').strip()
-                        likelihood = str(r.get('likelihood') or '').strip() or 'Not specified'
+                        likelihood = str(r.get('likelihood') or '').strip()
+                        if not likelihood:
+                            risk_l = risk_desc.lower()
+                            if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
+                                likelihood = 'High (inferred)'
+                            elif any(tok in risk_l for tok in ('minor', 'unlikely', 'low probability')):
+                                likelihood = 'Low (inferred)'
+                            else:
+                                likelihood = 'Medium (inferred)'
 
                         lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
@@ -3285,7 +3330,7 @@ RESPONSE FORMAT (JSON):
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
-        likelihood = 'Not specified'
+        likelihood = 'Medium (inferred)'
         risk_desc = risk_text
         
         # Parse likelihood

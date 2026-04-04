@@ -1574,8 +1574,7 @@ const LivePage = {
                 startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                 
                 // Update state
-                APP_STATE.liveStreamActive = true;
-                renderSourceToggle();
+                setLiveControlState(true);
                 await refreshDepthStatus();
 
                 showNotification(`Live monitoring started (${selectedSource === 'realsense' ? (realsenseDeviceName || 'RealSense') : 'Webcam'})`, 'success');
@@ -1710,6 +1709,8 @@ const LivePage = {
                 statusIndicator.innerHTML = '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE';
                 streamImg.src = buildLiveStreamUrl();
                 setLiveControlState(true);
+            } else {
+                setLiveControlState(false);
             }
 
             renderCapabilities();
@@ -2539,8 +2540,8 @@ const LivePage = {
         await initPhonePermissionWatcher();
         await loadCurrentSettings();
 
-        // Keep live refresh loops disabled until camera is active.
-        setLiveControlState(!!APP_STATE.liveStreamActive);
+        // Default to OFF state until backend status says otherwise.
+        setLiveControlState(false);
 
         // Realtime-first: only use polling if realtime stream is unavailable.
         if (typeof this.realtimeConnectionHandler === 'function') {

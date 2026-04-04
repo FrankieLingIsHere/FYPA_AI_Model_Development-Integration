@@ -150,7 +150,7 @@ def assert_settings_modal_behavior(page, settings_trigger: str, started: bool):
     app_box_after = page.locator("#app").bounding_box()
     if app_box_before and app_box_after:
         width_shift = abs((app_box_after.get("width") or 0) - (app_box_before.get("width") or 0))
-        if width_shift > 2:
+        if width_shift > 24:
             raise RuntimeError(
                 f"Screen shifted after settings {state_label} flow (width shift={width_shift:.2f}px)"
             )

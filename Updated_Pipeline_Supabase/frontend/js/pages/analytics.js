@@ -249,7 +249,8 @@ const AnalyticsPage = {
             }
         });
 
-        const labels = Array.from(dayBuckets.keys()).map((isoDate) => {
+        const isoDates = Array.from(dayBuckets.keys());
+        const labels = isoDates.map((isoDate) => {
             const date = new Date(`${isoDate}T00:00:00`);
             return `${date.getDate()}/${date.getMonth() + 1}`;
         });
@@ -266,7 +267,10 @@ const AnalyticsPage = {
                     backgroundColor: 'rgba(52, 152, 219, 0.1)',
                     borderWidth: 2,
                     fill: true,
-                    tension: 0.4
+                    tension: 0.4,
+                    pointRadius: 4,
+                    pointHoverRadius: 7,
+                    pointHitRadius: 18
                 }]
             },
             options: {
@@ -275,7 +279,34 @@ const AnalyticsPage = {
                 plugins: {
                     legend: {
                         display: false
+                    },
+                    tooltip: {
+                        enabled: true,
+                        mode: 'nearest',
+                        intersect: false,
+                        callbacks: {
+                            title(context) {
+                                if (!context || context.length === 0) return '';
+                                const idx = context[0].dataIndex;
+                                const isoDate = isoDates[idx];
+                                if (!isoDate) return '';
+                                const date = new Date(`${isoDate}T00:00:00`);
+                                return date.toLocaleDateString(undefined, {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                });
+                            },
+                            label(context) {
+                                const value = Number(context.raw || 0);
+                                return `Violations: ${value}`;
+                            }
+                        }
                     }
+                },
+                interaction: {
+                    mode: 'nearest',
+                    intersect: false
                 },
                 scales: {
                     y: {

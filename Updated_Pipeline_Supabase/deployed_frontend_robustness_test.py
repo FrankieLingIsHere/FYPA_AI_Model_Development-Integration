@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from contextlib import suppress
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -78,6 +79,127 @@ def first_visible_selector(page, selectors):
     return None
 
 
+def validate_sidebar_navigation(page):
+    nav_pages = ("home", "live", "reports", "analytics", "about")
+    for page_name in nav_pages:
+        ensure_nav_visible(page, page_name)
+        page.click(f"[data-page='{page_name}']")
+        page.wait_for_timeout(320)
+        active = page.locator(f"[data-page='{page_name}'].active")
+        if active.count() == 0:
+            raise RuntimeError(f"Sidebar/nav active state not set for page={page_name}")
+    print("PASS: sidebar/nav active-state routing")
+
+
+def validate_reports_filters_and_list(page):
+    ensure_nav_visible(page, "reports")
+    page.click("[data-page='reports']")
+    page.wait_for_selector("#reports-list", timeout=MAX_NAV_LATENCY_MS)
+
+    for selector in ("#search-reports", "#filter-severity", "#filter-date"):
+        if page.locator(selector).count() == 0:
+            raise RuntimeError(f"Reports filter control missing: {selector}")
+
+    page.fill("#search-reports", "2026")
+    page.select_option("#filter-severity", "high")
+    page.select_option("#filter-date", "week")
+    page.wait_for_timeout(250)
+    page.fill("#search-reports", "")
+    page.select_option("#filter-severity", "all")
+    page.select_option("#filter-date", "all")
+    print("PASS: reports filter controls")
+
+    report_cards = page.locator("#reports-list .card[id^='report-']")
+    if report_cards.count() > 0:
+        first_card = report_cards.first
+        first_card.scroll_into_view_if_needed()
+        first_card.wait_for(state="visible", timeout=6000)
+
+        process_btn = first_card.locator("button:has-text('Process Now'), button:has-text('Reprocess Now')")
+        if process_btn.count() == 0:
+            raise RuntimeError("Report card missing process/reprocess action button")
+
+        with suppress(Exception):
+            open_btn = first_card.locator("button:has-text('Open Report')")
+            if open_btn.count() > 0 and open_btn.first.is_visible():
+                with page.expect_popup(timeout=6000):
+                    open_btn.first.click()
+
+        # Card click should either open modal or open report popup; modal path is assertable.
+        with suppress(Exception):
+            first_card.click()
+            page.wait_for_timeout(450)
+            modal = page.locator("#report-status-modal")
+            if modal.count() > 0:
+                close_btn = modal.locator("button:has-text('Close')")
+                if close_btn.count() == 0:
+                    raise RuntimeError("Report modal opened but close button missing")
+                close_btn.first.click()
+                page.wait_for_timeout(250)
+
+        print("PASS: reports list card actions")
+        return
+
+    empty_alert = page.locator("#reports-list .alert")
+    if empty_alert.count() == 0:
+        raise RuntimeError("Reports page has neither cards nor empty-state alert")
+
+    refresh_selector = first_visible_selector(
+        page,
+        ("button:has-text('Refresh')", "#refreshReportsBtn", "button[onclick*='refreshReports']"),
+    )
+    if refresh_selector:
+        page.click(refresh_selector)
+        page.wait_for_timeout(450)
+
+    print("PASS: reports empty-state and refresh behavior")
+
+
+def validate_report_modal_actions(page):
+    ensure_nav_visible(page, "reports")
+    page.click("[data-page='reports']")
+    page.wait_for_selector("#reports-list", timeout=MAX_NAV_LATENCY_MS)
+
+    # Inject a deterministic modal path so modal action controls are always validated.
+    page.evaluate(
+        """
+        () => {
+            if (typeof ReportsPage === 'undefined' || typeof ReportsPage.showGeneratingModal !== 'function') {
+                throw new Error('ReportsPage.showGeneratingModal is unavailable');
+            }
+            ReportsPage.showGeneratingModal({
+                report_id: 'ui-smoke-modal-001',
+                timestamp: new Date().toISOString(),
+                status: 'pending',
+                has_report: false,
+                has_original: true,
+                has_annotated: false,
+                severity: 'HIGH',
+                violation_count: 1,
+                missing_ppe: ['Hardhat']
+            });
+        }
+        """
+    )
+
+    page.wait_for_selector("#report-status-modal", timeout=7000)
+    required_buttons = (
+        "#report-status-modal button:has-text('Close')",
+        "#report-status-modal #report-modal-process-btn",
+        "#report-status-modal button:has-text('Check Status')",
+    )
+    for selector in required_buttons:
+        if page.locator(selector).count() == 0:
+            raise RuntimeError(f"Report modal required control missing: {selector}")
+
+    page.click("#report-status-modal button:has-text('Close')")
+    page.wait_for_timeout(250)
+    if page.locator("#report-status-modal").count() > 0:
+        raise RuntimeError("Report modal failed to close after clicking close button")
+
+    print("PASS: report modal action controls")
+
+
 def main() -> int:
     console_errors = []
     page_errors = []
@@ -112,6 +234,8 @@ def main() -> int:
             print("PASS: startup gate completed")
 
             successful_navs = 0
+
+            validate_sidebar_navigation(page)
 
             try:
                 navigate_and_measure(page, "live", "#app")
@@ -151,11 +275,11 @@ def main() -> int:
             else:
                 print("INFO: live mode switch check skipped (controls not available in this UI variant)")
 
-            try:
-                navigate_and_measure(page, "reports", "#reports-list")
-                successful_navs += 1
-            except Exception as nav_reports_err:
-                print(f"INFO: reports navigation check skipped due variant/latency: {nav_reports_err}")
+            navigate_and_measure(page, "reports", "#reports-list")
+            successful_navs += 1
+            validate_reports_filters_and_list(page)
+            validate_report_modal_actions(page)
+
             refresh_selector = first_visible_selector(
                 page,
                 ("button:has-text('Refresh')", "#refreshReportsBtn", "button[onclick*='refreshReports']"),
@@ -167,19 +291,13 @@ def main() -> int:
                 page.wait_for_timeout(1200)
                 print(f"PASS: reports refresh stress x{STRESS_CLICKS}")
             else:
-                print("INFO: reports refresh stress skipped (refresh control not available in this UI variant)")
+                raise RuntimeError("Reports refresh control missing")
 
-            try:
-                navigate_and_measure(page, "analytics", "#app")
-                successful_navs += 1
-            except Exception as nav_analytics_err:
-                print(f"INFO: analytics navigation check skipped due variant/latency: {nav_analytics_err}")
+            navigate_and_measure(page, "analytics", "#app")
+            successful_navs += 1
 
-            try:
-                navigate_and_measure(page, "about", "#app")
-                successful_navs += 1
-            except Exception as nav_about_err:
-                print(f"INFO: about navigation check skipped due variant/latency: {nav_about_err}")
+            navigate_and_measure(page, "about", "#app")
+            successful_navs += 1
 
             if successful_navs == 0:
                 raise RuntimeError("No page navigation checks succeeded")

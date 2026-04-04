@@ -1,0 +1,68 @@
+name: Frontend Deployed Checks
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      vercel_url:
+        description: "Vercel frontend URL"
+        required: false
+        default: "https://fypa-ai-model-development-integrati.vercel.app"
+  schedule:
+    - cron: "30 */6 * * *"
+
+jobs:
+  frontend-assets-and-routing:
+    name: Frontend Assets And Routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Validate deployed frontend assets include settings fixes
+        env:
+          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+        run: |
+          python Updated_Pipeline_Supabase/deployed_frontend_asset_check.py
+
+  frontend-interaction-robustness:
+    name: Frontend Interaction Robustness
+    runs-on: ubuntu-latest
+    needs: frontend-assets-and-routing
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+
+      - name: Install Chromium browser
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run frontend robustness browser checks
+        env:
+          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "9000"
+          LUNA_FRONTEND_STRESS_CLICKS: "5"
+        run: |
+          python Updated_Pipeline_Supabase/deployed_frontend_robustness_test.py

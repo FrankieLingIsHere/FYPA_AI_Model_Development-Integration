@@ -1,4 +1,4 @@
-name: Deployed E2E Tests
+name: Backend Deployed Checks
 
 on:
   push:
@@ -40,12 +40,6 @@ jobs:
           LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
         run: |
           python Updated_Pipeline_Supabase/deployed_routing_check.py
-
-      - name: Validate deployed frontend assets include settings fixes
-        env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-        run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_asset_check.py
 
   deployed-system-conditions:
     name: Deployed System Conditions Matrix

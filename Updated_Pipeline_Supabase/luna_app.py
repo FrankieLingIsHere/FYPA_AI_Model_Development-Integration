@@ -4805,6 +4805,64 @@ def upload_inference():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/inference/live-frame', methods=['POST'])
+def live_frame_inference():
+    """Low-latency near-edge inference path for browser-owned live camera frames (phone/web)."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image provided'}), 400
+
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({'error': 'No image selected'}), 400
+
+    try:
+        img_bytes = file.read()
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            return jsonify({'error': 'Invalid image format'}), 400
+
+        conf = float(request.form.get('conf', 0.10))
+        detections, _annotated = predict_image(frame, conf=conf)
+
+        violation_detections = _extract_violation_detections(detections)
+        report_queued = False
+        report_queue_reason = None
+        queued_report_id = None
+
+        if violation_detections and FULL_PIPELINE_AVAILABLE:
+            frame_copy = frame.copy()
+            detections_copy = detections.copy()
+            # Treat browser-submitted live frames as live source so dedup logic applies.
+            queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
+            report_queued = queued_report_id is not None
+            if not report_queued:
+                report_queue_reason = 'cooldown_or_dedup_or_already_processing'
+        elif violation_detections and not FULL_PIPELINE_AVAILABLE:
+            report_queue_reason = 'pipeline_components_unavailable'
+
+        return jsonify({
+            'success': True,
+            'source': 'near_edge_live_frame',
+            'detections': detections,
+            'count': len(detections),
+            'violations_detected': len(violation_detections) > 0,
+            'violation_count': len(violation_detections),
+            'report_queued': report_queued,
+            'report_queue_reason': report_queue_reason,
+            'report_id': queued_report_id
+        })
+
+    except Exception as e:
+        logger.error(f"Live-frame inference error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/testing/live-dedup/probe', methods=['POST'])
 def api_live_dedup_probe():
     """

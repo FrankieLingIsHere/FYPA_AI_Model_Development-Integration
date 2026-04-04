@@ -17,6 +17,7 @@ const API_CONFIG = {
         LIVE_DEPTH_STATUS: '/api/live/depth/status',
         LIVE_DEPTH_PREVIEW: '/api/live/depth/preview',
         UPLOAD_INFERENCE: '/api/inference/upload',
+        LIVE_FRAME_INFERENCE: '/api/inference/live-frame',
         SYSTEM_INFO: '/api/system/info',
         RELIABILITY_STATS: '/api/reliability/stats',
         PROVIDER_RUNTIME_STATUS: '/api/providers/runtime-status',

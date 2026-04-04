@@ -974,7 +974,7 @@ const LivePage = {
                 formData.append('image', blob, 'phone_live.jpg');
                 formData.append('conf', String(phoneInferenceConfig.conf));
 
-                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
+                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_FRAME_INFERENCE}`, {
                     method: 'POST',
                     body: formData
                 });

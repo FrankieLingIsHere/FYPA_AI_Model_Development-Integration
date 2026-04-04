@@ -66,6 +66,27 @@ jobs:
         run: |
           python Updated_Pipeline_Supabase/deployed_system_conditions_test.py
 
+      - name: Run inference flood capacity and duplicate-guard test
+        env:
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_FLOOD_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
+          LUNA_FLOOD_TOTAL_REQUESTS: "12"
+          LUNA_FLOOD_WORKERS: "6"
+          LUNA_FLOOD_P95_MS: "9000"
+          LUNA_FLOOD_MIN_SUCCESS_RATIO: "0.90"
+          LUNA_FLOOD_MAX_UNIQUE_REPORTS: "1"
+        run: |
+          python Updated_Pipeline_Supabase/deployed_inference_flood_test.py
+
+      - name: Run true live dedup probe test
+        env:
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_LIVE_DEDUP_REPEATS: "4"
+          LUNA_LIVE_DEDUP_MAX_ACCEPTED: "1"
+          LUNA_LIVE_DEDUP_MIN_BLOCKED: "1"
+        run: |
+          python Updated_Pipeline_Supabase/deployed_live_dedup_probe_test.py
+
   deployed-generate-now-smoke:
     name: Deployed Generate-Now Smoke
     runs-on: ubuntu-latest

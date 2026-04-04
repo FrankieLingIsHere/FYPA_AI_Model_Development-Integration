@@ -4805,6 +4805,79 @@ def upload_inference():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/testing/live-dedup/probe', methods=['POST'])
+def api_live_dedup_probe():
+    """
+    Deterministic test probe for live dedup behavior without requiring camera hardware.
+
+    This endpoint simulates repeated live violations with identical spatial signatures.
+    Expected behavior:
+      - first trigger queues a report
+      - subsequent identical triggers are blocked by live dedup
+    """
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
+    if not FULL_PIPELINE_AVAILABLE:
+        return jsonify({'success': False, 'error': 'pipeline_components_unavailable'}), 503
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        repeats = int(payload.get('repeats', 4))
+        repeats = max(2, min(repeats, 12))
+
+        bbox = payload.get('bbox') or [120, 90, 310, 430]
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            bbox = [120, 90, 310, 430]
+
+        # Reset recent signatures for deterministic probe behavior.
+        with recent_live_violation_lock:
+            recent_live_violation_signatures.clear()
+
+        global last_violation_time, VIOLATION_COOLDOWN
+        previous_cooldown = VIOLATION_COOLDOWN
+        previous_last_violation_time = last_violation_time
+
+        # Disable short capture cooldown for this test so dedup logic is what blocks repeats.
+        VIOLATION_COOLDOWN = 0
+        last_violation_time = 0
+
+        accepted_report_ids = []
+        blocked_count = 0
+
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        detections = [{
+            'class_name': 'NO-Hardhat',
+            'confidence': 0.95,
+            'score': 0.95,
+            'bbox': bbox
+        }]
+
+        try:
+            for _ in range(repeats):
+                rid = enqueue_violation(frame.copy(), detections.copy(), trigger_source='live')
+                if rid:
+                    accepted_report_ids.append(str(rid))
+                else:
+                    blocked_count += 1
+        finally:
+            VIOLATION_COOLDOWN = previous_cooldown
+            last_violation_time = previous_last_violation_time
+
+        return jsonify({
+            'success': True,
+            'repeats': repeats,
+            'accepted_count': len(accepted_report_ids),
+            'accepted_report_ids': accepted_report_ids,
+            'blocked_count': blocked_count,
+            'dedup_window_seconds': LIVE_VIOLATION_DEDUP_WINDOW_SECONDS,
+        })
+    except Exception as e:
+        logger.error(f"Live dedup probe error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/report-progress', methods=['GET'])
 def api_report_progress():
     """Get current report generation progress."""

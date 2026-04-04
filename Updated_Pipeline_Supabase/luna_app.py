@@ -296,6 +296,77 @@ def _extract_violation_detections(detections: List[Dict[str, Any]]) -> List[Dict
     """Filter detections to likely PPE-violation classes."""
     return [d for d in detections if _is_violation_label(d.get('class_name', ''))]
 
+
+def _safe_bbox(det: Dict[str, Any]) -> List[float]:
+    """Extract bbox as [x1, y1, x2, y2] floats; return [] if invalid."""
+    bbox = det.get('bbox') if isinstance(det, dict) else None
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return []
+    try:
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+    except (TypeError, ValueError):
+        return []
+    if x2 <= x1 or y2 <= y1:
+        return []
+    return [x1, y1, x2, y2]
+
+
+def _bbox_iou(a: List[float], b: List[float]) -> float:
+    """Compute IoU between two [x1, y1, x2, y2] boxes."""
+    if len(a) != 4 or len(b) != 4:
+        return 0.0
+
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0:
+        return 0.0
+
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    denom = area_a + area_b - inter_area
+    if denom <= 0:
+        return 0.0
+    return inter_area / denom
+
+
+def _bbox_center_distance(a: List[float], b: List[float]) -> float:
+    """Compute Euclidean distance between bbox centers."""
+    if len(a) != 4 or len(b) != 4:
+        return float('inf')
+    acx = (a[0] + a[2]) * 0.5
+    acy = (a[1] + a[3]) * 0.5
+    bcx = (b[0] + b[2]) * 0.5
+    bcy = (b[1] + b[3]) * 0.5
+    dx = acx - bcx
+    dy = acy - bcy
+    return float((dx * dx + dy * dy) ** 0.5)
+
+
+def _build_violation_spatial_signature(violation_detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build compact spatial signatures for violation detections in current frame."""
+    signature = []
+    for det in violation_detections:
+        bbox = _safe_bbox(det)
+        if not bbox:
+            continue
+        signature.append({
+            'label': _normalize_label(det.get('class_name', '')),
+            'bbox': bbox,
+            'score': float(det.get('score', det.get('confidence', 0.0)) or 0.0)
+        })
+
+    signature.sort(key=lambda item: item.get('score', 0.0), reverse=True)
+    return signature[:6]
+
 # Violation detection state
 violation_detector = None
 caption_generator = None
@@ -305,10 +376,90 @@ storage_manager = None
 last_violation_time = 0
 VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
 
+# Live-stream dedup window to reduce redundant captures for same standing violators.
+LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = 12
+LIVE_VIOLATION_DEDUP_IOU_THRESHOLD = 0.50
+LIVE_VIOLATION_DEDUP_CENTER_FACTOR = 0.65
+recent_live_violation_signatures: List[Dict[str, Any]] = []
+recent_live_violation_lock = Lock()
+
+
+def _is_redundant_live_violation(violation_detections: List[Dict[str, Any]], now_ts: float) -> bool:
+    """Return True when current live violation closely matches recent ones in space + class."""
+    global recent_live_violation_signatures
+
+    current_signature = _build_violation_spatial_signature(violation_detections)
+    if not current_signature:
+        return False
+
+    cutoff = now_ts - float(LIVE_VIOLATION_DEDUP_WINDOW_SECONDS)
+    with recent_live_violation_lock:
+        recent_live_violation_signatures = [
+            item for item in recent_live_violation_signatures
+            if float(item.get('timestamp', 0.0)) >= cutoff
+        ]
+
+        has_new = False
+        for current in current_signature:
+            current_bbox = current.get('bbox', [])
+            current_label = current.get('label', '')
+            matched = False
+
+            for previous in recent_live_violation_signatures:
+                if previous.get('label') != current_label:
+                    continue
+                previous_bbox = previous.get('bbox', [])
+
+                iou = _bbox_iou(current_bbox, previous_bbox)
+                if iou >= LIVE_VIOLATION_DEDUP_IOU_THRESHOLD:
+                    matched = True
+                    break
+
+                distance = _bbox_center_distance(current_bbox, previous_bbox)
+                prev_w = max(1.0, float(previous_bbox[2]) - float(previous_bbox[0])) if len(previous_bbox) == 4 else 1.0
+                prev_h = max(1.0, float(previous_bbox[3]) - float(previous_bbox[1])) if len(previous_bbox) == 4 else 1.0
+                max_shift = max(prev_w, prev_h) * float(LIVE_VIOLATION_DEDUP_CENTER_FACTOR)
+                if distance <= max_shift:
+                    matched = True
+                    break
+
+            if not matched:
+                has_new = True
+                break
+
+        if not has_new:
+            return True
+
+        for current in current_signature:
+            recent_live_violation_signatures.append({
+                'timestamp': now_ts,
+                'label': current.get('label', ''),
+                'bbox': current.get('bbox', [])
+            })
+        return False
+
 # Queue-based violation handling (to prevent missing violations)
 violation_queue = None  # ViolationQueueManager instance
 queue_worker_thread = None  # Background worker for processing queue
 queue_worker_running = False
+queue_worker_state_lock = Lock()
+
+
+def _is_queue_worker_alive() -> bool:
+    """Return True only when worker flag is set and thread is alive."""
+    return bool(queue_worker_running and queue_worker_thread is not None and queue_worker_thread.is_alive())
+
+
+def ensure_queue_worker_running() -> bool:
+    """Best-effort worker self-heal for endpoints that require queue processing."""
+    if violation_queue is None:
+        return False
+
+    if _is_queue_worker_alive():
+        return True
+
+    logger.warning("Queue worker is not healthy; attempting restart")
+    return bool(start_queue_worker())
 
 # =========================================================================
 # OLLAMA CONCURRENCY CONTROL
@@ -553,8 +704,8 @@ def _run_startup_sequence():
             raise RuntimeError(f'Supabase storage check failed: {storage_exc}')
 
         _set_startup_progress(93, 'Checking background queue worker')
-        if not queue_worker_running:
-            _set_startup_step('queue_worker', 'error', 'Queue worker is not running')
+        if not ensure_queue_worker_running():
+            _set_startup_step('queue_worker', 'error', 'Queue worker thread is not healthy')
             raise RuntimeError('Queue worker failed to start')
         _set_startup_step('queue_worker', 'ok', 'Queue worker is running')
 
@@ -683,9 +834,11 @@ def initialize_pipeline_components():
             logger.info(f"✓ Violation queue initialized (max_size=100)")
         
         # Start queue worker thread if not running
-        if not queue_worker_running:
+        if not ensure_queue_worker_running():
             logger.info("Starting violation queue worker thread...")
-            start_queue_worker()
+            if not start_queue_worker():
+                logger.error("Failed to start queue worker thread")
+                return False
             
         logger.info("[OK] All pipeline components initialized")
         return True
@@ -697,28 +850,45 @@ def initialize_pipeline_components():
         return False
 
 
-def start_queue_worker():
+def start_queue_worker() -> bool:
     """Start the background worker thread for processing queued violations."""
     global queue_worker_thread, queue_worker_running
-    
-    if queue_worker_running:
-        logger.warning("Queue worker already running")
-        return
-    
-    queue_worker_running = True
-    queue_worker_thread = Thread(
-        target=queue_worker_loop,
-        name="ViolationQueueWorker",
-        daemon=True
-    )
-    queue_worker_thread.start()
-    logger.info(f"✓ Queue worker thread started (Thread ID: {queue_worker_thread.ident})")
+
+    with queue_worker_state_lock:
+        if queue_worker_thread is not None and queue_worker_thread.is_alive():
+            queue_worker_running = True
+            logger.info(f"Queue worker already running (Thread ID: {queue_worker_thread.ident})")
+            return True
+
+        queue_worker_running = True
+        queue_worker_thread = Thread(
+            target=queue_worker_loop,
+            name="ViolationQueueWorker",
+            daemon=True
+        )
+        queue_worker_thread.start()
+
+        if not queue_worker_thread.is_alive():
+            queue_worker_running = False
+            logger.error("Queue worker thread failed to become alive after start request")
+            return False
+
+        logger.info(f"✓ Queue worker thread started (Thread ID: {queue_worker_thread.ident})")
+        return True
 
 
 def stop_queue_worker():
     """Stop the background queue worker thread."""
-    global queue_worker_running
-    queue_worker_running = False
+    global queue_worker_running, queue_worker_thread
+
+    thread_to_join = None
+    with queue_worker_state_lock:
+        queue_worker_running = False
+        thread_to_join = queue_worker_thread
+
+    if thread_to_join is not None and thread_to_join.is_alive():
+        thread_to_join.join(timeout=2.0)
+
     logger.info("Queue worker stop requested")
 
 
@@ -811,10 +981,12 @@ def queue_worker_loop():
             logger.error(f"Queue worker error: {e}")
             time.sleep(1)
     
+    with queue_worker_state_lock:
+        queue_worker_running = False
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
+def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source: str = 'live') -> str:
     """
     Capture a violation and add it to the processing queue.
     This is a FAST operation that saves images immediately and queues for report generation.
@@ -833,6 +1005,8 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
     logger.info("=" * 80)
     
     try:
+        trigger_source = (trigger_source or 'live').strip().lower()
+
         # Check capture cooldown (shorter than processing time)
         current_time = time.time()
         if current_time - last_violation_time < VIOLATION_COOLDOWN:
@@ -840,14 +1014,21 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict]) -> str:
             logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
             return None
         
-        last_violation_time = current_time
-        
         # Check for violations using unified matcher (same logic as upload/live paths)
         violation_detections = _extract_violation_detections(detections)
         
         if not violation_detections:
             logger.warning("No violations found in detections")
             return None
+
+        if trigger_source == 'live' and _is_redundant_live_violation(violation_detections, current_time):
+            logger.info(
+                "Live dedup active - skipping redundant stationary violation capture "
+                f"(window={LIVE_VIOLATION_DEDUP_WINDOW_SECONDS}s)"
+            )
+            return None
+
+        last_violation_time = current_time
         
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
@@ -1950,7 +2131,7 @@ def api_queue_status():
             'total_processed': stats.get('total_processed', 0),
             'total_failed': stats.get('total_failed', 0),
             'total_rate_limited': stats.get('total_rate_limited', 0),
-            'worker_running': queue_worker_running,
+            'worker_running': _is_queue_worker_alive(),
             'environment_validation_enabled': ENVIRONMENT_VALIDATION_ENABLED,
             'by_priority': stats.get('by_priority', {}),
             'by_device': stats.get('by_device', {})
@@ -1976,7 +2157,7 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
     """Collect compact realtime state for frontend auto-refresh subscribers."""
     queue_data = {
         'available': violation_queue is not None,
-        'worker_running': bool(queue_worker_running),
+        'worker_running': _is_queue_worker_alive(),
         'queue_size': 0,
         'total_processed': 0,
         'total_failed': 0
@@ -2938,8 +3119,8 @@ def api_report_recovery_execute():
                 'local': diagnostics
             }), 400
 
-    if not queue_worker_running:
-        start_queue_worker()
+    if not ensure_queue_worker_running():
+        return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
     selected_order = ['local', 'ollama', 'model_api', 'gemini'] if mode == 'local' else ['model_api', 'ollama', 'local', 'gemini']
     applied_order = _apply_nlp_provider_order(selected_order)
@@ -3022,7 +3203,7 @@ def api_report_recovery_execute():
         'enqueued': enqueued_count,
         'skipped': skipped_count,
         'errors': errors[:10],
-        'worker_running': queue_worker_running
+        'worker_running': _is_queue_worker_alive()
     })
 
 
@@ -3126,6 +3307,17 @@ def api_generate_report_now(report_id):
         if current_status == 'completed' and not force_reprocess:
             return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
 
+        if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
+            queue_stats = violation_queue.get_stats()
+            return jsonify({
+                'success': True,
+                'message': 'Report is already queued or generating',
+                'already_queued': True,
+                'report_id': report_id,
+                'queue_size': queue_stats.get('current_size', 0),
+                'worker_running': _is_queue_worker_alive()
+            })
+
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
@@ -3158,8 +3350,8 @@ def api_generate_report_now(report_id):
             except Exception as annotate_err:
                 logger.warning(f"Could not regenerate annotated image for {report_id}: {annotate_err}")
 
-        if not queue_worker_running:
-            start_queue_worker()
+        if not ensure_queue_worker_running():
+            return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
         violation_data = {
             'report_id': report_id,
@@ -3174,13 +3366,20 @@ def api_generate_report_now(report_id):
 
         enqueued = violation_queue.enqueue(
             violation_data=violation_data,
-            device_id=event.get('device_id') or 'manual_regenerate',
+            device_id=event.get('device_id') or f'manual_regenerate_{report_id}',
             report_id=report_id,
             severity='CRITICAL'
         )
 
         if not enqueued:
-            return jsonify({'success': False, 'error': 'Could not enqueue report (queue full or rate limited)'}), 409
+            queue_stats = violation_queue.get_stats()
+            return jsonify({
+                'success': False,
+                'error': 'Could not enqueue report (queue full or rate limited)',
+                'queue_size': queue_stats.get('current_size', 0),
+                'queue_capacity': queue_stats.get('capacity', 100),
+                'worker_running': _is_queue_worker_alive()
+            }), 409
 
         db_manager.update_detection_status(report_id, 'pending')
 
@@ -3191,7 +3390,7 @@ def api_generate_report_now(report_id):
             'report_id': report_id,
             'force_reprocess': force_reprocess,
             'queue_size': queue_stats.get('current_size', 0),
-            'worker_running': queue_worker_running
+            'worker_running': _is_queue_worker_alive()
         })
 
     except Exception as e:
@@ -4364,7 +4563,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                         frame_copy = frame.copy()
                         detections_copy = detections.copy()
                         
-                        report_id = enqueue_violation(frame_copy, detections_copy)
+                        report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
                         if report_id:
                             logger.info(f"✓ Violation {report_id} queued for processing")
                         else:
@@ -4540,7 +4739,7 @@ def upload_inference():
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            queued_report_id = enqueue_violation(frame_copy, detections_copy)
+            queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='upload')
             report_queued = queued_report_id is not None
             if report_queued:
                 logger.info(f"📥 Violation queued for processing: {queued_report_id}")
@@ -4785,7 +4984,7 @@ def api_health_summary():
     try:
         queue_data = {
             'available': violation_queue is not None,
-            'worker_running': bool(queue_worker_running),
+            'worker_running': _is_queue_worker_alive(),
             'queue_size': 0,
             'capacity': None,
         }

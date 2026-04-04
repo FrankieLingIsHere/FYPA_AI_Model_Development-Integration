@@ -1278,11 +1278,11 @@ RESPONSE FORMAT (JSON):
                     logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
 
-            # Normalize structure once so all sections (including hidden expanded parts)
-            # consume consistent model-aligned data shapes.
-            raw_nlp_analysis = json.loads(json.dumps(nlp_analysis)) if isinstance(nlp_analysis, (dict, list)) else nlp_analysis
-            nlp_analysis = self._sanitize_nlp_analysis(nlp_analysis)
-            nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
+        # Normalize structure once so all sections (including hidden expanded parts)
+        # consume consistent model-aligned data shapes.
+        raw_nlp_analysis = json.loads(json.dumps(nlp_analysis)) if isinstance(nlp_analysis, (dict, list)) else nlp_analysis
+        nlp_analysis = self._sanitize_nlp_analysis(nlp_analysis)
+        nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
 
         

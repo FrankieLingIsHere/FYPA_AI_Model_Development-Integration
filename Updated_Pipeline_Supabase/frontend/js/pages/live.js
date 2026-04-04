@@ -6,6 +6,7 @@ const LivePage = {
     providerRuntimeInterval: null,
     settingsKeydownHandler: null,
     globalSettingsClickHandler: null,
+    inlineSettingsClickHandler: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     phoneCameraStream: null,
@@ -33,6 +34,9 @@ const LivePage = {
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
                             <span id="phoneCameraPermissionBadge" style="display: none; margin-right: 10px; font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; vertical-align: middle;"></span>
+                            <button id="liveInlineSettingsBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Open monitoring settings">
+                                <i class="fas fa-cog"></i> Settings
+                            </button>
                             <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
@@ -691,6 +695,7 @@ const LivePage = {
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
         const sourceToggleBtn = document.getElementById('sourceToggleBtn');
+        const liveInlineSettingsBtn = document.getElementById('liveInlineSettingsBtn');
         const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');
         const startBtn = document.getElementById('startLiveBtn');
         const stopBtn = document.getElementById('stopLiveBtn');
@@ -1146,6 +1151,14 @@ const LivePage = {
             };
             globalLiveSettingsBtn.addEventListener('click', onGlobalSettingsClick);
             this.globalSettingsClickHandler = onGlobalSettingsClick;
+        }
+
+        if (liveInlineSettingsBtn) {
+            const onInlineSettingsClick = () => {
+                openSettingsWindow();
+            };
+            liveInlineSettingsBtn.addEventListener('click', onInlineSettingsClick);
+            this.inlineSettingsClickHandler = onInlineSettingsClick;
         }
 
         settingsTabs.forEach(tab => {
@@ -2407,6 +2420,12 @@ const LivePage = {
             globalLiveSettingsBtn.removeEventListener('click', this.globalSettingsClickHandler);
             globalLiveSettingsBtn.style.display = 'none';
             this.globalSettingsClickHandler = null;
+        }
+
+        const liveInlineSettingsBtn = document.getElementById('liveInlineSettingsBtn');
+        if (liveInlineSettingsBtn && this.inlineSettingsClickHandler) {
+            liveInlineSettingsBtn.removeEventListener('click', this.inlineSettingsClickHandler);
+            this.inlineSettingsClickHandler = null;
         }
 
         document.body.classList.remove('settings-modal-open');

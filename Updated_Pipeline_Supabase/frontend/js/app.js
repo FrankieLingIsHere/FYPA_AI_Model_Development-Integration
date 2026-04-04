@@ -208,7 +208,8 @@ function setupResponsiveMobileUX() {
         const narrowViewport = window.matchMedia('(max-width: 1024px)').matches;
         const shortestSide = Math.min(window.screen?.width || 0, window.screen?.height || 0);
         const phoneLikeScreen = shortestSide > 0 && shortestSide <= 540;
-        const phoneHeuristic = (mobileUA || uaDataMobile || phoneLikeScreen || narrowViewport) && !iPadLike;
+        const strongPhoneSignal = mobileUA || uaDataMobile || phoneLikeScreen;
+        const phoneHeuristic = (strongPhoneSignal || (mobileUA && narrowViewport)) && !iPadLike;
         return touchCapable && phoneHeuristic;
     };
 

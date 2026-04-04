@@ -40,7 +40,7 @@ const LivePage = {
                     </button>
                 </div>
 
-                <div class="card mb-4">
+                <div class="card mb-4 live-monitor-card">
                     <div class="card-header">
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
                         <div id="liveControls" style="float: right;">
@@ -640,6 +640,16 @@ const LivePage = {
                     overflow: auto;
                     position: relative;
                     z-index: 1;
+                }
+
+                /* Keep the modal's ancestor stable; transformed cards can clip fixed descendants. */
+                .live-monitor-card {
+                    overflow: visible;
+                }
+
+                .live-monitor-card:hover {
+                    transform: none;
+                    box-shadow: var(--shadow-md);
                 }
 
                 #liveStreamContainer {

@@ -1,6 +1,7 @@
 name: Deployed E2E Tests
 
 on:
+  push:
   workflow_dispatch:
     inputs:
       vercel_url:
@@ -35,19 +36,19 @@ jobs:
 
       - name: Run routing and health checks
         env:
-          LUNA_VERCEL_URL: ${{ inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_BASE_URL: ${{ inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
         run: |
           python Updated_Pipeline_Supabase/deployed_routing_check.py
 
       - name: Validate deployed frontend assets include settings fixes
         env:
-          LUNA_VERCEL_URL: ${{ inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
         run: |
           python Updated_Pipeline_Supabase/deployed_frontend_asset_check.py
 
-  deployed-generate-now-smoke:
-    name: Deployed Generate-Now Smoke
+  deployed-system-conditions:
+    name: Deployed System Conditions Matrix
     runs-on: ubuntu-latest
     needs: deployed-routing-health
     timeout-minutes: 20
@@ -65,16 +66,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Run deployed system conditions matrix
+        env:
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+        run: |
+          python Updated_Pipeline_Supabase/deployed_system_conditions_test.py
+
+  deployed-generate-now-smoke:
+    name: Deployed Generate-Now Smoke
+    runs-on: ubuntu-latest
+    needs:
+      - deployed-routing-health
+      - deployed-system-conditions
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
       - name: Run deployed generate-now progression smoke test
         env:
-          LUNA_BASE_URL: ${{ inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
         run: |
           python Updated_Pipeline_Supabase/deployed_generate_now_smoke.py
 
       - name: Run upload E2E diagnostic (non-blocking)
         continue-on-error: true
         env:
-          LUNA_BASE_URL: ${{ inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           LUNA_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
         run: |
           python Updated_Pipeline_Supabase/e2e_report_test.py

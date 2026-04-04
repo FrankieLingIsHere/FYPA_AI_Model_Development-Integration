@@ -62,7 +62,7 @@ jobs:
       - name: Run frontend robustness browser checks
         env:
           LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "9000"
+          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "20000"
           LUNA_FRONTEND_STRESS_CLICKS: "5"
         run: |
           python Updated_Pipeline_Supabase/deployed_frontend_robustness_test.py

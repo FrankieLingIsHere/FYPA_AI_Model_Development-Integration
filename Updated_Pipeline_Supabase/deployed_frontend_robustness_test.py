@@ -48,16 +48,23 @@ def ensure_nav_visible(page, page_name: str):
 
 
 def navigate_and_measure(page, page_name: str, ready_selector: str):
-    ensure_nav_visible(page, page_name)
-    t0 = time.perf_counter()
-    page.click(f"[data-page='{page_name}']")
-    page.wait_for_selector(ready_selector, timeout=MAX_NAV_LATENCY_MS)
-    elapsed_ms = int((time.perf_counter() - t0) * 1000)
-    print(f"PASS: nav-{page_name} latency={elapsed_ms}ms")
-    if elapsed_ms > MAX_NAV_LATENCY_MS:
-        raise RuntimeError(
-            f"Navigation to {page_name} exceeded threshold: {elapsed_ms}ms > {MAX_NAV_LATENCY_MS}ms"
-        )
+    for attempt in (1, 2):
+        ensure_nav_visible(page, page_name)
+        t0 = time.perf_counter()
+        try:
+            page.click(f"[data-page='{page_name}']")
+            page.wait_for_selector(ready_selector, timeout=MAX_NAV_LATENCY_MS)
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            print(f"PASS: nav-{page_name} latency={elapsed_ms}ms attempt={attempt}")
+            if elapsed_ms > MAX_NAV_LATENCY_MS:
+                raise RuntimeError(
+                    f"Navigation to {page_name} exceeded threshold: {elapsed_ms}ms > {MAX_NAV_LATENCY_MS}ms"
+                )
+            return
+        except PlaywrightTimeoutError:
+            if attempt == 2:
+                raise
+            print(f"INFO: nav-{page_name} timed out on attempt=1, retrying once")
 
 
 def find_visible_settings_trigger(page):

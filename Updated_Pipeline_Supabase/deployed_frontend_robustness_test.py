@@ -96,6 +96,54 @@ def first_visible_selector(page, selectors):
     return None
 
 
+def assert_settings_modal_behavior(page, settings_trigger: str, started: bool):
+    state_label = "started" if started else "stopped"
+
+    start_btn = page.locator("#startLiveBtn")
+    stop_btn = page.locator("#stopLiveBtn")
+    if start_btn.count() == 0 or stop_btn.count() == 0:
+        raise RuntimeError("Missing start/stop controls for settings behavior assertion")
+
+    app_box_before = page.locator("#app").bounding_box()
+    stream_src_before = ""
+    with suppress(Exception):
+        stream_src_before = page.locator("#liveStream").evaluate("el => el.getAttribute('src') || ''")
+
+    page.click(settings_trigger)
+    page.wait_for_selector("#settingsModal[aria-hidden='false']", timeout=5000)
+
+    if started:
+        if start_btn.first.is_enabled():
+            raise RuntimeError("Start button became enabled while camera should be started")
+        if stop_btn.first.is_disabled():
+            raise RuntimeError("Stop button became disabled while camera should be started")
+    else:
+        if start_btn.first.is_disabled():
+            raise RuntimeError("Start button became disabled while camera should be stopped")
+        if stop_btn.first.is_enabled():
+            raise RuntimeError("Stop button became enabled while camera should be stopped")
+
+    stream_src_during = ""
+    with suppress(Exception):
+        stream_src_during = page.locator("#liveStream").evaluate("el => el.getAttribute('src') || ''")
+
+    if started and stream_src_before and stream_src_during and stream_src_before != stream_src_during:
+        raise RuntimeError("Live stream source changed after opening settings while started")
+
+    page.click("#closeSettingsWindowBtn")
+    page.wait_for_selector("#settingsModal", state="hidden", timeout=5000)
+
+    app_box_after = page.locator("#app").bounding_box()
+    if app_box_before and app_box_after:
+        width_shift = abs((app_box_after.get("width") or 0) - (app_box_before.get("width") or 0))
+        if width_shift > 2:
+            raise RuntimeError(
+                f"Screen shifted after settings {state_label} flow (width shift={width_shift:.2f}px)"
+            )
+
+    print(f"PASS: settings modal behavior with camera {state_label}")
+
+
 def validate_sidebar_navigation(page):
     nav_pages = ("home", "live", "reports", "analytics", "about")
     for page_name in nav_pages:
@@ -309,6 +357,53 @@ def main() -> int:
                         break
             else:
                 print("INFO: settings modal stress check skipped (controls not available in this UI variant)")
+
+            if settings_trigger and settings_modal_exists and close_btn_exists and live_start_control:
+                # Explicit stopped-state assertion.
+                assert_settings_modal_behavior(page, settings_trigger, started=False)
+
+                # Mock backend live start/stop to verify started-state behavior deterministically in CI.
+                start_url = "**/api/live/start"
+                stop_url = "**/api/live/stop"
+                status_url = "**/api/live/status"
+                page.route(
+                    start_url,
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body='{"success":true,"active":true,"source":"webcam"}',
+                    ),
+                )
+                page.route(
+                    stop_url,
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body='{"success":true,"active":false}',
+                    ),
+                )
+                page.route(
+                    status_url,
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body='{"active":false,"source":"webcam","realsense_available":false}',
+                    ),
+                )
+
+                page.click(live_start_control)
+                page.wait_for_timeout(600)
+                if page.locator("#stopLiveBtn").count() > 0 and page.locator("#stopLiveBtn").first.is_disabled():
+                    raise RuntimeError("Could not transition to camera started state for settings behavior check")
+
+                assert_settings_modal_behavior(page, settings_trigger, started=True)
+                page.click("#stopLiveBtn")
+                page.wait_for_timeout(350)
+                page.unroute(start_url)
+                page.unroute(stop_url)
+                page.unroute(status_url)
+            else:
+                print("INFO: explicit settings state behavior check skipped (controls unavailable)")
 
             upload_mode_btn = first_visible_selector(page, ("#uploadModeBtn", "button:has-text('Analyze Image')"))
             live_mode_btn = first_visible_selector(page, ("#liveModeBtn", "button:has-text('Camera Stream')"))

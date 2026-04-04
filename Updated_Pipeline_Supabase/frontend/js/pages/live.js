@@ -596,8 +596,6 @@ const LivePage = {
                     padding: 1rem;
                     overscroll-behavior: contain;
                     isolation: isolate;
-                    transform: translateZ(0);
-                    will-change: opacity;
                 }
 
                 .settings-modal.open {
@@ -616,9 +614,6 @@ const LivePage = {
                     flex-direction: column;
                     position: relative;
                     z-index: 1401;
-                    transform: translateZ(0);
-                    will-change: transform;
-                    backface-visibility: hidden;
                     contain: layout paint;
                 }
 
@@ -1097,6 +1092,12 @@ const LivePage = {
         }
 
         async function refreshDepthStatus() {
+            const shouldPollDepth = APP_STATE.liveStreamActive && selectedSource === 'realsense' && realsenseAvailable;
+            if (!shouldPollDepth) {
+                hideDepthWidgets();
+                return;
+            }
+
             try {
                 const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEPTH_STATUS}`);
                 if (!resp.ok) return;
@@ -1148,19 +1149,36 @@ const LivePage = {
             }
         }
 
+        const lockBodyScrollForSettings = () => {
+            const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+            if (scrollbarWidth > 0) {
+                document.body.style.paddingRight = `${scrollbarWidth}px`;
+            }
+            document.body.classList.add('settings-modal-open');
+        };
+
+        const unlockBodyScrollForSettings = () => {
+            document.body.classList.remove('settings-modal-open');
+            document.body.style.paddingRight = '';
+        };
+
         function openSettingsWindow() {
             if (!settingsModal) return;
             if (settingsModal.classList.contains('open')) return;
             settingsModal.classList.add('open');
             settingsModal.setAttribute('aria-hidden', 'false');
-            document.body.classList.add('settings-modal-open');
+            lockBodyScrollForSettings();
         }
 
         function closeSettingsWindow() {
             if (!settingsModal) return;
             settingsModal.classList.remove('open');
             settingsModal.setAttribute('aria-hidden', 'true');
-            document.body.classList.remove('settings-modal-open');
+            unlockBodyScrollForSettings();
+
+            updateQueueStatus({ force: true });
+            updateReliabilityStatus({ force: true });
+            updateProviderRuntimeStatus({ force: true });
         }
 
         function toggleSettingsWindowSize() {
@@ -1751,6 +1769,8 @@ const LivePage = {
             livePerformanceProfileStatus.textContent = `Profile: ${key} | laptop ${laptopLiveStreamConfig.fps}fps @ q${laptopLiveStreamConfig.quality} | phone ${phoneMs}ms`;
         };
 
+        const isSettingsWindowOpen = () => !!(settingsModal && settingsModal.classList.contains('open'));
+
         const applyLivePerformanceProfile = async (profileKey, options = {}) => {
             const silent = !!options.silent;
             const selected = LIVE_PERFORMANCE_PROFILES[profileKey] || LIVE_PERFORMANCE_PROFILES.balanced;
@@ -1827,14 +1847,21 @@ const LivePage = {
 
         if (livePerformanceProfile) {
             livePerformanceProfile.addEventListener('change', async () => {
-                await applyLivePerformanceProfile(livePerformanceProfile.value);
+                const selectedProfile = LIVE_PERFORMANCE_PROFILES[livePerformanceProfile.value]
+                    ? livePerformanceProfile.value
+                    : 'balanced';
+                updateLiveProfileStatusText(selectedProfile);
             });
         }
 
         await restoreLivePerformanceProfile();
 
         // Function to fetch and update queue status
-        async function updateQueueStatus() {
+        async function updateQueueStatus(options = {}) {
+            if (isSettingsWindowOpen() && !options.force) {
+                return;
+            }
+
             try {
                 const response = await fetch(`${API_CONFIG.BASE_URL}/api/queue/status`);
                 const data = await response.json();
@@ -1900,7 +1927,11 @@ const LivePage = {
             return pairs.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`).join(' • ');
         }
 
-        async function updateReliabilityStatus() {
+        async function updateReliabilityStatus(options = {}) {
+            if (isSettingsWindowOpen() && !options.force) {
+                return;
+            }
+
             try {
                 const windowSize = reliabilityWindowSelect ? Number(reliabilityWindowSelect.value || 50) : 50;
                 const data = await API.getReliabilityStats(windowSize);
@@ -1964,7 +1995,11 @@ const LivePage = {
             }
         }
 
-        async function updateProviderRuntimeStatus() {
+        async function updateProviderRuntimeStatus(options = {}) {
+            if (isSettingsWindowOpen() && !options.force) {
+                return;
+            }
+
             try {
                 const data = await API.getProviderRuntimeStatus();
                 if (!data || data.success === false) {
@@ -2285,9 +2320,9 @@ const LivePage = {
             refreshQueueBtn.disabled = true;
             refreshQueueBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
             
-            await updateQueueStatus();
-            await updateReliabilityStatus();
-            await updateProviderRuntimeStatus();
+            await updateQueueStatus({ force: true });
+            await updateReliabilityStatus({ force: true });
+            await updateProviderRuntimeStatus({ force: true });
             
             refreshQueueBtn.disabled = false;
             refreshQueueBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Status';
@@ -2298,14 +2333,14 @@ const LivePage = {
             refreshReliabilityBtn.addEventListener('click', async () => {
                 refreshReliabilityBtn.disabled = true;
                 refreshReliabilityBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
-                await updateReliabilityStatus();
+                await updateReliabilityStatus({ force: true });
                 refreshReliabilityBtn.disabled = false;
                 refreshReliabilityBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Reliability';
             });
         }
 
         if (reliabilityWindowSelect) {
-            reliabilityWindowSelect.addEventListener('change', updateReliabilityStatus);
+            reliabilityWindowSelect.addEventListener('change', () => updateReliabilityStatus({ force: true }));
         }
 
         if (applyProviderRoutingBtn) {
@@ -2317,7 +2352,7 @@ const LivePage = {
                 reloadProviderRoutingBtn.disabled = true;
                 reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reloading...';
                 await loadProviderRoutingSettings();
-                await updateProviderRuntimeStatus();
+                await updateProviderRuntimeStatus({ force: true });
                 reloadProviderRoutingBtn.disabled = false;
                 reloadProviderRoutingBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Reload Provider Settings';
                 showNotification('Provider routing settings reloaded', 'info');
@@ -2477,6 +2512,7 @@ const LivePage = {
         }
 
         document.body.classList.remove('settings-modal-open');
+        document.body.style.paddingRight = '';
 
         if (this.realtimeHandler) {
             window.removeEventListener('ppe-realtime:update', this.realtimeHandler);

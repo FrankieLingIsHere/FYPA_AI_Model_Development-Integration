@@ -943,10 +943,7 @@ const LivePage = {
 
         const shouldUseBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
-            if (selectedSource === 'phone') {
-                return phoneCameraSupported;
-            }
-            return selectedSource === 'webcam';
+            return selectedSource === 'phone' && phoneCameraSupported;
         };
 
         const capturePhoneFrameForInference = async () => {
@@ -1122,7 +1119,7 @@ const LivePage = {
             } else if (selectedSource === 'phone') {
                 sourceToggleBtn.innerHTML = '<i class="fas fa-mobile-alt"></i> Source: Phone Camera';
             } else {
-                sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam (Browser)';
+                sourceToggleBtn.innerHTML = '<i class="fas fa-camera"></i> Source: Webcam (Near-edge)';
             }
 
             const canToggle = getAvailableSources().length > 1 && !APP_STATE.liveStreamActive;
@@ -1140,8 +1137,8 @@ const LivePage = {
                 sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
                 sourceToggleBtn.title = phoneCameraSupported
-                    ? 'Click to switch Webcam (Browser) / RealSense / Phone Camera'
-                    : 'Click to switch Webcam (Browser)/RealSense';
+                    ? 'Click to switch Webcam (Near-edge) / RealSense / Phone Camera'
+                    : 'Click to switch Webcam (Near-edge)/RealSense';
                 sourceToggleBtn.style.opacity = '1';
                 sourceToggleBtn.style.cursor = 'pointer';
             }
@@ -1490,7 +1487,7 @@ const LivePage = {
                     showNotification(
                         usingPhoneSource
                             ? 'Phone camera access granted and monitoring started'
-                            : 'Webcam access granted and monitoring started (browser capture mode)',
+                            : 'Webcam access granted and monitoring started',
                         'success'
                     );
                     return;

@@ -715,6 +715,8 @@ const LivePage = {
     },
 
     async mount() {
+        const livePage = this;
+
         // Get UI elements
         const liveModeBtn = document.getElementById('liveModeBtn');
         const uploadModeBtn = document.getElementById('uploadModeBtn');
@@ -814,6 +816,12 @@ const LivePage = {
             if (startBtn) startBtn.disabled = !!isActive;
             if (stopBtn) stopBtn.disabled = !isActive;
             renderSourceToggle();
+
+            if (APP_STATE.liveStreamActive) {
+                startLiveRefreshLoops();
+            } else {
+                stopLiveRefreshLoops();
+            }
         };
 
         const updatePhonePermissionBadge = () => {
@@ -1176,9 +1184,11 @@ const LivePage = {
             settingsModal.setAttribute('aria-hidden', 'true');
             unlockBodyScrollForSettings();
 
-            updateQueueStatus({ force: true });
-            updateReliabilityStatus({ force: true });
-            updateProviderRuntimeStatus({ force: true });
+            if (APP_STATE.liveStreamActive) {
+                updateQueueStatus({ force: true });
+                updateReliabilityStatus({ force: true });
+                updateProviderRuntimeStatus({ force: true });
+            }
         }
 
         function toggleSettingsWindowSize() {
@@ -2016,6 +2026,64 @@ const LivePage = {
             }
         }
 
+        function stopLiveRefreshLoops() {
+            if (livePage.queueRefreshInterval) {
+                clearInterval(livePage.queueRefreshInterval);
+                livePage.queueRefreshInterval = null;
+            }
+            if (livePage.reliabilityRefreshInterval) {
+                clearInterval(livePage.reliabilityRefreshInterval);
+                livePage.reliabilityRefreshInterval = null;
+            }
+            if (livePage.depthStatusInterval) {
+                clearInterval(livePage.depthStatusInterval);
+                livePage.depthStatusInterval = null;
+            }
+            if (livePage.providerRuntimeInterval) {
+                clearInterval(livePage.providerRuntimeInterval);
+                livePage.providerRuntimeInterval = null;
+            }
+            hideDepthWidgets();
+        }
+
+        function startLiveRefreshLoops() {
+            if (!APP_STATE.liveStreamActive) {
+                return;
+            }
+
+            if (!livePage.depthStatusInterval) {
+                livePage.depthStatusInterval = setInterval(refreshDepthStatus, 1500);
+            }
+
+            if (!livePage.providerRuntimeInterval) {
+                livePage.providerRuntimeInterval = setInterval(updateProviderRuntimeStatus, 15000);
+            }
+
+            const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
+            if (connected) {
+                if (livePage.queueRefreshInterval) {
+                    clearInterval(livePage.queueRefreshInterval);
+                    livePage.queueRefreshInterval = null;
+                }
+                if (livePage.reliabilityRefreshInterval) {
+                    clearInterval(livePage.reliabilityRefreshInterval);
+                    livePage.reliabilityRefreshInterval = null;
+                }
+            } else {
+                if (!livePage.queueRefreshInterval) {
+                    livePage.queueRefreshInterval = setInterval(updateQueueStatus, 5000);
+                }
+                if (!livePage.reliabilityRefreshInterval) {
+                    livePage.reliabilityRefreshInterval = setInterval(updateReliabilityStatus, 10000);
+                }
+            }
+
+            updateQueueStatus({ force: true });
+            updateReliabilityStatus({ force: true });
+            updateProviderRuntimeStatus({ force: true });
+            refreshDepthStatus();
+        }
+
         // Function to fetch current settings
         async function loadCurrentSettings() {
             try {
@@ -2034,10 +2102,11 @@ const LivePage = {
                 console.error('Error loading settings:', error);
             }
 
-            // Also update queue status
-            await updateQueueStatus();
-            await updateReliabilityStatus();
-            await updateProviderRuntimeStatus();
+            if (APP_STATE.liveStreamActive) {
+                await updateQueueStatus();
+                await updateReliabilityStatus();
+                await updateProviderRuntimeStatus();
+            }
             await loadProviderRoutingSettings();
         }
 
@@ -2398,12 +2467,27 @@ const LivePage = {
         }
 
         this.realtimeHandler = () => {
+            if (!APP_STATE.liveStreamActive) {
+                return;
+            }
             updateQueueStatus();
             updateReliabilityStatus();
         };
         window.addEventListener('ppe-realtime:update', this.realtimeHandler);
 
         this.realtimeConnectionHandler = () => {
+            if (!APP_STATE.liveStreamActive) {
+                if (this.queueRefreshInterval) {
+                    clearInterval(this.queueRefreshInterval);
+                    this.queueRefreshInterval = null;
+                }
+                if (this.reliabilityRefreshInterval) {
+                    clearInterval(this.reliabilityRefreshInterval);
+                    this.reliabilityRefreshInterval = null;
+                }
+                return;
+            }
+
             const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
             if (connected) {
                 if (this.queueRefreshInterval) {
@@ -2444,11 +2528,9 @@ const LivePage = {
         updatePhonePermissionBadge();
         await initPhonePermissionWatcher();
         await loadCurrentSettings();
-        await updateProviderRuntimeStatus();
 
-        const depthStatusInterval = setInterval(refreshDepthStatus, 1500);
-        this.depthStatusInterval = depthStatusInterval;
-        this.providerRuntimeInterval = setInterval(updateProviderRuntimeStatus, 15000);
+        // Keep live refresh loops disabled until camera is active.
+        setLiveControlState(!!APP_STATE.liveStreamActive);
 
         // Realtime-first: only use polling if realtime stream is unavailable.
         if (typeof this.realtimeConnectionHandler === 'function') {
@@ -2458,7 +2540,7 @@ const LivePage = {
         // Clean up interval when leaving page (store for cleanup)
         window._livePageQueueInterval = this.queueRefreshInterval;
         window._livePageReliabilityInterval = this.reliabilityRefreshInterval;
-        window._liveDepthStatusInterval = depthStatusInterval;
+        window._liveDepthStatusInterval = this.depthStatusInterval;
         window._liveProviderRuntimeInterval = this.providerRuntimeInterval;
     },
 

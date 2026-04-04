@@ -109,6 +109,10 @@ def assert_settings_modal_behavior(page, settings_trigger: str, started: bool):
     with suppress(Exception):
         stream_src_before = page.locator("#liveStream").evaluate("el => el.getAttribute('src') || ''")
 
+    reliability_before = ""
+    with suppress(Exception):
+        reliability_before = page.locator("#reliabilityLastUpdated").inner_text().strip()
+
     page.click(settings_trigger)
     page.wait_for_selector("#settingsModal[aria-hidden='false']", timeout=5000)
 
@@ -129,6 +133,16 @@ def assert_settings_modal_behavior(page, settings_trigger: str, started: bool):
 
     if started and stream_src_before and stream_src_during and stream_src_before != stream_src_during:
         raise RuntimeError("Live stream source changed after opening settings while started")
+
+    if not started:
+        page.wait_for_timeout(1600)
+        reliability_during = ""
+        with suppress(Exception):
+            reliability_during = page.locator("#reliabilityLastUpdated").inner_text().strip()
+        if reliability_before and reliability_during and reliability_before != reliability_during:
+            raise RuntimeError(
+                "Reliability panel refreshed while camera is stopped and settings modal is open"
+            )
 
     page.click("#closeSettingsWindowBtn")
     page.wait_for_selector("#settingsModal", state="hidden", timeout=5000)

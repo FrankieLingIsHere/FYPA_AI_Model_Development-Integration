@@ -1297,10 +1297,12 @@ RESPONSE FORMAT (JSON):
             'indoor environment',
             'outdoor environment',
         )
-        if visual_evidence and (
-            len(visual_evidence) < 120
+        should_rebuild_visual_evidence = (
+            not visual_evidence
+            or len(visual_evidence) < 120
             or any(marker in visual_evidence.lower() for marker in generic_markers)
-        ):
+        )
+        if should_rebuild_visual_evidence and caption_for_quality:
             rebuilt = self._build_scene_description(
                 caption_for_quality,
                 nlp_analysis.get('environment_type', 'General Workspace'),
@@ -2339,7 +2341,7 @@ RESPONSE FORMAT (JSON):
                         <h2 class="section-title">🤖 AI Scene Description</h2>
                         <div class="card">
                             <div class="card-content">
-                                <p>{nlp_analysis.get('visual_evidence', report_data.get('caption', 'No description available'))}</p>
+                                <p>{nlp_analysis.get('visual_evidence') or report_data.get('caption') or 'No description available'}</p>
                             </div>
                         </div>
                     </div>

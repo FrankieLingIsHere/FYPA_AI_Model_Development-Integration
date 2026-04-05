@@ -792,19 +792,20 @@ const LivePage = {
             quality: 72
         };
         const phoneInferenceConfig = {
-            intervalMs: 320,
+            intervalMs: 220,
             conf: 0.08,
-            jpegQuality: 0.72
+            jpegQuality: 0.68
         };
+        let phoneInferenceRunId = 0;
         const LIVE_PROFILE_STORAGE_KEY = 'live_performance_profile_v1';
         const LIVE_PERFORMANCE_PROFILES = {
             smooth: {
-                laptop: { conf: 0.12, fps: 16, quality: 64 },
-                phone: { intervalMs: 240, conf: 0.10, jpegQuality: 0.65 }
+                laptop: { conf: 0.12, fps: 20, quality: 58 },
+                phone: { intervalMs: 170, conf: 0.10, jpegQuality: 0.62 }
             },
             balanced: {
-                laptop: { conf: 0.10, fps: 14, quality: 72 },
-                phone: { intervalMs: 320, conf: 0.08, jpegQuality: 0.72 }
+                laptop: { conf: 0.10, fps: 18, quality: 64 },
+                phone: { intervalMs: 220, conf: 0.08, jpegQuality: 0.68 }
             },
             detail: {
                 laptop: { conf: 0.08, fps: 12, quality: 82 },
@@ -912,6 +913,16 @@ const LivePage = {
                 this.phoneInferenceInterval = null;
             }
             this.phoneInferenceBusy = false;
+            phoneInferenceRunId += 1;
+        };
+
+        const clearLiveOverlayCanvas = () => {
+            if (!liveOverlayCanvas) return;
+            const ctx = liveOverlayCanvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, liveOverlayCanvas.width || 0, liveOverlayCanvas.height || 0);
+            }
+            liveOverlayCanvas.style.display = 'none';
         };
 
         const stopPhoneCameraTrack = () => {
@@ -936,13 +947,7 @@ const LivePage = {
                 phoneCameraPreview.style.display = 'none';
             }
 
-            if (liveOverlayCanvas) {
-                const ctx = liveOverlayCanvas.getContext('2d');
-                if (ctx) {
-                    ctx.clearRect(0, 0, liveOverlayCanvas.width || 0, liveOverlayCanvas.height || 0);
-                }
-                liveOverlayCanvas.style.display = 'none';
-            }
+            clearLiveOverlayCanvas();
         };
 
         const getAvailableSources = () => {
@@ -1031,6 +1036,7 @@ const LivePage = {
             renderSourceToggle();
 
             stopPhoneInferenceLoop();
+            phoneInferenceRunId += 1;
             this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, phoneInferenceConfig.intervalMs);
             await capturePhoneFrameForInference();
 
@@ -1044,6 +1050,9 @@ const LivePage = {
             if (!this.phoneCameraStream || !phoneCameraPreview) return;
             if (this.phoneInferenceBusy) return;
             if (phoneCameraPreview.readyState < 2) return;
+            if (!APP_STATE.liveStreamActive || !shouldUseBrowserCaptureSource()) return;
+
+            const runId = phoneInferenceRunId;
 
             const width = phoneCameraPreview.videoWidth || 1280;
             const height = phoneCameraPreview.videoHeight || 720;
@@ -1073,11 +1082,18 @@ const LivePage = {
                     body: formData
                 });
 
+                if (runId !== phoneInferenceRunId || !APP_STATE.liveStreamActive || !shouldUseBrowserCaptureSource()) {
+                    return;
+                }
+
                 if (!response.ok) {
                     throw new Error('Phone frame inference failed');
                 }
 
                 const result = await response.json();
+                if (runId !== phoneInferenceRunId || !APP_STATE.liveStreamActive || !shouldUseBrowserCaptureSource()) {
+                    return;
+                }
                 if (result && Array.isArray(result.detections) && liveOverlayCanvas && phoneCameraPreview) {
                     const ctx = liveOverlayCanvas.getContext('2d');
                     const videoW = phoneCameraPreview.videoWidth || width;
@@ -1505,6 +1521,17 @@ const LivePage = {
         // Live stream functions
         async function stopLiveStream() {
             stopBtn.disabled = true;
+            // Tear down UI first so stream frame and boxes disappear immediately.
+            setLiveControlState(false);
+            stopPhoneInferenceLoop();
+            clearLiveOverlayCanvas();
+            streamImg.src = '';
+            streamImg.style.display = 'none';
+            placeholder.style.display = 'block';
+            statusIndicator.style.display = 'none';
+            if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
+            hideDepthWidgets();
+
             try {
                 if (shouldUseBrowserCaptureSource()) {
                     stopPhoneInferenceLoop();
@@ -1514,14 +1541,6 @@ const LivePage = {
                         method: 'POST'
                     });
                 }
-
-                streamImg.src = '';
-                streamImg.style.display = 'none';
-                placeholder.style.display = 'block';
-                statusIndicator.style.display = 'none';
-                if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
-                setLiveControlState(false);
-                hideDepthWidgets();
                 showNotification('Live monitoring stopped', 'info');
             } catch (error) {
                 console.error('Error stopping live stream:', error);
@@ -1530,10 +1549,6 @@ const LivePage = {
                 stopPhoneInferenceLoop();
                 stopPhoneCameraTrack();
                 useBrowserCaptureRuntime = false;
-                streamImg.src = '';
-                streamImg.style.display = 'none';
-                placeholder.style.display = 'block';
-                statusIndicator.style.display = 'none';
                 setLiveControlState(false);
                 hideDepthWidgets();
             }

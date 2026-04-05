@@ -781,8 +781,10 @@ const LivePage = {
         const isPhoneDevice = document.body.classList.contains('is-phone-device');
         const browserCameraSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const phoneCameraSupported = !!(isPhoneDevice && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+        const isAutomationContext = !!navigator.webdriver;
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
+        let useBrowserCaptureRuntime = false;
         const phoneCaptureCanvas = document.createElement('canvas');
         const laptopLiveStreamConfig = {
             conf: 0.10,
@@ -955,8 +957,87 @@ const LivePage = {
         };
 
         const shouldUseBrowserCaptureSource = () => {
+            return !!(browserCameraSupported && useBrowserCaptureRuntime);
+        };
+
+        const shouldPreferBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
             return selectedSource === 'phone' && phoneCameraSupported;
+        };
+
+        const isWebcamUnavailableMessage = (message) => {
+            const text = String(message || '').toLowerCase();
+            return text.includes('failed to open webcam') ||
+                text.includes('could not open webcam') ||
+                (text.includes('webcam') && (text.includes('failed') || text.includes('unavailable')));
+        };
+
+        const isAutomationWebcamFallbackAllowed = () => {
+            return !!(window && window.__LUNA_ALLOW_AUTOMATION_WEBCAM_FALLBACK === true);
+        };
+
+        const startBrowserCaptureSession = async (usingPhoneSource, noticePrefix = '') => {
+            if (APP_STATE.liveStreamActive) {
+                startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+                return;
+            }
+
+            if (usingPhoneSource) {
+                phonePermissionState = 'prompt';
+                updatePhonePermissionBadge();
+            }
+
+            const videoConstraints = usingPhoneSource
+                ? {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+                : {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                };
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: videoConstraints,
+                audio: false
+            });
+
+            this.phoneCameraStream = stream;
+            useBrowserCaptureRuntime = true;
+
+            if (usingPhoneSource) {
+                phonePermissionState = 'granted';
+                updatePhonePermissionBadge();
+            }
+
+            if (phoneCameraPreview) {
+                phoneCameraPreview.srcObject = stream;
+                await phoneCameraPreview.play();
+                phoneCameraPreview.style.display = 'block';
+            }
+
+            placeholder.style.display = 'none';
+            streamImg.style.display = 'none';
+            streamImg.src = '';
+            statusIndicator.style.display = 'block';
+            statusIndicator.innerHTML = usingPhoneSource
+                ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'
+                : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> WEBCAM LIVE';
+
+            setLiveControlState(true);
+            startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+            hideDepthWidgets();
+            renderSourceToggle();
+
+            stopPhoneInferenceLoop();
+            this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, phoneInferenceConfig.intervalMs);
+            await capturePhoneFrameForInference();
+
+            const successText = usingPhoneSource
+                ? 'Phone camera access granted and monitoring started'
+                : 'Browser webcam access granted and monitoring started';
+            showNotification(`${noticePrefix}${successText}`.trim(), 'success');
         };
 
         const capturePhoneFrameForInference = async () => {
@@ -1448,6 +1529,7 @@ const LivePage = {
             } finally {
                 stopPhoneInferenceLoop();
                 stopPhoneCameraTrack();
+                useBrowserCaptureRuntime = false;
                 streamImg.src = '';
                 streamImg.style.display = 'none';
                 placeholder.style.display = 'block';
@@ -1465,69 +1547,8 @@ const LivePage = {
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
 
-                if (shouldUseBrowserCaptureSource()) {
-                    if (APP_STATE.liveStreamActive) {
-                        startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
-                        return;
-                    }
-
-                    const usingPhoneSource = selectedSource === 'phone';
-                    if (usingPhoneSource) {
-                        phonePermissionState = 'prompt';
-                        updatePhonePermissionBadge();
-                    }
-
-                    const videoConstraints = usingPhoneSource
-                        ? {
-                            facingMode: { ideal: 'environment' },
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 }
-                        }
-                        : {
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 }
-                        };
-
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: videoConstraints,
-                        audio: false
-                    });
-
-                    this.phoneCameraStream = stream;
-                    if (usingPhoneSource) {
-                        phonePermissionState = 'granted';
-                        updatePhonePermissionBadge();
-                    }
-
-                    if (phoneCameraPreview) {
-                        phoneCameraPreview.srcObject = stream;
-                        await phoneCameraPreview.play();
-                        phoneCameraPreview.style.display = 'block';
-                    }
-
-                    placeholder.style.display = 'none';
-                    streamImg.style.display = 'none';
-                    streamImg.src = '';
-                    statusIndicator.style.display = 'block';
-                    statusIndicator.innerHTML = usingPhoneSource
-                        ? '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> PHONE LIVE'
-                        : '<i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> WEBCAM LIVE';
-
-                    setLiveControlState(true);
-                    startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
-                    hideDepthWidgets();
-                    renderSourceToggle();
-
-                    stopPhoneInferenceLoop();
-                    this.phoneInferenceInterval = setInterval(capturePhoneFrameForInference, phoneInferenceConfig.intervalMs);
-                    await capturePhoneFrameForInference();
-
-                    showNotification(
-                        usingPhoneSource
-                            ? 'Phone camera access granted and monitoring started'
-                            : 'Webcam access granted and monitoring started',
-                        'success'
-                    );
+                if (shouldPreferBrowserCaptureSource()) {
+                    await startBrowserCaptureSession(selectedSource === 'phone');
                     return;
                 }
 
@@ -1549,11 +1570,32 @@ const LivePage = {
                     body: JSON.stringify({ source: selectedSource })
                 });
 
-                if (!response.ok) {
-                    throw new Error('Failed to start monitoring');
+                let startData = null;
+                let startText = '';
+                try {
+                    startText = await response.text();
+                    startData = startText ? JSON.parse(startText) : null;
+                } catch (parseError) {
+                    startData = null;
                 }
 
-                const startData = await response.json();
+                const backendErrorMessage = (startData && (startData.error || startData.message)) || startText || 'Failed to start monitoring';
+                const shouldFallbackToBrowserWebcam = (
+                    selectedSource === 'webcam' &&
+                    browserCameraSupported &&
+                    (!isAutomationContext || isAutomationWebcamFallbackAllowed()) &&
+                    isWebcamUnavailableMessage(backendErrorMessage)
+                );
+
+                if (!response.ok || (startData && startData.success === false)) {
+                    if (shouldFallbackToBrowserWebcam) {
+                        await startBrowserCaptureSession(false, 'Backend webcam unavailable. ');
+                        return;
+                    }
+                    throw new Error(backendErrorMessage);
+                }
+
+                useBrowserCaptureRuntime = false;
                 if (startData.source) {
                     selectedSource = startData.source;
                 }
@@ -1614,7 +1656,8 @@ const LivePage = {
                     stopPhoneInferenceLoop();
                     stopPhoneCameraTrack();
                 } else {
-                    alert('Failed to start live monitoring. Please check if the webcam is available.');
+                    const message = (error && error.message) ? String(error.message) : 'Failed to start live monitoring. Please check if the webcam is available.';
+                    alert(message);
                 }
 
                 startBtn.disabled = false;
@@ -1702,6 +1745,7 @@ const LivePage = {
             
             if (status.active) {
                 // Stream is already active
+                useBrowserCaptureRuntime = false;
                 placeholder.style.display = 'none';
                 if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
                 streamImg.style.display = 'block';

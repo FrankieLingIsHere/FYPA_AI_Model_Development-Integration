@@ -157,6 +157,32 @@ jobs:
         run: |
           python Updated_Pipeline_Supabase/deployed_live_start_contract_test.py
 
+  deployed-live-frame-contract:
+    name: Deployed Live-Frame Contract
+    runs-on: ubuntu-latest
+    needs: deployed-routing-health
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run deployed live-frame contract test
+        env:
+          LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          LUNA_LIVE_FRAME_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
+        run: |
+          python Updated_Pipeline_Supabase/deployed_live_frame_contract_test.py
+
   deployed-generate-now-smoke:
     name: Deployed Generate-Now Smoke
     runs-on: ubuntu-latest
@@ -164,6 +190,7 @@ jobs:
       - deployed-routing-health
       - deployed-system-conditions
       - deployed-live-start-contract
+      - deployed-live-frame-contract
     timeout-minutes: 20
     steps:
       - name: Checkout

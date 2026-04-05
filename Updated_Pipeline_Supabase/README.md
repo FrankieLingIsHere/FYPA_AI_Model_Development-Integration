@@ -90,6 +90,17 @@ If empty, frontend uses same-origin (`''`) which is suitable only when frontend 
 3. **Ollama** - For LLaVA image captioning and Llama3 report generation
 4. **NVIDIA GPU** - 8GB+ VRAM recommended for YOLOv8 inference
 
+### Local Webcam Startup Smoke Check
+
+To verify local camera startup before pushing changes:
+
+```bash
+cd Updated_Pipeline_Supabase
+python preflight_check.py --check-webcam --camera-index 0
+```
+
+If camera index `0` is not your device, try `1` or `2`.
+
 ---
 
 ## 🗄️ Supabase Setup

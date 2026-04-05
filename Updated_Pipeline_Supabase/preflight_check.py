@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import importlib
+import os
 import subprocess
 import sys
 from typing import List, Tuple
@@ -49,9 +50,33 @@ def install_requirements() -> bool:
     return result.returncode == 0
 
 
+def run_webcam_smoke_test(camera_index: int) -> int:
+    script_path = os.path.join(os.path.dirname(__file__), "webcam_smoke_test.py")
+    cmd = [
+        sys.executable,
+        script_path,
+        "--camera-index",
+        str(camera_index),
+    ]
+    print(f"Running local webcam smoke test (camera index {camera_index})...")
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--install", action="store_true", help="Install requirements when mandatory packages are missing")
+    parser.add_argument(
+        "--check-webcam",
+        action="store_true",
+        help="Run local webcam startup smoke test after dependency checks",
+    )
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=0,
+        help="Camera index for webcam smoke test (default: 0)",
+    )
     args = parser.parse_args()
 
     missing = check_imports(MANDATORY_IMPORTS)
@@ -76,6 +101,12 @@ def main() -> int:
             print(f"OK: optional package available: {package_name}")
         except Exception:
             print(f"WARN: optional package missing: {package_name}. {warning}")
+
+    if args.check_webcam:
+        webcam_exit = run_webcam_smoke_test(args.camera_index)
+        if webcam_exit != 0:
+            print("ERROR: webcam smoke test failed")
+            return webcam_exit
 
     print("OK: preflight dependency check passed")
     return 0

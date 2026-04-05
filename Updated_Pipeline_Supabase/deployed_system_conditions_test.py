@@ -16,6 +16,7 @@ POLL_INTERVAL = int(os.environ.get("LUNA_CONDITIONS_POLL_INTERVAL", "3"))
 MAX_REPORT_IDS = int(os.environ.get("LUNA_CONDITIONS_MAX_REPORT_IDS", "15"))
 ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("LUNA_PROVIDER_MODE_MATRIX", "1") != "0"
 PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
+STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "1") != "0"
 
 ALLOWED_REPORT_STATUSES = {
     "pending",
@@ -78,7 +79,10 @@ PROVIDER_MODE_MATRIX = [
 
 
 def fail(msg: str, code: int = 2) -> int:
-    # Deployed matrix can fail for transient infrastructure reasons; keep this non-blocking.
+    if STRICT_CONDITIONS:
+        print(f"FAIL: deployed conditions issue: {msg}")
+        return code
+
     print(f"INFO: non-blocking deployed conditions issue: {msg}")
     return 0
 
@@ -127,6 +131,51 @@ def is_skippable_generate_now_error(code: int, payload) -> bool:
         return False
     msg = str(payload.get("error") or payload.get("message") or "").lower()
     return "original image is missing" in msg or "report not found" in msg
+
+
+def run_live_start_contract_probe() -> None:
+    """Validate live start endpoint behavior against real backend (no mocks)."""
+    code, payload, text = request_json("GET", "/api/live/status")
+    if code >= 400 or not isinstance(payload, dict):
+        raise RuntimeError(f"live-status invalid ({code}): {text}")
+    print("PASS: live-status endpoint")
+
+    code, payload, text = request_json(
+        "POST",
+        "/api/live/start",
+        json={"source": "webcam"},
+        timeout=35,
+    )
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"live-start returned non-JSON payload ({code}): {text}")
+
+    if payload.get("success") is True:
+        print(f"PASS: live-start accepted webcam request (status={code})")
+        stop_code, stop_payload, stop_text = request_json("POST", "/api/live/stop", json={})
+        if stop_code >= 400 or not isinstance(stop_payload, dict) or stop_payload.get("success") is False:
+            raise RuntimeError(
+                f"live-stop failed after successful start ({stop_code}): "
+                f"{json.dumps(stop_payload)[:300] if isinstance(stop_payload, dict) else stop_text}"
+            )
+        print("PASS: live-stop after start")
+        return
+
+    message = str(payload.get("error") or payload.get("message") or "").lower()
+    expected_hardware_unavailable = (
+        "failed to open webcam" in message
+        or "could not open webcam" in message
+        or ("webcam" in message and ("failed" in message or "unavailable" in message))
+    )
+
+    if expected_hardware_unavailable:
+        print("PASS: live-start returned explicit webcam-unavailable response")
+        return
+
+    raise RuntimeError(
+        "live-start returned unexpected failure payload: "
+        f"status={code} body={json.dumps(payload)[:350]}"
+    )
 
 
 def build_restore_payload(current_settings: dict) -> dict:
@@ -274,6 +323,11 @@ def main() -> int:
         stats = require_json_dict("/api/stats", "stats")
         if "total_violations" not in stats and "total" not in stats:
             return fail(f"stats missing total/total_violations: {json.dumps(stats)[:400]}", 6)
+
+        try:
+            run_live_start_contract_probe()
+        except Exception as exc:
+            return fail(f"live start contract probe failed: {exc}", 22)
 
         code, pending_payload, pending_text = request_json("GET", "/api/reports/pending")
         if code >= 400 or not isinstance(pending_payload, list):

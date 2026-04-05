@@ -2641,14 +2641,47 @@ RESPONSE FORMAT (JSON):
         """Format summary as a structured table for 'AT A GLANCE' view."""
         import re
 
-        summary_text = str(nlp_analysis.get('summary', 'Analysis in progress...') or 'Analysis in progress...')
+        summary_text = str(nlp_analysis.get('summary') or '').strip()
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
             persons = []
 
+        report_data = report_data or {}
+        violation_summary = str(report_data.get('violation_summary') or '').strip()
+        caption_text = str(report_data.get('caption') or '').strip()
+        visual_evidence_text = str(nlp_analysis.get('visual_evidence') or '').strip()
+
+        placeholder_markers = (
+            'analysis in progress',
+            'no summary available',
+            'summary unavailable',
+            'not enough information',
+            'pending analysis',
+            'processing',
+        )
+
+        def _is_meaningful_summary(text: str) -> bool:
+            clean = str(text or '').strip()
+            if len(clean) < 24:
+                return False
+            lower = clean.lower()
+            return not any(marker in lower for marker in placeholder_markers)
+
+        def _clean_sentence(text: str, max_len: int = 190) -> str:
+            clean = re.sub(r'\s+', ' ', str(text or '')).strip()
+            if not clean:
+                return ''
+            first = re.split(r'(?<=[.!?])\s+', clean)[0].strip()
+            if not first:
+                first = clean
+            if len(first) <= max_len:
+                return first
+            return first[: max_len - 3].rstrip(' ,;') + '...'
+
         # WHO should reflect model output first; detector stats are context only.
         model_person_rows: List[str] = []
         model_non_compliant_count = 0
+        detected_missing_labels: List[str] = []
 
         for idx, person in enumerate(persons):
             if not isinstance(person, dict):
@@ -2663,7 +2696,10 @@ RESPONSE FORMAT (JSON):
                 for item_name, status in ppe.items():
                     status_text = str(status or '').strip().lower()
                     if 'missing' in status_text or status_text.startswith('no '):
-                        missing_items.append(str(item_name).replace('_', ' '))
+                        pretty_item = str(item_name).replace('_', ' ').strip().title()
+                        missing_items.append(pretty_item)
+                        if pretty_item and pretty_item not in detected_missing_labels:
+                            detected_missing_labels.append(pretty_item)
 
             hazards = person.get('hazards_faced', [])
             risks = person.get('risks', [])
@@ -2707,6 +2743,45 @@ RESPONSE FORMAT (JSON):
                 f"{detected_person_count} Scanned "
                 f"({detected_violation_items} Violation Items / {compliant_count} Compliant)"
             )
+
+        # Derive additional missing PPE clues from detector summary/caption text.
+        source_text = f"{violation_summary} {caption_text}".lower()
+        missing_keyword_map = {
+            'hard hat': 'Hard Hat',
+            'hardhat': 'Hard Hat',
+            'helmet': 'Helmet',
+            'safety vest': 'Safety Vest',
+            'high visibility vest': 'Safety Vest',
+            'reflective vest': 'Safety Vest',
+            'mask': 'Mask',
+            'respirator': 'Respirator',
+            'glove': 'Gloves',
+            'goggle': 'Safety Goggles',
+            'eye protection': 'Safety Goggles',
+            'boot': 'Safety Boots',
+        }
+        for keyword, label in missing_keyword_map.items():
+            if keyword in source_text and label not in detected_missing_labels:
+                detected_missing_labels.append(label)
+
+        # WHAT: use model summary when meaningful, otherwise synthesize from evidence.
+        if _is_meaningful_summary(summary_text):
+            what_text = summary_text
+        else:
+            if detected_missing_labels:
+                what_text = (
+                    "PPE non-compliance detected involving missing "
+                    + ", ".join(detected_missing_labels[:5])
+                    + "."
+                )
+            elif violation_summary:
+                what_text = _clean_sentence(violation_summary)
+            else:
+                what_text = "PPE non-compliance detected from analyzed scene evidence."
+
+            context_sentence = _clean_sentence(visual_evidence_text or caption_text)
+            if context_sentence:
+                what_text += f" Scene context: {context_sentence}"
         
         # Extract environment/risk keywords
         env_type = nlp_analysis.get('environment_type', 'Unknown')
@@ -2730,15 +2805,55 @@ RESPONSE FORMAT (JSON):
 
         # Preserve order while removing duplicates.
         reg_names = list(dict.fromkeys(reg_names))
-        reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names) if reg_names else "BOWEC 1986"
-
         hazard_items = [item.strip() for item in hazards if str(item).strip()]
         hazard_items = list(dict.fromkeys(hazard_items))
-        hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe Conditions Detected'
+
+        if not hazard_items:
+            inferred_hazards: List[str] = []
+            risk_map = {
+                'Hard Hat': 'Head injury risk from falling or struck-by objects',
+                'Helmet': 'Head injury risk from falling or struck-by objects',
+                'Safety Vest': 'Struck-by risk due to reduced worker visibility',
+                'Mask': 'Respiratory exposure risk from dust or airborne contaminants',
+                'Respirator': 'Respiratory exposure risk from hazardous airborne particles',
+                'Gloves': 'Hand injury risk from abrasion, sharp edges, or tool contact',
+                'Safety Goggles': 'Eye injury risk from dust, particles, or debris',
+                'Safety Boots': 'Foot injury risk from impact, puncture, or slip hazards',
+            }
+            for item in detected_missing_labels:
+                mapped = risk_map.get(item)
+                if mapped and mapped not in inferred_hazards:
+                    inferred_hazards.append(mapped)
+            if inferred_hazards:
+                hazard_items = inferred_hazards
+            elif detected_violation_items > 0:
+                hazard_items = ['Increased injury/exposure risk due to observed PPE non-compliance']
+
+        hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+
+        if not reg_names:
+            inferred_regs: List[str] = []
+            reg_map = {
+                'Hard Hat': 'BOWEC 1986 (Safety Helmets) - Head protection in construction zones',
+                'Helmet': 'BOWEC 1986 (Safety Helmets) - Head protection in construction zones',
+                'Safety Vest': 'BOWEC 1986 (Visibility and site traffic safety requirements)',
+                'Mask': 'USECHH Regulations 2000 - Respiratory protection for airborne hazards',
+                'Respirator': 'USECHH Regulations 2000 - Respiratory protection for airborne hazards',
+                'Gloves': 'OSHA 1994 Section 15 - Duty to provide suitable protective equipment',
+                'Safety Goggles': 'OSHA 1994 Section 15 - Eye and face protection obligations',
+                'Safety Boots': 'OSHA 1994 Section 15 - Foot protection obligations',
+            }
+            for item in detected_missing_labels:
+                mapped = reg_map.get(item)
+                if mapped and mapped not in inferred_regs:
+                    inferred_regs.append(mapped)
+            reg_names = inferred_regs or ['BOWEC 1986 - General PPE compliance requirements for construction operations']
+
+        reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>
-        parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', summary_text)
+        parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', what_text)
         # 2. Lists/Newlines: • or - -> <br>•
         parsed_summary = parsed_summary.replace('\n', '<br>')
 

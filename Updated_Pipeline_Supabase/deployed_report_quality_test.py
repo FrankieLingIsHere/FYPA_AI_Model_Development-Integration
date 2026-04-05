@@ -52,6 +52,19 @@ def extract_ai_scene_description(report_html: str) -> str:
     return " ".join(text.split()).strip()
 
 
+def extract_executive_what(report_html: str) -> str:
+    pattern = re.compile(
+        r">\s*WHAT\s*</td>\s*<td[^>]*>(.*?)</td>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(report_html or "")
+    if not match:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", match.group(1))
+    text = html.unescape(text)
+    return " ".join(text.split()).strip()
+
+
 def choose_latest_completed_with_report(items: List[Dict]) -> Optional[Dict]:
     for item in items:
         if not isinstance(item, dict):
@@ -100,6 +113,10 @@ def main() -> int:
         if not scene_desc:
             return fail(f"AI Scene Description is empty in rendered report {report_id}", 9)
 
+        what_text = extract_executive_what(report_html)
+        if not what_text:
+            return fail(f"Executive summary WHAT row is empty in rendered report {report_id}", 12)
+
         lower_desc = scene_desc.lower()
         generic_markers = (
             "person is visible",
@@ -123,9 +140,28 @@ def main() -> int:
                 11,
             )
 
+        lower_what = what_text.lower()
+        what_placeholders = (
+            "analysis in progress",
+            "summary unavailable",
+            "no summary available",
+            "not enough information",
+            "pending analysis",
+        )
+        if any(marker in lower_what for marker in what_placeholders):
+            return fail(
+                f"Executive summary WHAT row is placeholder-like for report {report_id}: {what_text[:220]}",
+                13,
+            )
+        if len(what_text) < 30:
+            return fail(
+                f"Executive summary WHAT row too short ({len(what_text)} chars) for report {report_id}: {what_text}",
+                14,
+            )
+
         print(
             "PASS: deployed report quality contract verified "
-            f"(report_id={report_id}, caption_len={len(caption)}, scene_desc_len={len(scene_desc)})"
+            f"(report_id={report_id}, caption_len={len(caption)}, scene_desc_len={len(scene_desc)}, what_len={len(what_text)})"
         )
         return 0
     except requests.HTTPError as exc:

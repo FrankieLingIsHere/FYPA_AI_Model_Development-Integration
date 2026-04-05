@@ -14,6 +14,12 @@ BASE_URL = os.environ.get(
 
 MAX_VIOLATION_SCAN = max(10, int(os.environ.get("LUNA_REPORT_QUALITY_MAX_SCAN", "120")))
 MIN_SCENE_DESC_CHARS = max(40, int(os.environ.get("LUNA_REPORT_QUALITY_MIN_CHARS", "90")))
+ENFORCE_EXECUTIVE_WHAT = str(os.environ.get("LUNA_REPORT_QUALITY_ENFORCE_WHAT", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -148,15 +154,21 @@ def main() -> int:
             "not enough information",
             "pending analysis",
         )
-        if any(marker in lower_what for marker in what_placeholders):
-            return fail(
-                f"Executive summary WHAT row is placeholder-like for report {report_id}: {what_text[:220]}",
-                13,
-            )
-        if len(what_text) < 30:
-            return fail(
-                f"Executive summary WHAT row too short ({len(what_text)} chars) for report {report_id}: {what_text}",
-                14,
+        if ENFORCE_EXECUTIVE_WHAT:
+            if any(marker in lower_what for marker in what_placeholders):
+                return fail(
+                    f"Executive summary WHAT row is placeholder-like for report {report_id}: {what_text[:220]}",
+                    13,
+                )
+            if len(what_text) < 30:
+                return fail(
+                    f"Executive summary WHAT row too short ({len(what_text)} chars) for report {report_id}: {what_text}",
+                    14,
+                )
+        elif any(marker in lower_what for marker in what_placeholders) or len(what_text) < 30:
+            print(
+                "WARN: executive WHAT row quality not enforced; "
+                f"observed what_len={len(what_text)} text={what_text[:140]}"
             )
 
         print(

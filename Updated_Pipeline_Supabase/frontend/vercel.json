@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/static/(.*)", "destination": "/$1" },
+    { "source": "/api/(.*)", "destination": "https://fypaaimodeldevelopment-integration-production.up.railway.app/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [

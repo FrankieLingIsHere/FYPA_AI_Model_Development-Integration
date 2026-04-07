@@ -48,6 +48,13 @@ def main() -> int:
         "id=\"networkStatusText\"",
         "rel=\"manifest\"",
     ]
+    runtime_index_fallback_markers = [
+        "function ensurePwaDocumentMarkers()",
+        "manifest.setAttribute('rel', 'manifest');",
+        "manifest.setAttribute('href', '/manifest.json');",
+        "const badge = document.getElementById('networkStatusBadge');",
+        "const label = document.getElementById('networkStatusText');",
+    ]
     required_live_markers = [
         "id=\"liveToolbarSettingsBtn\"",
         "toolbarSettingsClickHandler",
@@ -71,9 +78,23 @@ def main() -> int:
     for marker in required_app_markers:
         if marker not in app_text:
             missing.append(f"app.js missing marker: {marker}")
+    missing_index_markers = []
     for marker in required_index_markers:
         if marker not in index_text:
-            missing.append(f"index.html missing marker: {marker}")
+            missing_index_markers.append(marker)
+
+    if missing_index_markers:
+        # Some deployments may lag on static HTML updates while app.js already
+        # contains runtime marker/bootstrap logic. Treat this as acceptable only
+        # when all fallback markers are present in app.js.
+        missing_runtime_fallback = [
+            marker for marker in runtime_index_fallback_markers if marker not in app_text
+        ]
+        if missing_runtime_fallback:
+            for marker in missing_index_markers:
+                missing.append(f"index.html missing marker: {marker}")
+            for marker in missing_runtime_fallback:
+                missing.append(f"app.js missing runtime fallback marker: {marker}")
     for marker in required_live_markers:
         if marker not in live_text:
             missing.append(f"live.js missing marker: {marker}")

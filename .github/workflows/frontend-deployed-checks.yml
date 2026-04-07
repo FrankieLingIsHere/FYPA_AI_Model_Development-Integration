@@ -33,6 +33,7 @@ jobs:
       - name: Validate deployed frontend assets include settings fixes
         env:
           LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          LUNA_FRONTEND_ASSETS_STRICT: "1"
         run: |
           python Updated_Pipeline_Supabase/deployed_frontend_asset_check.py
 

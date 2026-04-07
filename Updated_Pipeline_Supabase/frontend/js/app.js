@@ -8,10 +8,32 @@ let adaptivePipelineBootstrapped = false;
 // Main Application Entry Point
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 PPE Safety Monitor - Initializing...');
+    ensurePwaDocumentMarkers();
     initializeNetworkIndicator();
     registerPwaSupport();
     initializeWithStartupGate();
 });
+
+function ensurePwaDocumentMarkers() {
+    const head = document.head;
+    if (!head) return;
+
+    const hasManifest = !!head.querySelector('link[rel="manifest"]');
+    if (!hasManifest) {
+        const manifest = document.createElement('link');
+        manifest.setAttribute('rel', 'manifest');
+        manifest.setAttribute('href', '/manifest.json');
+        head.appendChild(manifest);
+    }
+
+    const hasThemeColor = !!head.querySelector('meta[name="theme-color"]');
+    if (!hasThemeColor) {
+        const theme = document.createElement('meta');
+        theme.setAttribute('name', 'theme-color');
+        theme.setAttribute('content', '#e09c2e');
+        head.appendChild(theme);
+    }
+}
 
 async function initializeWithStartupGate() {
     const body = document.body;

@@ -273,7 +273,7 @@ const ViolationMonitor = {
                 title: '🚨 PPE Violation Detected!',
                 action: {
                     text: 'View Report',
-                    onClick: `ViolationMonitor.navigateToReport('${reportId}')`
+                    onClickFn: () => this.navigateToReport(reportId)
                 }
             }
         );
@@ -308,7 +308,7 @@ const ViolationMonitor = {
                 title: '📝 Generating Report',
                 action: {
                     text: 'View Progress',
-                    onClick: `ViolationMonitor.navigateToReport('${reportId}')`
+                    onClickFn: () => this.navigateToReport(reportId)
                 }
             }
         );
@@ -356,7 +356,7 @@ const ViolationMonitor = {
                 title: '❌ Report Failed',
                 action: {
                     text: 'View Details',
-                    onClick: `ViolationMonitor.navigateToReport('${reportId}')`
+                    onClickFn: () => this.navigateToReport(reportId)
                 }
             }
         );
@@ -392,7 +392,7 @@ const ViolationMonitor = {
                 title: '⚠️ PPE Caption Mismatch',
                 action: {
                     text: 'View Report',
-                    onClick: `ViolationMonitor.navigateToReport('${reportId}')`
+                    onClickFn: () => this.navigateToReport(reportId)
                 }
             }
         );

@@ -135,6 +135,7 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
     'true' if SERVE_FRONTEND else 'false'
 ).lower() == 'true'
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
+ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
 def _is_origin_allowed(origin: str) -> bool:
@@ -678,30 +679,48 @@ def _run_startup_sequence():
 
         _set_startup_progress(68, 'Verifying Supabase database connection')
         if db_manager is None:
-            _set_startup_step('supabase_database', 'error', 'Database manager is unavailable')
-            raise RuntimeError('Supabase database manager is not available')
+            local_diag = _get_local_mode_diagnostics()
+            if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                _set_startup_step('supabase_database', 'ok', 'Supabase DB unavailable; running local-only mode until reconnect')
+            else:
+                _set_startup_step('supabase_database', 'error', 'Database manager is unavailable')
+                raise RuntimeError('Supabase database manager is not available')
 
-        try:
-            db_manager._ensure_connection()
-            with db_manager.conn.cursor() as cur:
-                cur.execute('SELECT 1 AS startup_ok')
-                _ = cur.fetchone()
-            _set_startup_step('supabase_database', 'ok', 'Database query test passed')
-        except Exception as db_exc:
-            _set_startup_step('supabase_database', 'error', str(db_exc))
-            raise RuntimeError(f'Supabase database check failed: {db_exc}')
+        if db_manager is not None:
+            try:
+                db_manager._ensure_connection()
+                with db_manager.conn.cursor() as cur:
+                    cur.execute('SELECT 1 AS startup_ok')
+                    _ = cur.fetchone()
+                _set_startup_step('supabase_database', 'ok', 'Database query test passed')
+            except Exception as db_exc:
+                local_diag = _get_local_mode_diagnostics()
+                if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                    _set_startup_step('supabase_database', 'ok', f'Supabase DB unreachable; local-only mode active ({db_exc})')
+                else:
+                    _set_startup_step('supabase_database', 'error', str(db_exc))
+                    raise RuntimeError(f'Supabase database check failed: {db_exc}')
 
         _set_startup_progress(82, 'Verifying Supabase storage connection')
         if storage_manager is None:
-            _set_startup_step('supabase_storage', 'error', 'Storage manager is unavailable')
-            raise RuntimeError('Supabase storage manager is not available')
+            local_diag = _get_local_mode_diagnostics()
+            if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                _set_startup_step('supabase_storage', 'ok', 'Supabase Storage unavailable; local artifacts will sync after reconnect')
+            else:
+                _set_startup_step('supabase_storage', 'error', 'Storage manager is unavailable')
+                raise RuntimeError('Supabase storage manager is not available')
 
-        try:
-            _ = storage_manager.client.storage.list_buckets()
-            _set_startup_step('supabase_storage', 'ok', 'Storage buckets reachable')
-        except Exception as storage_exc:
-            _set_startup_step('supabase_storage', 'error', str(storage_exc))
-            raise RuntimeError(f'Supabase storage check failed: {storage_exc}')
+        if storage_manager is not None:
+            try:
+                _ = storage_manager.client.storage.list_buckets()
+                _set_startup_step('supabase_storage', 'ok', 'Storage buckets reachable')
+            except Exception as storage_exc:
+                local_diag = _get_local_mode_diagnostics()
+                if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                    _set_startup_step('supabase_storage', 'ok', f'Supabase Storage unreachable; local-only mode active ({storage_exc})')
+                else:
+                    _set_startup_step('supabase_storage', 'error', str(storage_exc))
+                    raise RuntimeError(f'Supabase storage check failed: {storage_exc}')
 
         _set_startup_progress(93, 'Checking background queue worker')
         if not ensure_queue_worker_running():
@@ -1681,6 +1700,25 @@ def favicon():
     if not SERVE_FRONTEND:
         abort(404)
     return send_from_directory('frontend', 'favicon.ico', mimetype='image/x-icon')
+
+
+@app.route('/manifest.json')
+def web_manifest():
+    """Serve web app manifest for PWA installation."""
+    if not SERVE_FRONTEND:
+        abort(404)
+    return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
+
+
+@app.route('/service-worker.js')
+def service_worker():
+    """Serve service worker at root scope for full-app offline support."""
+    if not SERVE_FRONTEND:
+        abort(404)
+    response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
 
 
 # =========================================================================
@@ -3239,6 +3277,161 @@ def api_report_recovery_execute():
         'skipped': skipped_count,
         'errors': errors[:10],
         'worker_running': _is_queue_worker_alive()
+    })
+
+
+@app.route('/api/reports/sync-local-cache', methods=['POST'])
+def api_sync_local_cache_to_supabase():
+    """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
+    payload = request.get_json(silent=True) or {}
+    max_items = int(payload.get('limit', 120) or 120)
+    max_items = max(1, min(max_items, 500))
+    dry_run = bool(payload.get('dry_run', False))
+
+    if db_manager is None:
+        return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
+    if storage_manager is None:
+        return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
+    if violation_queue is None:
+        return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
+    if not dry_run and not ensure_queue_worker_running():
+        return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
+
+    local_dirs = []
+    if VIOLATIONS_DIR.exists():
+        for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+            if violation_dir.is_dir():
+                local_dirs.append(violation_dir)
+            if len(local_dirs) >= max_items:
+                break
+
+    scanned = 0
+    enqueued = 0
+    skipped = 0
+    candidates = 0
+    errors = []
+
+    for violation_dir in local_dirs:
+        scanned += 1
+        report_id = violation_dir.name
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+        report_html_path = violation_dir / 'report.html'
+
+        if not original_path.exists():
+            skipped += 1
+            continue
+
+        try:
+            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+        except Exception as lookup_err:
+            errors.append(f"{report_id}: lookup failed ({lookup_err})")
+            skipped += 1
+            continue
+
+        has_cloud_original = bool((violation or {}).get('original_image_key'))
+        has_cloud_annotated = bool((violation or {}).get('annotated_image_key'))
+        has_cloud_report = bool((violation or {}).get('report_html_key'))
+        local_has_report = report_html_path.exists()
+
+        needs_sync = (
+            not event or
+            not has_cloud_original or
+            (annotated_path.exists() and not has_cloud_annotated) or
+            (local_has_report and not has_cloud_report)
+        )
+
+        if not needs_sync:
+            skipped += 1
+            continue
+
+        candidates += 1
+
+        if dry_run:
+            continue
+
+        detections = []
+        detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
+        if isinstance(detection_data, dict):
+            detections = detection_data.get('detections', []) or []
+
+        if not annotated_path.exists():
+            try:
+                frame = cv2.imread(str(original_path))
+                if frame is not None:
+                    _, annotated = predict_image(frame, conf=0.25)
+                    cv2.imwrite(str(annotated_path), annotated)
+            except Exception:
+                pass
+
+        ts_value = None
+        if event and event.get('timestamp'):
+            ts = event.get('timestamp')
+            ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
+        else:
+            try:
+                ts_obj = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
+                ts_value = ts_obj.isoformat()
+            except Exception:
+                ts_value = datetime.now().isoformat()
+
+        violation_data = {
+            'report_id': report_id,
+            'timestamp': ts_value,
+            'detections': detections,
+            'violation_types': [
+                d.get('class_name', '') for d in detections
+                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
+            ],
+            'violation_count': len([
+                d for d in detections
+                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
+            ]),
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(annotated_path if annotated_path.exists() else original_path),
+            'violation_dir': str(violation_dir)
+        }
+
+        try:
+            if not event and hasattr(db_manager, 'insert_detection_event'):
+                db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=ts_value,
+                    person_count=0,
+                    violation_count=max(1, violation_data['violation_count']),
+                    severity='HIGH',
+                    status='pending'
+                )
+
+            queued = violation_queue.enqueue(
+                violation_data=violation_data,
+                device_id=(event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync',
+                report_id=report_id,
+                severity='HIGH'
+            )
+
+            if not queued:
+                skipped += 1
+                continue
+
+            if hasattr(db_manager, 'update_detection_status'):
+                db_manager.update_detection_status(report_id, 'pending', 'Queued for local-cache reconciliation to Supabase')
+
+            enqueued += 1
+        except Exception as enqueue_err:
+            errors.append(f"{report_id}: enqueue failed ({enqueue_err})")
+            skipped += 1
+
+    return jsonify({
+        'success': True,
+        'dry_run': dry_run,
+        'scanned': scanned,
+        'candidates': candidates,
+        'enqueued': enqueued,
+        'skipped': skipped,
+        'errors': errors[:20],
+        'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None)
     })
 
 

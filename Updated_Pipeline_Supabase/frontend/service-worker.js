@@ -1,15 +1,21 @@
 // PPE Safety Monitor - Service Worker
-// Provides offline caching and PWA functionality
+// Offline support for app shell, read-only API payloads, and violation images.
 
-const CACHE_NAME = 'ppe-monitor-v2';
+const STATIC_CACHE = 'ppe-monitor-static-v3';
+const API_CACHE = 'ppe-monitor-api-v3';
+const IMAGE_CACHE = 'ppe-monitor-images-v3';
+
 const STATIC_ASSETS = [
   '/',
+  '/manifest.json',
   '/static/css/style.css',
-  '/static/js/timezone.js',
+  '/static/js/runtime-config.js',
   '/static/js/config.js',
   '/static/js/notifications.js',
+  '/static/js/timezone.js',
   '/static/js/violation-monitor.js',
   '/static/js/api.js',
+  '/static/js/realtime.js',
   '/static/js/router.js',
   '/static/js/pages/home.js',
   '/static/js/pages/live.js',
@@ -21,123 +27,174 @@ const STATIC_ASSETS = [
   '/static/icons/icon-512x512.png'
 ];
 
-// External CDN assets to cache
 const CDN_ASSETS = [
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
 ];
 
-// Install event - cache static assets
 self.addEventListener('install', (event) => {
-  console.log('[SW] Installing service worker...');
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[SW] Caching static assets');
-        // Cache local assets (ignore failures for individual files)
-        const cachePromises = STATIC_ASSETS.map((url) =>
-          cache.add(url).catch((err) => {
-            console.warn(`[SW] Failed to cache: ${url}`, err);
-          })
-        );
-        // Also try caching CDN assets
-        const cdnPromises = CDN_ASSETS.map((url) =>
-          cache.add(url).catch((err) => {
-            console.warn(`[SW] Failed to cache CDN: ${url}`, err);
-          })
-        );
-        return Promise.all([...cachePromises, ...cdnPromises]);
+  event.waitUntil((async () => {
+    const cache = await caches.open(STATIC_CACHE);
+
+    await Promise.all(
+      STATIC_ASSETS.map(async (assetUrl) => {
+        try {
+          await cache.add(assetUrl);
+        } catch (error) {
+          console.warn('[SW] Failed to cache static asset:', assetUrl, error);
+        }
       })
-      .then(() => {
-        console.log('[SW] All assets cached');
-        return self.skipWaiting(); // Activate immediately
+    );
+
+    await Promise.all(
+      CDN_ASSETS.map(async (assetUrl) => {
+        try {
+          await cache.add(assetUrl);
+        } catch (error) {
+          console.warn('[SW] Failed to cache CDN asset:', assetUrl, error);
+        }
       })
-  );
+    );
+
+    await self.skipWaiting();
+  })());
 });
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating service worker...');
-  event.waitUntil(
-    caches.keys()
-      .then((cacheNames) => {
-        return Promise.all(
-          cacheNames
-            .filter((name) => name !== CACHE_NAME)
-            .map((name) => {
-              console.log(`[SW] Deleting old cache: ${name}`);
-              return caches.delete(name);
-            })
-        );
-      })
-      .then(() => {
-        console.log('[SW] Service worker activated');
-        return self.clients.claim(); // Take control of all pages
-      })
-  );
+  event.waitUntil((async () => {
+    const keep = new Set([STATIC_CACHE, API_CACHE, IMAGE_CACHE]);
+    const names = await caches.keys();
+
+    await Promise.all(
+      names
+        .filter((name) => !keep.has(name))
+        .map((name) => caches.delete(name))
+    );
+
+    await self.clients.claim();
+  })());
 });
 
-// Fetch event - serve from cache, fallback to network
+function isApiGetRequest(request, url) {
+  return request.method === 'GET' && url.pathname.startsWith('/api/');
+}
+
+function isLiveOrMutatingApi(url) {
+  return (
+    url.pathname.startsWith('/api/live/') ||
+    url.pathname.startsWith('/api/inference/') ||
+    url.pathname.startsWith('/api/realtime/stream')
+  );
+}
+
+function isViolationImageRequest(url) {
+  return /\/image\/.+\/(annotated|original)\.jpg$/i.test(url.pathname);
+}
+
+async function networkFirstWithCache(request, cacheName, offlineFallback = null) {
+  const cache = await caches.open(cacheName);
+
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.ok) {
+      cache.put(request, networkResponse.clone());
+    }
+    return networkResponse;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) {
+      return cached;
+    }
+    if (offlineFallback) {
+      return offlineFallback;
+    }
+    throw error;
+  }
+}
+
+async function staleWhileRevalidate(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+
+  const fetchPromise = fetch(request)
+    .then((response) => {
+      if (response && response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => cached);
+
+  return cached || fetchPromise;
+}
+
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  const { request } = event;
+  const url = new URL(request.url);
 
-  // Skip non-GET requests
-  if (event.request.method !== 'GET') return;
+  if (request.method !== 'GET') {
+    return;
+  }
 
-  // API calls & live streams: Network only (never cache dynamic data)
-  if (url.pathname.startsWith('/api/') || url.pathname.includes('/stream')) {
+  if (isApiGetRequest(request, url)) {
+    if (isLiveOrMutatingApi(url)) {
+      event.respondWith(
+        fetch(request).catch(() => {
+          return new Response(
+            JSON.stringify({ error: 'Live endpoint unavailable while offline.' }),
+            {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' }
+            }
+          );
+        })
+      );
+      return;
+    }
+
     event.respondWith(
-      fetch(event.request).catch(() => {
-        // Return offline fallback for API failures
-        return new Response(
-          JSON.stringify({ error: 'You are offline. Please check your connection.' }),
-          {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      })
+      networkFirstWithCache(
+        request,
+        API_CACHE,
+        new Response(JSON.stringify({ error: 'Offline and no cached API response available.' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
     );
     return;
   }
 
-  // Static assets: Cache-first, then network
-  event.respondWith(
-    caches.match(event.request)
-      .then((cachedResponse) => {
-        if (cachedResponse) {
-          // Serve from cache, but also update in background
-          const fetchPromise = fetch(event.request)
-            .then((networkResponse) => {
-              if (networkResponse && networkResponse.ok) {
-                const responseClone = networkResponse.clone();
-                caches.open(CACHE_NAME).then((cache) => {
-                  cache.put(event.request, responseClone);
-                });
-              }
-              return networkResponse;
-            })
-            .catch(() => cachedResponse);
+  if (isViolationImageRequest(url)) {
+    event.respondWith(staleWhileRevalidate(request, IMAGE_CACHE));
+    return;
+  }
 
-          return cachedResponse;
-        }
+  event.respondWith((async () => {
+    const cache = await caches.open(STATIC_CACHE);
+    const cached = await cache.match(request);
 
-        // Not in cache: fetch from network and cache it
-        return fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.ok) {
-              const responseClone = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(event.request, responseClone);
-              });
-            }
-            return networkResponse;
-          })
-          .catch(() => {
-            // If HTML request fails offline, serve the main page from cache
-            if (event.request.headers.get('accept')?.includes('text/html')) {
-              return caches.match('/');
-            }
-          });
-      })
-  );
+    if (cached) {
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            cache.put(request, response.clone());
+          }
+        })
+        .catch(() => undefined);
+      return cached;
+    }
+
+    try {
+      const response = await fetch(request);
+      if (response && response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    } catch (error) {
+      if (request.headers.get('accept')?.includes('text/html')) {
+        return cache.match('/');
+      }
+      throw error;
+    }
+  })());
 });

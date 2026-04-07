@@ -170,6 +170,90 @@ const API = {
         };
     },
 
+    getCacheStorageKey(scope) {
+        return `ppe-cache-v1:${scope}`;
+    },
+
+    writeJsonCache(scope, payload) {
+        try {
+            const envelope = {
+                ts: Date.now(),
+                data: payload
+            };
+            localStorage.setItem(this.getCacheStorageKey(scope), JSON.stringify(envelope));
+        } catch (error) {
+            // Best-effort cache only.
+        }
+    },
+
+    readJsonCache(scope) {
+        try {
+            const raw = localStorage.getItem(this.getCacheStorageKey(scope));
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return parsed;
+        } catch (error) {
+            return null;
+        }
+    },
+
+    async fetchJsonWithCache(url, {
+        cacheScope,
+        timeoutMs = 8000,
+        preferFresh = true
+    } = {}) {
+        const scope = cacheScope || url;
+        const cached = this.readJsonCache(scope);
+
+        if (!navigator.onLine && cached) {
+            return cached.data;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(url, {
+                signal: controller.signal,
+                cache: preferFresh ? 'no-store' : 'default'
+            });
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+            const data = await response.json();
+            this.writeJsonCache(scope, data);
+            return data;
+        } catch (error) {
+            if (cached) {
+                console.warn(`Using cached response for ${scope}:`, error.message || error);
+                return cached.data;
+            }
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    },
+
+    prefetchViolationImages(violations = []) {
+        if (!Array.isArray(violations) || violations.length === 0) return;
+
+        const urls = [];
+        violations.slice(0, 40).forEach((violation) => {
+            if (!violation || !violation.report_id) return;
+            if (violation.has_original) {
+                urls.push(this.getImageUrl(violation.report_id, 'original.jpg'));
+            }
+            if (violation.has_annotated) {
+                urls.push(this.getImageUrl(violation.report_id, 'annotated.jpg'));
+            }
+        });
+
+        urls.forEach((url) => {
+            fetch(url, { cache: 'force-cache' }).catch(() => {
+                // Ignore prefetch failures.
+            });
+        });
+    },
+
     // Fetch all violations with status info
     async getViolations(options = {}) {
         try {
@@ -177,9 +261,14 @@ const API = {
             const safeLimit = Number.isFinite(requestedLimit)
                 ? Math.max(1, Math.min(Math.floor(requestedLimit), 5000))
                 : 1000;
-            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`);
-            if (!response.ok) throw new Error('Failed to fetch violations');
-            return await response.json();
+            const url = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
+            const data = await this.fetchJsonWithCache(url, {
+                cacheScope: `violations:limit:${safeLimit}`,
+                timeoutMs: 10000
+            });
+            const list = Array.isArray(data) ? data : [];
+            this.prefetchViolationImages(list);
+            return list;
         } catch (error) {
             console.error('Error fetching violations:', error);
             return [];
@@ -189,9 +278,10 @@ const API = {
     // Get violation by ID with status info
     async getViolation(reportId) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/violation/${reportId}`);
-            if (!response.ok) throw new Error('Failed to fetch violation');
-            return await response.json();
+            const url = `${API_CONFIG.BASE_URL}/api/violation/${reportId}`;
+            return await this.fetchJsonWithCache(url, {
+                cacheScope: `violation:${reportId}`
+            });
         } catch (error) {
             console.error('Error fetching violation:', error);
             return null;
@@ -201,9 +291,11 @@ const API = {
     // Get report status
     async getReportStatus(reportId) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/status`);
-            if (!response.ok) throw new Error('Failed to fetch report status');
-            return await response.json();
+            const url = `${API_CONFIG.BASE_URL}/api/report/${reportId}/status`;
+            return await this.fetchJsonWithCache(url, {
+                cacheScope: `report-status:${reportId}`,
+                timeoutMs: 7000
+            });
         } catch (error) {
             console.error('Error fetching report status:', error);
             return { status: 'unknown', message: 'Unable to check status' };
@@ -213,9 +305,11 @@ const API = {
     // Get pending reports
     async getPendingReports() {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/pending`);
-            if (!response.ok) throw new Error('Failed to fetch pending reports');
-            return await response.json();
+            const url = `${API_CONFIG.BASE_URL}/api/reports/pending`;
+            const data = await this.fetchJsonWithCache(url, {
+                cacheScope: 'reports:pending'
+            });
+            return Array.isArray(data) ? data : [];
         } catch (error) {
             console.error('Error fetching pending reports:', error);
             return [];
@@ -226,9 +320,11 @@ const API = {
     async getStats() {
         try {
             // Try fetching pre-calculated stats from backend first (includes breakdown & deltas)
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/stats`);
-            if (response.ok) {
-                const data = await response.json();
+            const data = await this.fetchJsonWithCache(`${API_CONFIG.BASE_URL}/api/stats`, {
+                cacheScope: 'stats:summary',
+                timeoutMs: 9000
+            });
+            if (data && typeof data === 'object') {
                 const needsEnrichment =
                     data.todayDelta === undefined ||
                     data.weekDelta === undefined ||
@@ -327,9 +423,11 @@ const API = {
         try {
             let url = `${API_CONFIG.BASE_URL}/api/logs?limit=${limit}`;
             if (eventType) url += `&event_type=${eventType}`;
-            const response = await fetch(url);
-            if (!response.ok) throw new Error('Failed to fetch logs');
-            return await response.json();
+            const data = await this.fetchJsonWithCache(url, {
+                cacheScope: `logs:${limit}:${eventType || 'all'}`,
+                timeoutMs: 9000
+            });
+            return Array.isArray(data) ? data : [];
         } catch (error) {
             console.error('Error fetching logs:', error);
             return [];
@@ -338,9 +436,12 @@ const API = {
 
     async getDeviceStats(deviceId) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/device/${deviceId}/stats`);
-            if (!response.ok) throw new Error('Failed to fetch device stats');
-            return await response.json();
+            const url = `${API_CONFIG.BASE_URL}/api/device/${deviceId}/stats`;
+            const data = await this.fetchJsonWithCache(url, {
+                cacheScope: `device-stats:${deviceId}`,
+                timeoutMs: 9000
+            });
+            return data && typeof data === 'object' ? data : {};
         } catch (error) {
             console.error('Error fetching device stats:', error);
             return {};
@@ -503,6 +604,46 @@ const API = {
             return data;
         } catch (error) {
             console.error('Error preparing local mode:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async switchPipelineMode(mode) {
+        const normalized = String(mode || '').trim().toLowerCase();
+        if (normalized !== 'local' && normalized !== 'cloud') {
+            return { success: false, error: 'Mode must be either local or cloud' };
+        }
+
+        const nlpOrder = normalized === 'local'
+            ? ['local', 'ollama', 'model_api', 'gemini']
+            : ['model_api', 'gemini', 'ollama', 'local'];
+
+        return this.updateProviderRoutingSettings({
+            nlp_provider_order: nlpOrder
+        });
+    },
+
+    async syncLocalCacheToSupabase(options = {}) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/sync-local-cache`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    limit: Number(options.limit || 120)
+                })
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    error: data.error || 'Failed to sync local cache to Supabase'
+                };
+            }
+            return data;
+        } catch (error) {
+            console.error('Error syncing local cache to Supabase:', error);
             return { success: false, error: error.message };
         }
     },

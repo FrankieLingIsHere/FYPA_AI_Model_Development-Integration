@@ -62,6 +62,21 @@ def index():
     return render_template_string(SIMPLE_INDEX)
 
 
+@app.route('/manifest.json')
+def web_manifest():
+    """Serve web app manifest for installable frontend."""
+    return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
+
+
+@app.route('/service-worker.js')
+def service_worker():
+    """Serve service worker at root scope for offline support."""
+    response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Service-Worker-Allowed'] = '/'
+    return response
+
+
 @app.route('/api/violations')
 def api_violations():
     """

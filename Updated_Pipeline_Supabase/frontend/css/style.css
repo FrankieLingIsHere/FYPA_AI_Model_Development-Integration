@@ -160,11 +160,19 @@
     box-sizing: border-box;
 }
 
+html,
+body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
 body {
     font-family: var(--font-family);
     background-color: var(--background-color);
     color: var(--text-color);
     line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
@@ -381,6 +389,61 @@ body:not(.startup-loading) .startup-loader {
     display: flex;
 }
 
+.network-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    padding: 0.32rem 0.62rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+    white-space: nowrap;
+}
+
+.network-badge i {
+    font-size: 0.78rem;
+}
+
+.network-strong {
+    color: #14532d;
+    background: rgba(187, 247, 208, 0.88);
+    border-color: rgba(22, 163, 74, 0.6);
+}
+
+.network-good {
+    color: #1e3a8a;
+    background: rgba(191, 219, 254, 0.9);
+    border-color: rgba(37, 99, 235, 0.55);
+}
+
+.network-fair {
+    color: #78350f;
+    background: rgba(254, 215, 170, 0.92);
+    border-color: rgba(234, 88, 12, 0.5);
+}
+
+.network-weak {
+    color: #7f1d1d;
+    background: rgba(254, 202, 202, 0.9);
+    border-color: rgba(220, 38, 38, 0.52);
+}
+
+.network-offline {
+    color: #fff;
+    background: rgba(127, 29, 29, 0.92);
+    border-color: rgba(248, 113, 113, 0.56);
+}
+
+.network-unknown {
+    color: #fff;
+    background: rgba(71, 85, 105, 0.88);
+    border-color: rgba(148, 163, 184, 0.54);
+}
+
 .nav-menu {
     display: flex;
     list-style: none;
@@ -436,6 +499,17 @@ body.is-phone-device .nav-toggle {
     margin-left: auto;
 }
 
+body.is-phone-device .network-badge {
+    font-size: 0.72rem;
+    padding: 0.28rem 0.5rem;
+}
+
+body.is-phone-device .network-badge span {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 body.is-phone-device .nav-menu {
     order: 3;
     width: 100%;
@@ -465,6 +539,18 @@ body.is-phone-device .main-content {
     padding: 0.75rem;
     margin-left: 0;
     max-width: 100%;
+}
+
+body.is-phone-device .nav-brand span {
+    max-width: 46vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.is-phone-device .page {
+    max-width: 100%;
+    overflow-x: hidden;
 }
 
 .nav-timezone {
@@ -667,6 +753,8 @@ body.mobile-portrait-locked .mobile-orientation-overlay {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 0.55rem;
 }
 
 .card-content {
@@ -1001,6 +1089,10 @@ body.is-phone-device .main-content {
     }
 
     .realtime-badge span {
+        display: none;
+    }
+
+    .network-badge span {
         display: none;
     }
 

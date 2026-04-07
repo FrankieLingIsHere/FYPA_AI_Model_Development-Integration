@@ -168,12 +168,18 @@ const NotificationManager = {
         }
 
         const actionBtn = notification.querySelector('.notification-action-btn');
-        if (actionBtn && options.action && options.action.onClick) {
+        if (actionBtn && options.action) {
             actionBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
                 try {
-                    const fn = new Function(options.action.onClick);
-                    fn();
+                    if (typeof options.action.onClickFn === 'function') {
+                        options.action.onClickFn();
+                    } else if (typeof options.action.onClick === 'function') {
+                        options.action.onClick();
+                    } else if (typeof options.action.onClick === 'string' && options.action.onClick.trim()) {
+                        const fn = new Function(options.action.onClick);
+                        fn();
+                    }
                 } catch (err) {
                     console.error('Notification action failed:', err);
                 }
@@ -247,12 +253,28 @@ const NotificationManager = {
     },
 
     reportGenerating(reportId, options = {}) {
+        const defaultAction = {
+            text: 'View Progress',
+            onClickFn: () => {
+                try {
+                    if (typeof ReportsPage !== 'undefined' && typeof ReportsPage.focusReport === 'function') {
+                        ReportsPage.focusReport(reportId, { openModal: true });
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('ReportsPage focusReport unavailable:', e);
+                }
+                window.location.hash = '#/reports';
+            }
+        };
+
         return this.show(
             'Generating safety report...',
             'report',
             8000,
             {
                 title: '📝 Processing',
+                action: defaultAction,
                 ...options
             }
         );

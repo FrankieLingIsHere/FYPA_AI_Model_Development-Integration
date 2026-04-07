@@ -17,6 +17,7 @@ const ReportsPage = {
         cooldownTimer: null,
         retryCount: 0,
         quotaPromptedForReport: null,
+        lastPollStatus: null,
         cooldownUntil: 0,
         pollStartedAt: 0,
         maxRetries: 5,
@@ -153,6 +154,7 @@ const ReportsPage = {
     async loadReports() {
         this.violations = await API.getViolations();
         this.renderReports();
+        this.applyPendingFocusRequest();
     },
 
     async refreshReports() {
@@ -290,6 +292,60 @@ const ReportsPage = {
         this.notify(`Opening report ${reportId}`, 'info');
     },
 
+    focusReport(reportId, { openModal = false } = {}) {
+        if (!reportId) {
+            window.location.hash = '#/reports';
+            return;
+        }
+
+        const attemptFocus = () => {
+            const card = document.getElementById(`report-${reportId}`);
+            if (!card) return false;
+
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            card.style.outline = '2px solid var(--accent-color)';
+            card.style.outlineOffset = '2px';
+            setTimeout(() => {
+                card.style.outline = '';
+                card.style.outlineOffset = '';
+            }, 1800);
+
+            if (openModal) {
+                const violation = this.violations.find((v) => String(v.report_id) === String(reportId));
+                if (violation) this.showGeneratingModal(violation);
+            }
+
+            return true;
+        };
+
+        if (window.location.hash !== '#/reports') {
+            this.pendingFocusRequest = {
+                reportId: String(reportId),
+                openModal: !!openModal
+            };
+            window.location.hash = '#/reports';
+            return;
+        }
+
+        if (!attemptFocus()) {
+            this.pendingFocusRequest = {
+                reportId: String(reportId),
+                openModal: !!openModal
+            };
+        }
+    },
+
+    applyPendingFocusRequest() {
+        const req = this.pendingFocusRequest;
+        if (!req || !req.reportId) return;
+
+        const card = document.getElementById(`report-${req.reportId}`);
+        if (!card) return;
+
+        this.pendingFocusRequest = null;
+        this.focusReport(req.reportId, { openModal: !!req.openModal });
+    },
+
     renderReports() {
         const list = document.getElementById('reports-list');
         const filtered = this.getFilteredViolations();
@@ -364,11 +420,8 @@ const ReportsPage = {
         let detailedError = violation.error_message;
         if (this.normalizeStatus(violation) === 'failed') {
             try {
-                const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${violation.report_id}/status`);
-                if (response.ok) {
-                    const data = await response.json();
-                    detailedError = data.error_message || detailedError;
-                }
+                const data = await API.getReportStatus(violation.report_id);
+                detailedError = (data && data.error_message) || detailedError;
             } catch (e) {
                 console.error('Failed to fetch detailed error:', e);
             }
@@ -508,6 +561,7 @@ const ReportsPage = {
             this.modalRuntime.reportId = reportId;
             this.modalRuntime.retryCount = 0;
             this.modalRuntime.quotaPromptedForReport = null;
+            this.modalRuntime.lastPollStatus = null;
             this.modalRuntime.cooldownUntil = 0;
             this.modalRuntime.pollStartedAt = 0;
         }
@@ -743,6 +797,7 @@ const ReportsPage = {
         this.stopModalCooldown();
         let remaining = seconds;
         this.modalRuntime.cooldownUntil = Date.now() + (seconds * 1000);
+        this.notify(`Queue busy. Retry available in ${remaining}s.`, 'warning');
 
         const cooldownEl = document.getElementById('report-modal-cooldown');
         if (cooldownEl) {
@@ -769,6 +824,35 @@ const ReportsPage = {
         const status = String((data && data.status) || '').toLowerCase();
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
+        const runtime = this.ensureModalRuntime(reportId);
+
+        if (runtime.lastPollStatus !== status) {
+            if (status === 'pending' || status === 'queued') {
+                this.notify(`Report ${reportId} is queued for generation.`, 'info');
+            } else if (status === 'generating' || status === 'processing') {
+                if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
+                    NotificationManager.reportGenerating(reportId, {
+                        title: '📝 Generating Report',
+                        action: {
+                            text: 'View Progress',
+                            onClickFn: () => this.focusReport(reportId, { openModal: true })
+                        }
+                    });
+                }
+            } else if (status === 'completed' && data && data.has_report) {
+                if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
+                    NotificationManager.reportReady(reportId, {
+                        action: {
+                            text: 'Open Report',
+                            onClickFn: () => this.openReport(reportId)
+                        }
+                    });
+                }
+            } else if (status === 'failed' || status === 'partial' || status === 'skipped') {
+                this.notify(`Report ${reportId} status changed to ${status}. Retry is available.`, 'warning');
+            }
+            runtime.lastPollStatus = status;
+        }
 
         if (this.isQuotaOrRateLimitError(providerError)) {
             this.setProviderWarning('Provider quota/rate limit detected. Generation is waiting on provider availability.');
@@ -878,6 +962,7 @@ const ReportsPage = {
         if (runtime.retryCount >= runtime.maxRetries) {
             this.setModalStatusText('Maximum retries reached. Please wait before trying again.');
             this.setModalProcessButtonEnabled(false);
+            this.notify('Maximum retries reached for this report.', 'warning');
             return;
         }
 
@@ -885,6 +970,7 @@ const ReportsPage = {
             const waitSeconds = Math.max(1, Math.ceil((runtime.cooldownUntil - now) / 1000));
             this.setModalStatusText(`Queue is busy. Retry available in ${waitSeconds}s.`);
             this.setModalProcessButtonEnabled(false);
+            this.notify(`Queue is still busy. Retry in ${waitSeconds}s.`, 'warning');
             return;
         }
 
@@ -908,12 +994,14 @@ const ReportsPage = {
                 }
                 if (queueBusy) {
                     this.setModalStatusText(`Queue busy: ${errorText}`);
+                    this.notify(`Queue busy for report ${reportId}. Monitoring in progress.`, 'warning');
                     this.startModalCooldown(runtime.cooldownSeconds);
                     return;
                 }
 
                 this.setModalStatusText(errorText);
                 this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
+                this.notify(errorText, 'error');
                 return;
             }
 
@@ -921,6 +1009,15 @@ const ReportsPage = {
             this.stopModalCooldown();
             this.setModalStage('queued');
             this.setModalStatusText('Regeneration queued. Monitoring progress...');
+            if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
+                NotificationManager.reportGenerating(reportId, {
+                    title: options.force ? '♻️ Reprocessing Started' : '📝 Generation Started',
+                    action: {
+                        text: 'View Progress',
+                        onClickFn: () => this.focusReport(reportId, { openModal: true })
+                    }
+                });
+            }
             await this.refreshReports();
             this.startModalPolling(reportId, { autoOpen: true });
         } catch (error) {

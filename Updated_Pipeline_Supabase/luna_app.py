@@ -28,7 +28,7 @@ import html
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 import json
 import time
 
@@ -296,6 +296,87 @@ def _is_violation_label(class_name: str) -> bool:
 def _extract_violation_detections(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Filter detections to likely PPE-violation classes."""
     return [d for d in detections if _is_violation_label(d.get('class_name', ''))]
+
+
+def _extract_violation_types_from_detections(detections: List[Dict[str, Any]]) -> List[str]:
+    """Extract violation labels from detections using class_name/class with normalized matching."""
+    types: List[str] = []
+    for item in detections or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('class_name') or item.get('class') or '').strip()
+        if not label:
+            continue
+        if _is_violation_label(label):
+            types.append(label)
+    return types
+
+
+def _extract_violation_types_from_summary(summary: str) -> List[str]:
+    """Best-effort parse of persisted summary text into NO-* style violation labels."""
+    summary_text = str(summary or '').strip()
+    if not summary_text:
+        return []
+
+    out: List[str] = []
+    lower_summary = summary_text.lower()
+
+    if 'ppe violation detected:' in lower_summary:
+        _, _, rhs = summary_text.partition(':')
+        for raw_item in rhs.split(','):
+            item = str(raw_item or '').strip()
+            if not item:
+                continue
+            if _is_violation_label(item):
+                out.append(item)
+                continue
+            if item.lower().startswith('missing '):
+                out.append(f"NO-{item[8:].strip()}")
+                continue
+            out.append(f"NO-{item}")
+        return out
+
+    for match in re.findall(r'Missing ([\\w\\s]+?)(?:,|\\.|$)', summary_text, flags=re.IGNORECASE):
+        ppe_item = str(match or '').strip()
+        if ppe_item:
+            out.append(f"NO-{ppe_item}")
+
+    return out
+
+
+def _resolve_violation_types_and_count(
+    detections: List[Dict[str, Any]],
+    *,
+    event: Optional[Dict[str, Any]] = None,
+    violation_summary: Optional[str] = None,
+    fallback_count: Optional[int] = None
+) -> Tuple[List[str], int]:
+    """Resolve robust violation labels/count even when stored detection payload is partial."""
+    violation_types = _extract_violation_types_from_detections(detections)
+    if not violation_types:
+        violation_types = _extract_violation_types_from_summary(violation_summary or '')
+
+    candidate_counts: List[int] = []
+    if fallback_count is not None:
+        try:
+            candidate_counts.append(int(fallback_count))
+        except Exception:
+            pass
+
+    if isinstance(event, dict):
+        try:
+            candidate_counts.append(int(event.get('violation_count') or 0))
+        except Exception:
+            pass
+
+    resolved_count = max([len(violation_types)] + candidate_counts + [0])
+    if resolved_count <= 0:
+        resolved_count = 1
+
+    if not violation_types:
+        violation_types = ['NO-PPE Violation']
+
+    return violation_types, resolved_count
 
 
 def _safe_bbox(det: Dict[str, Any]) -> List[float]:
@@ -1142,7 +1223,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     violation_dir = Path(data['violation_dir'])
     timestamp = data['timestamp']
     detections = data['detections']
-    violation_types = data['violation_types']
+    violation_types = data.get('violation_types') or []
+    queued_violation_count = data.get('violation_count')
     original_path = Path(data['original_image_path'])
     annotated_path = Path(data['annotated_image_path'])
     
@@ -1304,15 +1386,24 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             
             logger.info("📄 Generating NLP report with Llama3...")
             
-            violation_types_raw = violation_types
+            violation_types_raw = violation_types if isinstance(violation_types, list) else []
+            if not violation_types_raw:
+                violation_types_raw = _extract_violation_types_from_detections(detections)
+
+            resolved_violation_count = max(
+                len(violation_types_raw),
+                int(queued_violation_count or 0),
+                1,
+            )
             violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
+            violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
             
             report_data = {
                 'report_id': report_id,
                 'timestamp': timestamp,
                 'detections': detections,
-                'violation_summary': ', '.join(violation_types_formatted),
-                'violation_count': len(violation_types_formatted),
+                'violation_summary': violation_summary_text,
+                'violation_count': resolved_violation_count,
                 'caption': caption,
                 'image_caption': caption,
                 'caption_provider': caption_provider,
@@ -3225,10 +3316,13 @@ def api_report_recovery_execute():
             if violation and isinstance(violation.get('detection_data'), dict):
                 detections = violation['detection_data'].get('detections', []) or []
 
-            violation_types = [
-                d.get('class_name', '') for d in detections
-                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
-            ]
+            violation_summary_text = (violation or {}).get('violation_summary') if isinstance(violation, dict) else ''
+            violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+                detections,
+                event=event,
+                violation_summary=violation_summary_text,
+                fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
+            )
 
             if not annotated_path.exists():
                 try:
@@ -3244,7 +3338,7 @@ def api_report_recovery_execute():
                 'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
                 'detections': detections,
                 'violation_types': violation_types,
-                'violation_count': len(violation_types),
+                'violation_count': resolved_violation_count,
                 'original_image_path': str(original_path),
                 'annotated_image_path': str(annotated_path),
                 'violation_dir': str(violation_dir)
@@ -3376,18 +3470,20 @@ def api_sync_local_cache_to_supabase():
             except Exception:
                 ts_value = datetime.now().isoformat()
 
+        violation_summary_text = (violation or {}).get('violation_summary') if isinstance(violation, dict) else ''
+        violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+            detections,
+            event=event,
+            violation_summary=violation_summary_text,
+            fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
+        )
+
         violation_data = {
             'report_id': report_id,
             'timestamp': ts_value,
             'detections': detections,
-            'violation_types': [
-                d.get('class_name', '') for d in detections
-                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
-            ],
-            'violation_count': len([
-                d for d in detections
-                if isinstance(d, dict) and 'no-' in str(d.get('class_name', '')).lower()
-            ]),
+            'violation_types': violation_types,
+            'violation_count': resolved_violation_count,
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path if annotated_path.exists() else original_path),
             'violation_dir': str(violation_dir)
@@ -3563,11 +3659,13 @@ def api_generate_report_now(report_id):
         if violation and isinstance(violation.get('detection_data'), dict):
             detections = violation['detection_data'].get('detections', []) or []
 
-        if detections:
-            violation_types = [
-                d.get('class_name', '') for d in detections
-                if isinstance(d, dict) and 'no-' in d.get('class_name', '').lower()
-            ]
+        violation_summary_text = violation.get('violation_summary') if isinstance(violation, dict) else ''
+        violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+            detections,
+            event=event,
+            violation_summary=violation_summary_text,
+            fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
+        )
 
         if not annotated_path.exists():
             try:
@@ -3586,7 +3684,7 @@ def api_generate_report_now(report_id):
             'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
             'detections': detections,
             'violation_types': violation_types,
-            'violation_count': len(violation_types),
+            'violation_count': resolved_violation_count,
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path),
             'violation_dir': str(violation_dir)

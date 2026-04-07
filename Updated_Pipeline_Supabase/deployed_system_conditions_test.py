@@ -339,6 +339,38 @@ def main() -> int:
             return fail(f"violations endpoint invalid ({code}): {violations_text}", 8)
         print(f"PASS: violations-list (count={len(violations_payload)})")
 
+        for item in violations_payload[:MAX_REPORT_IDS]:
+            if not isinstance(item, dict):
+                continue
+            summary = str(item.get("violation_summary") or "").strip().lower()
+            count_raw = item.get("violation_count")
+            missing_ppe = item.get("missing_ppe") if isinstance(item.get("missing_ppe"), list) else []
+            has_report = bool(item.get("has_report"))
+            status = str(item.get("status") or "").strip().lower()
+
+            count_value = None
+            try:
+                count_value = int(count_raw)
+            except Exception:
+                pass
+
+            summary_signals_violation = (
+                bool(missing_ppe)
+                or ("missing" in summary)
+                or ("violation" in summary)
+                or ("no-" in summary)
+            )
+            completed_report = has_report or status == "completed"
+
+            if completed_report and summary_signals_violation and count_value is not None and count_value <= 0:
+                return fail(
+                    f"inconsistent violation payload for report {item.get('report_id')}: "
+                    f"violation_count={count_value}, summary={summary[:140]}",
+                    23,
+                )
+
+        print("PASS: violation-count consistency on completed violation payloads")
+
         report_ids = []
         for item in violations_payload:
             if isinstance(item, dict):

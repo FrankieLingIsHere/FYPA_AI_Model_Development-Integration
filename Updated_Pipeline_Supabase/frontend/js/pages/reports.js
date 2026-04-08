@@ -1033,7 +1033,9 @@ const ReportsPage = {
     },
 
     renderReportCard(violation) {
-        const date = new Date(violation.timestamp);
+        const reportTime = (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function')
+            ? TimezoneManager.formatDateTime(violation.timestamp)
+            : new Date(violation.timestamp).toLocaleString();
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
         const isReady = this.isReportReady(violation);
@@ -1070,7 +1072,7 @@ const ReportsPage = {
                                 Report #${violation.report_id}
                             </h3>
                             <p style="color: #7f8c8d; font-size: 0.9rem; margin: 0;">
-                                <i class="fas fa-clock"></i> ${date.toLocaleString()}
+                                <i class="fas fa-clock"></i> ${reportTime}
                             </p>
                         </div>
                         <span class="badge badge-${severityClass}">

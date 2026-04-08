@@ -84,6 +84,54 @@ startup_state = {
     }
 }
 
+# In-memory cache for rendered report HTML source payloads to reduce repeated
+# storage fetch latency when the same report is opened multiple times.
+REPORT_HTML_CACHE_TTL_SECONDS = int(os.getenv('REPORT_HTML_CACHE_TTL_SECONDS', '300'))
+report_html_cache_lock = Lock()
+report_html_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _get_cached_report_html_content(report_id: str, report_html_key: str) -> Optional[str]:
+    if REPORT_HTML_CACHE_TTL_SECONDS <= 0:
+        return None
+
+    now = time.time()
+    with report_html_cache_lock:
+        entry = report_html_cache.get(report_id)
+        if not entry:
+            return None
+        if entry.get('report_html_key') != report_html_key:
+            report_html_cache.pop(report_id, None)
+            return None
+        expires_at = float(entry.get('expires_at') or 0)
+        if expires_at <= now:
+            report_html_cache.pop(report_id, None)
+            return None
+        content = entry.get('content')
+        return content if isinstance(content, str) else None
+
+
+def _set_cached_report_html_content(report_id: str, report_html_key: str, content: str) -> None:
+    if REPORT_HTML_CACHE_TTL_SECONDS <= 0:
+        return
+    if not isinstance(content, str) or not content:
+        return
+
+    with report_html_cache_lock:
+        report_html_cache[report_id] = {
+            'report_html_key': report_html_key,
+            'content': content,
+            'expires_at': time.time() + REPORT_HTML_CACHE_TTL_SECONDS,
+        }
+        if len(report_html_cache) > 300:
+            # Evict oldest expiring entries to bound memory usage.
+            stale_keys = sorted(
+                report_html_cache,
+                key=lambda k: float(report_html_cache[k].get('expires_at') or 0)
+            )[:80]
+            for key in stale_keys:
+                report_html_cache.pop(key, None)
+
 # Import pipeline components for violation handling
 try:
     from pipeline.backend.core.violation_detector import ViolationDetector
@@ -3881,7 +3929,9 @@ def view_report(report_id):
         
         # Download the HTML content and render it
         try:
-            html_content = storage_manager.download_file_content(report_html_key)
+            html_content = _get_cached_report_html_content(report_id, report_html_key)
+            if html_content is None:
+                html_content = storage_manager.download_file_content(report_html_key)
             if not html_content:
                 if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
                     trace_payload = _build_traceability_payload(
@@ -3913,6 +3963,8 @@ def view_report(report_id):
                     "Report content is fallback-template output. Regenerate to use model-generated response.",
                     status_code=409
                 )
+
+            _set_cached_report_html_content(report_id, report_html_key, html_content)
             
             # Return the HTML content directly so browser renders it
             trace_payload = _build_traceability_payload(

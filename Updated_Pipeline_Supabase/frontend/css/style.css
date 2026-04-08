@@ -1140,6 +1140,11 @@ body.is-phone-device .main-content {
         display: none;
     }
 
+    body.is-phone-device .network-badge span {
+        display: inline;
+        font-size: 0.66rem;
+    }
+
     body.is-phone-device .nav-more-panel .realtime-badge span {
         display: inline;
     }
@@ -2426,4 +2431,31 @@ body.is-phone-device .handbook-content {
     .footer {
         padding: 0.7rem;
     }
+}
+
+body.is-phone-device .network-badge {
+    margin-left: auto;
+    order: 2;
+    position: relative;
+    z-index: 1201;
+    padding: 0.28rem 0.45rem;
+}
+
+/* Final handbook sizing normalization to avoid oversized modal and unnecessary scrollbars. */
+.handbook-modal {
+    width: min(96vw, 960px);
+    height: min(88vh, 680px);
+    max-width: 96vw;
+}
+
+.handbook-body {
+    min-height: 0;
+}
+
+.handbook-content {
+    padding: 1rem 1.1rem;
+}
+
+body.is-phone-device .handbook-content {
+    padding: 0.75rem;
 }

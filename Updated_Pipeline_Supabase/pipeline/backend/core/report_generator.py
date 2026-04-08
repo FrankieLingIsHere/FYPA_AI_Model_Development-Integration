@@ -21,6 +21,7 @@ import html
 import requests
 import threading
 import time
+import re
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -1302,6 +1303,11 @@ RESPONSE FORMAT (JSON):
             or len(visual_evidence) < 120
             or any(marker in visual_evidence.lower() for marker in generic_markers)
         )
+        if not should_rebuild_visual_evidence and caption_for_quality:
+            # If model scene text is long but semantically unrelated to caption, rebuild from caption+detections.
+            if not self._has_grounding_overlap(visual_evidence, caption_for_quality, min_overlap=3, min_ratio=0.08):
+                should_rebuild_visual_evidence = True
+
         if should_rebuild_visual_evidence and caption_for_quality:
             rebuilt = self._build_scene_description(
                 caption_for_quality,
@@ -1310,6 +1316,29 @@ RESPONSE FORMAT (JSON):
             )
             if rebuilt and len(rebuilt) > len(visual_evidence):
                 nlp_analysis['visual_evidence'] = rebuilt
+
+        summary_text = str(nlp_analysis.get('summary', '') or '').strip()
+        violation_summary_text = str(report_data.get('violation_summary', '') or '').strip()
+        detection_terms = ' '.join(
+            str(d.get('class_name') or d.get('class') or '').replace('NO-', 'No ')
+            for d in (report_data.get('detections', []) or [])
+            if isinstance(d, dict)
+        )
+        grounding_reference = ' '.join(
+            part for part in [
+                caption_for_quality,
+                str(nlp_analysis.get('visual_evidence', '') or '').strip(),
+                violation_summary_text,
+                detection_terms,
+            ] if part
+        )
+
+        if summary_text and not self._has_grounding_overlap(summary_text, grounding_reference, min_overlap=2, min_ratio=0.08):
+            logger.warning(
+                "NLP summary appears ungrounded for report %s; replacing with grounded summary",
+                report_data.get('report_id')
+            )
+            nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
@@ -3036,6 +3065,80 @@ RESPONSE FORMAT (JSON):
 
         normalized['persons'] = persons_out
         return normalized
+
+    def _content_tokens(self, text: str) -> List[str]:
+        """Extract lightweight content tokens for lexical grounding checks."""
+        text = str(text or '').lower()
+        if not text:
+            return []
+
+        tokens = re.findall(r'[a-z0-9]+', text)
+        stopwords = {
+            'the', 'and', 'with', 'from', 'this', 'that', 'were', 'was', 'are', 'for', 'into',
+            'onto', 'over', 'under', 'near', 'then', 'than', 'have', 'has', 'had', 'into', 'while',
+            'person', 'persons', 'worker', 'workers', 'scene', 'setting', 'report', 'analysis',
+            'observed', 'detected', 'safety', 'risk', 'risks', 'hazard', 'hazards', 'summary', 'law',
+            'what', 'who', 'danger', 'compliance', 'non', 'ppe'
+        }
+        return [tok for tok in tokens if len(tok) >= 3 and tok not in stopwords]
+
+    def _has_grounding_overlap(
+        self,
+        candidate_text: str,
+        reference_text: str,
+        min_overlap: int = 2,
+        min_ratio: float = 0.1,
+    ) -> bool:
+        """Check whether candidate text is grounded in reference evidence using token overlap."""
+        candidate_tokens = set(self._content_tokens(candidate_text))
+        reference_tokens = set(self._content_tokens(reference_text))
+
+        if not candidate_tokens:
+            return False
+        if not reference_tokens:
+            return True
+
+        overlap = candidate_tokens & reference_tokens
+        overlap_count = len(overlap)
+        overlap_ratio = overlap_count / max(1, len(candidate_tokens))
+        return overlap_count >= min_overlap or (overlap_count >= 1 and overlap_ratio >= min_ratio)
+
+    def _build_grounded_summary_text(self, report_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> str:
+        """Build concise grounded summary when model summary is unrelated to visual evidence."""
+        detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
+        missing_items: List[str] = []
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            cls = str(det.get('class_name') or det.get('class') or '').strip()
+            if cls.startswith('NO-'):
+                pretty = cls.replace('NO-', '').replace('_', ' ').strip()
+                if pretty and pretty not in missing_items:
+                    missing_items.append(pretty)
+
+        env = str(nlp_analysis.get('environment_type') or 'General Workspace').strip() or 'General Workspace'
+        context_source = str(nlp_analysis.get('visual_evidence') or report_data.get('caption') or '').strip()
+        context_sentence = ''
+        if context_source:
+            context_sentence = re.split(r'(?<=[.!?])\s+', context_source)[0].strip()
+            if len(context_sentence) > 180:
+                context_sentence = context_sentence[:177].rstrip(' ,;') + '...'
+
+        if missing_items:
+            issue_text = f"missing {', '.join(missing_items[:4])}"
+            if len(missing_items) > 4:
+                issue_text += f" (+{len(missing_items) - 4} more)"
+        else:
+            issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
+
+        summary_parts = [
+            f"• **SCENE CLASS**: {env}",
+            f"• **CRITICAL OBSERVATION**: {issue_text}",
+        ]
+        if context_sentence:
+            summary_parts.append(f"• **VISUAL CONTEXT**: {context_sentence}")
+        summary_parts.append("• **LEGAL ORDER**: enforce compliant PPE before work resumes")
+        return '\n'.join(summary_parts)
 
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
         """Build compact diagnostics comparing raw model payload and sanitized structure."""

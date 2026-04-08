@@ -241,61 +241,90 @@ class SupabaseReportGenerator(ReportGenerator):
         # Store storage keys in result for reprocessing scenarios
         result['storage_keys'] = storage_keys
         
-        # Step 4: Insert violation record with storage keys and validation
-        # Skip if this is a reprocessing operation (record already exists)
+        # Step 4: Persist violation record with storage keys and validation.
+        # For reprocessing, update the existing row to avoid stale caption/NLP data drift.
         is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
-        
-        if not is_reprocessing:
-            try:
-                violation_summary = report_data.get('violation_summary')
-                caption = report_data.get('caption')
-                nlp_analysis = result.get('nlp_analysis')
-                detection_data = report_data.get('detections')
-                
-                # FORCE Environment Override based on Caption Keywords (Fixes "Roadside" hallucination)
-                caption = report_data.get('caption', '')
-                detected_env = self._extract_environment_from_caption(caption)
-                
-                # Trust VLM keywords over NLP for specific environments
-                if detected_env != 'General Workspace':
-                    logger.info(f"Overriding NLP environment '{nlp_analysis.get('environment_type')}' with VLM-detected '{detected_env}'")
-                    nlp_analysis['environment_type'] = detected_env
-                    
-                    # Rebuild visual_evidence using professional scene description
-                    nlp_analysis['visual_evidence'] = self._build_scene_description(
-                        caption, detected_env, report_data.get('detections', [])
-                    )
-                
-                # Add validation data to metadata
-                metadata = {
-                    'detections': detection_data
-                }
-                caption_provider = report_data.get('caption_provider')
-                caption_model = report_data.get('caption_model')
-                if caption_provider:
-                    metadata['caption_provider'] = caption_provider
-                if caption_model:
-                    metadata['caption_model'] = caption_model
+        try:
+            violation_summary = report_data.get('violation_summary')
+            caption = report_data.get('caption', '')
+            nlp_analysis = result.get('nlp_analysis')
+            detection_data = report_data.get('detections')
 
-                if isinstance(nlp_analysis, dict):
-                    report_provider = nlp_analysis.get('provider')
-                    report_model = nlp_analysis.get('model')
-                    if report_provider:
-                        metadata['generation_provider'] = report_provider
-                    if report_model:
-                        metadata['generation_model'] = report_model
-                nlp_integrity = result.get('nlp_integrity')
-                if isinstance(nlp_integrity, dict):
-                    metadata['nlp_integrity'] = nlp_integrity
-                if validation_result:
-                    metadata['caption_validation'] = {
-                        'is_valid': validation_result['is_valid'],
-                        'confidence': validation_result['confidence'],
-                        'contradictions': validation_result['contradictions'],
-                        'warnings': validation_result['warnings'],
-                        'summary': validation_result['validation_summary']
-                    }
-                
+            # FORCE Environment Override based on Caption Keywords (Fixes "Roadside" hallucination)
+            detected_env = self._extract_environment_from_caption(caption)
+
+            # Trust VLM keywords over NLP for specific environments
+            if isinstance(nlp_analysis, dict) and detected_env != 'General Workspace':
+                logger.info(f"Overriding NLP environment '{nlp_analysis.get('environment_type')}' with VLM-detected '{detected_env}'")
+                nlp_analysis['environment_type'] = detected_env
+
+                # Rebuild visual_evidence using professional scene description
+                nlp_analysis['visual_evidence'] = self._build_scene_description(
+                    caption, detected_env, report_data.get('detections', [])
+                )
+
+            # Add validation data to metadata
+            metadata = {
+                'detections': detection_data
+            }
+            caption_provider = report_data.get('caption_provider')
+            caption_model = report_data.get('caption_model')
+            if caption_provider:
+                metadata['caption_provider'] = caption_provider
+            if caption_model:
+                metadata['caption_model'] = caption_model
+
+            if isinstance(nlp_analysis, dict):
+                report_provider = nlp_analysis.get('provider')
+                report_model = nlp_analysis.get('model')
+                if report_provider:
+                    metadata['generation_provider'] = report_provider
+                if report_model:
+                    metadata['generation_model'] = report_model
+            nlp_integrity = result.get('nlp_integrity')
+            if isinstance(nlp_integrity, dict):
+                metadata['nlp_integrity'] = nlp_integrity
+            if validation_result:
+                metadata['caption_validation'] = {
+                    'is_valid': validation_result['is_valid'],
+                    'confidence': validation_result['confidence'],
+                    'contradictions': validation_result['contradictions'],
+                    'warnings': validation_result['warnings'],
+                    'summary': validation_result['validation_summary']
+                }
+
+            if is_reprocessing and hasattr(self.db_manager, 'update_violation'):
+                updated = self.db_manager.update_violation(
+                    report_id=report_id,
+                    violation_summary=violation_summary,
+                    caption=caption,
+                    nlp_analysis=nlp_analysis,
+                    detection_data=metadata,
+                    original_image_key=storage_keys.get('original_image_key'),
+                    annotated_image_key=storage_keys.get('annotated_image_key'),
+                    report_html_key=storage_keys.get('report_html_key'),
+                    report_pdf_key=storage_keys.get('report_pdf_key')
+                )
+                if updated:
+                    logger.info(f"Updated violation record for reprocessing: {report_id}")
+                else:
+                    logger.warning(f"Reprocessing update affected no rows, falling back to insert: {report_id}")
+                    violation_id = self.db_manager.insert_violation(
+                        report_id=report_id,
+                        violation_summary=violation_summary,
+                        caption=caption,
+                        nlp_analysis=nlp_analysis,
+                        detection_data=metadata,
+                        original_image_key=storage_keys.get('original_image_key'),
+                        annotated_image_key=storage_keys.get('annotated_image_key'),
+                        report_html_key=storage_keys.get('report_html_key'),
+                        report_pdf_key=storage_keys.get('report_pdf_key')
+                    )
+                    if violation_id:
+                        logger.info(f"Inserted violation record after reprocessing fallback: {violation_id}")
+                    else:
+                        logger.error(f"Failed to persist violation record after reprocessing fallback: {report_id}")
+            else:
                 violation_id = self.db_manager.insert_violation(
                     report_id=report_id,
                     violation_summary=violation_summary,
@@ -307,17 +336,15 @@ class SupabaseReportGenerator(ReportGenerator):
                     report_html_key=storage_keys.get('report_html_key'),
                     report_pdf_key=storage_keys.get('report_pdf_key')
                 )
-                
+
                 if violation_id:
                     logger.info(f"Inserted violation record: {violation_id}")
                 else:
                     logger.error(f"Failed to insert violation record: {report_id}")
-                    
-            except Exception as e:
-                logger.error(f"Error inserting violation record: {e}")
-                # Continue anyway
-        else:
-            logger.info(f"Skipping database insert for reprocessing: {report_id}")
+
+        except Exception as e:
+            logger.error(f"Error persisting violation record: {e}")
+            # Continue anyway
         
         # Step 5: Log event to flood_logs (skip for reprocessing)
         if not is_reprocessing:

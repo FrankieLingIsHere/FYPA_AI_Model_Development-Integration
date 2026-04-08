@@ -2794,10 +2794,29 @@ RESPONSE FORMAT (JSON):
                 detected_missing_labels.append(label)
 
         # WHAT: use model summary when meaningful, otherwise synthesize from evidence.
+        caption_lower = caption_text.lower()
+        caption_safety_neutral = any(
+            marker in caption_lower for marker in (
+                'no immediate safety concerns',
+                'no ppe is visible',
+                'ppe visibility is not applicable',
+            )
+        )
+        no_concrete_ppe_evidence = (
+            len(detected_missing_labels) == 0
+            and model_non_compliant_count == 0
+            and detected_violation_items > 0
+        )
+
         if _is_meaningful_summary(summary_text):
             what_text = summary_text
         else:
-            if detected_missing_labels:
+            if no_concrete_ppe_evidence and caption_safety_neutral:
+                what_text = (
+                    'No explicit PPE non-compliance could be confirmed from current visual evidence. '
+                    'This event is flagged for manual review before enforcement action.'
+                )
+            elif detected_missing_labels:
                 what_text = (
                     "PPE non-compliance detected involving missing "
                     + ", ".join(detected_missing_labels[:5])
@@ -2858,7 +2877,10 @@ RESPONSE FORMAT (JSON):
             elif detected_violation_items > 0:
                 hazard_items = ['Increased injury/exposure risk due to observed PPE non-compliance']
 
-        hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+        if no_concrete_ppe_evidence and caption_safety_neutral:
+            hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
+        else:
+            hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
 
         if not reg_names:
             inferred_regs: List[str] = []
@@ -2878,7 +2900,10 @@ RESPONSE FORMAT (JSON):
                     inferred_regs.append(mapped)
             reg_names = inferred_regs or ['BOWEC 1986 - General PPE compliance requirements for construction operations']
 
-        reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
+        if no_concrete_ppe_evidence and caption_safety_neutral:
+            reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
+        else:
+            reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>

@@ -452,18 +452,22 @@ function setupResponsiveMobileUX() {
         if (navMoreToggle) navMoreToggle.setAttribute('aria-expanded', 'false');
     };
 
-    const isTouchPhone = () => {
+    const getDeviceProfile = () => {
         const ua = (navigator.userAgent || '').toLowerCase();
         const uaDataMobile = !!(navigator.userAgentData && navigator.userAgentData.mobile);
-        const mobileUA = /android|iphone|ipod|blackberry|windows phone|mobile/i.test(ua);
+        const explicitPhoneUA = /iphone|ipod|blackberry|windows phone|mobile/i.test(ua);
+        const androidUA = /android/i.test(ua);
+        const androidPhoneUA = androidUA && /mobile/i.test(ua);
         const iPadLike = /ipad/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
         const touchCapable = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia('(pointer: coarse)').matches;
-        const narrowViewport = window.matchMedia('(max-width: 1024px)').matches;
+        const compactViewport = window.matchMedia('(max-width: 1280px)').matches;
+        const narrowTouchViewport = touchCapable && window.matchMedia('(max-width: 860px)').matches;
         const shortestSide = Math.min(window.screen?.width || 0, window.screen?.height || 0);
-        const phoneLikeScreen = shortestSide > 0 && shortestSide <= 540;
-        const strongPhoneSignal = mobileUA || uaDataMobile || phoneLikeScreen;
-        const phoneHeuristic = (strongPhoneSignal || (mobileUA && narrowViewport)) && !iPadLike;
-        return touchCapable && phoneHeuristic;
+        const phoneLikeScreen = shortestSide > 0 && shortestSide <= 600;
+        const tabletLikeScreen = shortestSide > 600 && shortestSide <= 1100;
+        const phoneDevice = touchCapable && !iPadLike && (explicitPhoneUA || androidPhoneUA || uaDataMobile || phoneLikeScreen || narrowTouchViewport);
+        const tabletDevice = touchCapable && !phoneDevice && compactViewport && (iPadLike || tabletLikeScreen || (androidUA && !androidPhoneUA));
+        return { phoneDevice, tabletDevice };
     };
 
     const isPortrait = () => {
@@ -474,11 +478,12 @@ function setupResponsiveMobileUX() {
     };
 
     const applyMobileUX = () => {
-        const phoneDevice = isTouchPhone();
+        const { phoneDevice, tabletDevice } = getDeviceProfile();
         const portrait = isPortrait();
         const locked = phoneDevice && portrait;
 
         body.classList.toggle('is-phone-device', phoneDevice);
+        body.classList.toggle('is-tablet-device', tabletDevice);
         body.classList.toggle('mobile-portrait-locked', locked);
 
         if (!phoneDevice) {

@@ -133,11 +133,14 @@ const ReportsPage = {
     },
 
     startAutoRefresh() {
-        // Check for pending reports every 10 seconds
+        if (this.refreshInterval) return;
+
+        // Check for in-flight reports every 10 seconds when realtime is unavailable.
         this.refreshInterval = setInterval(async () => {
-            const hasPending = this.violations.some(v => 
-                v.status === 'pending' || v.status === 'generating' || !v.has_report
-            );
+            const hasPending = this.violations.some((v) => {
+                const status = this.normalizeStatus(v);
+                return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
+            });
             if (hasPending) {
                 await this.loadReports();
             }
@@ -945,8 +948,7 @@ const ReportsPage = {
 
     getProcessAction(violation) {
         const status = this.normalizeStatus(violation);
-        const ready = this.isReportReady(violation);
-        const isCompleted = status === 'completed' && ready;
+        const isCompleted = status === 'completed';
 
         return {
             force: isCompleted,

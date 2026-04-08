@@ -553,6 +553,50 @@ body.is-phone-device .page {
     overflow-x: hidden;
 }
 
+/* Tablet-specific tuning keeps layout readable without phone-only collapsing. */
+body.is-tablet-device .nav-container {
+    padding: 0.65rem 0.95rem;
+}
+
+body.is-tablet-device .nav-brand {
+    font-size: 1.2rem;
+}
+
+body.is-tablet-device .nav-link {
+    font-size: 0.88rem;
+    padding: 0.45rem 0.65rem;
+}
+
+body.is-tablet-device .main-content {
+    max-width: 100%;
+    padding: 1rem 1.1rem;
+}
+
+body.is-tablet-device .grid {
+    gap: 0.9rem;
+}
+
+body.is-tablet-device .card-header {
+    font-size: 1.05rem;
+    padding: 0.9rem 1rem;
+}
+
+body.is-tablet-device .card-content {
+    padding: 1rem;
+}
+
+body.is-tablet-device .card table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+@media (min-width: 768px) and (max-width: 1100px) {
+    html {
+        font-size: 15px;
+    }
+}
+
 .nav-timezone {
     display: flex;
     align-items: center;
@@ -1098,6 +1142,43 @@ body.is-phone-device .main-content {
 
     body.is-phone-device .nav-more-panel .realtime-badge span {
         display: inline;
+    }
+}
+
+@media (max-width: 700px) {
+    html {
+        font-size: 14px;
+    }
+
+    .main-content {
+        padding: 0.6rem;
+    }
+
+    .card-header {
+        font-size: 1rem;
+        padding: 0.75rem 0.85rem;
+    }
+
+    .card-content {
+        padding: 0.8rem;
+    }
+
+    .summary-block .value,
+    .stat-card h3 {
+        font-size: 1.55rem;
+    }
+
+    .btn {
+        font-size: 0.92rem;
+        padding: 0.6rem 0.8rem;
+    }
+
+    .nav-brand {
+        font-size: 1rem;
+    }
+
+    .nav-brand i {
+        font-size: 1.1rem;
     }
 }
 

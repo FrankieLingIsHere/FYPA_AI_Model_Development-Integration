@@ -36,12 +36,21 @@ def main() -> int:
     index_text = index_html.text
 
     required_app_markers = [
-        "const strongPhoneSignal = mobileUA || uaDataMobile || phoneLikeScreen;",
-        "const phoneHeuristic = (strongPhoneSignal || (mobileUA && narrowViewport)) && !iPadLike;",
         "function initializeNetworkIndicator()",
         "window.dispatchEvent(new CustomEvent('ppe-network:status'",
         "function initializeAdaptivePipelineModeManager()",
         "API.syncLocalCacheToSupabase({ limit: 180 });",
+    ]
+    app_detection_marker_alternatives = [
+        [
+            "const strongPhoneSignal = mobileUA || uaDataMobile || phoneLikeScreen;",
+            "const phoneHeuristic = (strongPhoneSignal || (mobileUA && narrowViewport)) && !iPadLike;",
+        ],
+        [
+            "const getDeviceProfile = () => {",
+            "const narrowTouchViewport = touchCapable && window.matchMedia('(max-width: 860px)').matches;",
+            "body.classList.toggle('is-tablet-device', tabletDevice);",
+        ],
     ]
     required_index_markers = [
         "id=\"networkStatusBadge\"",
@@ -78,6 +87,10 @@ def main() -> int:
     for marker in required_app_markers:
         if marker not in app_text:
             missing.append(f"app.js missing marker: {marker}")
+    if not any(all(marker in app_text for marker in option) for option in app_detection_marker_alternatives):
+        missing.append(
+            "app.js missing phone/tablet detection markers (neither legacy nor updated implementation found)"
+        )
     missing_index_markers = []
     for marker in required_index_markers:
         if marker not in index_text:

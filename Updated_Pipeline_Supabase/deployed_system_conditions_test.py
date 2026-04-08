@@ -17,6 +17,8 @@ MAX_REPORT_IDS = int(os.environ.get("LUNA_CONDITIONS_MAX_REPORT_IDS", "15"))
 ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("LUNA_PROVIDER_MODE_MATRIX", "1") != "0"
 PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
 STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "0") != "0"
+REQUIRE_NO_NLP_FALLBACK = os.environ.get("LUNA_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
+ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini"}
 
 ALLOWED_REPORT_STATUSES = {
     "pending",
@@ -131,6 +133,29 @@ def is_skippable_generate_now_error(code: int, payload) -> bool:
         return False
     msg = str(payload.get("error") or payload.get("message") or "").lower()
     return "original image is missing" in msg or "report not found" in msg
+
+
+def assert_no_nlp_fallback(runtime_payload: dict) -> None:
+    runtime = runtime_payload.get("runtime") if isinstance(runtime_payload, dict) else None
+    nlp_runtime = runtime.get("nlp") if isinstance(runtime, dict) else None
+    if not isinstance(nlp_runtime, dict):
+        raise RuntimeError("runtime status missing runtime.nlp object")
+
+    fallback_reason = str(nlp_runtime.get("last_fallback_reason") or "").strip()
+    last_provider = str(nlp_runtime.get("last_provider") or "").strip().lower()
+
+    if fallback_reason:
+        raise RuntimeError(f"unexpected NLP fallback observed: {fallback_reason}")
+
+    if last_provider and last_provider not in ALLOWED_NO_FALLBACK_PROVIDERS:
+        raise RuntimeError(
+            f"unexpected NLP provider while no-fallback is required: {last_provider}"
+        )
+
+    print(
+        "PASS: no NLP fallback observed "
+        f"(last_provider={last_provider or 'unknown'}, last_fallback_reason=empty)"
+    )
 
 
 def run_live_start_contract_probe() -> None:
@@ -472,6 +497,19 @@ def main() -> int:
             run_provider_mode_matrix_probe(report_ids)
         else:
             print("INFO: provider mode matrix probe disabled via LUNA_PROVIDER_MODE_MATRIX=0")
+
+        if REQUIRE_NO_NLP_FALLBACK:
+            runtime_code, runtime_payload, runtime_text = request_json(
+                "GET",
+                "/api/providers/runtime-status",
+                timeout=30,
+            )
+            if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                return fail(
+                    f"provider runtime-status unavailable for no-fallback validation ({runtime_code}): {runtime_text}",
+                    24,
+                )
+            assert_no_nlp_fallback(runtime_payload)
 
         print("PASS: deployed conditions matrix")
         print("observed-conditions=" + json.dumps(conditions, ensure_ascii=True))

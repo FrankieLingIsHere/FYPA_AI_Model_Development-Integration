@@ -13,9 +13,12 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_DEFAULT_IMAGE_PATH = (_SCRIPT_DIR / "static" / "images" / "handbook-live.png").resolve()
+
 IMAGE_PATH = os.environ.get(
     "LUNA_FLOOD_TEST_IMAGE",
-    str(Path("Updated_Pipeline_Supabase/static/images/handbook-live.png").resolve()),
+    str(_DEFAULT_IMAGE_PATH),
 )
 
 TOTAL_REQUESTS = max(3, int(os.environ.get("LUNA_FLOOD_TOTAL_REQUESTS", "12")))

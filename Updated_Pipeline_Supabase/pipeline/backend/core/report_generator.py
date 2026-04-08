@@ -943,12 +943,15 @@ Generate a JSON report following this logic:
    Then describe what the VLM caption shows. Be objective and factual. DO NOT REPEAT THE LIST OF CATEGORIES.
 2. **INDIVIDUAL ANALYSIS**:
    - "Person N (Action) + No PPE + [Scene Hazard] = Specific Risk"
+    - For each risk, include the most relevant regulation citation from official JKR/DOSH standards in context.
+    - Do NOT limit citations to PPE-only rules; include non-PPE breaches (e.g., traffic control, fall protection, unsafe stacking, excavation controls) when evidenced by caption/detections.
 3. **WEIGHTED SEVERITY**:
    - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
 4. **NEGATIVE CONSTRAINTS**:
    - NO vague terms ("scattered", "some").
    - NO "Chemical masks" unless chemicals visible.
    - NO "1." numbering prefixes in the description text.
+    - ONLY cite regulations from the provided JKR/DOSH regulation context. Do not invent regulation titles.
 
 {dosh_text if dosh_text else ""}{context_text if context_text else ""}
 
@@ -976,7 +979,7 @@ RESPONSE FORMAT (JSON):
                  {{ 
                     "risk": "Risk description", 
                     "likelihood": "HIGH/MEDIUM/LOW", 
-                    "regulation_citation": "Regulation", 
+                    "regulation_citation": "Most relevant official regulation for this risk (PPE or non-PPE)", 
                     "legal_regulatory_consequences": "Consequence" 
                  }}
             ]
@@ -984,7 +987,7 @@ RESPONSE FORMAT (JSON):
     ],
     "summary": "• **SCENE CLASS**: [Environment Type]...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
     "dosh_regulations_cited": [
-        {{ "regulation": "Regulation Name", "requirement": "Requirement" }}
+        {{ "regulation": "Official JKR/DOSH regulation name", "requirement": "Specific breached requirement in this scene" }}
     ]
 }}
 """
@@ -1483,24 +1486,30 @@ RESPONSE FORMAT (JSON):
         # Build PPE status and collect data
         ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
         hazards, risks, actions, regulations = [], [], [], []
+
+        def _add_violation_signal(key: str, ppe_field: Optional[str] = None) -> None:
+            data = VIOLATION_DATA.get(key)
+            if not data:
+                return
+            if ppe_field:
+                ppe_status[ppe_field] = 'Missing'
+            hazards.append(data['hazard'])
+            risks.append(data['risk'])
+            actions.append(data['action'])
+            regulations.append({
+                'regulation': data['regulation'],
+                'requirement': data['requirement'],
+                'penalty': data.get('penalty', ''),
+                'legal_url': data.get('legal_url', ''),
+                'standard_url': data.get('standard_url', '')
+            })
         
         for v in violations:
             v_lower = v.lower().replace('no-', '')
             for key in VIOLATION_DATA:
                 if key.replace(' ', '') in v_lower.replace(' ', '') or key in v_lower:
                     ppe_field = key.replace(' ', '_')
-                    ppe_status[ppe_field] = 'Missing'
-                    data = VIOLATION_DATA[key]
-                    hazards.append(data['hazard'])
-                    risks.append(data['risk'])
-                    actions.append(data['action'])
-                    regulations.append({
-                        'regulation': data['regulation'], 
-                        'requirement': data['requirement'],
-                        'penalty': data.get('penalty', ''),
-                        'legal_url': data.get('legal_url', ''),
-                        'standard_url': data.get('standard_url', '')
-                    })
+                    _add_violation_signal(key, ppe_field=ppe_field)
                     break
         
         # Detect environment from caption keywords AND YOLO detections
@@ -1520,6 +1529,15 @@ RESPONSE FORMAT (JSON):
         has_roadside = any(kw in caption_lower for kw in ['road', 'roadside', 'traffic', 'highway', 'lorry', 'truck', 'pavement']) or yolo_cones or yolo_vehicle
         has_lorry = any(kw in caption_lower for kw in ['lorry', 'truck', 'flatbed', 'vehicle']) or yolo_vehicle
         has_phone = any(kw in caption_lower for kw in ['phone', 'mobile', 'call', 'device', 'watsapp', 'texting'])
+        has_work_height = any(kw in caption_lower for kw in ['scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform'])
+
+        # Add non-PPE regulatory signals from scene context when evidenced.
+        if has_roadside:
+            _add_violation_signal('roadside_risk')
+        if has_piles and has_slope:
+            _add_violation_signal('unsecured_piles')
+        if has_work_height and 'NO-Harness' in violations:
+            _add_violation_signal('harness', ppe_field='harness')
         
         if has_roadside and has_piles:
             env_type = 'Roadside Bakau Piling Zone'
@@ -3331,7 +3349,7 @@ RESPONSE FORMAT (JSON):
                 <h2 class="section-title">📚 Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
                 <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                     <p style="margin: 0; color: #e67e22; font-weight: 600;">
-                        <i class="fas fa-info-circle"></i> The following DOSH (Department of Occupational Safety and Health) regulations apply to this violation:
+                        <i class="fas fa-info-circle"></i> The following official JKR/DOSH regulations may apply to observed scene violations (PPE and non-PPE):
                     </p>
                 </div>
                 {''.join(reg_items)}
@@ -3437,6 +3455,8 @@ RESPONSE FORMAT (JSON):
                     if isinstance(r, dict):
                         risk_desc = str(r.get('risk') or r.get('description') or '').strip()
                         likelihood = str(r.get('likelihood') or '').strip()
+                        regulation_citation = str(r.get('regulation_citation') or '').strip()
+                        legal_consequence = str(r.get('legal_regulatory_consequences') or r.get('penalty') or '').strip()
                         if not likelihood:
                             risk_l = risk_desc.lower()
                             if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
@@ -3462,6 +3482,8 @@ RESPONSE FORMAT (JSON):
                         risks_html += f"""
             <div class="risk-item">
                 <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                {f'<div class="risk-meta" style="margin-top: 0.4rem; font-size: 0.9rem; color: #555;"><strong>Regulation:</strong> {self._to_safe_html_text(regulation_citation)}</div>' if regulation_citation else ''}
+                {f'<div class="risk-meta" style="margin-top: 0.25rem; font-size: 0.88rem; color: #666;"><strong>Legal consequence:</strong> {self._to_safe_html_text(legal_consequence)}</div>' if legal_consequence else ''}
                 <div class="likelihood-badge {lik_class}">
                     <span class="likelihood-label">Likelihood</span>
                     <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>

@@ -3646,6 +3646,22 @@ def api_generate_report_now(report_id):
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
 
+        violation = db_manager.get_violation(report_id)
+
+        if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
+            try:
+                original_key = violation.get('original_image_key')
+                if original_key:
+                    blob = storage_manager.download_file_content(original_key)
+                    if blob:
+                        violation_dir.mkdir(parents=True, exist_ok=True)
+                        if isinstance(blob, str):
+                            blob = blob.encode('utf-8')
+                        original_path.write_bytes(blob)
+                        logger.info(f"Recovered original image from Supabase for report {report_id}")
+            except Exception as recover_err:
+                logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+
         if not original_path.exists():
             return jsonify({
                 'success': False,
@@ -3655,7 +3671,6 @@ def api_generate_report_now(report_id):
         detections = []
         violation_types = []
 
-        violation = db_manager.get_violation(report_id)
         if violation and isinstance(violation.get('detection_data'), dict):
             detections = violation['detection_data'].get('detections', []) or []
 

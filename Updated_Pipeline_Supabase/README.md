@@ -60,6 +60,15 @@ EMBEDDING_API_MODEL=nomic-ai/nomic-embed-text-v1.5
 GEMINI_ENABLED=true
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.5-flash
+
+# Optional paid-plan quality tuning
+GEMINI_PAID_PLAN=true
+GEMINI_REPORT_MODEL=gemini-2.5-flash
+GEMINI_VISION_MODEL=gemini-2.5-flash
+
+# Optional multi-key pool for automatic key failover on quota/rate limits
+GEMINI_API_KEYS=key_primary,key_backup
+# GOOGLE_API_KEYS=key_primary,key_backup
 ```
 
 Notes:

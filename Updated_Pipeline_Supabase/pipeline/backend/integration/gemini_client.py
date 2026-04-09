@@ -22,7 +22,7 @@ import time
 import re
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +68,42 @@ class GeminiClient:
                 key = key[1:-1].strip()
             return key
 
-        self.api_key = _clean_key(gemini_config.get('api_key')) or _clean_key(os.getenv('GEMINI_API_KEY', ''))
+        def _parse_key_list(value: Any) -> List[str]:
+            if value is None:
+                return []
+            if isinstance(value, (list, tuple, set)):
+                raw_items = list(value)
+            else:
+                raw_items = str(value).split(',')
+            cleaned = []
+            for raw in raw_items:
+                key = _clean_key(raw)
+                if key and key not in cleaned:
+                    cleaned.append(key)
+            return cleaned
+
+        self.api_keys = []
+        self.api_key_index = 0
+        key_candidates = []
+        key_candidates.extend(_parse_key_list(gemini_config.get('api_keys')))
+        key_candidates.extend(_parse_key_list(gemini_config.get('api_key')))
+        key_candidates.extend(_parse_key_list(os.getenv('GEMINI_API_KEYS', '')))
+        key_candidates.extend(_parse_key_list(os.getenv('GOOGLE_API_KEYS', '')))
+        key_candidates.extend(_parse_key_list(os.getenv('GEMINI_API_KEY', '')))
+        key_candidates.extend(_parse_key_list(os.getenv('GOOGLE_API_KEY', '')))
+        for key in key_candidates:
+            if key not in self.api_keys:
+                self.api_keys.append(key)
+        self.api_key = self.api_keys[0] if self.api_keys else ''
+
         self.model_name = gemini_config.get('model', 'gemini-2.0-flash')
+        self.report_model_name = gemini_config.get('report_model', os.getenv('GEMINI_REPORT_MODEL', self.model_name))
+        self.vision_model_name = gemini_config.get('vision_model', os.getenv('GEMINI_VISION_MODEL', self.model_name))
+        self.model_name = self.report_model_name
         candidate_text = str(
             gemini_config.get(
                 'model_candidates',
-                os.getenv('GEMINI_MODEL_CANDIDATES', f"{self.model_name},gemini-2.5-flash-lite,gemini-1.5-flash")
+                os.getenv('GEMINI_MODEL_CANDIDATES', f"{self.model_name},gemini-2.5-flash,gemini-2.5-flash-lite,gemini-1.5-flash")
             )
         )
         parsed_candidates = [item.strip() for item in candidate_text.split(',') if item.strip()]
@@ -87,11 +117,12 @@ class GeminiClient:
         self.max_tokens = gemini_config.get('max_tokens', 2000)
         self.timeout = gemini_config.get('timeout', 120)
         self.max_retries = gemini_config.get('max_retries', 3)
+        self.paid_plan = bool(gemini_config.get('paid_plan', False))
         self.last_error = None
         
         # Rate limiter state
         self._last_call_time = 0
-        self._min_interval = gemini_config.get('min_interval', 4.0)  # seconds between calls (15 RPM free tier)
+        self._min_interval = gemini_config.get('min_interval', 0.35 if self.paid_plan else 4.0)
         
         # Initialize the client
         self.client = None
@@ -110,10 +141,35 @@ class GeminiClient:
         try:
             self.client = genai.Client(api_key=self.api_key)
             self._initialized = True
-            logger.info(f"✓ Gemini client initialized (model: {self.model_name})")
+            logger.info(
+                f"✓ Gemini client initialized (report_model: {self.model_name}, vision_model: {self.vision_model_name}, keys: {len(self.api_keys)})"
+            )
         except Exception as e:
             logger.error(f"❌ Failed to initialize Gemini client: {e}")
             self.last_error = str(e)
+
+    def _switch_to_next_api_key(self, reason: str) -> bool:
+        """Rotate to next configured Gemini API key when current key is throttled/exhausted."""
+        if len(self.api_keys) <= 1:
+            return False
+
+        for offset in range(1, len(self.api_keys)):
+            next_index = (self.api_key_index + offset) % len(self.api_keys)
+            next_key = self.api_keys[next_index]
+            try:
+                candidate_client = genai.Client(api_key=next_key)
+                self.api_key_index = next_index
+                self.api_key = next_key
+                self.client = candidate_client
+                self._initialized = True
+                logger.warning(
+                    f"Switched Gemini API key to slot {next_index + 1}/{len(self.api_keys)} due to: {reason}"
+                )
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to activate Gemini API key at slot {next_index + 1}: {e}")
+
+        return False
     
     @property
     def is_available(self) -> bool:
@@ -121,7 +177,7 @@ class GeminiClient:
         return self._initialized and self.client is not None
     
     def _rate_limit(self):
-        """Simple rate limiter to stay within free tier (15 RPM)."""
+        """Simple rate limiter; interval is configurable and can be lower for paid plans."""
         now = time.time()
         elapsed = now - self._last_call_time
         if elapsed < self._min_interval:
@@ -358,7 +414,7 @@ class GeminiClient:
                 logger.info(f"Generating caption (attempt {attempt + 1}/{self.max_retries})...")
                 
                 response = self.client.models.generate_content(
-                    model=self.model_name,
+                    model=self.vision_model_name,
                     contents=[prompt, image_part],
                     config=types.GenerateContentConfig(
                         temperature=0.3,  # Lower temp for factual description
@@ -374,7 +430,12 @@ class GeminiClient:
                     logger.warning(f"Empty response from Gemini (attempt {attempt + 1})")
                     
             except Exception as e:
-                logger.error(f"Gemini captioning error (attempt {attempt + 1}): {e}")
+                err_text = str(e)
+                logger.error(f"Gemini captioning error (attempt {attempt + 1}): {err_text}")
+                upper = err_text.upper()
+                if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    if self._switch_to_next_api_key('quota/resource exhaustion (caption)'):
+                        continue
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
@@ -453,8 +514,8 @@ class GeminiClient:
                     self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
                     logger.error(self.last_error)
                 else:
-                            self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
-                            logger.warning(self.last_error)
+                    self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
+                    logger.warning(self.last_error)
                     
             except json.JSONDecodeError as e:
                 self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
@@ -469,6 +530,9 @@ class GeminiClient:
                 # Fail fast on quota/resource exhaustion to avoid long stuck generation windows.
                 upper = err_text.upper()
                 if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    switched_key = self._switch_to_next_api_key('quota/resource exhaustion')
+                    if switched_key:
+                        continue
                     switched = self._try_switch_to_next_model('quota/resource exhaustion')
                     if switched:
                         continue
@@ -490,9 +554,15 @@ class GeminiClient:
             'available': self.is_available,
             'sdk_installed': GEMINI_AVAILABLE,
             'api_key_set': bool(self.api_key),
+            'api_key_slots': len(self.api_keys),
+            'active_api_key_slot': self.api_key_index + 1 if self.api_keys else 0,
             'model': self.model_name,
+            'report_model': self.model_name,
+            'vision_model': self.vision_model_name,
             'model_candidates': self.model_candidates,
             'last_model_switch_reason': self.last_model_switch_reason,
+            'paid_plan': self.paid_plan,
+            'min_interval_seconds': self._min_interval,
             'backend': 'Google Gemini API',
             'error': GEMINI_ERROR if not GEMINI_AVAILABLE else None
         }

@@ -134,13 +134,22 @@ OLLAMA_CONFIG = {
 # =========================================================================
 
 GEMINI_CONFIG = {
-    'api_key': os.getenv('GEMINI_API_KEY', ''),
+    'api_key': os.getenv('GEMINI_API_KEY', os.getenv('GOOGLE_API_KEY', '')),
+    'api_keys': os.getenv('GEMINI_API_KEYS', os.getenv('GOOGLE_API_KEYS', '')),
     'model': os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'),
+    'report_model': os.getenv('GEMINI_REPORT_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
+    'vision_model': os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
     'temperature': float(os.getenv('GEMINI_TEMPERATURE', '0.4')),
     'max_tokens': int(os.getenv('GEMINI_MAX_TOKENS', '2000')),
     'timeout': int(os.getenv('GEMINI_TIMEOUT', '120')),
     'max_retries': int(os.getenv('GEMINI_MAX_RETRIES', '3')),
-    'min_interval': float(os.getenv('GEMINI_MIN_INTERVAL', '4.0')),  # Seconds between API calls (free tier: 15 RPM)
+    'paid_plan': os.getenv('GEMINI_PAID_PLAN', 'false').lower() == 'true',
+    'min_interval': float(
+        os.getenv(
+            'GEMINI_MIN_INTERVAL',
+            '0.35' if os.getenv('GEMINI_PAID_PLAN', 'false').lower() == 'true' else '4.0'
+        )
+    ),
     'enabled': os.getenv('GEMINI_ENABLED', 'true').lower() == 'true',
 }
 

@@ -2770,6 +2770,58 @@ RESPONSE FORMAT (JSON):
         detected_person_count = int((report_data or {}).get('person_count', 0) or 0)
         detected_violation_items = int((report_data or {}).get('violation_count', 0) or 0)
 
+        def _infer_people_count_from_text(*texts: str) -> int:
+            combined = " ".join(str(t or "") for t in texts)
+            lower = combined.lower()
+
+            # Prefer explicit numeric phrases like "6 people".
+            digit_hits = [
+                int(m.group(1))
+                for m in re.finditer(r"\b(\d{1,2})\s+(?:people|persons?|workers?|individuals?|men|women)\b", lower)
+            ]
+
+            number_words = {
+                "one": 1,
+                "two": 2,
+                "three": 3,
+                "four": 4,
+                "five": 5,
+                "six": 6,
+                "seven": 7,
+                "eight": 8,
+                "nine": 9,
+                "ten": 10,
+                "eleven": 11,
+                "twelve": 12,
+            }
+            word_hits = []
+            for word, value in number_words.items():
+                if re.search(rf"\b{word}\s+(?:people|persons?|workers?|individuals?|men|women)\b", lower):
+                    word_hits.append(value)
+
+            candidates = digit_hits + word_hits
+            if candidates:
+                return max(candidates)
+
+            # Last-resort heuristic: count ordinal-person mentions (e.g., "first person", "second person").
+            ordinal_hits = re.findall(
+                r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+person\b",
+                lower,
+            )
+            if ordinal_hits:
+                return len(set(ordinal_hits))
+
+            return 0
+
+        inferred_person_count = 0
+        if model_person_count == 0 and detected_person_count == 0:
+            inferred_person_count = _infer_people_count_from_text(
+                summary_text,
+                visual_evidence_text,
+                caption_text,
+                violation_summary,
+            )
+
         if model_person_count > 0:
             preview_rows = model_person_rows[:4]
             if model_person_count > 4:
@@ -2785,9 +2837,18 @@ RESPONSE FORMAT (JSON):
             )
             count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}<br><span style='color:#7f8c8d;'>{detector_context}</span>"
         else:
-            compliant_count = max(0, detected_person_count - min(detected_person_count, detected_violation_items))
+            people_count_for_display = detected_person_count if detected_person_count > 0 else inferred_person_count
+            compliant_count = max(
+                0,
+                people_count_for_display - min(people_count_for_display, detected_violation_items),
+            )
+            people_prefix = (
+                f"{people_count_for_display} Scanned"
+                if detected_person_count > 0
+                else f"{people_count_for_display} Estimated From Scene Text"
+            )
             count_display = (
-                f"{detected_person_count} Scanned "
+                f"{people_prefix} "
                 f"({detected_violation_items} Violation Items / {compliant_count} Compliant)"
             )
 

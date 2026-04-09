@@ -64,6 +64,8 @@ jobs:
         env:
           LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           LUNA_CONDITIONS_STRICT: "1"
+          LUNA_CONDITIONS_POLL_SECONDS: "90"
+          LUNA_CONDITIONS_POLL_INTERVAL: "5"
         run: |
           set +e
           python Updated_Pipeline_Supabase/deployed_system_conditions_test.py

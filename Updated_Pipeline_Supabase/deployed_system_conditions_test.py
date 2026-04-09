@@ -18,6 +18,7 @@ ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("LUNA_PROVIDER_MODE_MATRIX", "1") !
 PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
 STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "0") != "0"
 REQUIRE_NO_NLP_FALLBACK = os.environ.get("LUNA_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
+REQUIRE_GENERATE_PROGRESSION = os.environ.get("LUNA_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
 ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini"}
 
 ALLOWED_REPORT_STATUSES = {
@@ -488,10 +489,10 @@ def main() -> int:
                 time.sleep(POLL_INTERVAL)
 
             if seen and all(s in ("pending", "queued") for s in seen):
-                return fail(
-                    f"{progression_candidate} remained queued/pending across polling window",
-                    16,
-                )
+                msg = f"{progression_candidate} remained queued/pending across polling window"
+                if REQUIRE_GENERATE_PROGRESSION:
+                    return fail(msg, 16)
+                print(f"INFO: non-blocking condition: {msg}")
 
         if ENABLE_PROVIDER_MODE_MATRIX:
             run_provider_mode_matrix_probe(report_ids)

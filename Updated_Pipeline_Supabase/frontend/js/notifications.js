@@ -188,7 +188,7 @@ const NotificationManager = {
 
         // Click anywhere to dismiss
         notification.addEventListener('click', (e) => {
-            if (e.target.tagName !== 'BUTTON') {
+            if (!e.target.closest('button')) {
                 this.dismiss(id);
             }
         });
@@ -210,10 +210,18 @@ const NotificationManager = {
         const index = this.notifications.findIndex(n => n.id == id);
         if (index !== -1) {
             const notif = this.notifications[index];
+            if (notif.isDismissing) {
+                return;
+            }
+
+            notif.isDismissing = true;
             notif.element.style.animation = 'slideOutDown 0.3s ease-out';
             setTimeout(() => {
                 notif.element.remove();
-                this.notifications.splice(index, 1);
+                const currentIndex = this.notifications.findIndex(n => n.id == id);
+                if (currentIndex !== -1) {
+                    this.notifications.splice(currentIndex, 1);
+                }
                 this.updateSummaryBadge();
             }, 300);
         }

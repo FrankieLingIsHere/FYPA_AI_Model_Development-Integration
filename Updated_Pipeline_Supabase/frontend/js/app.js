@@ -483,7 +483,9 @@ function setupResponsiveMobileUX() {
         const locked = phoneDevice && portrait;
 
         body.classList.toggle('is-phone-device', phoneDevice);
-        body.classList.toggle('is-tablet-device', tabletDevice);
+        // Tablets keep desktop layout. Only landscape tablet gets a small spacing optimization.
+        body.classList.remove('is-tablet-device');
+        body.classList.toggle('is-tablet-landscape', tabletDevice && !portrait);
         body.classList.toggle('mobile-portrait-locked', locked);
 
         if (!phoneDevice) {

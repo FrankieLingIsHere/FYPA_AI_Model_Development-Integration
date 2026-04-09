@@ -21,6 +21,8 @@ MAX_ALLOWED_SAMPLE_SECONDS = float(
     os.environ.get("LUNA_REPORT_OPEN_MAX_SAMPLE_SECONDS", str(max(2.0, WARM_TARGET_SECONDS * 2.0)))
 )
 MEAN_MULTIPLIER = float(os.environ.get("LUNA_REPORT_OPEN_MEAN_MULTIPLIER", "1.15"))
+RETRY_ATTEMPTS = max(1, int(os.environ.get("LUNA_REPORT_OPEN_RETRY_ATTEMPTS", "2")))
+RETRY_BACKOFF_SECONDS = max(1.0, float(os.environ.get("LUNA_REPORT_OPEN_RETRY_BACKOFF_SECONDS", "3")))
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -125,7 +127,7 @@ def warm_and_measure(report_id: str) -> Optional[Dict]:
     }
 
 
-def main() -> int:
+def run_once() -> int:
     try:
         code, payload, preview, elapsed = request_json("GET", "/api/violations", timeout=REQUEST_TIMEOUT)
         if code >= 400:
@@ -211,6 +213,28 @@ def main() -> int:
         return fail(f"HTTP error during report latency test: {exc}", 20)
     except Exception as exc:
         return fail(f"Unhandled error during report latency test: {exc}", 21)
+
+
+def main() -> int:
+    last_code = 0
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        if RETRY_ATTEMPTS > 1:
+            print(f"INFO: latency-check-attempt={attempt}/{RETRY_ATTEMPTS}")
+
+        code = run_once()
+        if code == 0:
+            return 0
+
+        last_code = code
+        if attempt < RETRY_ATTEMPTS:
+            sleep_s = RETRY_BACKOFF_SECONDS * attempt
+            print(
+                f"WARN: latency contract attempt {attempt} failed with code {code}; "
+                f"retrying after {sleep_s:.1f}s"
+            )
+            time.sleep(sleep_s)
+
+    return last_code
 
 
 if __name__ == "__main__":

@@ -51,6 +51,12 @@ def main() -> int:
             "const narrowTouchViewport = touchCapable && window.matchMedia('(max-width: 860px)').matches;",
             "body.classList.toggle('is-tablet-device', tabletDevice);",
         ],
+        [
+            "const getDeviceProfile = () => {",
+            "const narrowTouchViewport = touchCapable && window.matchMedia('(max-width: 860px)').matches;",
+            "body.classList.remove('is-tablet-device');",
+            "body.classList.toggle('is-tablet-landscape', tabletDevice && !portrait);",
+        ],
     ]
     required_index_markers = [
         "id=\"networkStatusBadge\"",

@@ -119,6 +119,21 @@ class GeminiClient:
         self.max_retries = gemini_config.get('max_retries', 3)
         self.paid_plan = bool(gemini_config.get('paid_plan', False))
         self.last_error = None
+        self.last_parse_strategy = None
+        self.raw_capture_enabled = str(os.getenv('GEMINI_RAW_CAPTURE_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+        self.raw_capture_max_chars = max(200, int(os.getenv('GEMINI_RAW_CAPTURE_MAX_CHARS', '4000')))
+        capture_file = os.getenv('GEMINI_RAW_CAPTURE_FILE', 'reports/debug/gemini_raw_capture.jsonl').strip()
+        self.raw_capture_file = Path(capture_file)
+
+        prompt_budget = os.getenv('GEMINI_REPORT_PROMPT_MAX_CHARS', '').strip()
+        self.report_prompt_max_chars = int(prompt_budget) if prompt_budget.isdigit() else 22000
+        output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
+        self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 1100
+        temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
+        try:
+            self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2
+        except ValueError:
+            self.report_temperature_cap = 0.2
         
         # Rate limiter state
         self._last_call_time = 0
@@ -280,12 +295,100 @@ class GeminiClient:
 
         return None
 
+    def _sanitize_debug_text(self, value: Any, max_chars: Optional[int] = None) -> str:
+        """Sanitize debug text to keep logs safe and bounded."""
+        limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else self.raw_capture_max_chars
+        text = str(value or "").replace('\r', '')
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+        if len(text) > limit:
+            return f"{text[:limit]} ...[truncated {len(text) - limit} chars]"
+        return text
+
+    def _capture_nlp_debug(
+        self,
+        *,
+        report_id: Optional[str],
+        attempt: int,
+        phase: str,
+        prompt_text: str,
+        raw_response: Optional[str] = None,
+        parse_strategy: Optional[str] = None,
+        success: bool = False,
+        error: Optional[str] = None,
+        repaired: bool = False,
+    ) -> None:
+        """Persist sanitized Gemini NLP attempt telemetry for postmortem analysis."""
+        if not self.raw_capture_enabled:
+            return
+
+        try:
+            resolved_path = self.raw_capture_file
+            if not resolved_path.is_absolute():
+                resolved_path = Path.cwd() / resolved_path
+            resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+            required_keys = ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
+            key_presence = {}
+            payload = None
+            if raw_response:
+                payload = self._parse_json_from_response_text(raw_response)
+            if isinstance(payload, dict):
+                key_presence = {key: key in payload for key in required_keys}
+
+            record = {
+                'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                'report_id': report_id or 'unknown',
+                'model': self.model_name,
+                'attempt': attempt,
+                'phase': phase,
+                'success': bool(success),
+                'repaired': bool(repaired),
+                'parse_strategy': parse_strategy,
+                'prompt_chars': len(prompt_text or ''),
+                'response_chars': len(raw_response or ''),
+                'required_key_presence': key_presence,
+                'error': self._sanitize_debug_text(error or '', 1000),
+                'prompt_preview': self._sanitize_debug_text(prompt_text),
+                'response_preview': self._sanitize_debug_text(raw_response or ''),
+            }
+
+            with resolved_path.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(record, ensure_ascii=True) + '\n')
+        except Exception as capture_error:
+            logger.warning(f"Failed to capture Gemini debug payload: {capture_error}")
+
+    def _tighten_prompt_for_json(self, prompt: str) -> str:
+        """Reduce prompt bloat while preserving required JSON-output instructions."""
+        compact = str(prompt or '').strip()
+        if not compact:
+            return compact
+
+        compact = re.sub(
+            r"=== HISTORICAL INCIDENTS \(For Reference\) ===.*?=== END HISTORICAL INCIDENTS ===\\s*",
+            "",
+            compact,
+            flags=re.DOTALL,
+        )
+
+        max_chars = max(4000, self.report_prompt_max_chars)
+        if len(compact) > max_chars:
+            compact = compact[:max_chars]
+
+        compact += (
+            "\\n\\nFINAL RESPONSE RULES:\\n"
+            "- Return exactly one valid JSON object and no markdown fences.\\n"
+            "- Keep each description concise while preserving factual grounding.\\n"
+        )
+        return compact
+
     def _parse_json_from_response_text(self, raw_text: str) -> Optional[Dict[str, Any]]:
         """Parse model output into JSON dict using progressive recovery strategies."""
+        self.last_parse_strategy = None
         # 1) Strict JSON response
         try:
             parsed = json.loads(raw_text)
             if isinstance(parsed, dict):
+                self.last_parse_strategy = 'strict_json'
                 return parsed
         except json.JSONDecodeError:
             pass
@@ -297,6 +400,7 @@ class GeminiClient:
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
+                    self.last_parse_strategy = 'fenced_json'
                     return parsed
             except json.JSONDecodeError:
                 pass
@@ -307,6 +411,7 @@ class GeminiClient:
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
+                    self.last_parse_strategy = 'generic_fence_json'
                     return parsed
             except json.JSONDecodeError:
                 pass
@@ -321,6 +426,7 @@ class GeminiClient:
             try:
                 parsed = json.loads(cleaned)
                 if isinstance(parsed, dict):
+                    self.last_parse_strategy = 'balanced_object_json'
                     return parsed
             except json.JSONDecodeError:
                 pass
@@ -450,7 +556,8 @@ class GeminiClient:
     def generate_report_json(
         self,
         prompt: str,
-        image_path: Optional[str] = None
+        image_path: Optional[str] = None,
+        report_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Generate structured NLP report analysis as JSON.
@@ -467,12 +574,22 @@ class GeminiClient:
         if not self.is_available:
             logger.error("Gemini not available for report generation")
             self.last_error = "Gemini client not available for report generation"
+            self._capture_nlp_debug(
+                report_id=report_id,
+                attempt=0,
+                phase='client-unavailable',
+                prompt_text=prompt,
+                success=False,
+                error=self.last_error,
+            )
             return None
 
         self.last_model_switch_reason = None
         
+        tight_prompt = self._tighten_prompt_for_json(prompt)
+
         # Build content parts
-        contents = [prompt]
+        contents = [tight_prompt]
         
         # Optionally include the image for multimodal analysis
         if image_path:
@@ -491,8 +608,8 @@ class GeminiClient:
                     model=self.model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(
-                        temperature=self.temperature,
-                        max_output_tokens=self.max_tokens,
+                        temperature=min(self.temperature, self.report_temperature_cap),
+                        max_output_tokens=min(self.max_tokens, self.report_output_max_tokens),
                         response_mime_type="application/json",
                     )
                 )
@@ -503,19 +620,56 @@ class GeminiClient:
                     if result is not None:
                         logger.info("✓ NLP report JSON generated successfully")
                         self.last_error = None
+                        self._capture_nlp_debug(
+                            report_id=report_id,
+                            attempt=attempt + 1,
+                            phase='primary-parse',
+                            prompt_text=tight_prompt,
+                            raw_response=raw_text,
+                            parse_strategy=self.last_parse_strategy,
+                            success=True,
+                        )
                         return result
 
                     repaired = self._repair_json_with_gemini(raw_text)
                     if repaired is not None:
                         logger.info("✓ NLP report JSON repaired successfully")
                         self.last_error = None
+                        self._capture_nlp_debug(
+                            report_id=report_id,
+                            attempt=attempt + 1,
+                            phase='repair-parse',
+                            prompt_text=tight_prompt,
+                            raw_response=raw_text,
+                            parse_strategy='gemini_repair_json',
+                            success=True,
+                            repaired=True,
+                        )
                         return repaired
 
                     self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
                     logger.error(self.last_error)
+                    self._capture_nlp_debug(
+                        report_id=report_id,
+                        attempt=attempt + 1,
+                        phase='parse-failed',
+                        prompt_text=tight_prompt,
+                        raw_response=raw_text,
+                        parse_strategy=self.last_parse_strategy,
+                        success=False,
+                        error=self.last_error,
+                    )
                 else:
                     self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
                     logger.warning(self.last_error)
+                    self._capture_nlp_debug(
+                        report_id=report_id,
+                        attempt=attempt + 1,
+                        phase='empty-response',
+                        prompt_text=tight_prompt,
+                        success=False,
+                        error=self.last_error,
+                    )
                     
             except json.JSONDecodeError as e:
                 self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
@@ -526,6 +680,14 @@ class GeminiClient:
                 err_text = str(e)
                 self.last_error = f"Gemini report generation error (attempt {attempt + 1}): {err_text}"
                 logger.error(self.last_error)
+                self._capture_nlp_debug(
+                    report_id=report_id,
+                    attempt=attempt + 1,
+                    phase='exception',
+                    prompt_text=tight_prompt,
+                    success=False,
+                    error=self.last_error,
+                )
 
                 # Fail fast on quota/resource exhaustion to avoid long stuck generation windows.
                 upper = err_text.upper()

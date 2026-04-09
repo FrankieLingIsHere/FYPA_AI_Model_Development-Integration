@@ -994,7 +994,7 @@ RESPONSE FORMAT (JSON):
         
         return prompt
     
-    def _call_gemini_api(self, prompt: str, image_path: str = None) -> Optional[Dict[str, Any]]:
+    def _call_gemini_api(self, prompt: str, image_path: str = None, report_id: str = None) -> Optional[Dict[str, Any]]:
         """
         Call Gemini API for NLP analysis (primary provider).
         
@@ -1010,7 +1010,7 @@ RESPONSE FORMAT (JSON):
         
         try:
             logger.info("\U0001f680 Using Gemini API for NLP analysis...")
-            result = self.gemini_client.generate_report_json(prompt, image_path=image_path)
+            result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
             
             if result:
                 logger.info("✓ Gemini NLP analysis completed")
@@ -1214,7 +1214,11 @@ RESPONSE FORMAT (JSON):
                         continue
 
                     logger.info("Trying Gemini NLP API...")
-                    nlp_analysis = self._call_gemini_api(prompt, image_path=image_path_str)
+                    nlp_analysis = self._call_gemini_api(
+                        prompt,
+                        image_path=image_path_str,
+                        report_id=str(report_data.get('report_id') or ''),
+                    )
                     if self.gemini_client is not None:
                         self.last_nlp_model = getattr(self.gemini_client, 'model_name', None)
                     if not nlp_analysis:

@@ -31,11 +31,11 @@ const LivePage = {
                     </div>
                 </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem 0.9rem; border: 1px solid var(--border-color); border-radius: 10px; background: linear-gradient(180deg, #ffffff, #f8fbff);">
-                    <p style="margin: 0; color: var(--text-secondary); font-size: 0.9rem;">
+                <div class="live-toolbar">
+                    <p class="live-toolbar-note">
                         System controls are outside the live monitor card for easier access.
                     </p>
-                    <button id="liveToolbarSettingsBtn" class="btn btn-secondary" title="Open monitoring settings">
+                    <button id="liveToolbarSettingsBtn" class="btn btn-secondary live-toolbar-settings-btn" title="Open monitoring settings">
                         <i class="fas fa-cog"></i> Open Settings
                     </button>
                 </div>
@@ -43,12 +43,12 @@ const LivePage = {
                 <div class="card mb-4 live-monitor-card">
                     <div class="card-header">
                         <span id="cardTitle"><i class="fas fa-video"></i> Live Camera Monitoring</span>
-                        <div id="liveControls" style="float: right;">
+                        <div id="liveControls" class="live-controls">
                             <span id="phoneCameraPermissionBadge" style="display: none; margin-right: 10px; font-size: 0.78rem; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid transparent; vertical-align: middle;"></span>
-                            <button id="sourceToggleBtn" class="btn btn-secondary" style="margin-right: 10px;" title="Toggle camera source">
+                            <button id="sourceToggleBtn" class="btn btn-secondary" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
-                            <button id="startLiveBtn" class="btn btn-success" style="margin-right: 10px;">
+                            <button id="startLiveBtn" class="btn btn-success">
                                 <i class="fas fa-play"></i> Start
                             </button>
                             <button id="stopLiveBtn" class="btn btn-danger" disabled>

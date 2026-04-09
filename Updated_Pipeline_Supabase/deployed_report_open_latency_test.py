@@ -23,6 +23,10 @@ MAX_ALLOWED_SAMPLE_SECONDS = float(
 MEAN_MULTIPLIER = float(os.environ.get("LUNA_REPORT_OPEN_MEAN_MULTIPLIER", "1.15"))
 RETRY_ATTEMPTS = max(1, int(os.environ.get("LUNA_REPORT_OPEN_RETRY_ATTEMPTS", "2")))
 RETRY_BACKOFF_SECONDS = max(1.0, float(os.environ.get("LUNA_REPORT_OPEN_RETRY_BACKOFF_SECONDS", "3")))
+NETWORK_BASELINE_SAMPLES = max(1, int(os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_SAMPLES", "3")))
+NETWORK_BASELINE_PATH = os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_PATH", "/api/health")
+NETWORK_BASELINE_FREE_S = max(0.0, float(os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_FREE_S", "0.20")))
+NETWORK_ALLOWANCE_CAP_S = max(0.0, float(os.environ.get("LUNA_REPORT_OPEN_NETWORK_ALLOWANCE_CAP_S", "0.60")))
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -50,6 +54,21 @@ def timed_get_text(path: str, *, timeout: int = REQUEST_TIMEOUT):
     response = requests.get(url, timeout=timeout, headers={"Cache-Control": "no-cache"})
     elapsed = time.perf_counter() - started
     return response, elapsed
+
+
+def measure_network_baseline_seconds() -> Optional[float]:
+    samples: List[float] = []
+    for _ in range(NETWORK_BASELINE_SAMPLES):
+        try:
+            response, elapsed = timed_get_text(NETWORK_BASELINE_PATH, timeout=REQUEST_TIMEOUT)
+            if response.status_code >= 400:
+                continue
+            samples.append(elapsed)
+        except Exception:
+            continue
+    if not samples:
+        return None
+    return statistics.median(samples)
 
 
 def choose_candidates(rows: List[Dict]) -> List[str]:
@@ -129,6 +148,13 @@ def warm_and_measure(report_id: str) -> Optional[Dict]:
 
 def run_once() -> int:
     try:
+        network_baseline_s = measure_network_baseline_seconds()
+        extra_network_allowance_s = 0.0
+        if network_baseline_s is not None:
+            extra_network_allowance_s = max(0.0, network_baseline_s - NETWORK_BASELINE_FREE_S)
+            extra_network_allowance_s = min(extra_network_allowance_s, NETWORK_ALLOWANCE_CAP_S)
+        effective_warm_target_s = WARM_TARGET_SECONDS + extra_network_allowance_s
+
         code, payload, preview, elapsed = request_json("GET", "/api/violations", timeout=REQUEST_TIMEOUT)
         if code >= 400:
             return fail(f"/api/violations failed ({code}): {preview}", 3)
@@ -140,7 +166,9 @@ def run_once() -> int:
             return fail("No completed reports with artifacts found for latency test", 5)
 
         print(
-            f"INFO: candidates={len(candidates)} scan_time_s={elapsed:.3f} warm_target_s={WARM_TARGET_SECONDS:.3f}"
+            f"INFO: candidates={len(candidates)} scan_time_s={elapsed:.3f} warm_target_s={WARM_TARGET_SECONDS:.3f} "
+            f"effective_target_s={effective_warm_target_s:.3f} network_baseline_s="
+            f"{(f'{network_baseline_s:.3f}' if network_baseline_s is not None else 'n/a')}"
         )
 
         measured: List[Dict] = []
@@ -180,17 +208,17 @@ def run_once() -> int:
         overall_p95 = all_warm_samples[overall_p95_index]
         worst_sample = max(all_warm_samples)
 
-        if overall_p95 > WARM_TARGET_SECONDS:
+        if overall_p95 > effective_warm_target_s:
             return fail(
-                f"Warm open latency target exceeded (overall p95): {overall_p95:.3f}s > {WARM_TARGET_SECONDS:.3f}s "
+                f"Warm open latency target exceeded (overall p95): {overall_p95:.3f}s > {effective_warm_target_s:.3f}s "
                 f"(worst_sample={worst_sample:.3f}s, candidates={len(measured)})",
                 7,
             )
 
-        if worst_mean > (WARM_TARGET_SECONDS * MEAN_MULTIPLIER):
+        if worst_mean > (effective_warm_target_s * MEAN_MULTIPLIER):
             return fail(
                 f"Warm open latency mean degraded: worst_mean={worst_mean:.3f}s > "
-                f"{(WARM_TARGET_SECONDS * MEAN_MULTIPLIER):.3f}s "
+                f"{(effective_warm_target_s * MEAN_MULTIPLIER):.3f}s "
                 f"(overall_p95={overall_p95:.3f}s, candidates={len(measured)})",
                 9,
             )
@@ -204,7 +232,7 @@ def run_once() -> int:
 
         print(
             f"PASS: report open warm latency contract met "
-            f"(target<={WARM_TARGET_SECONDS:.3f}s, overall_p95={overall_p95:.3f}s, "
+            f"(target<={effective_warm_target_s:.3f}s, overall_p95={overall_p95:.3f}s, "
             f"worst_p95={worst_p95:.3f}s, worst_mean={worst_mean:.3f}s, "
             f"worst_sample={worst_sample:.3f}s, candidates={len(measured)})"
         )

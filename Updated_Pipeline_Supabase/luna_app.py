@@ -89,6 +89,11 @@ startup_state = {
 REPORT_HTML_CACHE_TTL_SECONDS = int(os.getenv('REPORT_HTML_CACHE_TTL_SECONDS', '300'))
 report_html_cache_lock = Lock()
 report_html_cache: Dict[str, Dict[str, Any]] = {}
+REPORT_RENDERED_CACHE_TTL_SECONDS = int(
+    os.getenv('REPORT_RENDERED_CACHE_TTL_SECONDS', str(REPORT_HTML_CACHE_TTL_SECONDS))
+)
+report_rendered_cache_lock = Lock()
+report_rendered_cache: Dict[str, Dict[str, Any]] = {}
 
 
 def _get_cached_report_html_content(report_id: str, report_html_key: str) -> Optional[str]:
@@ -131,6 +136,47 @@ def _set_cached_report_html_content(report_id: str, report_html_key: str, conten
             )[:80]
             for key in stale_keys:
                 report_html_cache.pop(key, None)
+
+
+def _get_cached_rendered_report_html(report_id: str, report_html_key: str) -> Optional[str]:
+    if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
+        return None
+
+    now = time.time()
+    with report_rendered_cache_lock:
+        entry = report_rendered_cache.get(report_id)
+        if not entry:
+            return None
+        if entry.get('report_html_key') != report_html_key:
+            report_rendered_cache.pop(report_id, None)
+            return None
+        expires_at = float(entry.get('expires_at') or 0)
+        if expires_at <= now:
+            report_rendered_cache.pop(report_id, None)
+            return None
+        content = entry.get('content')
+        return content if isinstance(content, str) else None
+
+
+def _set_cached_rendered_report_html(report_id: str, report_html_key: str, content: str) -> None:
+    if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
+        return
+    if not isinstance(content, str) or not content:
+        return
+
+    with report_rendered_cache_lock:
+        report_rendered_cache[report_id] = {
+            'report_html_key': report_html_key,
+            'content': content,
+            'expires_at': time.time() + REPORT_RENDERED_CACHE_TTL_SECONDS,
+        }
+        if len(report_rendered_cache) > 300:
+            stale_keys = sorted(
+                report_rendered_cache,
+                key=lambda k: float(report_rendered_cache[k].get('expires_at') or 0)
+            )[:80]
+            for key in stale_keys:
+                report_rendered_cache.pop(key, None)
 
 # Import pipeline components for violation handling
 try:
@@ -1929,6 +1975,12 @@ def api_violations():
         # Format violations for API response
         formatted_violations = []
         for v in violations:
+            report_id = v['report_id']
+            local_violation_dir = VIOLATIONS_DIR / str(report_id)
+            local_has_original = (local_violation_dir / 'original.jpg').exists()
+            local_has_annotated = (local_violation_dir / 'annotated.jpg').exists()
+            local_has_report = (local_violation_dir / 'report.html').exists()
+
             # Extract caption validation data if available
             detection_data = v.get('detection_data') or {}
             caption_validation = detection_data.get('caption_validation')
@@ -1936,10 +1988,14 @@ def api_violations():
             # Determine status - use actual status if available, otherwise infer from data
             status = v.get('status', 'unknown')
             if status == 'unknown':
-                if v.get('report_html_key') or v.get('violation_id'):
+                if v.get('report_html_key') or local_has_report or v.get('violation_id'):
                     status = 'completed'
                 else:
                     status = 'pending'
+
+            # Keep list view aligned with status endpoint: local report artifact means ready.
+            if status in ('pending', 'queued', 'generating', 'processing', 'unknown') and local_has_report:
+                status = 'completed'
             
             # Extract missing PPE details from detection_data or violation_summary
             missing_ppe = []
@@ -2006,7 +2062,7 @@ def api_violations():
                 resolved_person_count = v.get('person_count', 0)
             
             formatted_violations.append({
-                'report_id': v['report_id'],
+                'report_id': report_id,
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
                 'person_count': resolved_person_count,
                 'violation_count': v.get('violation_count') if v.get('violation_count') else len(missing_ppe) if missing_ppe else 1,
@@ -2018,9 +2074,9 @@ def api_violations():
                 'missing_ppe': missing_ppe,
                 'ppe_tags': ppe_tags,
                 'violation_type': 'PPE Violation',
-                'has_original': bool(v.get('original_image_key')),
-                'has_annotated': bool(v.get('annotated_image_key')),
-                'has_report': bool(v.get('report_html_key')),
+                'has_original': bool(v.get('original_image_key')) or local_has_original,
+                'has_annotated': bool(v.get('annotated_image_key')) or local_has_annotated,
+                'has_report': bool(v.get('report_html_key')) or local_has_report,
                 'detection_data': {
                     'caption_validation': caption_validation
                 } if caption_validation else None
@@ -2322,6 +2378,100 @@ def api_report_status(report_id):
     except Exception as e:
         logger.error(f"Error fetching report status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch status'}), 500
+
+
+@app.route('/api/report/<report_id>/prefetch', methods=['POST'])
+def api_report_prefetch(report_id):
+    """Warm backend caches so the next /report/<id> open is low-latency."""
+    started = time.perf_counter()
+
+    try:
+        local_report_html = VIOLATIONS_DIR / report_id / 'report.html'
+
+        if storage_manager is None or db_manager is None:
+            if local_report_html.exists():
+                return jsonify({
+                    'success': True,
+                    'report_id': report_id,
+                    'warmed': True,
+                    'layer': 'local_filesystem',
+                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+                })
+            return jsonify({'success': False, 'error': 'Report not found'}), 404
+
+        violation = db_manager.get_violation(report_id)
+        if not violation:
+            if local_report_html.exists():
+                return jsonify({
+                    'success': True,
+                    'report_id': report_id,
+                    'warmed': True,
+                    'layer': 'local_filesystem',
+                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+                })
+            return jsonify({'success': False, 'error': 'Report not found'}), 404
+
+        report_html_key = violation.get('report_html_key')
+        if not report_html_key:
+            if local_report_html.exists():
+                return jsonify({
+                    'success': True,
+                    'report_id': report_id,
+                    'warmed': True,
+                    'layer': 'local_filesystem',
+                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+                })
+            return jsonify({'success': False, 'error': 'Report HTML not available'}), 404
+
+        rendered = _get_cached_rendered_report_html(report_id, report_html_key)
+        if rendered:
+            return jsonify({
+                'success': True,
+                'report_id': report_id,
+                'warmed': True,
+                'layer': 'rendered_cache',
+                'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+            })
+
+        html_content = _get_cached_report_html_content(report_id, report_html_key)
+        source_layer = 'source_cache'
+        if html_content is None:
+            html_content = storage_manager.download_file_content(report_html_key)
+            source_layer = 'supabase_storage'
+
+        if not html_content:
+            return jsonify({'success': False, 'error': 'Failed to download report HTML'}), 404
+
+        if isinstance(html_content, (bytes, bytearray)):
+            html_content = html_content.decode('utf-8', errors='replace')
+        elif not isinstance(html_content, str):
+            html_content = str(html_content)
+
+        _set_cached_report_html_content(report_id, report_html_key, html_content)
+
+        event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+        trace_payload = _build_traceability_payload(
+            report_id=report_id,
+            violation=violation or {},
+            event=event or {},
+            source='supabase_storage_prefetch',
+            failed_view_requested=False,
+        )
+        rendered = _repair_report_documentation_block(html_content, report_id)
+        rendered = _normalize_report_footer_branding(rendered)
+        rendered = _inject_traceability_widget(rendered, trace_payload)
+        _set_cached_rendered_report_html(report_id, report_html_key, rendered)
+
+        return jsonify({
+            'success': True,
+            'report_id': report_id,
+            'warmed': True,
+            'layer': source_layer,
+            'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+        })
+    except Exception as e:
+        logger.warning(f"Report prefetch failed for {report_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/queue/status')
@@ -3926,6 +4076,16 @@ def view_report(report_id):
                     status_code=409
                 )
             abort(404, description="Report HTML not found")
+
+        if not failed_view:
+            cached_rendered = _get_cached_rendered_report_html(report_id, report_html_key)
+            if cached_rendered:
+                return cached_rendered, 200, {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
         
         # Download the HTML content and render it
         try:
@@ -3977,6 +4137,8 @@ def view_report(report_id):
             html_content = _repair_report_documentation_block(html_content, report_id)
             html_content = _normalize_report_footer_branding(html_content)
             html_content = _inject_traceability_widget(html_content, trace_payload)
+            if not failed_view:
+                _set_cached_rendered_report_html(report_id, report_html_key, html_content)
             return html_content, 200, {
                 'Content-Type': 'text/html; charset=utf-8',
                 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',

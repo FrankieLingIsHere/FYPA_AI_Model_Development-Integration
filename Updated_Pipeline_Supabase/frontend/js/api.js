@@ -418,6 +418,23 @@ const API = {
         return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REPORT(reportId)}`;
     },
 
+    async prefetchReport(reportId) {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/prefetch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store'
+            });
+            if (!response.ok) {
+                return { success: false, error: `Prefetch failed: ${response.status}` };
+            }
+            const data = await response.json().catch(() => ({}));
+            return data && typeof data === 'object' ? data : { success: false, error: 'Invalid prefetch response' };
+        } catch (error) {
+            return { success: false, error: String(error && error.message ? error.message : error) };
+        }
+    },
+
     // Get event logs
     async getLogs(limit = 50, eventType = null) {
         try {

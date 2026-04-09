@@ -11,6 +11,10 @@ const ReportsPage = {
         dateRange: 'all'
     },
     refreshInterval: null,
+    prefetchState: {
+        completed: new Set(),
+        inFlight: new Set()
+    },
     modalRuntime: {
         reportId: null,
         pollTimer: null,
@@ -157,7 +161,41 @@ const ReportsPage = {
     async loadReports() {
         this.violations = await API.getViolations();
         this.renderReports();
+        this.scheduleReportPrefetch();
         this.applyPendingFocusRequest();
+    },
+
+    scheduleReportPrefetch() {
+        const ready = this.violations
+            .filter((v) => this.isReportReady(v))
+            .slice(0, 8);
+
+        ready.forEach((v, idx) => {
+            const reportId = String(v.report_id || '').trim();
+            if (!reportId) return;
+            setTimeout(() => {
+                this.prefetchReport(reportId);
+            }, 120 * idx);
+        });
+    },
+
+    async prefetchReport(reportId) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return;
+        if (this.prefetchState.completed.has(rid)) return;
+        if (this.prefetchState.inFlight.has(rid)) return;
+
+        this.prefetchState.inFlight.add(rid);
+        try {
+            const result = await API.prefetchReport(rid);
+            if (result && result.success) {
+                this.prefetchState.completed.add(rid);
+            }
+        } catch (error) {
+            // Non-blocking optimization path.
+        } finally {
+            this.prefetchState.inFlight.delete(rid);
+        }
     },
 
     async refreshReports() {
@@ -289,7 +327,19 @@ const ReportsPage = {
         }
     },
 
-    openReport(reportId) {
+    async openReport(reportId) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return;
+
+        try {
+            await Promise.race([
+                this.prefetchReport(rid),
+                new Promise((resolve) => setTimeout(resolve, 250))
+            ]);
+        } catch (error) {
+            // Fall through to open even if prefetch fails or times out.
+        }
+
         const url = API.getReportUrl(reportId);
         window.open(url, '_blank');
         this.notify(`Opening report ${reportId}`, 'info');
@@ -1046,6 +1096,7 @@ const ReportsPage = {
         return `
             <div class="card" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
+                  onmouseenter="ReportsPage.prefetchReport('${violation.report_id}')"
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${violation.has_annotated ? 
@@ -1096,6 +1147,7 @@ const ReportsPage = {
                             </button>
                             ${isReady ? `
                                 <button class="btn btn-secondary" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;"
+                                    onmousedown="event.stopPropagation(); ReportsPage.prefetchReport('${violation.report_id}');"
                                     onclick="event.stopPropagation(); ReportsPage.openReport('${violation.report_id}');">
                                     <i class="fas fa-file-alt"></i> Open Report
                                 </button>

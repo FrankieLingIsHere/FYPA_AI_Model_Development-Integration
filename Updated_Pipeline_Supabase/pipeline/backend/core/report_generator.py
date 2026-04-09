@@ -2912,11 +2912,7 @@ RESPONSE FORMAT (JSON):
                 f"Model identified {model_person_count} person(s), "
                 f"{model_non_compliant_count} with non-compliance signals."
             )
-            detector_context = (
-                f"Detector context: {detected_person_count} persons scanned, "
-                f"{detected_violation_items} violation item(s)."
-            )
-            count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}<br><span style='color:#7f8c8d;'>{detector_context}</span>"
+            count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}"
         else:
             people_count_for_display = detected_person_count if detected_person_count > 0 else inferred_person_count
             compliant_count = max(

@@ -245,8 +245,11 @@ jobs:
         env:
           LUNA_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           LUNA_REPORT_OPEN_WARM_TARGET_SECONDS: "1.0"
-          LUNA_REPORT_OPEN_WARM_SAMPLES: "3"
+          LUNA_REPORT_OPEN_WARM_SAMPLES: "5"
+          LUNA_REPORT_OPEN_RETRY_ATTEMPTS: "4"
+          LUNA_REPORT_OPEN_RETRY_BACKOFF_SECONDS: "4"
           LUNA_REPORT_LATENCY_MAX_SCAN: "150"
+          LUNA_REPORT_LATENCY_MAX_CANDIDATES: "4"
         run: |
           python Updated_Pipeline_Supabase/deployed_report_open_latency_test.py
 

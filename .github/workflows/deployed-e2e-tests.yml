@@ -34,6 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Run schema regeneration contract test (offline)
+        run: |
+          python Updated_Pipeline_Supabase/schema_regen_contract_test.py
+
       - name: Run routing and health checks
         env:
           LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}

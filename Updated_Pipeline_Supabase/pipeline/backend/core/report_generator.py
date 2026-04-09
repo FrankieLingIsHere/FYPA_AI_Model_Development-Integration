@@ -82,6 +82,7 @@ class ReportGenerator:
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
+        self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
 
@@ -1013,6 +1014,52 @@ RESPONSE FORMAT (JSON):
             result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
             
             if result:
+                missing_fields = self._missing_required_nlp_fields(result)
+                if missing_fields:
+                    logger.warning(
+                        "Gemini NLP output missing required fields %s for report %s; attempting schema regeneration",
+                        missing_fields,
+                        report_id or 'unknown',
+                    )
+
+                    regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
+                    attempts = max(0, self.gemini_schema_regen_attempts)
+                    repaired_result = None
+                    repaired_missing = list(missing_fields)
+
+                    for attempt_idx in range(attempts):
+                        candidate = self.gemini_client.generate_report_json(
+                            regen_prompt,
+                            image_path=image_path,
+                            report_id=report_id,
+                        )
+                        if not candidate:
+                            continue
+
+                        candidate_missing = self._missing_required_nlp_fields(candidate)
+                        if not candidate_missing:
+                            repaired_result = candidate
+                            repaired_missing = []
+                            logger.info(
+                                "Gemini schema regeneration succeeded on attempt %s for report %s",
+                                attempt_idx + 1,
+                                report_id or 'unknown',
+                            )
+                            break
+
+                        repaired_missing = candidate_missing
+
+                    if repaired_result is not None:
+                        result = repaired_result
+                    else:
+                        detail = (
+                            "Gemini output missing required fields after regeneration: "
+                            + ", ".join(repaired_missing)
+                        )
+                        self.last_nlp_error = detail
+                        logger.warning(detail)
+                        return None
+
                 logger.info("✓ Gemini NLP analysis completed")
                 self.last_nlp_error = None
                 return result
@@ -1026,6 +1073,36 @@ RESPONSE FORMAT (JSON):
             self.last_nlp_error = f"Gemini API error: {e}"
             logger.error(f"Gemini API error: {e}")
             return None
+
+    def _missing_required_nlp_fields(self, nlp_analysis: Optional[Dict[str, Any]]) -> List[str]:
+        """Return list of missing/empty required NLP fields for strict schema gating."""
+        if not isinstance(nlp_analysis, dict):
+            return ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
+
+        missing = []
+        if not str(nlp_analysis.get('environment_type', '') or '').strip():
+            missing.append('environment_type')
+        if not str(nlp_analysis.get('visual_evidence', '') or '').strip():
+            missing.append('visual_evidence')
+        if not isinstance(nlp_analysis.get('persons'), list) or len(nlp_analysis.get('persons', [])) == 0:
+            missing.append('persons')
+        if not str(nlp_analysis.get('summary', '') or '').strip():
+            missing.append('summary')
+        if not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0:
+            missing.append('dosh_regulations_cited')
+        return missing
+
+    def _build_schema_regen_prompt(self, prompt: str, missing_fields: List[str]) -> str:
+        """Append strict schema reminder to force required fields in regenerated output."""
+        fields_text = ', '.join(missing_fields)
+        return (
+            str(prompt or '')
+            + "\n\nSCHEMA REGENERATION REQUIREMENT:\n"
+            + f"Your previous response was missing required fields: {fields_text}.\n"
+            + "Return exactly one valid JSON object with ALL required fields present and non-empty:\n"
+            + "environment_type, visual_evidence, persons, summary, dosh_regulations_cited.\n"
+            + "No markdown fences. No extra text."
+        )
     
     def _call_ollama_api(self, prompt: str, allow_local_fallback: bool = True) -> Optional[Dict[str, Any]]:
         """

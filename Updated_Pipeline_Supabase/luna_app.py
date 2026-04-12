@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import html
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
@@ -231,6 +232,7 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
 ).lower() == 'true'
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
 STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS', '90'))
+STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS', '15'))
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
@@ -749,6 +751,39 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _extract_project_ref_from_supabase_url(value: str) -> str:
+    try:
+        host = (urlparse(value).hostname or '').strip().lower()
+    except Exception:
+        host = ''
+    if not host:
+        return ''
+    if host.endswith('.supabase.co'):
+        return host.split('.supabase.co')[0]
+    return ''
+
+
+def _extract_db_host(value: str) -> str:
+    try:
+        host = (urlparse(value).hostname or '').strip().lower()
+        return host
+    except Exception:
+        return ''
+
+
+def _startup_env_diagnostics() -> Dict[str, Any]:
+    supabase_url = os.getenv('SUPABASE_URL', '').strip()
+    db_url = os.getenv('SUPABASE_DB_URL', '').strip()
+    project_ref = _extract_project_ref_from_supabase_url(supabase_url)
+    return {
+        'supabase_url_host': (urlparse(supabase_url).hostname or '') if supabase_url else '',
+        'supabase_project_ref': project_ref,
+        'supabase_db_host': _extract_db_host(db_url),
+        'allow_offline_local_mode': ALLOW_OFFLINE_LOCAL_MODE,
+        'startup_warmup_enabled': STARTUP_MODEL_WARMUP_ENABLED,
+    }
+
+
 def _set_startup_step(step_key: str, step_status: str, detail: str = None):
     """Update a startup check step status in a thread-safe manner."""
     with startup_state_lock:
@@ -757,6 +792,7 @@ def _set_startup_step(step_key: str, step_status: str, detail: str = None):
             checks[step_key]['status'] = step_status
             if detail is not None:
                 checks[step_key]['detail'] = detail
+        startup_state['updated_at'] = _utc_now_iso()
 
 
 def _set_startup_progress(progress: int, current_step: str):
@@ -804,7 +840,8 @@ def get_startup_state_snapshot() -> Dict[str, Any]:
             'updated_at': startup_state.get('updated_at'),
             'checks': checks,
             'checks_completed': completed_checks,
-            'checks_total': total_checks
+            'checks_total': total_checks,
+            'env_diagnostics': _startup_env_diagnostics()
         }
 
 
@@ -845,7 +882,11 @@ def _run_startup_sequence():
         else:
             _set_startup_progress(24, 'Skipping YOLO warm-up for this deployment')
             try:
-                resolved_path = resolve_model_path()
+                resolved_path = _run_with_timeout(
+                    lambda: resolve_model_path(),
+                    STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS,
+                    'yolo-path-check'
+                )
                 _set_startup_step(
                     'yolo_model',
                     'ok',

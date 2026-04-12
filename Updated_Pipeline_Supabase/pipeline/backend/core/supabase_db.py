@@ -262,9 +262,14 @@ class SupabaseDatabaseManager:
         """
         self._ensure_connection()
         fixed_count = 0
+        statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
+        lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '5000'))
         
         try:
             with self.conn.cursor() as cur:
+                # Avoid blocking startup indefinitely on locks/slow queries.
+                cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
+                cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
                 # Get all reports with pending or generating status (or NULL/unknown)
                 cur.execute("""
                     SELECT 

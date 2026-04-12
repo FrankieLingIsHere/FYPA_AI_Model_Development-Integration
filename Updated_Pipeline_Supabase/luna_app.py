@@ -1033,30 +1033,40 @@ def initialize_pipeline_components():
     
     try:
         if violation_detector is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing violation detector')
             logger.info("Initializing violation detector...")
             violation_detector = ViolationDetector(VIOLATION_RULES)
             
         if caption_generator is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing caption generator')
             logger.info("Initializing caption generator...")
             caption_config = {'LLAVA_CONFIG': LLAVA_CONFIG}
             caption_generator = CaptionGenerator(caption_config)
         
         if db_manager is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
             db_manager = create_db_manager_from_env()
             
             # Fix any stuck reports from previous sessions
             if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
+                _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
                 logger.info("Checking for stuck reports...")
-                fixed = db_manager.fix_stuck_reports()
+                fixed = _run_with_timeout(
+                    db_manager.fix_stuck_reports,
+                    int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
+                    'fix_stuck_reports'
+                )
                 if fixed > 0:
                     logger.info(f"✓ Fixed {fixed} stuck reports")
         
         if storage_manager is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
             storage_manager = create_storage_manager_from_env()
             
         if report_generator is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
             logger.info("Initializing Supabase report generator...")
             report_config = {
                 'OLLAMA_CONFIG': OLLAMA_CONFIG,
@@ -1073,6 +1083,7 @@ def initialize_pipeline_components():
         
         # Initialize violation queue for handling multiple violations
         if violation_queue is None:
+            _set_startup_step('pipeline_components', 'pending', 'Initializing violation queue manager')
             logger.info("Initializing violation queue manager...")
             violation_queue = ViolationQueueManager(
                 max_size=100,           # Max violations in queue
@@ -1084,15 +1095,18 @@ def initialize_pipeline_components():
         
         # Start queue worker thread if not running
         if not ensure_queue_worker_running():
+            _set_startup_step('pipeline_components', 'pending', 'Starting queue worker thread')
             logger.info("Starting violation queue worker thread...")
             if not start_queue_worker():
                 logger.error("Failed to start queue worker thread")
                 return False
             
+        _set_startup_step('pipeline_components', 'ok', 'All pipeline components initialized')
         logger.info("[OK] All pipeline components initialized")
         return True
         
     except Exception as e:
+        _set_startup_step('pipeline_components', 'error', f"Initialization failed: {e}")
         logger.error(f"Error initializing pipeline components: {e}")
         import traceback
         traceback.print_exc()

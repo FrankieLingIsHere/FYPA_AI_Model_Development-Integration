@@ -126,7 +126,7 @@
     --warning-color: #f39c12;
     --error-color: #e74c3c;
     --info-color: #3498db;
-    --footer-color: #2c3e50;
+    --footer-color: #1178df;
 
     /* Typography */
     --font-family: 'Inter', sans-serif;
@@ -1774,7 +1774,7 @@ body.is-phone-device .handbook-content {
 
 .sidebar-voice-btn:hover {
     background: rgba(231, 76, 60, 0.2);
-    color: #3ce7e4;
+    color: #e74c3c;
     box-shadow: none;
     transform: none;
 }

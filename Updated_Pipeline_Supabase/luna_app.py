@@ -237,6 +237,9 @@ STARTUP_MODEL_PATH_CHECK_ENABLED = os.getenv(
     'STARTUP_MODEL_PATH_CHECK_ENABLED',
     'false' if not STARTUP_MODEL_WARMUP_ENABLED else 'true'
 ).lower() == 'true'
+STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
+STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
+STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS', '30'))
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
@@ -1057,7 +1060,11 @@ def initialize_pipeline_components():
         if db_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
-            db_manager = create_db_manager_from_env()
+            db_manager = _run_with_timeout(
+                create_db_manager_from_env,
+                STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
+                'db-manager-init'
+            )
             
             # Fix any stuck reports from previous sessions
             if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
@@ -1074,7 +1081,11 @@ def initialize_pipeline_components():
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
-            storage_manager = create_storage_manager_from_env()
+            storage_manager = _run_with_timeout(
+                create_storage_manager_from_env,
+                STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
+                'storage-manager-init'
+            )
             
         if report_generator is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
@@ -1090,7 +1101,11 @@ def initialize_pipeline_components():
                 'VIOLATIONS_DIR': VIOLATIONS_DIR,
                 'SUPABASE_CONFIG': SUPABASE_CONFIG
             }
-            report_generator = create_supabase_report_generator(report_config)
+            report_generator = _run_with_timeout(
+                lambda: create_supabase_report_generator(report_config),
+                STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
+                'report-generator-init'
+            )
         
         # Initialize violation queue for handling multiple violations
         if violation_queue is None:

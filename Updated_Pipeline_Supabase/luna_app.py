@@ -786,6 +786,9 @@ def _startup_env_diagnostics() -> Dict[str, Any]:
         'supabase_url_host': (urlparse(supabase_url).hostname or '') if supabase_url else '',
         'supabase_project_ref': project_ref,
         'supabase_db_host': _extract_db_host(db_url),
+        'railway_deployment_id': os.getenv('RAILWAY_DEPLOYMENT_ID', '').strip(),
+        'railway_service_id': os.getenv('RAILWAY_SERVICE_ID', '').strip(),
+        'railway_git_commit_sha': os.getenv('RAILWAY_GIT_COMMIT_SHA', '').strip(),
         'allow_offline_local_mode': ALLOW_OFFLINE_LOCAL_MODE,
         'startup_warmup_enabled': STARTUP_MODEL_WARMUP_ENABLED,
     }

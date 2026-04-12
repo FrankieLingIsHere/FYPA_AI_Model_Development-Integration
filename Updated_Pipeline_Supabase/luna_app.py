@@ -868,7 +868,7 @@ def _run_startup_sequence():
             startup_state['updated_at'] = startup_state['started_at']
             for key in startup_state.get('checks', {}):
                 startup_state['checks'][key]['status'] = 'pending'
-                startup_state['checks'][key]['detail'] = None
+                startup_state['checks'][key]['detail'] = 'Not started yet'
 
         _set_startup_progress(8, 'Checking pipeline modules')
         if not FULL_PIPELINE_AVAILABLE:
@@ -990,6 +990,9 @@ def ensure_startup_thread():
 
     with startup_state_lock:
         if startup_state.get('ready'):
+            return
+        # Preserve failure details for debugging; do not auto-restart on every request.
+        if startup_state.get('status') == 'error':
             return
         if startup_state.get('status') == 'running' and startup_thread and startup_thread.is_alive():
             return

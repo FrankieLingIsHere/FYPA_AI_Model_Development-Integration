@@ -254,7 +254,7 @@ const NotificationManager = {
             title: '🚨 Violation Detected',
             action: {
                 text: 'View Reports',
-                onClick: `window.location.hash = '#/reports'`
+                onClick: `Router.navigate('reports')`
             },
             ...options
         });
@@ -272,7 +272,7 @@ const NotificationManager = {
                 } catch (e) {
                     console.warn('ReportsPage focusReport unavailable:', e);
                 }
-                window.location.hash = '#/reports';
+                Router.navigate('reports');
             }
         };
 

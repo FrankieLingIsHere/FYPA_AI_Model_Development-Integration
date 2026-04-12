@@ -119,6 +119,13 @@ function bindTimezoneSelector(selector) {
         const offsetStr = newOffset >= 0 ? `+${newOffset}` : newOffset;
         notifyTimezoneChange(`Timezone changed to UTC${offsetStr}`);
         updateAllTimestamps();
+        window.dispatchEvent(new CustomEvent('ppe-timezone:changed', {
+            detail: {
+                offset: newOffset,
+                label: getTimezoneLabel(),
+                changedAt: Date.now()
+            }
+        }));
     });
 }
 

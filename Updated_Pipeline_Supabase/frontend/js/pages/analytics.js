@@ -2,6 +2,7 @@
 const AnalyticsPage = {
     _realtimeHandler: null,
     _connectionHandler: null,
+    _timezoneChangeHandler: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
 
@@ -97,6 +98,9 @@ const AnalyticsPage = {
 
         this._connectionHandler = () => this.syncFallbackPolling();
         window.addEventListener('ppe-realtime:connection', this._connectionHandler);
+
+        this._timezoneChangeHandler = () => this.refreshData();
+        window.addEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
         this.syncFallbackPolling();
     },
 
@@ -112,6 +116,10 @@ const AnalyticsPage = {
         if (this._connectionHandler) {
             window.removeEventListener('ppe-realtime:connection', this._connectionHandler);
             this._connectionHandler = null;
+        }
+        if (this._timezoneChangeHandler) {
+            window.removeEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
+            this._timezoneChangeHandler = null;
         }
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);

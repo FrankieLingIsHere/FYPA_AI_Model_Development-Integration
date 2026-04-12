@@ -3,23 +3,47 @@ const Router = {
     routes: {},
     currentComponent: null,
 
+    normalizePath(path) {
+        const raw = String(path || '').trim();
+        if (!raw) return 'home';
+        let normalized = raw;
+        if (normalized.startsWith('#')) normalized = normalized.slice(1);
+        if (normalized.startsWith('/')) normalized = normalized.slice(1);
+        return normalized || 'home';
+    },
+
     // Register a route
     register(path, component) {
         this.routes[path] = component;
     },
 
     // Navigate to a route
-    navigate(path) {
-        const component = this.routes[path];
+    navigate(path, options = {}) {
+        const { updateHash = true } = options;
+        const normalizedPath = this.normalizePath(path);
+        const component = this.routes[normalizedPath];
         if (component) {
-            APP_STATE.currentPage = path;
+            if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
+                this.updateActiveNav(normalizedPath);
+                if (updateHash && window.location.hash !== `#${normalizedPath}`) {
+                    window.location.hash = normalizedPath;
+                }
+                return;
+            }
+
+            APP_STATE.currentPage = normalizedPath;
             this.render(component);
-            this.updateActiveNav(path);
+            this.updateActiveNav(normalizedPath);
 
             // Update URL hash
-            window.location.hash = path;
+            if (updateHash && window.location.hash !== `#${normalizedPath}`) {
+                window.location.hash = normalizedPath;
+            }
         } else {
-            console.error(`Route not found: ${path}`);
+            console.error(`Route not found: ${normalizedPath}. Falling back to home.`);
+            if (normalizedPath !== 'home' && this.routes.home) {
+                this.navigate('home', { updateHash });
+            }
         }
     },
 
@@ -77,12 +101,15 @@ const Router = {
 
         // Handle browser back/forward
         window.addEventListener('hashchange', () => {
-            const hash = window.location.hash.slice(1) || 'home';
-            this.navigate(hash);
+            const hash = this.normalizePath(window.location.hash);
+            if (APP_STATE.currentPage === hash) {
+                return;
+            }
+            this.navigate(hash, { updateHash: false });
         });
 
         // Navigate to initial page
-        const initialPage = window.location.hash.slice(1) || 'home';
-        this.navigate(initialPage);
+        const initialPage = this.normalizePath(window.location.hash);
+        this.navigate(initialPage, { updateHash: false });
     }
 };

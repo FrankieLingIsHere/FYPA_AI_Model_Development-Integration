@@ -4,6 +4,7 @@ const ReportsPage = {
     providerRuntimeInterval: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
+    timezoneChangeHandler: null,
     realtimeRefreshTimer: null,
     filters: {
         search: '',
@@ -103,6 +104,9 @@ const ReportsPage = {
 
         this.realtimeConnectionHandler = () => this.syncFallbackPolling();
         window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
+
+        this.timezoneChangeHandler = () => this.renderReports();
+        window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
     },
 
     unmount() {
@@ -124,6 +128,10 @@ const ReportsPage = {
         if (this.realtimeConnectionHandler) {
             window.removeEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
             this.realtimeConnectionHandler = null;
+        }
+        if (this.timezoneChangeHandler) {
+            window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
+            this.timezoneChangeHandler = null;
         }
     },
 
@@ -161,7 +169,6 @@ const ReportsPage = {
     async loadReports() {
         this.violations = await API.getViolations();
         this.renderReports();
-        this.scheduleReportPrefetch();
         this.applyPendingFocusRequest();
     },
 
@@ -347,7 +354,7 @@ const ReportsPage = {
 
     focusReport(reportId, { openModal = false } = {}) {
         if (!reportId) {
-            window.location.hash = '#/reports';
+            Router.navigate('reports');
             return;
         }
 
@@ -371,12 +378,16 @@ const ReportsPage = {
             return true;
         };
 
-        if (window.location.hash !== '#/reports') {
+        const currentRoute = (typeof Router !== 'undefined' && typeof Router.normalizePath === 'function')
+            ? Router.normalizePath(window.location.hash)
+            : String(window.location.hash || '').replace(/^#\/?/, '') || 'home';
+
+        if (currentRoute !== 'reports') {
             this.pendingFocusRequest = {
                 reportId: String(reportId),
                 openModal: !!openModal
             };
-            window.location.hash = '#/reports';
+            Router.navigate('reports');
             return;
         }
 
@@ -1096,11 +1107,10 @@ const ReportsPage = {
         return `
             <div class="card" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
-                  onmouseenter="ReportsPage.prefetchReport('${violation.report_id}')"
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${violation.has_annotated ? 
-                        `<img src="${imageUrl}" alt="Violation" style="width: 100%; height: 100%; object-fit: cover;">` :
+                        `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async" style="width: 100%; height: 100%; object-fit: cover;">` :
                         `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
                          </div>`
@@ -1147,7 +1157,6 @@ const ReportsPage = {
                             </button>
                             ${isReady ? `
                                 <button class="btn btn-secondary" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;"
-                                    onmousedown="event.stopPropagation(); ReportsPage.prefetchReport('${violation.report_id}');"
                                     onclick="event.stopPropagation(); ReportsPage.openReport('${violation.report_id}');">
                                     <i class="fas fa-file-alt"></i> Open Report
                                 </button>

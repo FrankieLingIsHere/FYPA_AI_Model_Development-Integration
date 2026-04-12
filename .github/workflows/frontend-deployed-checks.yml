@@ -68,6 +68,13 @@ jobs:
         run: |
           python Updated_Pipeline_Supabase/deployed_frontend_robustness_test.py
 
+      - name: Run frontend navigation and timezone action checks
+        env:
+          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "30000"
+        run: |
+          python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+
   frontend-mobile-usability:
     name: Frontend Mobile Usability
     runs-on: ubuntu-latest

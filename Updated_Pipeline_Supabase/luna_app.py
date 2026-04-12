@@ -233,6 +233,10 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
 STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS', '90'))
 STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS', '15'))
+STARTUP_MODEL_PATH_CHECK_ENABLED = os.getenv(
+    'STARTUP_MODEL_PATH_CHECK_ENABLED',
+    'false' if not STARTUP_MODEL_WARMUP_ENABLED else 'true'
+).lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
@@ -881,20 +885,27 @@ def _run_startup_sequence():
             _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
         else:
             _set_startup_progress(24, 'Skipping YOLO warm-up for this deployment')
-            try:
-                resolved_path = _run_with_timeout(
-                    lambda: resolve_model_path(),
-                    STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS,
-                    'yolo-path-check'
-                )
+            if STARTUP_MODEL_PATH_CHECK_ENABLED:
+                try:
+                    resolved_path = _run_with_timeout(
+                        lambda: resolve_model_path(),
+                        STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS,
+                        'yolo-path-check'
+                    )
+                    _set_startup_step(
+                        'yolo_model',
+                        'ok',
+                        f'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false), model found at {resolved_path}'
+                    )
+                except Exception as yolo_path_exc:
+                    _set_startup_step('yolo_model', 'error', str(yolo_path_exc))
+                    raise RuntimeError(f'YOLO model path check failed: {yolo_path_exc}')
+            else:
                 _set_startup_step(
                     'yolo_model',
                     'ok',
-                    f'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false), model found at {resolved_path}'
+                    'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false); startup model path check disabled'
                 )
-            except Exception as yolo_path_exc:
-                _set_startup_step('yolo_model', 'error', str(yolo_path_exc))
-                raise RuntimeError(f'YOLO model path check failed: {yolo_path_exc}')
 
         _set_startup_progress(50, 'Initializing detection and report pipeline')
         init_success = _run_with_timeout(

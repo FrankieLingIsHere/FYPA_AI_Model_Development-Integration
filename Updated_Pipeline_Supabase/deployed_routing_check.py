@@ -18,6 +18,7 @@ STARTUP_WAIT_SECONDS = int(os.environ.get("LUNA_STARTUP_WAIT_SECONDS", "180"))
 STARTUP_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_STARTUP_POLL_INTERVAL_SECONDS", "6"))
 QUEUE_WAIT_SECONDS = int(os.environ.get("LUNA_QUEUE_WAIT_SECONDS", "90"))
 QUEUE_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_QUEUE_POLL_INTERVAL_SECONDS", "6"))
+ALLOW_DEGRADED_STARTUP = os.environ.get("LUNA_ALLOW_DEGRADED_STARTUP", "0").strip().lower() in ("1", "true", "yes")
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -115,7 +116,7 @@ def main() -> int:
         degraded_startup = False
         if isinstance(startup, dict) and startup.get("ready"):
             print("PASS: Backend startup ready")
-        elif isinstance(startup, dict) and startup.get("status") == "running" and not startup.get("error_message"):
+        elif ALLOW_DEGRADED_STARTUP and isinstance(startup, dict) and startup.get("status") == "running" and not startup.get("error_message"):
             degraded_startup = True
             progress = startup.get("progress")
             current_step = startup.get("current_step")

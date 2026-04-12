@@ -230,6 +230,7 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
     'true' if SERVE_FRONTEND else 'false'
 ).lower() == 'true'
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
+STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS', '90'))
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
@@ -855,7 +856,11 @@ def _run_startup_sequence():
                 raise RuntimeError(f'YOLO model path check failed: {yolo_path_exc}')
 
         _set_startup_progress(50, 'Initializing detection and report pipeline')
-        init_success = initialize_pipeline_components()
+        init_success = _run_with_timeout(
+            initialize_pipeline_components,
+            STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS,
+            'pipeline-components-init'
+        )
         if not init_success:
             _set_startup_step('pipeline_components', 'error', 'Component initialization returned failure')
             raise RuntimeError('Pipeline components failed to initialize')

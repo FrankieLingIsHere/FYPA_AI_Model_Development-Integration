@@ -28,7 +28,7 @@ class SupabaseDatabaseManager:
     - flood_logs: System event logging
     """
     
-    def __init__(self, db_url: str):
+    def __init__(self, db_url: str, connect_timeout: Optional[int] = None):
         """
         Initialize Supabase Database Manager.
         
@@ -36,6 +36,7 @@ class SupabaseDatabaseManager:
             db_url: Postgres connection URL (from Supabase dashboard)
         """
         self.db_url = db_url
+        self.connect_timeout = int(connect_timeout if connect_timeout is not None else os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
         self.conn = None
         
         try:
@@ -50,10 +51,11 @@ class SupabaseDatabaseManager:
         try:
             self.conn = psycopg2.connect(
                 self.db_url,
-                cursor_factory=RealDictCursor
+                cursor_factory=RealDictCursor,
+                connect_timeout=max(1, int(self.connect_timeout))
             )
             self.conn.autocommit = False
-            logger.info("Connected to Supabase Postgres")
+            logger.info(f"Connected to Supabase Postgres (connect_timeout={self.connect_timeout}s)")
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             raise
@@ -874,7 +876,8 @@ def create_db_manager_from_env() -> SupabaseDatabaseManager:
     if not db_url:
         raise ValueError("SUPABASE_DB_URL must be set in environment")
     
-    return SupabaseDatabaseManager(db_url)
+    connect_timeout = int(os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
+    return SupabaseDatabaseManager(db_url, connect_timeout=connect_timeout)
 
 
 # =============================================================================

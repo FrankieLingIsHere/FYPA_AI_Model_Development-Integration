@@ -240,6 +240,7 @@ STARTUP_MODEL_PATH_CHECK_ENABLED = os.getenv(
 STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
 STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
 STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS', '30'))
+ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
 
@@ -5598,6 +5599,14 @@ def api_live_dedup_probe():
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
         return startup_gate
+
+    # Safety default: keep synthetic testing endpoints disabled unless explicitly enabled.
+    if not ENABLE_TESTING_ENDPOINTS:
+        return jsonify({
+            'success': False,
+            'error': 'testing_endpoints_disabled',
+            'hint': 'Set ENABLE_TESTING_ENDPOINTS=true only in non-production environments.'
+        }), 403
 
     if not FULL_PIPELINE_AVAILABLE:
         return jsonify({'success': False, 'error': 'pipeline_components_unavailable'}), 503

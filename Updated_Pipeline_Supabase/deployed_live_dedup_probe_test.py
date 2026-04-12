@@ -69,6 +69,10 @@ def main() -> int:
             print("PASS: true live dedup probe skipped (endpoint not yet available on deployed target)")
             return 0
 
+        if status_code == 403 and isinstance(payload, dict) and payload.get("error") == "testing_endpoints_disabled":
+            print("PASS: true live dedup probe skipped (testing endpoints disabled by default)")
+            return 0
+
         if status_code in gateway_like_codes:
             print(f"INFO: live dedup probe gateway status on attempt {attempt}: {status_code}")
             if attempt < 5:

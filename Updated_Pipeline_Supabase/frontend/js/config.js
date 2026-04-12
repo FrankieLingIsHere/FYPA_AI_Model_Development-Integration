@@ -14,6 +14,7 @@ const API_CONFIG = {
         LIVE_STOP: '/api/live/stop',
         LIVE_STATUS: '/api/live/status',
         LIVE_DEVICES: '/api/live/devices',
+        LIVE_EDGE_REALSENSE_STATUS: '/api/live/edge/realsense/status',
         LIVE_DEPTH_STATUS: '/api/live/depth/status',
         LIVE_DEPTH_PREVIEW: '/api/live/depth/preview',
         UPLOAD_INFERENCE: '/api/inference/upload',

@@ -48,6 +48,14 @@ const LivePage = {
                             <button id="sourceToggleBtn" class="btn btn-secondary" title="Toggle camera source">
                                 <i class="fas fa-camera"></i> Source: Webcam
                             </button>
+                            <select id="webcamDeviceSelect" class="btn btn-secondary" title="Select backend webcam index" style="display: none; min-width: 190px;"></select>
+                            <button id="refreshWebcamDevicesBtn" class="btn btn-secondary" title="Refresh backend webcam device list" style="display: none;">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                            <select id="browserCameraSelect" class="btn btn-secondary" title="Select browser camera" style="display: none; min-width: 220px;"></select>
+                            <button id="refreshBrowserCameraBtn" class="btn btn-secondary" title="Refresh browser camera list" style="display: none;">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
                             <button id="startLiveBtn" class="btn btn-success">
                                 <i class="fas fa-play"></i> Start
                             </button>
@@ -735,6 +743,10 @@ const LivePage = {
         const liveControls = document.getElementById('liveControls');
         const cardTitle = document.getElementById('cardTitle');
         const sourceToggleBtn = document.getElementById('sourceToggleBtn');
+        const webcamDeviceSelect = document.getElementById('webcamDeviceSelect');
+        const refreshWebcamDevicesBtn = document.getElementById('refreshWebcamDevicesBtn');
+        const browserCameraSelect = document.getElementById('browserCameraSelect');
+        const refreshBrowserCameraBtn = document.getElementById('refreshBrowserCameraBtn');
         const liveToolbarSettingsBtn = document.getElementById('liveToolbarSettingsBtn');
         const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');
         const startBtn = document.getElementById('startLiveBtn');
@@ -775,13 +787,31 @@ const LivePage = {
         let currentMode = 'live';
         let selectedFile = null;
         let selectedSource = 'webcam';
+        let selectedCameraIndex = 0;
+        let backendWebcamDevices = [];
+        let browserVideoDevices = [];
+        let selectedBrowserDeviceId = '';
         let realsenseAvailable = false;
         let realsenseDeviceName = 'Intel RealSense';
         let realsenseCapabilities = {};
+        let edgeRealsenseAvailable = false;
+        let edgeRealsenseDeviceName = 'RealSense (Edge Relay)';
+        let edgeRealsenseCapabilities = {};
         const isPhoneDevice = document.body.classList.contains('is-phone-device');
         const browserCameraSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const phoneCameraSupported = !!(isPhoneDevice && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const isAutomationContext = !!navigator.webdriver;
+        const isLikelyRemoteBackend = (() => {
+            try {
+                if (!API_CONFIG.BASE_URL) return false;
+                const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
+                const host = String(resolved.hostname || '').toLowerCase();
+                const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+                return !isLocalHost;
+            } catch (error) {
+                return false;
+            }
+        })();
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
         let useBrowserCaptureRuntime = false;
@@ -950,15 +980,68 @@ const LivePage = {
             clearLiveOverlayCanvas();
         };
 
-        const getAvailableSources = () => {
-            const sources = ['webcam'];
-            if (realsenseAvailable) {
-                sources.push('realsense');
+        const normalizeCameraIndex = (value, fallback = 0) => {
+            const parsed = Number.parseInt(value, 10);
+            if (Number.isFinite(parsed) && parsed >= 0) {
+                return parsed;
             }
-            if (phoneCameraSupported) {
-                sources.push('phone');
+            return fallback;
+        };
+
+        const syncBackendWebcamDevices = (payload) => {
+            const hasDeviceList = !!(payload && Array.isArray(payload.webcam_devices));
+
+            if (hasDeviceList) {
+                backendWebcamDevices = payload.webcam_devices
+                    .map((item) => ({
+                        index: normalizeCameraIndex(item && item.index, -1),
+                        label: String((item && item.label) || '').trim()
+                    }))
+                    .filter((item) => item.index >= 0)
+                    .sort((a, b) => a.index - b.index);
             }
-            return sources;
+
+            if (payload && payload.camera_index !== null && payload.camera_index !== undefined) {
+                selectedCameraIndex = normalizeCameraIndex(payload.camera_index, selectedCameraIndex);
+            } else if (backendWebcamDevices.length > 0 && !backendWebcamDevices.some((d) => d.index === selectedCameraIndex)) {
+                selectedCameraIndex = backendWebcamDevices[0].index;
+            }
+        };
+
+        const getBrowserDeviceLabel = (device, index) => {
+            const label = String((device && device.label) || '').trim();
+            if (label) return label;
+            return `Browser Camera ${index + 1}`;
+        };
+
+        const getSelectedBrowserDeviceLabel = () => {
+            if (!selectedBrowserDeviceId) return 'Default browser camera';
+            const idx = browserVideoDevices.findIndex((d) => d.deviceId === selectedBrowserDeviceId);
+            if (idx < 0) return 'Selected browser camera';
+            return getBrowserDeviceLabel(browserVideoDevices[idx], idx);
+        };
+
+        const isDepthSourceSelected = () => {
+            if (selectedSource === 'realsense') {
+                return realsenseAvailable;
+            }
+            if (selectedSource === 'edge_realsense') {
+                return edgeRealsenseAvailable;
+            }
+            return false;
+        };
+
+        const getCurrentSourceLabel = () => {
+            if (selectedSource === 'realsense') {
+                return realsenseDeviceName || 'RealSense';
+            }
+            if (selectedSource === 'edge_realsense') {
+                return edgeRealsenseDeviceName || 'RealSense (Edge Relay)';
+            }
+            if (selectedSource === 'phone') {
+                return 'Phone Camera';
+            }
+            return `Webcam ${selectedCameraIndex}`;
         };
 
         const shouldUseBrowserCaptureSource = () => {
@@ -967,7 +1050,145 @@ const LivePage = {
 
         const shouldPreferBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
-            return selectedSource === 'phone' && phoneCameraSupported;
+            if (selectedSource === 'phone' && phoneCameraSupported) return true;
+            if (selectedSource === 'webcam' && (isLikelyRemoteBackend || !!selectedBrowserDeviceId)) return true;
+            return false;
+        };
+
+        const renderBackendWebcamSelector = () => {
+            if (!webcamDeviceSelect || !refreshWebcamDevicesBtn) return;
+
+            const showSelector = (
+                !APP_STATE.liveStreamActive &&
+                selectedSource === 'webcam' &&
+                !shouldPreferBrowserCaptureSource()
+            );
+
+            if (!showSelector) {
+                webcamDeviceSelect.style.display = 'none';
+                refreshWebcamDevicesBtn.style.display = 'none';
+                return;
+            }
+
+            webcamDeviceSelect.style.display = 'inline-flex';
+            refreshWebcamDevicesBtn.style.display = 'inline-flex';
+            webcamDeviceSelect.innerHTML = '';
+
+            if (!backendWebcamDevices.length) {
+                const fallback = document.createElement('option');
+                fallback.value = String(selectedCameraIndex);
+                fallback.textContent = `Backend Webcam ${selectedCameraIndex}`;
+                webcamDeviceSelect.appendChild(fallback);
+                webcamDeviceSelect.value = String(selectedCameraIndex);
+                webcamDeviceSelect.disabled = true;
+                return;
+            }
+
+            webcamDeviceSelect.disabled = false;
+            backendWebcamDevices.forEach((device) => {
+                const option = document.createElement('option');
+                option.value = String(device.index);
+                option.textContent = device.label || `Backend Webcam ${device.index}`;
+                webcamDeviceSelect.appendChild(option);
+            });
+
+            if (!backendWebcamDevices.some((d) => d.index === selectedCameraIndex)) {
+                selectedCameraIndex = backendWebcamDevices[0].index;
+            }
+
+            webcamDeviceSelect.value = String(selectedCameraIndex);
+        };
+
+        const renderBrowserCameraSelector = () => {
+            if (!browserCameraSelect || !refreshBrowserCameraBtn) return;
+
+            const showSelector = (
+                !APP_STATE.liveStreamActive &&
+                selectedSource === 'webcam' &&
+                shouldPreferBrowserCaptureSource()
+            );
+
+            if (!showSelector) {
+                browserCameraSelect.style.display = 'none';
+                refreshBrowserCameraBtn.style.display = 'none';
+                return;
+            }
+
+            browserCameraSelect.style.display = 'inline-flex';
+            refreshBrowserCameraBtn.style.display = 'inline-flex';
+
+            const currentValue = selectedBrowserDeviceId || browserCameraSelect.value || '';
+            browserCameraSelect.innerHTML = '';
+
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'Default browser camera';
+            browserCameraSelect.appendChild(defaultOption);
+
+            browserVideoDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId || '';
+                option.textContent = getBrowserDeviceLabel(device, index);
+                browserCameraSelect.appendChild(option);
+            });
+
+            const hasCurrent = !!(currentValue && browserVideoDevices.some((d) => d.deviceId === currentValue));
+            browserCameraSelect.value = hasCurrent ? currentValue : '';
+            selectedBrowserDeviceId = browserCameraSelect.value || '';
+        };
+
+        const refreshBrowserCameraOptions = async () => {
+            if (!browserCameraSupported || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                browserVideoDevices = [];
+                renderBrowserCameraSelector();
+                return;
+            }
+
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                browserVideoDevices = devices.filter((device) => device.kind === 'videoinput');
+            } catch (error) {
+                browserVideoDevices = [];
+            }
+
+            renderBrowserCameraSelector();
+        };
+
+        const refreshBackendWebcamOptions = async (notify = false) => {
+            try {
+                const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}`);
+                if (!resp.ok) {
+                    throw new Error('Failed to load backend webcam devices');
+                }
+
+                const payload = await resp.json();
+                syncBackendWebcamDevices(payload);
+                renderBackendWebcamSelector();
+
+                if (notify) {
+                    showNotification(`Backend camera list refreshed (${backendWebcamDevices.length || 0} found)`, 'info');
+                }
+            } catch (error) {
+                console.error('Error refreshing backend webcam devices:', error);
+                renderBackendWebcamSelector();
+                if (notify) {
+                    showNotification('Unable to refresh backend webcam list', 'warning');
+                }
+            }
+        };
+
+        const getAvailableSources = () => {
+            const sources = ['webcam'];
+            if (realsenseAvailable) {
+                sources.push('realsense');
+            }
+            if (edgeRealsenseAvailable) {
+                sources.push('edge_realsense');
+            }
+            if (phoneCameraSupported) {
+                sources.push('phone');
+            }
+            return sources;
         };
 
         const isWebcamUnavailableMessage = (message) => {
@@ -992,24 +1213,66 @@ const LivePage = {
                 updatePhonePermissionBadge();
             }
 
+            const webcamConstraints = {
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            };
+
+            if (!usingPhoneSource && selectedBrowserDeviceId) {
+                webcamConstraints.deviceId = { exact: selectedBrowserDeviceId };
+            }
+
             const videoConstraints = usingPhoneSource
                 ? {
                     facingMode: { ideal: 'environment' },
                     width: { ideal: 1280 },
                     height: { ideal: 720 }
                 }
-                : {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                };
+                : webcamConstraints;
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: videoConstraints,
-                audio: false
-            });
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: videoConstraints,
+                    audio: false
+                });
+            } catch (error) {
+                const selectedDeviceUnavailable = (
+                    !usingPhoneSource &&
+                    !!selectedBrowserDeviceId &&
+                    (error.name === 'OverconstrainedError' || error.name === 'NotFoundError')
+                );
+
+                if (!selectedDeviceUnavailable) {
+                    throw error;
+                }
+
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: false
+                });
+                selectedBrowserDeviceId = '';
+                if (browserCameraSelect) {
+                    browserCameraSelect.value = '';
+                }
+                showNotification('Selected browser camera is unavailable. Switched to default camera.', 'warning');
+            }
 
             this.phoneCameraStream = stream;
             useBrowserCaptureRuntime = true;
+
+            const activeTrack = stream.getVideoTracks && stream.getVideoTracks()[0];
+            if (activeTrack && typeof activeTrack.getSettings === 'function') {
+                const activeSettings = activeTrack.getSettings() || {};
+                if (!usingPhoneSource && activeSettings.deviceId) {
+                    selectedBrowserDeviceId = activeSettings.deviceId;
+                }
+            }
+
+            await refreshBrowserCameraOptions();
 
             if (usingPhoneSource) {
                 phonePermissionState = 'granted';
@@ -1042,7 +1305,7 @@ const LivePage = {
 
             const successText = usingPhoneSource
                 ? 'Phone camera access granted and monitoring started'
-                : 'Browser webcam access granted and monitoring started';
+                : `Browser webcam access granted and monitoring started (${getSelectedBrowserDeviceLabel()})`;
             showNotification(`${noticePrefix}${successText}`.trim(), 'success');
         };
 
@@ -1157,19 +1420,41 @@ const LivePage = {
         function renderCapabilities() {
             if (!capabilitiesContainer) return;
 
-            if (!realsenseAvailable) {
-                capabilitiesContainer.innerHTML = '<span class="rs-cap-badge off"><i class="fas fa-microchip"></i> RealSense Depth: Not detected</span>';
+            const hasAnyRealsense = realsenseAvailable || edgeRealsenseAvailable;
+            if (!hasAnyRealsense) {
+                const reasonText = String((realsenseCapabilities && realsenseCapabilities.reason) || '').trim();
+                const reasonBadge = reasonText
+                    ? `<span class="rs-cap-badge off"><i class="fas fa-info-circle"></i> ${reasonText}</span>`
+                    : '';
+                const hostedBadge = isLikelyRemoteBackend
+                    ? '<span class="rs-cap-badge off"><i class="fas fa-cloud"></i> Hosted backend cannot detect USB cameras on this PC</span>'
+                    : '';
+                capabilitiesContainer.innerHTML = `
+                    <span class="rs-cap-badge off"><i class="fas fa-microchip"></i> RealSense Depth: Not detected</span>
+                    ${reasonBadge}
+                    ${hostedBadge}
+                `;
                 return;
             }
 
-            const depthOk = !!realsenseCapabilities.depth_stream;
-            const imuOk = !!realsenseCapabilities.imu;
-            const colorOk = !!realsenseCapabilities.color_stream;
-            const resolution = realsenseCapabilities.resolution || '-';
-            const fps = realsenseCapabilities.fps || '-';
+            const usingEdge = edgeRealsenseAvailable && (selectedSource === 'edge_realsense' || !realsenseAvailable);
+            const activeCaps = usingEdge ? (edgeRealsenseCapabilities || {}) : (realsenseCapabilities || {});
+            const activeName = usingEdge
+                ? (edgeRealsenseDeviceName || 'RealSense (Edge Relay)')
+                : (realsenseDeviceName || 'RealSense');
+            const sourceBadge = usingEdge
+                ? '<span class="rs-cap-badge ok"><i class="fas fa-network-wired"></i> Edge Relay</span>'
+                : '<span class="rs-cap-badge ok"><i class="fas fa-usb"></i> Local USB</span>';
+
+            const depthOk = !!activeCaps.depth_stream;
+            const imuOk = !!activeCaps.imu;
+            const colorOk = !!activeCaps.color_stream;
+            const resolution = activeCaps.resolution || '-';
+            const fps = activeCaps.fps || '-';
 
             capabilitiesContainer.innerHTML = `
-                <span class="rs-cap-badge ok"><i class="fas fa-microchip"></i> ${realsenseDeviceName || 'RealSense'}</span>
+                <span class="rs-cap-badge ok"><i class="fas fa-microchip"></i> ${activeName}</span>
+                ${sourceBadge}
                 <span class="rs-cap-badge ${depthOk ? 'ok' : 'off'}"><i class="fas fa-ruler-combined"></i> Depth ${depthOk ? 'On' : 'Off'}</span>
                 <span class="rs-cap-badge ${colorOk ? 'ok' : 'off'}"><i class="fas fa-video"></i> RGB ${colorOk ? 'On' : 'Off'}</span>
                 <span class="rs-cap-badge ${imuOk ? 'ok' : 'off'}"><i class="fas fa-compass"></i> IMU ${imuOk ? 'On' : 'Off'}</span>
@@ -1183,7 +1468,7 @@ const LivePage = {
         }
 
         function updateDepthWidgets(depthTelemetry) {
-            const showDepth = APP_STATE.liveStreamActive && selectedSource === 'realsense' && realsenseAvailable;
+            const showDepth = APP_STATE.liveStreamActive && isDepthSourceSelected();
             if (!showDepth || !depthTelemetry || !depthTelemetry.depth_available) {
                 hideDepthWidgets();
                 return;
@@ -1207,7 +1492,7 @@ const LivePage = {
         }
 
         async function refreshDepthStatus() {
-            const shouldPollDepth = APP_STATE.liveStreamActive && selectedSource === 'realsense' && realsenseAvailable;
+            const shouldPollDepth = APP_STATE.liveStreamActive && isDepthSourceSelected();
             if (!shouldPollDepth) {
                 hideDepthWidgets();
                 return;
@@ -1219,6 +1504,13 @@ const LivePage = {
 
                 const payload = await resp.json();
                 realsenseCapabilities = payload.realsense_capabilities || realsenseCapabilities;
+                if (payload.edge_realsense_available !== undefined) {
+                    edgeRealsenseAvailable = !!payload.edge_realsense_available;
+                }
+                if (payload.edge_realsense_device_name) {
+                    edgeRealsenseDeviceName = payload.edge_realsense_device_name;
+                }
+                edgeRealsenseCapabilities = payload.edge_realsense_capabilities || edgeRealsenseCapabilities;
                 renderCapabilities();
                 updateDepthWidgets(payload.depth_telemetry || null);
             } catch (error) {
@@ -1232,6 +1524,8 @@ const LivePage = {
 
             if (selectedSource === 'realsense') {
                 sourceToggleBtn.innerHTML = `<i class="fas fa-microchip"></i> Source: ${realsenseDeviceName || 'RealSense'}`;
+            } else if (selectedSource === 'edge_realsense') {
+                sourceToggleBtn.innerHTML = `<i class="fas fa-network-wired"></i> Source: ${edgeRealsenseDeviceName || 'RealSense (Edge Relay)'}`;
             } else if (selectedSource === 'phone') {
                 sourceToggleBtn.innerHTML = '<i class="fas fa-mobile-alt"></i> Source: Phone Camera';
             } else {
@@ -1244,7 +1538,7 @@ const LivePage = {
             if (!canToggle) {
                 if (APP_STATE.liveStreamActive) {
                     sourceToggleBtn.title = 'Stop monitoring to switch source';
-                } else if (!realsenseAvailable && !phoneCameraSupported) {
+                } else if (!realsenseAvailable && !edgeRealsenseAvailable && !phoneCameraSupported) {
                     sourceToggleBtn.title = 'No additional camera source available';
                 } else {
                     sourceToggleBtn.title = 'Only one source currently available';
@@ -1252,16 +1546,21 @@ const LivePage = {
                 sourceToggleBtn.style.opacity = '0.55';
                 sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
-                sourceToggleBtn.title = phoneCameraSupported
-                    ? 'Click to switch Webcam (Near-edge) / RealSense / Phone Camera'
-                    : 'Click to switch Webcam (Near-edge)/RealSense';
+                const modeLabels = ['Webcam (Near-edge)'];
+                if (realsenseAvailable) modeLabels.push('RealSense USB');
+                if (edgeRealsenseAvailable) modeLabels.push('RealSense Edge Relay');
+                if (phoneCameraSupported) modeLabels.push('Phone Camera');
+                sourceToggleBtn.title = `Click to switch ${modeLabels.join(' / ')}`;
                 sourceToggleBtn.style.opacity = '1';
                 sourceToggleBtn.style.cursor = 'pointer';
             }
 
-            if (selectedSource !== 'realsense') {
+            if (selectedSource !== 'realsense' && selectedSource !== 'edge_realsense') {
                 hideDepthWidgets();
             }
+
+            renderBackendWebcamSelector();
+            renderBrowserCameraSelector();
         }
 
         const lockBodyScrollForSettings = () => {
@@ -1410,11 +1709,47 @@ const LivePage = {
             selectedSource = sources[(currentIndex + 1) % sources.length];
             renderSourceToggle();
 
-            const sourceLabel = selectedSource === 'realsense'
-                ? (realsenseDeviceName || 'RealSense')
-                : (selectedSource === 'phone' ? 'Phone Camera' : 'Webcam');
+            const sourceLabel = getCurrentSourceLabel();
             showNotification(`Camera source changed to ${sourceLabel}`, 'success');
         });
+
+        if (webcamDeviceSelect) {
+            webcamDeviceSelect.addEventListener('change', () => {
+                selectedCameraIndex = normalizeCameraIndex(webcamDeviceSelect.value, selectedCameraIndex);
+                showNotification(`Backend webcam index set to ${selectedCameraIndex}`, 'info');
+            });
+        }
+
+        if (refreshWebcamDevicesBtn) {
+            refreshWebcamDevicesBtn.addEventListener('click', async () => {
+                refreshWebcamDevicesBtn.disabled = true;
+                const previousLabel = refreshWebcamDevicesBtn.innerHTML;
+                refreshWebcamDevicesBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                await refreshBackendWebcamOptions(true);
+                refreshWebcamDevicesBtn.innerHTML = previousLabel;
+                refreshWebcamDevicesBtn.disabled = false;
+            });
+        }
+
+        if (browserCameraSelect) {
+            browserCameraSelect.addEventListener('change', () => {
+                selectedBrowserDeviceId = browserCameraSelect.value || '';
+                const label = selectedBrowserDeviceId ? getSelectedBrowserDeviceLabel() : 'Default browser camera';
+                showNotification(`Browser camera set to ${label}`, 'info');
+            });
+        }
+
+        if (refreshBrowserCameraBtn) {
+            refreshBrowserCameraBtn.addEventListener('click', async () => {
+                refreshBrowserCameraBtn.disabled = true;
+                const previousLabel = refreshBrowserCameraBtn.innerHTML;
+                refreshBrowserCameraBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                await refreshBrowserCameraOptions();
+                refreshBrowserCameraBtn.innerHTML = previousLabel;
+                refreshBrowserCameraBtn.disabled = false;
+                showNotification(`Browser camera list refreshed (${browserVideoDevices.length || 0} found)`, 'info');
+            });
+        }
         
         // Image upload handling
         imageUpload.addEventListener('change', (e) => {
@@ -1582,7 +1917,10 @@ const LivePage = {
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ source: selectedSource })
+                    body: JSON.stringify({
+                        source: selectedSource,
+                        camera_index: selectedSource === 'webcam' ? selectedCameraIndex : null
+                    })
                 });
 
                 let startData = null;
@@ -1614,6 +1952,26 @@ const LivePage = {
                 if (startData.source) {
                     selectedSource = startData.source;
                 }
+                if (startData.camera_index !== null && startData.camera_index !== undefined) {
+                    selectedCameraIndex = normalizeCameraIndex(startData.camera_index, selectedCameraIndex);
+                }
+                syncBackendWebcamDevices(startData || {});
+
+                if (startData.realsense_available !== undefined) {
+                    realsenseAvailable = !!startData.realsense_available;
+                }
+                if (startData.realsense_device_name) {
+                    realsenseDeviceName = startData.realsense_device_name;
+                }
+                realsenseCapabilities = startData.realsense_capabilities || realsenseCapabilities;
+
+                if (startData.edge_realsense_available !== undefined) {
+                    edgeRealsenseAvailable = !!startData.edge_realsense_available;
+                }
+                if (startData.edge_realsense_device_name) {
+                    edgeRealsenseDeviceName = startData.edge_realsense_device_name;
+                }
+                edgeRealsenseCapabilities = startData.edge_realsense_capabilities || edgeRealsenseCapabilities;
 
                 // Hide placeholder, show stream
                 placeholder.style.display = 'none';
@@ -1632,9 +1990,11 @@ const LivePage = {
                 
                 // Update state
                 setLiveControlState(true);
+                renderCapabilities();
+                renderSourceToggle();
                 await refreshDepthStatus();
 
-                showNotification(`Live monitoring started (${selectedSource === 'realsense' ? (realsenseDeviceName || 'RealSense') : 'Webcam'})`, 'success');
+                showNotification(`Live monitoring started (${getCurrentSourceLabel()})`, 'success');
 
                 if (startData.fallback_to_webcam) {
                     showNotification(startData.message || 'RealSense unavailable, switched to webcam', 'warning');
@@ -1719,12 +2079,27 @@ const LivePage = {
                 realsenseDeviceName = devices.realsense_device_name;
             }
             realsenseCapabilities = devices.realsense_capabilities || {};
+            edgeRealsenseAvailable = !!devices.edge_realsense_available;
+            if (devices.edge_realsense_device_name) {
+                edgeRealsenseDeviceName = devices.edge_realsense_device_name;
+            }
+            edgeRealsenseCapabilities = devices.edge_realsense_capabilities || {};
+            syncBackendWebcamDevices(devices);
             selectedSource = devices.default_source || 'webcam';
-            if (!realsenseAvailable) {
+
+            if (selectedSource === 'realsense' && !realsenseAvailable) {
+                selectedSource = edgeRealsenseAvailable ? 'edge_realsense' : 'webcam';
+            }
+
+            if (selectedSource === 'edge_realsense' && !edgeRealsenseAvailable) {
+                selectedSource = realsenseAvailable ? 'realsense' : 'webcam';
+            }
+
+            if (!['webcam', 'realsense', 'edge_realsense', 'phone'].includes(selectedSource)) {
                 selectedSource = 'webcam';
             }
 
-            if (phoneCameraSupported && selectedSource !== 'realsense' && selectedSource !== 'webcam' && selectedSource !== 'phone') {
+            if (phoneCameraSupported && !['realsense', 'edge_realsense', 'webcam', 'phone'].includes(selectedSource)) {
                 selectedSource = 'phone';
             }
             renderCapabilities();
@@ -1733,6 +2108,8 @@ const LivePage = {
             console.error('Error checking live devices:', error);
             selectedSource = 'webcam';
             realsenseAvailable = false;
+            edgeRealsenseAvailable = false;
+            backendWebcamDevices = [];
             renderCapabilities();
             renderSourceToggle();
         }
@@ -1749,12 +2126,29 @@ const LivePage = {
                 realsenseDeviceName = status.realsense_device_name;
             }
             realsenseCapabilities = status.realsense_capabilities || realsenseCapabilities;
+            if (status.edge_realsense_available !== undefined) {
+                edgeRealsenseAvailable = !!status.edge_realsense_available;
+            }
+            if (status.edge_realsense_device_name) {
+                edgeRealsenseDeviceName = status.edge_realsense_device_name;
+            }
+            edgeRealsenseCapabilities = status.edge_realsense_capabilities || edgeRealsenseCapabilities;
+            syncBackendWebcamDevices(status);
             selectedSource = status.source || status.default_source || selectedSource;
-            if (!realsenseAvailable) {
+
+            if (selectedSource === 'realsense' && !realsenseAvailable) {
+                selectedSource = edgeRealsenseAvailable ? 'edge_realsense' : 'webcam';
+            }
+
+            if (selectedSource === 'edge_realsense' && !edgeRealsenseAvailable) {
+                selectedSource = realsenseAvailable ? 'realsense' : 'webcam';
+            }
+
+            if (!['webcam', 'realsense', 'edge_realsense', 'phone'].includes(selectedSource)) {
                 selectedSource = 'webcam';
             }
 
-            if (phoneCameraSupported && selectedSource !== 'realsense' && selectedSource !== 'webcam' && selectedSource !== 'phone') {
+            if (phoneCameraSupported && !['realsense', 'edge_realsense', 'webcam', 'phone'].includes(selectedSource)) {
                 selectedSource = 'phone';
             }
             
@@ -1780,6 +2174,9 @@ const LivePage = {
             renderCapabilities();
             renderSourceToggle();
         }
+
+        await refreshBrowserCameraOptions();
+        renderSourceToggle();
 
         // =========================================
         // PROCESSING SETTINGS HANDLERS

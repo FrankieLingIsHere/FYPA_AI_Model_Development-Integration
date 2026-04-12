@@ -37,6 +37,10 @@ Set these in Railway:
 SERVE_FRONTEND=false
 ALLOWED_ORIGINS=https://your-frontend.vercel.app
 
+# Optional: local RealSense edge relay ingest security
+EDGE_INGEST_TOKEN=your-shared-secret-token
+EDGE_REALSENSE_STALE_SECONDS=4
+
 # Optional: switchable model provider routing
 MODEL_API_ENABLED=true
 NLP_PROVIDER_ORDER=model_api,gemini,ollama,local
@@ -330,6 +334,26 @@ python luna_app.py
 
 Then open your browser to: `http://localhost:5000`
 
+### Local RealSense to Deployed Backend (Edge Relay)
+
+When frontend/backend are deployed (Vercel + Railway), the cloud backend cannot see USB cameras on your PC directly.
+Use the edge relay script to push local RealSense color/depth to Railway:
+
+```bash
+cd Updated_Pipeline_Supabase
+
+# Option A: helper script (Windows)
+set EDGE_INGEST_TOKEN=your-shared-secret-token
+START_EDGE_REALSENSE_RELAY.bat https://your-backend.up.railway.app
+
+# Option B: direct Python
+python edge_realsense_streamer.py \
+    --backend-url https://your-backend.up.railway.app \
+    --token your-shared-secret-token
+```
+
+Then in Live Monitoring source selector, choose **RealSense Edge Relay**.
+
 ### Alternative: Report Viewer Only
 
 If you only want to view existing reports without live monitoring:
@@ -363,6 +387,8 @@ All endpoints remain the same as the original LUNA system:
 - `GET /api/live/stream` - Video stream
 - `POST /api/live/start` - Start monitoring
 - `POST /api/live/stop` - Stop monitoring
+- `POST /api/live/edge/realsense/frame` - Ingest local RealSense relay frame + depth payload
+- `GET /api/live/edge/realsense/status` - Edge relay availability/status
 
 ### System
 - `GET /api/system/info` - System information

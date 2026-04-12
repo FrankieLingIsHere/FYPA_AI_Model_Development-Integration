@@ -223,6 +223,7 @@ ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv('ALLOWED_ORIGINS', '*').split(',') if origin.strip()
 ]
 ALLOWED_ORIGINS = [o.strip().strip('"').strip("'") for o in ALLOWED_ORIGINS if o.strip().strip('"').strip("'")]
+EDGE_INGEST_TOKEN = os.getenv('EDGE_INGEST_TOKEN', '').strip()
 
 STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
     'STARTUP_MODEL_WARMUP_ENABLED',
@@ -230,6 +231,14 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
 ).lower() == 'true'
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
+
+
+def _is_edge_ingest_authorized() -> bool:
+    """Validate edge relay ingest token when configured."""
+    if not EDGE_INGEST_TOKEN:
+        return True
+    supplied = (request.headers.get('X-Edge-Token') or '').strip()
+    return supplied == EDGE_INGEST_TOKEN
 
 
 def _is_origin_allowed(origin: str) -> bool:
@@ -354,9 +363,9 @@ def _get_default_live_source() -> str:
     return live_source_adapter.get_default_source()
 
 
-def _start_live_source_locked(requested_source: str) -> Dict[str, Any]:
+def _start_live_source_locked(requested_source: str, camera_index: Optional[int] = None) -> Dict[str, Any]:
     """Start requested source with graceful fallback behavior (lock must be held)."""
-    return live_source_adapter.start_locked(requested_source)
+    return live_source_adapter.start_locked(requested_source, camera_index=camera_index)
 
 
 def _read_active_frame_locked():
@@ -5186,9 +5195,15 @@ def start_live():
 
     payload = request.get_json(silent=True) or {}
     requested_source = str(payload.get('source', _get_default_live_source()))
+    requested_camera_index = payload.get('camera_index')
+    if requested_camera_index is not None:
+        try:
+            requested_camera_index = int(requested_camera_index)
+        except (TypeError, ValueError):
+            requested_camera_index = None
 
     with camera_lock:
-        result = _start_live_source_locked(requested_source)
+        result = _start_live_source_locked(requested_source, requested_camera_index)
 
     if not result.get('success'):
         return jsonify({'success': False, 'error': result.get('message', 'Failed to start live monitoring')}), 500
@@ -5196,9 +5211,23 @@ def start_live():
     response = {
         'success': True,
         'source': result.get('source', 'webcam'),
+        'camera_index': result.get('camera_index'),
         'fallback_to_webcam': bool(result.get('fallback_to_webcam')),
         'message': result.get('message', 'Live monitoring started')
     }
+
+    state_payload = _build_live_state_payload()
+    response['realsense_available'] = state_payload.get('realsense_available', False)
+    response['realsense_device_name'] = state_payload.get('realsense_device_name')
+    response['realsense_capabilities'] = state_payload.get('realsense_capabilities', {})
+    response['edge_realsense_available'] = state_payload.get('edge_realsense_available', False)
+    response['edge_realsense_device_name'] = state_payload.get('edge_realsense_device_name')
+    response['edge_realsense_age_ms'] = state_payload.get('edge_realsense_age_ms')
+    response['edge_realsense_capabilities'] = state_payload.get('edge_realsense_capabilities', {})
+
+    if response['source'] == 'webcam':
+        response['webcam_devices'] = state_payload.get('webcam_devices', [])
+
     return jsonify(response)
 
 
@@ -5245,6 +5274,87 @@ def live_depth_preview():
         return Response(status=204)
 
     return Response(preview, mimetype='image/jpeg')
+
+
+@app.route('/api/live/edge/realsense/frame', methods=['POST'])
+def ingest_edge_realsense_frame():
+    """Ingest a local-machine RealSense frame/depth payload for hosted live streaming."""
+    if not _is_edge_ingest_authorized():
+        return jsonify({'success': False, 'error': 'Unauthorized edge ingest token'}), 401
+
+    frame_file = request.files.get('frame') or request.files.get('image')
+    if frame_file is None:
+        return jsonify({'success': False, 'error': 'No frame/image file provided'}), 400
+
+    try:
+        raw_bytes = frame_file.read()
+        nparr = np.frombuffer(raw_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'Invalid frame payload: {exc}'}), 400
+
+    if frame is None:
+        return jsonify({'success': False, 'error': 'Invalid frame image format'}), 400
+
+    def _parse_json_field(field_name: str):
+        raw_value = request.form.get(field_name)
+        if not raw_value:
+            return None
+
+        raw_text = str(raw_value).strip()
+        try:
+            parsed = json.loads(raw_text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            # Some shell form uploads escape quotes (e.g. {\"key\":\"value\"}).
+            try:
+                unescaped = raw_text.encode('utf-8').decode('unicode_escape')
+                parsed = json.loads(unescaped)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
+        return None
+
+    device_name = (request.form.get('device_name') or 'Intel RealSense (Edge Relay)').strip()
+    depth_telemetry = _parse_json_field('depth_telemetry')
+    capabilities = _parse_json_field('capabilities')
+
+    depth_preview_file = request.files.get('depth_preview')
+    depth_preview_bytes = None
+    if depth_preview_file is not None:
+        try:
+            depth_preview_bytes = depth_preview_file.read()
+        except Exception:
+            depth_preview_bytes = None
+
+    with camera_lock:
+        edge_snapshot = live_source_adapter.ingest_edge_realsense_locked(
+            frame,
+            device_name=device_name,
+            depth_telemetry=depth_telemetry,
+            depth_preview_jpeg=depth_preview_bytes,
+            capabilities=capabilities,
+        )
+
+    return jsonify({'success': True, **edge_snapshot})
+
+
+@app.route('/api/live/edge/realsense/status')
+def edge_realsense_status():
+    """Return current edge RealSense relay status for UI/source selection."""
+    payload = _build_live_state_payload()
+    return jsonify({
+        'success': True,
+        'source': payload.get('source'),
+        'active': payload.get('active'),
+        'default_source': payload.get('default_source'),
+        'edge_realsense_available': payload.get('edge_realsense_available', False),
+        'edge_realsense_device_name': payload.get('edge_realsense_device_name'),
+        'edge_realsense_age_ms': payload.get('edge_realsense_age_ms'),
+        'edge_realsense_capabilities': payload.get('edge_realsense_capabilities', {}),
+    })
 
 
 # =========================================================================

@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 
 import requests
 
@@ -13,6 +14,10 @@ VERCEL_URL = os.environ.get(
 
 DEFAULT_RAILWAY_URL = "https://fypaaimodeldevelopment-integration-production.up.railway.app"
 RAILWAY_URL = os.environ.get("LUNA_BASE_URL", "").rstrip("/")
+STARTUP_WAIT_SECONDS = int(os.environ.get("LUNA_STARTUP_WAIT_SECONDS", "180"))
+STARTUP_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_STARTUP_POLL_INTERVAL_SECONDS", "6"))
+QUEUE_WAIT_SECONDS = int(os.environ.get("LUNA_QUEUE_WAIT_SECONDS", "90"))
+QUEUE_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_QUEUE_POLL_INTERVAL_SECONDS", "6"))
 
 
 def fail(msg: str, code: int = 2) -> int:
@@ -41,6 +46,51 @@ def is_placeholder_url(value: str) -> bool:
     return (not text) or ("your-backend" in text) or text.endswith("example.com")
 
 
+def wait_for_startup_ready(api_base: str):
+    deadline = time.time() + max(STARTUP_WAIT_SECONDS, 0)
+    last_payload = None
+    while True:
+        try:
+            payload = get_json(f"{api_base}/api/system/startup-status")
+            last_payload = payload
+            ready = isinstance(payload, dict) and bool(payload.get("ready"))
+            progress = payload.get("progress") if isinstance(payload, dict) else None
+            message = payload.get("message") if isinstance(payload, dict) else None
+            print(f"INFO: startup poll ready={ready} progress={progress} message={message}")
+            if ready:
+                return payload
+        except Exception as exc:
+            print(f"INFO: startup poll error: {exc}")
+
+        if time.time() >= deadline:
+            break
+        time.sleep(max(1, STARTUP_POLL_INTERVAL_SECONDS))
+
+    return last_payload
+
+
+def wait_for_queue_healthy(api_base: str):
+    deadline = time.time() + max(QUEUE_WAIT_SECONDS, 0)
+    last_payload = None
+    while True:
+        try:
+            payload = get_json(f"{api_base}/api/queue/status")
+            last_payload = payload
+            available = isinstance(payload, dict) and bool(payload.get("available"))
+            worker_running = isinstance(payload, dict) and bool(payload.get("worker_running"))
+            print(f"INFO: queue poll available={available} worker_running={worker_running}")
+            if available and worker_running:
+                return payload
+        except Exception as exc:
+            print(f"INFO: queue poll error: {exc}")
+
+        if time.time() >= deadline:
+            break
+        time.sleep(max(1, QUEUE_POLL_INTERVAL_SECONDS))
+
+    return last_payload
+
+
 def main() -> int:
     try:
         home = requests.get(f"{VERCEL_URL}/", timeout=30)
@@ -61,16 +111,21 @@ def main() -> int:
         else:
             api_base = RAILWAY_URL
 
-        startup = get_json(f"{api_base}/api/system/startup-status")
+        startup = wait_for_startup_ready(api_base)
         if not isinstance(startup, dict) or not startup.get("ready"):
-            return fail(f"Backend startup not ready: {json.dumps(startup)[:350]}", 4)
+            return fail(
+                "Backend startup not ready after wait window. "
+                "Check Railway env vars SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL and deployment logs. "
+                f"Last payload: {json.dumps(startup)[:500]}",
+                4,
+            )
         print("PASS: Backend startup ready")
 
-        queue = get_json(f"{api_base}/api/queue/status")
+        queue = wait_for_queue_healthy(api_base)
         if not isinstance(queue, dict) or not queue.get("available"):
-            return fail(f"Queue endpoint unavailable: {json.dumps(queue)[:350]}", 5)
+            return fail(f"Queue endpoint unavailable after wait window: {json.dumps(queue)[:500]}", 5)
         if not queue.get("worker_running"):
-            return fail(f"Queue worker is not running: {json.dumps(queue)[:350]}", 6)
+            return fail(f"Queue worker is not running after wait window: {json.dumps(queue)[:500]}", 6)
         print("PASS: Queue worker healthy")
 
         print("PASS: deployed routing and backend health checks")

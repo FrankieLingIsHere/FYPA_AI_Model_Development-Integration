@@ -1131,7 +1131,7 @@ def initialize_pipeline_components():
             logger.info("Starting violation queue worker thread...")
             if not start_queue_worker():
                 logger.error("Failed to start queue worker thread")
-                return False
+                raise RuntimeError('Queue worker thread failed to start during component initialization')
             
         _set_startup_step('pipeline_components', 'ok', 'All pipeline components initialized')
         logger.info("[OK] All pipeline components initialized")
@@ -1142,7 +1142,7 @@ def initialize_pipeline_components():
         logger.error(f"Error initializing pipeline components: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
 
 def start_queue_worker() -> bool:

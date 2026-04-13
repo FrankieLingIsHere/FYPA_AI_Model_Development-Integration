@@ -1,9 +1,41 @@
 const STARTUP_STATUS_ENDPOINT = '/api/system/startup-status';
 const STARTUP_POLL_INTERVAL_MS = 1200;
+const BACKEND_PROBE_TIMEOUT_MS = 2600;
 let appBootstrapped = false;
 let networkIndicatorBootstrapped = false;
 let pwaBootstrapped = false;
 let adaptivePipelineBootstrapped = false;
+let backendResolutionInFlight = null;
+let lastResolvedBackendBaseUrl = null;
+const LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
+const LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
+
+function getLocalModePolicy() {
+    return {
+        checkupCompleted: localStorage.getItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY) === 'true',
+        autoSetupAllowed: localStorage.getItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY) === 'true'
+    };
+}
+
+function setLocalModePolicy({ checkupCompleted, autoSetupAllowed } = {}) {
+    if (checkupCompleted !== undefined) {
+        localStorage.setItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY, checkupCompleted ? 'true' : 'false');
+    }
+    if (autoSetupAllowed !== undefined) {
+        localStorage.setItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY, autoSetupAllowed ? 'true' : 'false');
+    }
+    window.dispatchEvent(new CustomEvent('ppe-local-mode:policy-changed', {
+        detail: {
+            ...getLocalModePolicy(),
+            measuredAt: Date.now()
+        }
+    }));
+}
+
+window.PPELocalModePolicy = {
+    get: () => getLocalModePolicy(),
+    set: (next) => setLocalModePolicy(next || {})
+};
 
 // Main Application Entry Point
 document.addEventListener('DOMContentLoaded', () => {
@@ -51,6 +83,11 @@ async function initializeWithStartupGate() {
     updateStartupUi({
         progress: 0,
         current_step: 'Contacting backend startup service...'
+    });
+
+    await resolveWorkingBackendBaseUrl({
+        preferLocal: navigator.onLine === false,
+        force: true
     });
 
     try {
@@ -129,6 +166,14 @@ async function waitForStartupReady() {
                 throw error;
             }
             consecutiveFetchFailures += 1;
+
+            if (consecutiveFetchFailures >= 2) {
+                await resolveWorkingBackendBaseUrl({
+                    preferLocal: navigator.onLine === false,
+                    force: true
+                });
+            }
+
             updateStartupUi({
                 progress: 5,
                 current_step: 'Waiting for backend startup checks to respond...'
@@ -207,6 +252,89 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeBaseUrl(base) {
+    const raw = String(base || '').trim();
+    if (!raw || raw === window.location.origin) return '';
+    return raw.replace(/\/+$/, '');
+}
+
+function buildBackendCandidates(preferLocal) {
+    const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || API_CONFIG.BASE_URL || '');
+    const sameOrigin = '';
+    const locals = ['http://127.0.0.1:5000', 'http://127.0.0.1:5001', 'http://localhost:5000', 'http://localhost:5001'];
+
+    const ordered = preferLocal
+        ? [sameOrigin, ...locals, configured]
+        : [configured, sameOrigin, ...locals];
+
+    const dedup = [];
+    ordered.forEach((item) => {
+        const normalized = normalizeBaseUrl(item);
+        if (!dedup.includes(normalized)) {
+            dedup.push(normalized);
+        }
+    });
+
+    return dedup;
+}
+
+async function probeBackend(baseUrl, endpoint = STARTUP_STATUS_ENDPOINT, timeoutMs = BACKEND_PROBE_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const response = await fetch(`${baseUrl}${endpoint}`, {
+            cache: 'no-store',
+            signal: controller.signal
+        });
+        if (response.status === 200 || response.status === 202 || response.status === 500 || response.status === 503) {
+            return true;
+        }
+        return false;
+    } catch (error) {
+        return false;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false } = {}) {
+    if (backendResolutionInFlight && !force) {
+        return backendResolutionInFlight;
+    }
+
+    backendResolutionInFlight = (async () => {
+        const preferLocalNow = preferLocal || navigator.onLine === false;
+        const candidates = buildBackendCandidates(preferLocalNow);
+
+        for (const candidate of candidates) {
+            const reachable = await probeBackend(candidate, STARTUP_STATUS_ENDPOINT);
+            if (!reachable) {
+                continue;
+            }
+
+            API_CONFIG.BASE_URL = candidate;
+            lastResolvedBackendBaseUrl = candidate;
+            window.dispatchEvent(new CustomEvent('ppe-backend:resolved', {
+                detail: {
+                    baseUrl: candidate,
+                    preferLocal: preferLocalNow,
+                    measuredAt: Date.now()
+                }
+            }));
+            return candidate;
+        }
+
+        return API_CONFIG.BASE_URL || lastResolvedBackendBaseUrl || '';
+    })();
+
+    try {
+        return await backendResolutionInFlight;
+    } finally {
+        backendResolutionInFlight = null;
+    }
+}
+
 function registerPwaSupport() {
     if (pwaBootstrapped) return;
     pwaBootstrapped = true;
@@ -229,22 +357,28 @@ function initializeNetworkIndicator() {
     if (networkIndicatorBootstrapped) return;
     networkIndicatorBootstrapped = true;
 
-    const badge = document.getElementById('networkStatusBadge');
-    const label = document.getElementById('networkStatusText');
-    if (!badge || !label) return;
+    const targets = [
+        {
+            badge: document.getElementById('networkStatusBadge'),
+            label: document.getElementById('networkStatusText')
+        },
+        {
+            badge: document.getElementById('startupNetworkStatusBadge'),
+            label: document.getElementById('startupNetworkStatusText')
+        }
+    ].filter((item) => item.badge && item.label);
+    if (!targets.length) return;
 
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     const stateClasses = ['network-strong', 'network-good', 'network-fair', 'network-weak', 'network-offline'];
 
-    const clearStateClasses = () => {
-        stateClasses.forEach((cls) => badge.classList.remove(cls));
-    };
-
     const setBadgeState = (stateClass, text, title) => {
-        clearStateClasses();
-        badge.classList.add(stateClass);
-        label.textContent = text;
-        badge.title = title;
+        targets.forEach(({ badge, label }) => {
+            stateClasses.forEach((cls) => badge.classList.remove(cls));
+            badge.classList.add(stateClass);
+            label.textContent = text;
+            badge.title = title;
+        });
     };
 
     const scoreConnection = () => {
@@ -324,7 +458,10 @@ function initializeAdaptivePipelineModeManager() {
         currentMode: 'unknown',
         switchInFlight: false,
         lastSwitchAttemptAt: 0,
-        minSwitchIntervalMs: 90 * 1000,
+        minSwitchIntervalMs: 15 * 1000,
+        lastEvaluatedNetworkState: null,
+        localUnavailableNotified: false,
+        evaluationTimer: null,
 
         notify(message, type = 'info') {
             if (typeof NotificationManager !== 'undefined') {
@@ -340,17 +477,34 @@ function initializeAdaptivePipelineModeManager() {
             return state === 'network-offline' || state === 'network-weak' || state === 'network-fair';
         },
 
-        canAttemptSwitch() {
+        canAttemptSwitch(force = false) {
+            if (force) return true;
             return (Date.now() - this.lastSwitchAttemptAt) >= this.minSwitchIntervalMs;
         },
 
-        async evaluate(networkState) {
+        async evaluate(networkState, options = {}) {
+            const force = !!options.force;
             if (this.switchInFlight) return;
-            if (!this.canAttemptSwitch()) return;
+            if (!this.canAttemptSwitch(force)) return;
+
+            if (!force && networkState === this.lastEvaluatedNetworkState) {
+                return;
+            }
+
+            this.lastEvaluatedNetworkState = networkState;
+
+            await resolveWorkingBackendBaseUrl({
+                preferLocal: this.shouldUseLocal(networkState),
+                force: this.shouldUseLocal(networkState)
+            });
 
             if (this.shouldUseLocal(networkState)) {
                 if (this.currentMode === 'local') return;
                 await this.switchToLocal(`network state ${networkState}`);
+                return;
+            }
+
+            if (navigator.onLine === false) {
                 return;
             }
 
@@ -365,8 +519,11 @@ function initializeAdaptivePipelineModeManager() {
             try {
                 const options = await API.getReportRecoveryOptions();
                 let localReady = !!(options && options.success !== false && options.local && options.local.local_mode_possible);
+                const policy = getLocalModePolicy();
+                const isOffline = navigator.onLine === false;
+                const canAutoPrepare = isOffline && policy.checkupCompleted && policy.autoSetupAllowed;
 
-                if (!localReady) {
+                if (!localReady && canAutoPrepare) {
                     const prep = await API.prepareLocalMode({
                         autoPull: true,
                         setLocalFirst: true,
@@ -377,7 +534,16 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 if (!localReady) {
-                    this.notify('Local pipeline is not ready on this host yet; keeping existing routing.', 'warning');
+                    if (!this.localUnavailableNotified) {
+                        if (isOffline && !policy.checkupCompleted) {
+                            this.notify('Offline detected. Run Local Mode Checkup once in Live Settings to enable offline auto-setup.', 'warning');
+                        } else if (isOffline && policy.checkupCompleted && !policy.autoSetupAllowed) {
+                            this.notify('Offline detected. Local auto-setup is disabled by your preference.', 'warning');
+                        } else {
+                            this.notify('Local pipeline is not ready on this host yet; keeping existing routing.', 'warning');
+                        }
+                    }
+                    this.localUnavailableNotified = true;
                     return;
                 }
 
@@ -388,8 +554,13 @@ function initializeAdaptivePipelineModeManager() {
 
                 await API.executeReportRecovery('local');
                 this.currentMode = 'local';
+                this.localUnavailableNotified = false;
                 this.notify(`Pipeline switched to LOCAL mode (${reason}).`, 'success');
             } catch (error) {
+                if (!this.localUnavailableNotified) {
+                    this.notify('Local mode auto-switch failed. It will retry automatically when conditions change.', 'warning');
+                    this.localUnavailableNotified = true;
+                }
                 console.warn('Adaptive switch to local failed:', error);
             } finally {
                 this.switchInFlight = false;
@@ -419,16 +590,38 @@ function initializeAdaptivePipelineModeManager() {
             } finally {
                 this.switchInFlight = false;
             }
+        },
+
+        startPeriodicEvaluation() {
+            if (this.evaluationTimer) return;
+            this.evaluationTimer = setInterval(() => {
+                const state = !navigator.onLine ? 'network-offline' : 'network-good';
+                this.evaluate(state, { force: false });
+            }, 12000);
         }
     };
 
     window.addEventListener('ppe-network:status', (event) => {
         const networkState = event && event.detail ? event.detail.state : 'network-good';
-        manager.evaluate(networkState);
+        manager.evaluate(networkState, { force: true });
+    });
+
+    window.addEventListener('online', () => {
+        manager.evaluate('network-good', { force: true });
+    });
+
+    window.addEventListener('offline', () => {
+        manager.evaluate('network-offline', { force: true });
+    });
+
+    window.addEventListener('ppe-backend:resolved', () => {
+        const state = !navigator.onLine ? 'network-offline' : 'network-good';
+        manager.evaluate(state, { force: true });
     });
 
     const bootState = !navigator.onLine ? 'network-offline' : 'network-good';
-    manager.evaluate(bootState);
+    manager.startPeriodicEvaluation();
+    manager.evaluate(bootState, { force: true });
 }
 
 function setupResponsiveMobileUX() {

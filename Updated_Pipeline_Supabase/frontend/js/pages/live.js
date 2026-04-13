@@ -7,12 +7,15 @@ const LivePage = {
     settingsKeydownHandler: null,
     globalSettingsClickHandler: null,
     toolbarSettingsClickHandler: null,
+    localModePolicyHandler: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     phoneCameraStream: null,
     phoneInferenceInterval: null,
     phoneInferenceBusy: false,
     phoneLastViolationNoticeAt: 0,
+    reportQueueSuppressionActive: false,
+    reportQueueSuppressionReason: null,
 
     render() {
         return `
@@ -462,6 +465,12 @@ const LivePage = {
                                     <button id="reloadProviderRoutingBtn" class="btn btn-secondary">
                                         <i class="fas fa-sync-alt"></i> Reload Provider Settings
                                     </button>
+                                    <button id="runLocalModeCheckupBtn" class="btn btn-secondary">
+                                        <i class="fas fa-wifi"></i> Run Local Mode Checkup
+                                    </button>
+                                </div>
+                                <div id="localModeCheckupStatus" style="margin-top: 0.55rem; font-size: 0.84rem; color: var(--text-secondary);">
+                                    Local mode checkup not completed yet. Offline auto-setup remains disabled.
                                 </div>
                                 <div id="providerRoutingStatus" style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);"></div>
                                 <div id="providerRuntimePanel" style="margin-top: 0.7rem; border: 1px solid var(--border-color); border-radius: 8px; background: #fff; padding: 0.65rem 0.75rem;">
@@ -734,6 +743,8 @@ const LivePage = {
 
     async mount() {
         const livePage = this;
+        this.reportQueueSuppressionActive = false;
+        this.reportQueueSuppressionReason = null;
 
         // Get UI elements
         const liveModeBtn = document.getElementById('liveModeBtn');
@@ -1406,9 +1417,20 @@ const LivePage = {
                         this.phoneLastViolationNoticeAt = now;
                         showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
                     }
+                    if (result.report_queued === true) {
+                        // Reset suppression state only when a new violation is successfully enqueued.
+                        this.reportQueueSuppressionActive = false;
+                        this.reportQueueSuppressionReason = null;
+                    }
                     if (result.report_queued === false) {
                         const reason = result.report_queue_reason || 'queue_unavailable';
-                        showNotification(`Violation detected but report not queued (${reason})`, 'warning');
+                        const shouldNotifySuppression =
+                            !this.reportQueueSuppressionActive || this.reportQueueSuppressionReason !== reason;
+                        if (shouldNotifySuppression) {
+                            showNotification(`Violation detected but report not queued (${reason})`, 'warning');
+                            this.reportQueueSuppressionActive = true;
+                            this.reportQueueSuppressionReason = reason;
+                        }
                     }
                 }
             } catch (error) {
@@ -2199,6 +2221,8 @@ const LivePage = {
         const geminiModelSelect = document.getElementById('geminiModelSelect');
         const applyProviderRoutingBtn = document.getElementById('applyProviderRoutingBtn');
         const reloadProviderRoutingBtn = document.getElementById('reloadProviderRoutingBtn');
+        const runLocalModeCheckupBtn = document.getElementById('runLocalModeCheckupBtn');
+        const localModeCheckupStatus = document.getElementById('localModeCheckupStatus');
         const providerRoutingStatus = document.getElementById('providerRoutingStatus');
         const reliabilityHeadingIcon = document.getElementById('reliabilityHeadingIcon');
         const reliabilityWindowSelect = document.getElementById('reliabilityWindowSelect');
@@ -2592,6 +2616,131 @@ const LivePage = {
             }
         }
 
+        function updateLocalModeCheckupStatus() {
+            if (!localModeCheckupStatus) return;
+            const policyApi = window.PPELocalModePolicy;
+            const policy = policyApi && typeof policyApi.get === 'function'
+                ? policyApi.get()
+                : { checkupCompleted: false, autoSetupAllowed: false };
+
+            if (!policy.checkupCompleted) {
+                localModeCheckupStatus.textContent = 'Local mode checkup not completed yet. Offline auto-setup remains disabled.';
+                localModeCheckupStatus.style.color = 'var(--text-secondary)';
+                return;
+            }
+
+            if (policy.autoSetupAllowed) {
+                localModeCheckupStatus.textContent = 'Local mode checkup completed. Offline auto-setup is enabled.';
+                localModeCheckupStatus.style.color = 'var(--success-color)';
+                return;
+            }
+
+            localModeCheckupStatus.textContent = 'Local mode checkup completed. Offline auto-setup is disabled by preference.';
+            localModeCheckupStatus.style.color = 'var(--warning-color)';
+        }
+
+        async function runLocalModeCheckup() {
+            if (!runLocalModeCheckupBtn) return;
+
+            const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+            const REQUIRED_SPACE_NOTE = 'Required local storage for Ollama models: minimum 20 GB free (recommended 35 GB for smoother offline operation).';
+
+            try {
+                runLocalModeCheckupBtn.disabled = true;
+                runLocalModeCheckupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+                setProviderStatus('Running local mode checkup...', 'info');
+
+                const proceedAfterPrereqWarning = confirm(
+                    'Before running Local Mode Checkup:\n\n'
+                    + '- Ollama must be installed on this device.\n'
+                    + `- ${REQUIRED_SPACE_NOTE}\n\n`
+                    + 'Continue to run checkup?'
+                );
+                if (!proceedAfterPrereqWarning) {
+                    setProviderStatus('Local mode checkup cancelled by user.', 'warning');
+                    return;
+                }
+
+                const options = await API.getReportRecoveryOptions();
+                if (!options || options.success === false) {
+                    throw new Error((options && options.error) || 'Failed to fetch local mode diagnostics');
+                }
+
+                const local = options.local || {};
+                const ollamaInstalled = !!local.ollama_installed;
+                let ready = !!local.local_mode_possible;
+                let prep = null;
+
+                if (!ollamaInstalled) {
+                    const openDownloadPage = confirm(
+                        'Ollama was not found on this device.\n\n'
+                        + `Install Ollama first: ${OLLAMA_DOWNLOAD_URL}\n`
+                        + `${REQUIRED_SPACE_NOTE}\n\n`
+                        + 'Open the Ollama download page now?'
+                    );
+                    if (openDownloadPage) {
+                        try {
+                            window.open(OLLAMA_DOWNLOAD_URL, '_blank', 'noopener');
+                        } catch (openErr) {
+                            console.warn('Could not open Ollama download page automatically:', openErr);
+                        }
+                    }
+                    setProviderStatus('Ollama is not installed. Install Ollama before running local mode checkup.', 'warning');
+                    showNotification('Install Ollama first to continue local mode checkup', 'warning');
+                    return;
+                }
+
+                if (!ready) {
+                    const proceedSetup = confirm(
+                        'Local mode is not ready yet.\n\nRun local setup now?\nThis may start Ollama and download required model files.\n\n'
+                        + REQUIRED_SPACE_NOTE
+                    );
+                    if (proceedSetup) {
+                        runLocalModeCheckupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+                        prep = await API.prepareLocalMode({
+                            autoPull: true,
+                            setLocalFirst: false,
+                            waitSeconds: 8,
+                            pullTimeoutSeconds: 900
+                        });
+                        ready = !!(prep && prep.success && prep.after && prep.after.local_mode_possible);
+                    }
+                }
+
+                if (window.PPELocalModePolicy && typeof window.PPELocalModePolicy.set === 'function') {
+                    window.PPELocalModePolicy.set({ checkupCompleted: true });
+                }
+
+                if (ready) {
+                    const allowOfflineAutoSetup = confirm(
+                        'Local mode checkup completed and local pipeline is ready.\n\nEnable automatic local setup attempts when network disconnects?'
+                    );
+                    if (window.PPELocalModePolicy && typeof window.PPELocalModePolicy.set === 'function') {
+                        window.PPELocalModePolicy.set({ autoSetupAllowed: allowOfflineAutoSetup });
+                    }
+                    setProviderStatus('Local mode checkup completed.', 'success');
+                    showNotification('Local mode checkup completed', 'success');
+                } else {
+                    if (window.PPELocalModePolicy && typeof window.PPELocalModePolicy.set === 'function') {
+                        window.PPELocalModePolicy.set({ autoSetupAllowed: false });
+                    }
+                    const prepError = String((prep && prep.error) || local.error || 'Local mode is still not ready after checkup.');
+                    setProviderStatus(prepError, 'warning');
+                    showNotification(prepError, 'warning');
+                }
+
+                updateLocalModeCheckupStatus();
+                await updateProviderRuntimeStatus({ force: true });
+            } catch (error) {
+                console.error('Local mode checkup failed:', error);
+                setProviderStatus(error.message || 'Local mode checkup failed', 'error');
+                showNotification(error.message || 'Local mode checkup failed', 'error');
+            } finally {
+                runLocalModeCheckupBtn.disabled = false;
+                runLocalModeCheckupBtn.innerHTML = '<i class="fas fa-wifi"></i> Run Local Mode Checkup';
+            }
+        }
+
         function setSelectValueOrInject(selectEl, value, customPrefix) {
             if (!selectEl) return;
             const normalizedValue = String(value || '').trim();
@@ -2895,6 +3044,14 @@ const LivePage = {
             });
         }
 
+        if (runLocalModeCheckupBtn) {
+            runLocalModeCheckupBtn.addEventListener('click', runLocalModeCheckup);
+        }
+
+        this.localModePolicyHandler = updateLocalModeCheckupStatus;
+        window.addEventListener('ppe-local-mode:policy-changed', this.localModePolicyHandler);
+        updateLocalModeCheckupStatus();
+
         if (closeSettingsWindowBtn) {
             closeSettingsWindowBtn.addEventListener('click', closeSettingsWindow);
         }
@@ -3045,6 +3202,11 @@ const LivePage = {
         if (this.settingsKeydownHandler) {
             document.removeEventListener('keydown', this.settingsKeydownHandler);
             this.settingsKeydownHandler = null;
+        }
+
+        if (this.localModePolicyHandler) {
+            window.removeEventListener('ppe-local-mode:policy-changed', this.localModePolicyHandler);
+            this.localModePolicyHandler = null;
         }
 
         const globalLiveSettingsBtn = document.getElementById('globalLiveSettingsBtn');

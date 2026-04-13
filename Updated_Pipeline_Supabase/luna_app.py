@@ -79,6 +79,7 @@ startup_state = {
         'pipeline_imports': {'label': 'Pipeline modules', 'status': 'pending', 'detail': None},
         'yolo_model': {'label': 'YOLO model warm-up', 'status': 'pending', 'detail': None},
         'pipeline_components': {'label': 'Pipeline components', 'status': 'pending', 'detail': None},
+        'local_mode': {'label': 'Local mode readiness', 'status': 'pending', 'detail': None},
         'supabase_database': {'label': 'Supabase database', 'status': 'pending', 'detail': None},
         'supabase_storage': {'label': 'Supabase storage', 'status': 'pending', 'detail': None},
         'queue_worker': {'label': 'Queue worker', 'status': 'pending', 'detail': None}
@@ -240,6 +241,10 @@ STARTUP_MODEL_PATH_CHECK_ENABLED = os.getenv(
 STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
 STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
 STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS', '30'))
+STARTUP_AUTO_PREPARE_LOCAL_MODE = os.getenv('STARTUP_AUTO_PREPARE_LOCAL_MODE', 'false').lower() == 'true'
+STARTUP_AUTO_PULL_LOCAL_MODEL = os.getenv('STARTUP_AUTO_PULL_LOCAL_MODEL', 'true').lower() == 'true'
+STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS', '6'))
+STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS', '240'))
 ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 
@@ -792,6 +797,8 @@ def _startup_env_diagnostics() -> Dict[str, Any]:
         'railway_git_commit_sha': os.getenv('RAILWAY_GIT_COMMIT_SHA', '').strip(),
         'allow_offline_local_mode': ALLOW_OFFLINE_LOCAL_MODE,
         'startup_warmup_enabled': STARTUP_MODEL_WARMUP_ENABLED,
+        'startup_auto_prepare_local_mode': STARTUP_AUTO_PREPARE_LOCAL_MODE,
+        'startup_auto_pull_local_model': STARTUP_AUTO_PULL_LOCAL_MODEL,
     }
 
 
@@ -924,6 +931,62 @@ def _run_startup_sequence():
             _set_startup_step('pipeline_components', 'error', 'Component initialization returned failure')
             raise RuntimeError('Pipeline components failed to initialize')
         _set_startup_step('pipeline_components', 'ok', 'Core components initialized')
+
+        _set_startup_progress(60, 'Checking local mode readiness (Ollama)')
+        try:
+            if not STARTUP_AUTO_PREPARE_LOCAL_MODE:
+                _set_startup_step('local_mode', 'ok', 'Startup local-mode preparation disabled by env')
+            else:
+                before_local = _get_local_mode_diagnostics()
+                start_action = {
+                    'attempted': False,
+                    'started': False,
+                    'already_running': bool(before_local.get('ollama_running')),
+                    'error': None,
+                }
+                pull_action = {
+                    'attempted': False,
+                    'pulled': False,
+                    'already_available': bool(before_local.get('model_available')),
+                    'error': None,
+                }
+
+                if before_local.get('ollama_installed') and not before_local.get('ollama_running'):
+                    start_action = _start_ollama_service_if_needed(wait_seconds=STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS)
+
+                mid_local = _get_local_mode_diagnostics()
+                if (
+                    STARTUP_AUTO_PULL_LOCAL_MODEL
+                    and mid_local.get('ollama_running')
+                    and not mid_local.get('model_available')
+                ):
+                    pull_action = _pull_ollama_model_if_needed(
+                        ollama_base_url=mid_local.get('ollama_base_url') or before_local.get('ollama_base_url') or 'http://localhost:11434',
+                        model_name=mid_local.get('ollama_model') or before_local.get('ollama_model') or 'llama3',
+                        timeout_seconds=STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS,
+                    )
+
+                after_local = _get_local_mode_diagnostics()
+                if after_local.get('local_mode_possible'):
+                    _set_startup_step(
+                        'local_mode',
+                        'ok',
+                        f"Ready (running={after_local.get('ollama_running')}, model={after_local.get('ollama_model')}, available={after_local.get('model_available')})"
+                    )
+                elif after_local.get('ollama_installed'):
+                    detail_parts = [
+                        f"running={after_local.get('ollama_running')}",
+                        f"model_available={after_local.get('model_available')}",
+                    ]
+                    if start_action.get('error'):
+                        detail_parts.append(f"start_error={start_action.get('error')}")
+                    if pull_action.get('error'):
+                        detail_parts.append(f"pull_error={pull_action.get('error')}")
+                    _set_startup_step('local_mode', 'ok', 'Ollama detected but local mode not fully ready: ' + '; '.join(detail_parts))
+                else:
+                    _set_startup_step('local_mode', 'ok', 'Ollama is not installed on this host; local mode unavailable until installed')
+        except Exception as local_mode_exc:
+            _set_startup_step('local_mode', 'ok', f'Local mode check skipped due to non-blocking error: {local_mode_exc}')
 
         _set_startup_progress(68, 'Verifying Supabase database connection')
         if db_manager is None:

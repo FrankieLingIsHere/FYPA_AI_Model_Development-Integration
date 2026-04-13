@@ -186,7 +186,6 @@ body.settings-modal-open {
     overflow: hidden;
 }
 
-body.startup-loading .navbar,
 body.startup-loading .main-content,
 body.startup-loading .footer {
     visibility: hidden;

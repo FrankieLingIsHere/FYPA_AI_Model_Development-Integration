@@ -368,7 +368,7 @@ const LivePage = {
                                 </p>
 
                                 <div class="grid grid-2" style="gap: 1rem;">
-                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                    <div style="display: none; padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                                             <label style="font-weight: 600;">Model API Enabled</label>
                                             <label class="toggle-switch">
@@ -379,7 +379,7 @@ const LivePage = {
                                         <small style="color: var(--text-secondary);">Use provider-specific cloud APIs first.</small>
                                     </div>
 
-                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                    <div style="display: none; padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                                             <label style="font-weight: 600;">Gemini Fallback Enabled</label>
                                             <label class="toggle-switch">
@@ -393,53 +393,44 @@ const LivePage = {
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Routing Mode</label>
                                         <select id="nlpProviderOrderSelect" class="provider-input">
-                                            <option value="model_api,gemini,ollama,local">API first (cloud preferred)</option>
-                                            <option value="gemini,model_api,ollama,local">Gemini first (cost-balanced cloud)</option>
-                                            <option value="ollama,local,model_api,gemini">Local first (offline resilience)</option>
+                                            <option value="ollama,local,model_api,gemini" selected>Local first (offline resilience)</option>
                                         </select>
-                                        <small style="color: var(--text-secondary);">Click to choose provider priority.</small>
+                                        <small style="color: var(--text-secondary);">Locked to local-first mode to match Gemma local pipeline.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Routing Mode</label>
                                         <select id="visionProviderOrderSelect" class="provider-input">
-                                            <option value="model_api,gemini,ollama">API first</option>
-                                            <option value="gemini,model_api,ollama">Gemini first</option>
-                                            <option value="ollama,model_api,gemini">Local first</option>
+                                            <option value="ollama,model_api,gemini" selected>Local first</option>
                                         </select>
-                                        <small style="color: var(--text-secondary);">Click to choose captioning fallback order.</small>
+                                        <small style="color: var(--text-secondary);">Locked to local-first mode for on-device captioning.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Routing Mode</label>
                                         <select id="embeddingProviderOrderSelect" class="provider-input">
-                                            <option value="model_api,ollama">API first</option>
-                                            <option value="ollama,model_api">Local first</option>
+                                            <option value="ollama,model_api" selected>Local first</option>
                                         </select>
-                                        <small style="color: var(--text-secondary);">Click to choose embeddings fallback order.</small>
+                                        <small style="color: var(--text-secondary);">Locked to local-first mode.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">NLP Model</label>
                                         <select id="nlpModelSelect" class="provider-input">
-                                            <option value="meta-llama/Meta-Llama-3-8B-Instruct">Meta-Llama-3-8B-Instruct</option>
-                                            <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral-7B-Instruct-v0.3</option>
-                                            <option value="deepseek-ai/DeepSeek-R1-Distill-Llama-8B">DeepSeek-R1-Distill-Llama-8B</option>
+                                            <option value="gemma4" selected>Gemma 4 (local)</option>
                                         </select>
-                                        <small style="color: var(--text-secondary);">Choose from tested NLP model presets.</small>
+                                        <small style="color: var(--text-secondary);">Single local model profile.</small>
                                     </div>
 
                                     <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vision Model</label>
                                         <select id="visionModelSelect" class="provider-input">
-                                            <option value="Qwen/Qwen2.5-VL-7B-Instruct">Qwen2.5-VL-7B-Instruct</option>
-                                            <option value="Qwen/Qwen2-VL-7B-Instruct">Qwen2-VL-7B-Instruct</option>
-                                            <option value="llava:13b">LLaVA 13B (local)</option>
+                                            <option value="gemma4" selected>Gemma 4 (local)</option>
                                         </select>
-                                        <small style="color: var(--text-secondary);">Choose from tested vision model presets.</small>
+                                        <small style="color: var(--text-secondary);">Single local model profile.</small>
                                     </div>
 
-                                    <div style="padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
+                                    <div style="display: none; padding: 0.9rem; background: #fff; border-radius: 8px; border: 1px solid var(--border-color);">
                                         <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Embedding Model</label>
                                         <select id="embeddingModelSelect" class="provider-input">
                                             <option value="nomic-ai/nomic-embed-text-v1.5">nomic-embed-text-v1.5</option>
@@ -473,6 +464,9 @@ const LivePage = {
                                     Local mode checkup not completed yet. Offline auto-setup remains disabled.
                                 </div>
                                 <div id="providerRoutingStatus" style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);"></div>
+                                <div style="margin-top: 0.4rem; font-size: 0.82rem; color: var(--text-secondary);">
+                                    Provider routing is now local-first with Gemma local model profile. Cloud API toggles are hidden to avoid confusion.
+                                </div>
                                 <div id="providerRuntimePanel" style="margin-top: 0.7rem; border: 1px solid var(--border-color); border-radius: 8px; background: #fff; padding: 0.65rem 0.75rem;">
                                     <div style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Runtime Provider Status</div>
                                     <div id="providerRuntimeActive" style="font-size: 0.9rem; color: var(--text-color);">Active provider: -</div>
@@ -2262,6 +2256,15 @@ const LivePage = {
             embedding_model: 'nomic-ai/nomic-embed-text-v1.5',
             gemini_model: 'gemini-2.5-flash'
         };
+        const LOCAL_ONLY_PROVIDER_SETTINGS = {
+            model_api_enabled: false,
+            gemini_enabled: false,
+            nlp_provider_order: 'ollama,local,model_api,gemini',
+            vision_provider_order: 'ollama,model_api,gemini',
+            embedding_provider_order: 'ollama,model_api',
+            nlp_model: 'gemma4',
+            vision_model: 'gemma4'
+        };
 
         const updateLiveProfileStatusText = (profileKey) => {
             if (!livePerformanceProfileStatus) return;
@@ -2668,10 +2671,19 @@ const LivePage = {
 
                 const local = options.local || {};
                 const ollamaInstalled = !!local.ollama_installed;
+                const ollamaReachable = !!local.ollama_running || !!local.model_available;
                 let ready = !!local.local_mode_possible;
                 let prep = null;
+                const backendHost = (() => {
+                    try {
+                        const resolved = new URL((API_CONFIG && API_CONFIG.BASE_URL) || window.location.origin, window.location.origin);
+                        return resolved.host || window.location.host;
+                    } catch (error) {
+                        return window.location.host;
+                    }
+                })();
 
-                if (!ollamaInstalled) {
+                if (!ollamaInstalled && !ollamaReachable) {
                     const openDownloadPage = confirm(
                         'Ollama was not found on this device.\n\n'
                         + `Install Ollama first: ${OLLAMA_DOWNLOAD_URL}\n`
@@ -2685,8 +2697,9 @@ const LivePage = {
                             console.warn('Could not open Ollama download page automatically:', openErr);
                         }
                     }
-                    setProviderStatus('Ollama is not installed. Install Ollama before running local mode checkup.', 'warning');
-                    showNotification('Install Ollama first to continue local mode checkup', 'warning');
+                    const backendHint = `Current backend host for checkup: ${backendHost}. If this is a cloud backend, it cannot detect Ollama installed on your personal device.`;
+                    setProviderStatus(`Ollama is not installed on backend host (${backendHost}).`, 'warning');
+                    showNotification(backendHint, 'warning');
                     return;
                 }
 
@@ -2777,6 +2790,27 @@ const LivePage = {
                 setSelectValueOrInject(embeddingModelSelect, settings.embedding_model || '', 'Current model');
                 setSelectValueOrInject(geminiModelSelect, settings.gemini_model || '', 'Current model');
 
+                // Lock form to local-only routing/model profile to avoid cloud settings confusion.
+                if (modelApiToggle) {
+                    modelApiToggle.checked = false;
+                    modelApiToggle.disabled = true;
+                }
+                if (geminiToggle) {
+                    geminiToggle.checked = false;
+                    geminiToggle.disabled = true;
+                }
+                setSelectValueOrInject(nlpProviderOrderSelect, LOCAL_ONLY_PROVIDER_SETTINGS.nlp_provider_order, 'Locked order');
+                setSelectValueOrInject(visionProviderOrderSelect, LOCAL_ONLY_PROVIDER_SETTINGS.vision_provider_order, 'Locked order');
+                setSelectValueOrInject(embeddingProviderOrderSelect, LOCAL_ONLY_PROVIDER_SETTINGS.embedding_provider_order, 'Locked order');
+                setSelectValueOrInject(nlpModelSelect, LOCAL_ONLY_PROVIDER_SETTINGS.nlp_model, 'Locked model');
+                setSelectValueOrInject(visionModelSelect, LOCAL_ONLY_PROVIDER_SETTINGS.vision_model, 'Locked model');
+                if (nlpProviderOrderSelect) nlpProviderOrderSelect.disabled = true;
+                if (visionProviderOrderSelect) visionProviderOrderSelect.disabled = true;
+                if (embeddingProviderOrderSelect) embeddingProviderOrderSelect.disabled = true;
+                if (nlpModelSelect) nlpModelSelect.disabled = true;
+                if (visionModelSelect) visionModelSelect.disabled = true;
+                if (geminiModelSelect) geminiModelSelect.disabled = true;
+
                 setProviderStatus('Provider settings loaded');
             } catch (error) {
                 console.error('Error loading provider settings:', error);
@@ -2790,15 +2824,15 @@ const LivePage = {
                 applyProviderRoutingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
 
                 const payload = {
-                    model_api_enabled: !!modelApiToggle.checked,
-                    gemini_enabled: !!geminiToggle.checked,
-                    nlp_provider_order: (nlpProviderOrderSelect.value || '').trim(),
-                    vision_provider_order: (visionProviderOrderSelect.value || '').trim(),
-                    embedding_provider_order: (embeddingProviderOrderSelect.value || '').trim(),
-                    nlp_model: (nlpModelSelect.value || '').trim(),
-                    vision_model: (visionModelSelect.value || '').trim(),
+                    model_api_enabled: false,
+                    gemini_enabled: false,
+                    nlp_provider_order: LOCAL_ONLY_PROVIDER_SETTINGS.nlp_provider_order,
+                    vision_provider_order: LOCAL_ONLY_PROVIDER_SETTINGS.vision_provider_order,
+                    embedding_provider_order: LOCAL_ONLY_PROVIDER_SETTINGS.embedding_provider_order,
+                    nlp_model: LOCAL_ONLY_PROVIDER_SETTINGS.nlp_model,
+                    vision_model: LOCAL_ONLY_PROVIDER_SETTINGS.vision_model,
                     embedding_model: (embeddingModelSelect.value || '').trim(),
-                    gemini_model: (geminiModelSelect.value || '').trim()
+                    gemini_model: ''
                 };
 
                 const result = await API.updateProviderRoutingSettings(payload);
@@ -2924,17 +2958,11 @@ const LivePage = {
                     const warningText = [
                         'Local-first mode may not run well because available disk space is below the model requirement.',
                         `Required: ${diskStatus.required_gb} GB`,
-                        `Available: ${diskStatus.free_gb} GB`,
-                        'Switch to API mode now for optimized experience?'
+                        `Available: ${diskStatus.free_gb} GB`
                     ].join('\n');
 
-                    const shouldSwitchToApi = confirm(warningText);
-                    if (shouldSwitchToApi) {
-                        await applyApiModeSettings();
-                    } else {
-                        alert('You can switch to API mode later from Provider Routing settings.');
-                        showNotification('Low disk space detected. API mode is recommended.', 'warning');
-                    }
+                    alert(warningText);
+                    showNotification('Low disk space detected for local mode.', 'warning');
                 }
 
                 await loadCurrentSettings();

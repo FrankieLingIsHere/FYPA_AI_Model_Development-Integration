@@ -170,6 +170,7 @@ const AnalyticsPage = {
 
     renderStats(stats) {
         const container = document.getElementById('analytics-stats');
+        if (!container) return;
         container.innerHTML = `
             <div class="stat-card">
                 <h3>${stats.total}</h3>
@@ -330,6 +331,7 @@ const AnalyticsPage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById('analytics-violation-types');
+        if (!container) return;
         const breakdown = stats.breakdown || {};
         const types = [
             { name: 'Missing Hardhat', count: breakdown['NO-Hardhat'] || 0, color: 'var(--error-color)' },
@@ -361,6 +363,7 @@ const AnalyticsPage = {
 
     renderTimeDistribution(violations) {
         const container = document.getElementById('analytics-time-distribution');
+        if (!container) return;
 
         // Calculate time distribution
         const distribution = {
@@ -406,6 +409,8 @@ const AnalyticsPage = {
         const scoreElement = document.getElementById('safety-score');
         const barElement = document.getElementById('safety-bar');
         const benchmarkEl = document.getElementById('analytics-safety-benchmark-note');
+
+        if (!scoreElement || !barElement) return;
 
         scoreElement.textContent = `${score}%`;
         barElement.style.width = `${score}%`;

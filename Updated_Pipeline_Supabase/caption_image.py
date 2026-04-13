@@ -1,15 +1,14 @@
 """
-Image Captioning with Qwen2.5-VL via Ollama API
+Image Captioning with local Ollama vision model
 
-Fast and accurate image captioning using Qwen2.5-VL through Ollama.
-Superior spatial reasoning, object counting, and PPE detection compared to LLaVA.
+Fast and accurate image captioning using the configured local Ollama model.
 
 Usage:
     python caption_image.py path/to/image.jpg
 
 Requirements:
     - Ollama installed and running
-    - Qwen2.5-VL model: ollama pull qwen2.5vl
+    - Unified local model: ollama pull gemma4
 """
 import sys
 import os
@@ -24,7 +23,7 @@ from pathlib import Path
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_TAGS_URL = os.getenv('OLLAMA_TAGS_URL', f"{OLLAMA_BASE_URL}/api/tags")
-OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', 'qwen2.5vl')
+OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma4')))
 
 VISION_PROVIDER_ORDER = [
     provider.strip().lower()

@@ -2643,7 +2643,7 @@ const LivePage = {
             if (!runLocalModeCheckupBtn) return;
 
             const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
-            const REQUIRED_SPACE_NOTE = 'Required local storage for Ollama models: minimum 20 GB free (recommended 35 GB for smoother offline operation).';
+            const REQUIRED_SPACE_NOTE = 'Required local storage for local mode: minimum 10 GB free (recommended 18 GB) when using single-model Gemma setup.';
 
             try {
                 runLocalModeCheckupBtn.disabled = true;

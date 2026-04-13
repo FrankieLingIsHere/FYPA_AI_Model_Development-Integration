@@ -247,6 +247,13 @@ STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PREP_WA
 STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS', '240'))
 ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
+LOCAL_OLLAMA_UNIFIED_MODEL = str(
+    os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL')
+    or os.getenv('OLLAMA_MODEL')
+    or os.getenv('OLLAMA_VISION_MODEL')
+    or (OLLAMA_CONFIG or {}).get('model')
+    or 'gemma4'
+).strip()
 
 
 def _is_edge_ingest_authorized() -> bool:
@@ -962,7 +969,7 @@ def _run_startup_sequence():
                 ):
                     pull_action = _pull_ollama_model_if_needed(
                         ollama_base_url=mid_local.get('ollama_base_url') or before_local.get('ollama_base_url') or 'http://localhost:11434',
-                        model_name=mid_local.get('ollama_model') or before_local.get('ollama_model') or 'llama3',
+                        model_name=mid_local.get('ollama_model') or before_local.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL,
                         timeout_seconds=STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS,
                     )
 
@@ -1643,7 +1650,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 current_step='Generating analysis report'
             )
             
-            logger.info("📄 Generating NLP report with Llama3...")
+            logger.info(f"📄 Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
             
             violation_types_raw = violation_types if isinstance(violation_types, list) else []
             if not violation_types_raw:
@@ -1767,7 +1774,7 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
         
         <div class="warning">
             <h3>⚠️ Report Generator Not Available</h3>
-            <p>The NLP report generator (Llama3) is not configured or not running.</p>
+            <p>The local NLP report generator ({LOCAL_OLLAMA_UNIFIED_MODEL}) is not configured or not running.</p>
         </div>
         
         <div class="info">
@@ -1925,7 +1932,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     except Exception as e:
                         logger.warning(f"Could not update status: {e}")
                 
-                logger.info("📄 Generating NLP report with Llama3...")
+                logger.info(f"📄 Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
                 
                 report_data = {
                     'report_id': report_id,
@@ -2973,7 +2980,7 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
             'post_install_steps': [
                 'Start Ollama app once after install.',
                 'If needed, run: ollama serve',
-                'Pull required model: ollama pull llama3'
+                f'Pull required model: ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'
             ]
         }
 
@@ -2986,7 +2993,7 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
             'post_install_steps': [
                 'Open Ollama app.',
                 'If needed, run: ollama serve',
-                'Pull required model: ollama pull llama3'
+                f'Pull required model: ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'
             ]
         }
 
@@ -2998,7 +3005,7 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
         'post_install_steps': [
             'Start Ollama service/app.',
             'If needed, run: ollama serve',
-            'Pull required model: ollama pull llama3'
+            f'Pull required model: ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'
         ]
     }
 
@@ -3012,7 +3019,8 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     ollama_model = str(
         os.getenv('OLLAMA_MODEL')
         or (OLLAMA_CONFIG or {}).get('model')
-        or 'llama3'
+        or os.getenv('OLLAMA_VISION_MODEL')
+        or LOCAL_OLLAMA_UNIFIED_MODEL
     ).strip()
     ollama_executable = _detect_ollama_executable()
     install_guidance = _get_ollama_install_guidance()
@@ -3226,7 +3234,7 @@ def api_prepare_local_mode():
         if auto_pull and mid.get('ollama_running') and not mid.get('model_available'):
             actions['pull_model'] = _pull_ollama_model_if_needed(
                 ollama_base_url=mid.get('ollama_base_url') or before.get('ollama_base_url') or 'http://localhost:11434',
-                model_name=mid.get('ollama_model') or before.get('ollama_model') or 'llama3',
+                model_name=mid.get('ollama_model') or before.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL,
                 timeout_seconds=pull_timeout_seconds,
             )
 
@@ -3300,9 +3308,12 @@ def _current_provider_settings():
             'vision_provider_order': ['model_api', 'gemini', 'ollama'],
             'vision_api_url': os.getenv('VISION_API_URL', ''),
             'vision_api_model': os.getenv('VISION_API_MODEL', ''),
-            'ollama_vision_model': os.getenv('OLLAMA_VISION_MODEL', 'qwen2.5vl'),
+            'ollama_vision_model': os.getenv('OLLAMA_VISION_MODEL', LOCAL_OLLAMA_UNIFIED_MODEL),
             'gemini_vision_model': os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'))
         }
+
+    ollama_nlp_model = str(OLLAMA_CONFIG.get('model') or os.getenv('OLLAMA_MODEL') or LOCAL_OLLAMA_UNIFIED_MODEL).strip()
+    ollama_vision_model = str(vision_settings.get('ollama_vision_model') or os.getenv('OLLAMA_VISION_MODEL') or ollama_nlp_model).strip()
 
     return {
         'model_api_enabled': bool(MODEL_API_CONFIG.get('enabled', False)),
@@ -3313,11 +3324,11 @@ def _current_provider_settings():
         'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
         'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama']),
         'vision_provider_order': vision_settings.get('vision_provider_order', ['model_api', 'gemini', 'ollama']),
-        'nlp_model': MODEL_API_CONFIG.get('nlp_model', OLLAMA_CONFIG.get('model', 'llama3')),
+        'nlp_model': MODEL_API_CONFIG.get('nlp_model', ollama_nlp_model),
         'vision_model': vision_settings.get('vision_api_model', ''),
         'embedding_model': MODEL_API_CONFIG.get('embedding_model', RAG_CONFIG.get('embedding_model', 'nomic-embed-text')),
-        'ollama_nlp_model': OLLAMA_CONFIG.get('model', 'llama3'),
-        'ollama_vision_model': vision_settings.get('ollama_vision_model', 'qwen2.5vl'),
+        'ollama_nlp_model': ollama_nlp_model,
+        'ollama_vision_model': ollama_vision_model,
         'gemini_model': GEMINI_CONFIG.get('model', 'gemini-2.5-flash'),
         'gemini_vision_model': vision_settings.get('gemini_vision_model', GEMINI_CONFIG.get('model', 'gemini-2.5-flash'))
     }
@@ -3520,8 +3531,17 @@ def api_provider_routing_settings():
         if data.get('gemini_model'):
             GEMINI_CONFIG['model'] = str(data['gemini_model']).strip()
 
-        if data.get('ollama_nlp_model'):
-            OLLAMA_CONFIG['model'] = str(data['ollama_nlp_model']).strip()
+        requested_local_model = str(
+            data.get('ollama_nlp_model')
+            or data.get('ollama_vision_model')
+            or os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL')
+            or LOCAL_OLLAMA_UNIFIED_MODEL
+        ).strip()
+        if requested_local_model:
+            OLLAMA_CONFIG['model'] = requested_local_model
+            os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = requested_local_model
+            os.environ['OLLAMA_MODEL'] = requested_local_model
+            os.environ['OLLAMA_VISION_MODEL'] = requested_local_model
 
         # Persist to environment for module consumers
         os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
@@ -3541,6 +3561,7 @@ def api_provider_routing_settings():
             os.environ['GEMINI_MODEL'] = GEMINI_CONFIG['model']
         if OLLAMA_CONFIG.get('model'):
             os.environ['OLLAMA_MODEL'] = OLLAMA_CONFIG['model']
+            os.environ['OLLAMA_VISION_MODEL'] = OLLAMA_CONFIG['model']
 
         # Update captioning module runtime routing without restart
         try:
@@ -3549,7 +3570,7 @@ def api_provider_routing_settings():
                 'vision_provider_order': vision_provider_order,
                 'vision_model': data.get('vision_model'),
                 'gemini_vision_model': data.get('gemini_vision_model'),
-                'ollama_vision_model': data.get('ollama_vision_model')
+                'ollama_vision_model': OLLAMA_CONFIG.get('model')
             })
         except Exception as caption_err:
             logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
@@ -4492,6 +4513,7 @@ def _looks_like_fallback_template_html(html_content: str) -> bool:
         )
         has_setup_instructions = (
             'to enable full report generation' in lowered
+            or f'ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'.lower() in lowered
             or 'ollama pull llama3' in lowered
         )
         return has_fallback_label and has_setup_instructions

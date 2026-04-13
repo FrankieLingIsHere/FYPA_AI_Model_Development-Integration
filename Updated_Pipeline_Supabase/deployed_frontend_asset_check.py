@@ -67,8 +67,8 @@ def main() -> int:
         "function ensurePwaDocumentMarkers()",
         "manifest.setAttribute('rel', 'manifest');",
         "manifest.setAttribute('href', '/manifest.json');",
-        "const badge = document.getElementById('networkStatusBadge');",
-        "const label = document.getElementById('networkStatusText');",
+        "badge: document.getElementById('networkStatusBadge')",
+        "label: document.getElementById('networkStatusText')",
     ]
     required_live_markers = [
         "id=\"liveToolbarSettingsBtn\"",

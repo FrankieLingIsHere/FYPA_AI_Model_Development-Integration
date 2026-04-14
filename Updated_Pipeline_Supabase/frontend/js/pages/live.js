@@ -2666,33 +2666,68 @@ const LivePage = {
 
                 // If options is STILL null, it means localhost:5000 is NOT running!
                 if (!options || options.success === false) {
-                    alert(
-                        '⚠ WARNING: LUNA LOCAL BACKEND IS NOT RUNNING ⚠\n\n'
-                        + 'The Local Mode Checkup ONLY checks your physical device (localhost). '
-                        + 'It could not detect the LUNA Desktop App running on port 5000.\n\n'
-                        + 'To use local mode, YOU MUST HAVE THE LUNA APP RUNNING NATIVELY.\n'
-                        + '- If you have downloaded it, double-click "start.bat".\n'
-                        + '- If you have NOT downloaded it, click the Download Installer button below.\n\n'
-                        + '(Note: If you already have Ollama installed, the installer will safely skip re-installing it.)'
-                    );
-
-                    if (localModeCheckupStatus) {
-                        localModeCheckupStatus.innerHTML = `
-                            <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
-                                <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
-                                    <i class="fas fa-exclamation-triangle"></i> Local LUNA Backend Required
-                                </strong>
-                                <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
-                                   style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                   <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
-                                </a>
-                                <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                    Run "start.bat" if already downloaded. Otherwise, run this installer natively to construct your local environment.
-                                </div>
-                            </div>
-                        `;
+                    
+                    let nativeOllamaExists = false;
+                    try {
+                        const ollamaPing = await fetch('http://localhost:11434/', { mode: 'no-cors', cache: 'no-store' });
+                        nativeOllamaExists = true;
+                    } catch (e) {
+                        nativeOllamaExists = false;
                     }
-                    setProviderStatus(`Local LUNA App not found natively on port 5000.`, 'warning');
+
+                    if (nativeOllamaExists) {
+                        alert(
+                            '⚠ WARNING: LOCAL LUNA APP NOT FOUND ⚠\n\n'
+                            + '✅ Good news: We detected Ollama is ALREADY running natively on your device!\n\n'
+                            + '❌ Bad news: The LUNA Python Desktop App is NOT running on port 5000.\n\n'
+                            + 'To use local mode, you must run the LUNA backend software so it can orchestrate AI and computer vision tasks.\n'
+                            + '- If you already downloaded LUNA, run "start.bat" in its folder.\n'
+                            + '- If not, click the Download Installer below. It will safely skip reinstalling Ollama and ONLY download the LUNA software.'
+                        );
+
+                        if (localModeCheckupStatus) {
+                            localModeCheckupStatus.innerHTML = `
+                                <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
+                                    <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
+                                        <i class="fas fa-exclamation-triangle"></i> Local LUNA App Required (Ollama Detected)
+                                    </strong>
+                                    <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                       style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+                                       <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                    </a>
+                                    <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
+                                        Since Ollama was natively detected, this installer will strictly download LUNA source files without touching Ollama.
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    } else {
+                        alert(
+                            '⚠ WARNING: COMPLETE LOCAL ENVIRONMENT MISSING ⚠\n\n'
+                            + 'The Local Mode Checkup could not detect the LUNA Desktop App OR Ollama on your physical device.\n\n'
+                            + 'To use offline local mode, you must construct the entire AI environment natively.\n'
+                            + 'Please click the "Download Zero-Touch Installer" button below to fully automate installing Python, Ollama, and LUNA.'
+                        );
+
+                        if (localModeCheckupStatus) {
+                            localModeCheckupStatus.innerHTML = `
+                                <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
+                                    <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
+                                        <i class="fas fa-exclamation-triangle"></i> Total Local Environment Missing
+                                    </strong>
+                                    <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                       style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+                                       <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                    </a>
+                                    <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
+                                        Run this natively on your physical device to automatically install Python, Ollama, and LUNA. Space required: ~18GB.
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+
+                    setProviderStatus('Local environment missing on physical device.', 'warning');
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
                     return;

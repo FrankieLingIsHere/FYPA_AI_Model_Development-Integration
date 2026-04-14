@@ -2682,7 +2682,8 @@ const LivePage = {
                             + '❌ Bad news: The LUNA Python Desktop App is NOT running on port 5000.\n\n'
                             + 'To use local mode, you must run the LUNA backend software so it can orchestrate AI and computer vision tasks.\n'
                             + '- If you already downloaded LUNA, run "start.bat" in its folder.\n'
-                            + '- If not, click the Download Installer below. It will safely skip reinstalling Ollama and ONLY download the LUNA software.'
+                            + '- If not, click the Download Installer below. It will safely skip reinstalling Ollama and ONLY download the LUNA software.\n\n'
+                            + '(Requires Python 3.10+. The script auto-detects out-of-date versions like 2.7 and upgrades them securely).'
                         );
 
                         if (localModeCheckupStatus) {
@@ -2707,7 +2708,8 @@ const LivePage = {
                             + 'The Local Mode Checkup could not detect the LUNA Desktop App OR Ollama actively running on your physical device.\n\n'
                             + '• If you already installed Ollama, please make sure the Ollama app is OPEN (check your system tray).\n'
                             + '• To use offline local mode, you must construct the entire AI environment natively.\n\n'
-                            + 'Please click the "Download Zero-Touch Installer" button below to fully automate installing Python, Ollama, and LUNA.'
+                            + 'Please click the "Download Zero-Touch Installer" button below to fully automate installing Python 3.11, Ollama, and LUNA.\n'
+                            + '(If you have an outdated Python version like 2.7, it will securely upgrade it to 3.10+).'
                         );
 
                         if (localModeCheckupStatus) {

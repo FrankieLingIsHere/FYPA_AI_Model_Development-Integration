@@ -21,19 +21,40 @@ cd /d "%INSTALL_DIR%"
 echo [1/5] Checking System Dependencies...
 echo.
 
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Python is missing. Launching Python 3.11 installer...
+set "PYTHON_EXE="
+echo Checking for compatible Python installation...
+py -3 --version >nul 2>&1
+if %errorlevel% equ 0 (
+    set "PYTHON_EXE=py -3"
+) else (
+    python --version >nul 2>&1
+    if %errorlevel% equ 0 (
+        set "PYTHON_EXE=python"
+    )
+)
+
+if "!PYTHON_EXE!"=="" (
+    echo Python is completely missing. Launching Python 3.11 installer...
     winget install --id Python.Python.3.11 -e
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo Failed to install Python using winget.
-        echo Please manually install Python from python.org and rerun this script.
+        echo Please manually install Python 3.11 from python.org and rerun this script.
         pause
         exit /b 1
     )
-    echo Python installed successfully. Needs PATH refresh.
+    echo Python installed successfully.
+    set "PYTHON_EXE=python"
 ) else (
-    echo Python is already installed.
+    !PYTHON_EXE! -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo [ERROR] Outdated Python detected! 
+        echo LUNA requires Python 3.10 or higher ^(You have an older version like 2.7 or 3.9^).
+        echo Launching Python 3.11 installer natively...
+        winget install --id Python.Python.3.11 -e
+        set "PYTHON_EXE=py -3.11"
+    ) else (
+        echo Python 3.10+ is already installed and compatible.
+    )
 )
 
 where ollama >nul 2>&1
@@ -89,7 +110,7 @@ echo.
 echo [4/5] Setting up Virtual Environment...
 echo.
 if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
+    !PYTHON_EXE! -m venv venv
     if !errorlevel! neq 0 (
         echo "Failed to create python environment. Please reopen this terminal to refresh PATH and run start.bat manually."
         explorer .

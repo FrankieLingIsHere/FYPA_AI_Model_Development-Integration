@@ -451,17 +451,29 @@ def validate_local_mode_checkup_action(page):
                 ),
             ),
         )
+        page.route("http://localhost:11434/", lambda route: route.abort())
 
         dialog_messages.clear()
         checkup_btn.first.click()
         page.wait_for_timeout(1000)
 
-        # Allow the download to just be initiated and handled safely by Playwright downloading blindly.
-        
         missing_prompt_seen = any("LOCAL ENVIRONMENT MISSING" in msg for msg in dialog_messages)
         if not missing_prompt_seen:
             raise RuntimeError(f"Expected Zero-Touch Installer prompt for missing Ollama not seen. Dialogs: {dialog_messages}")
         
+        page.unroute("http://localhost:11434/")
+
+        # Test 1.5: Native Ollama present but No LUNA Backend
+        page.route("http://localhost:11434/", lambda route: route.fulfill(status=200, body="Ollama is running"))
+        dialog_messages.clear()
+        checkup_btn.first.click()
+        page.wait_for_timeout(1000)
+
+        native_ollama_prompt_seen = any("LUNA BACKEND NOT RUNNING NATIVELY" in msg for msg in dialog_messages)
+        if not native_ollama_prompt_seen:
+             raise RuntimeError(f"Expected Native Ollama warning not seen. Dialogs: {dialog_messages}")
+        
+        page.unroute("http://localhost:11434/")
         page.unroute(options_url)
 
 

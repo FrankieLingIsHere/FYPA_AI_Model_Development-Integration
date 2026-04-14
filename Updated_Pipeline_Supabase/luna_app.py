@@ -1137,32 +1137,46 @@ def initialize_pipeline_components():
         if db_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
-            db_manager = _run_with_timeout(
-                create_db_manager_from_env,
-                STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
-                'db-manager-init'
-            )
-            
-            # Fix any stuck reports from previous sessions
-            if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
-                _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
-                logger.info("Checking for stuck reports...")
-                fixed = _run_with_timeout(
-                    db_manager.fix_stuck_reports,
-                    int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
-                    'fix_stuck_reports'
+            try:
+                db_manager = _run_with_timeout(
+                    create_db_manager_from_env,
+                    STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
+                    'db-manager-init'
                 )
-                if fixed > 0:
-                    logger.info(f"✓ Fixed {fixed} stuck reports")
+                
+                # Fix any stuck reports from previous sessions
+                if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
+                    _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
+                    logger.info("Checking for stuck reports...")
+                    fixed = _run_with_timeout(
+                        db_manager.fix_stuck_reports,
+                        int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
+                        'fix_stuck_reports'
+                    )
+                    if fixed > 0:
+                        logger.info(f"✓ Fixed {fixed} stuck reports")
+            except Exception as db_exc:
+                if ALLOW_OFFLINE_LOCAL_MODE:
+                    logger.warning(f"Offline Mode Allowed: Skipping Supabase DB initialization error: {db_exc}")
+                    db_manager = None
+                else:
+                    raise
         
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
-            storage_manager = _run_with_timeout(
-                create_storage_manager_from_env,
-                STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
-                'storage-manager-init'
-            )
+            try:
+                storage_manager = _run_with_timeout(
+                    create_storage_manager_from_env,
+                    STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
+                    'storage-manager-init'
+                )
+            except Exception as storage_exc:
+                if ALLOW_OFFLINE_LOCAL_MODE:
+                    logger.warning(f"Offline Mode Allowed: Skipping Supabase Storage initialization error: {storage_exc}")
+                    storage_manager = None
+                else:
+                    raise
             
         if report_generator is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
@@ -3766,10 +3780,19 @@ def api_sync_local_cache_to_supabase():
     max_items = max(1, min(max_items, 500))
     dry_run = bool(payload.get('dry_run', False))
 
+    global db_manager, storage_manager
     if db_manager is None:
-        return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
+        try:
+            db_manager = create_db_manager_from_env()
+        except Exception as e:
+            logger.error(f"Failed to auto-init db_manager during sync: {e}")
+            return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
     if storage_manager is None:
-        return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
+        try:
+            storage_manager = create_storage_manager_from_env()
+        except Exception as e:
+            logger.error(f"Failed to auto-init storage_manager during sync: {e}")
+            return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
     if violation_queue is None:
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
     if not dry_run and not ensure_queue_worker_running():

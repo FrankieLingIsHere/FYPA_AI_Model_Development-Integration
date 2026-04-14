@@ -3,7 +3,13 @@
 // or set window.PPE_API_URL before this script loads for custom backend URL.
 // For Vercel deployment, set PPE_API_URL to your backend server's public URL.
 const API_CONFIG = {
-    BASE_URL: window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '',
+    get BASE_URL() {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return 'http://localhost:5000';
+        }
+        return window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '';
+    },
+    LOCAL_BACKEND_URL: 'http://localhost:5000',
     ENDPOINTS: {
         VIOLATIONS: '/api/violations',
         REPORT: (id) => `/report/${id}`,

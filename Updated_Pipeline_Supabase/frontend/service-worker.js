@@ -137,6 +137,10 @@ self.addEventListener('fetch', (event) => {
 
   if (isApiGetRequest(request, url)) {
     if (isLiveOrMutatingApi(url)) {
+      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        event.respondWith(fetch(request));
+        return;
+      }
       event.respondWith(
         fetch(request).catch(() => {
           return new Response(

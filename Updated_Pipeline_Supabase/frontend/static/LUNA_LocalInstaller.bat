@@ -99,15 +99,31 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 echo.
-echo [5/5] Launching LUNA Background Server...
+echo [5/6] Launching LUNA Background Server...
 echo.
 echo ========================================================
 echo SETUP COMPLETE!  
-echo The backend is now starting. Wait a moment for models
-echo to load, then open your browser link again!
+echo The backend is now starting in a new window. 
+echo The first boot may take 2-5 minutes to download AI 
+echo dependencies in that new black window.
 echo ========================================================
 echo.
 
 start cmd /k "start.bat"
 
+echo [6/6] Creating Desktop Shortcut for Future Use...
+set "SHORTCUT_PATH=%USERPROFILE%\Desktop\Start LUNA Local Mode.lnk"
+set "TARGET_PATH=%CD%\start.bat"
+set "WORKING_DIR=%CD%"
+
+powershell -Command "$wshell = New-Object -ComObject WScript.Shell; $shortcut = $wshell.CreateShortcut('%SHORTCUT_PATH%'); $shortcut.TargetPath = '%TARGET_PATH%'; $shortcut.WorkingDirectory = '%WORKING_DIR%'; $shortcut.Description = 'Launch LUNA Offline Mode'; $shortcut.Save()"
+
+echo.
+echo --------------------------------------------------------
+echo A shortcut "Start LUNA Local Mode" has been placed on 
+echo your Desktop. YOU NO LONGER NEED THIS INSTALLER FILE!
+echo Double-click that shortcut anytime you want to launch.
+echo --------------------------------------------------------
+echo You can safely close this installer window now.
+pause
 exit /b 0

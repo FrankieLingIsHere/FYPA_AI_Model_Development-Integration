@@ -2653,17 +2653,6 @@ const LivePage = {
                 runLocalModeCheckupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
                 setProviderStatus('Running local mode checkup...', 'info');
 
-                const proceedAfterPrereqWarning = confirm(
-                    'Before running Local Mode Checkup:\n\n'
-                    + '- Ollama must be installed on this device.\n'
-                    + `- ${REQUIRED_SPACE_NOTE}\n\n`
-                    + 'Continue to run checkup?'
-                );
-                if (!proceedAfterPrereqWarning) {
-                    setProviderStatus('Local mode checkup cancelled by user.', 'warning');
-                    return;
-                }
-
                 const options = await API.getReportRecoveryOptions();
                 if (!options || options.success === false) {
                     throw new Error((options && options.error) || 'Failed to fetch local mode diagnostics');
@@ -2686,10 +2675,10 @@ const LivePage = {
                 if (!ollamaInstalled && !ollamaReachable) {
                     const isCloudBackend = backendHost !== 'localhost:5000' && backendHost !== '127.0.0.1:5000';
                     const promptSuffix = isCloudBackend
-                        ? 'It looks like you are running on a cloud backend.\nTo enable zero-touch offline Local Mode natively on this device, download and run the automated LUNA Setup Installer.'
-                        : 'Would you like to download the fully automated Zero-Touch Local Installer to cleanly construct your AI environment?';
+                        ? 'It looks like you are running on a cloud backend.\nTo enable zero-touch offline Local Mode natively on this device, you must run the automated LUNA Setup Installer.'
+                        : 'You can download the fully automated Zero-Touch Local Installer to cleanly construct your AI environment.';
                     
-                    const performAutomatedInstall = confirm(
+                    alert(
                         '⚠ WARNING: LOCAL ENVIRONMENT MISSING ⚠\n\n'
                         + 'Local Python Environment and Ollama were not found.\n\n'
                         + `${promptSuffix}\n\n`
@@ -2698,24 +2687,28 @@ const LivePage = {
                         + '• Prompts you to install Ollama\n'
                         + '• Downloads the LUNA Backend System\n\n'
                         + `${REQUIRED_SPACE_NOTE}\n\n`
-                        + 'Click OK to download the LUNA Setup Installer (.bat).'
+                        + 'A secure download link will now appear below the checkup button.'
                     );
 
-                    if (performAutomatedInstall) {
-                        try {
-                            const link = document.createElement('a');
-                            link.href = '/static/LUNA_LocalInstaller.bat';
-                            link.download = 'LUNA_LocalInstaller.bat';
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            showNotification('Installer downloaded. Run the .bat file to automate setup.', 'success');
-                        } catch (err) {
-                            console.warn('Could not trigger installer download:', err);
-                        }
-                    }
-
                     const backendHint = `Current backend host for checkup: ${backendHost}. If this is a cloud backend, it cannot detect native installations on your personal device.`;
+                    
+                    if (localModeCheckupStatus) {
+                        localModeCheckupStatus.innerHTML = `
+                            <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
+                                <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
+                                    <i class="fas fa-exclamation-triangle"></i> Local Environment Missing
+                                </strong>
+                                <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                   style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+                                   <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                </a>
+                                <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
+                                    Run this file natively on your Windows device to automate environment setup. Space required: ~18GB.
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
                     setProviderStatus(`Local environment is missing on backend host (${backendHost}).`, 'warning');
                     showNotification(backendHint, 'warning');
                     return;

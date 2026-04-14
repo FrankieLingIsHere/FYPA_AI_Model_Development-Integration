@@ -1179,8 +1179,8 @@ def initialize_pipeline_components():
                     raise
             
         if report_generator is None:
-            _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
-            logger.info("Initializing Supabase report generator...")
+            _set_startup_step('pipeline_components', 'pending', 'Initializing report generator')
+            logger.info("Initializing report generator...")
             report_config = {
                 'OLLAMA_CONFIG': OLLAMA_CONFIG,
                 'GEMINI_CONFIG': GEMINI_CONFIG,
@@ -1192,11 +1192,23 @@ def initialize_pipeline_components():
                 'VIOLATIONS_DIR': VIOLATIONS_DIR,
                 'SUPABASE_CONFIG': SUPABASE_CONFIG
             }
-            report_generator = _run_with_timeout(
-                lambda: create_supabase_report_generator(report_config),
-                STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
-                'report-generator-init'
-            )
+            
+            if db_manager is not None and storage_manager is not None:
+                logger.info("Using SupabaseReportGenerator with active cloud connections.")
+                from pipeline.backend.core.supabase_report_generator import SupabaseReportGenerator
+                report_generator = _run_with_timeout(
+                    lambda: SupabaseReportGenerator(report_config, storage_manager, db_manager),
+                    STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
+                    'report-generator-init'
+                )
+            else:
+                logger.info("Offline mode active or Supabase disconnected: Using local ReportGenerator fallback.")
+                from pipeline.backend.core.report_generator import ReportGenerator
+                report_generator = _run_with_timeout(
+                    lambda: ReportGenerator(report_config),
+                    STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
+                    'report-generator-init'
+                )
         
         # Initialize violation queue for handling multiple violations
         if violation_queue is None:

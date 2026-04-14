@@ -2684,21 +2684,39 @@ const LivePage = {
                 })();
 
                 if (!ollamaInstalled && !ollamaReachable) {
-                    const openDownloadPage = confirm(
-                        'Ollama was not found on this device.\n\n'
-                        + `Install Ollama first: ${OLLAMA_DOWNLOAD_URL}\n`
+                    const isCloudBackend = backendHost !== 'localhost:5000' && backendHost !== '127.0.0.1:5000';
+                    const promptSuffix = isCloudBackend
+                        ? 'It looks like you are running on a cloud backend.\nTo enable zero-touch offline Local Mode natively on this device, download and run the automated LUNA Setup Installer.'
+                        : 'Would you like to download the fully automated Zero-Touch Local Installer to cleanly construct your AI environment?';
+                    
+                    const performAutomatedInstall = confirm(
+                        '⚠ WARNING: LOCAL ENVIRONMENT MISSING ⚠\n\n'
+                        + 'Local Python Environment and Ollama were not found.\n\n'
+                        + `${promptSuffix}\n\n`
+                        + 'WHAT THIS SCRIPT DOES:\n'
+                        + '• Prompts you to install Python 3.11\n'
+                        + '• Prompts you to install Ollama\n'
+                        + '• Downloads the LUNA Backend System\n\n'
                         + `${REQUIRED_SPACE_NOTE}\n\n`
-                        + 'Open the Ollama download page now?'
+                        + 'Click OK to download the LUNA Setup Installer (.bat).'
                     );
-                    if (openDownloadPage) {
+
+                    if (performAutomatedInstall) {
                         try {
-                            window.open(OLLAMA_DOWNLOAD_URL, '_blank', 'noopener');
-                        } catch (openErr) {
-                            console.warn('Could not open Ollama download page automatically:', openErr);
+                            const link = document.createElement('a');
+                            link.href = '/static/LUNA_LocalInstaller.bat';
+                            link.download = 'LUNA_LocalInstaller.bat';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            showNotification('Installer downloaded. Run the .bat file to automate setup.', 'success');
+                        } catch (err) {
+                            console.warn('Could not trigger installer download:', err);
                         }
                     }
-                    const backendHint = `Current backend host for checkup: ${backendHost}. If this is a cloud backend, it cannot detect Ollama installed on your personal device.`;
-                    setProviderStatus(`Ollama is not installed on backend host (${backendHost}).`, 'warning');
+
+                    const backendHint = `Current backend host for checkup: ${backendHost}. If this is a cloud backend, it cannot detect native installations on your personal device.`;
+                    setProviderStatus(`Local environment is missing on backend host (${backendHost}).`, 'warning');
                     showNotification(backendHint, 'warning');
                     return;
                 }

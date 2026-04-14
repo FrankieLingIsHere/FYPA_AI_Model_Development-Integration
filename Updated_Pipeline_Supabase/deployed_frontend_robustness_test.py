@@ -438,7 +438,34 @@ def validate_local_mode_checkup_action(page):
             print("INFO: local-mode checkup action skipped (status label unavailable in this variant)")
             return
 
-        # Stub API endpoints used by the manual checkup action for deterministic behavior.
+        # Test 1: Zero-Touch Installer Prompt (Ollama missing)
+        page.route(
+            options_url,
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=(
+                    '{"success":true,'
+                    '"local":{"local_mode_possible":false,"ollama_installed":false,"ollama_running":false,"model_available":false},'
+                    '"counts":{"total_candidates":0,"pending_like":0,"quota_failed":0}}'
+                ),
+            ),
+        )
+
+        dialog_messages.clear()
+        checkup_btn.first.click()
+        page.wait_for_timeout(1000)
+
+        # Allow the download to just be initiated and handled safely by Playwright downloading blindly.
+        
+        missing_prompt_seen = any("LOCAL ENVIRONMENT MISSING" in msg for msg in dialog_messages)
+        if not missing_prompt_seen:
+            raise RuntimeError(f"Expected Zero-Touch Installer prompt for missing Ollama not seen. Dialogs: {dialog_messages}")
+        
+        page.unroute(options_url)
+
+
+        # Test 2: Standard checkup flow (Ollama installed but model missing)
         page.route(
             options_url,
             lambda route: route.fulfill(
@@ -463,6 +490,7 @@ def validate_local_mode_checkup_action(page):
             ),
         )
 
+        dialog_messages.clear()
         checkup_btn.first.click()
         page.wait_for_timeout(1400)
 

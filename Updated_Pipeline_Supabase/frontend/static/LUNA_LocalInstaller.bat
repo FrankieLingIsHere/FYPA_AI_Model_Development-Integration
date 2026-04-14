@@ -50,7 +50,10 @@ if %errorlevel% neq 0 (
     )
     echo Ollama installed successfully.
 ) else (
+    echo.
     echo Ollama is already installed.
+    echo Waking up Ollama background service if it is asleep...
+    start /b ollama serve >nul 2>&1
 )
 
 echo.

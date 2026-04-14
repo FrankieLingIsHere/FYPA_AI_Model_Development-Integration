@@ -2703,9 +2703,10 @@ const LivePage = {
                         }
                     } else {
                         alert(
-                            '⚠ WARNING: COMPLETE LOCAL ENVIRONMENT MISSING ⚠\n\n'
-                            + 'The Local Mode Checkup could not detect the LUNA Desktop App OR Ollama on your physical device.\n\n'
-                            + 'To use offline local mode, you must construct the entire AI environment natively.\n'
+                            '⚠ WARNING: LOCAL ENVIRONMENT NOT DETECTED RUNNING ⚠\n\n'
+                            + 'The Local Mode Checkup could not detect the LUNA Desktop App OR Ollama actively running on your physical device.\n\n'
+                            + '• If you already installed Ollama, please make sure the Ollama app is OPEN (check your system tray).\n'
+                            + '• To use offline local mode, you must construct the entire AI environment natively.\n\n'
                             + 'Please click the "Download Zero-Touch Installer" button below to fully automate installing Python, Ollama, and LUNA.'
                         );
 
@@ -2713,14 +2714,14 @@ const LivePage = {
                             localModeCheckupStatus.innerHTML = `
                                 <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
                                     <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
-                                        <i class="fas fa-exclamation-triangle"></i> Total Local Environment Missing
+                                        <i class="fas fa-exclamation-triangle"></i> Local Environment Missing or Asleep
                                     </strong>
                                     <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                                        <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Run this natively on your physical device to automatically install Python, Ollama, and LUNA. Space required: ~18GB.
+                                        Run this natively to automate installing your environment. (If Ollama is already installed, it will just wake it up). Space required: ~18GB.
                                     </div>
                                 </div>
                             `;

@@ -114,26 +114,26 @@ echo Ollama server started
 echo.
 
 echo ==========================================
-echo Checking Qwen2.5-VL Model...
+echo Checking Unified Local Model (Gemma)...
 echo ==========================================
 echo.
 
-REM Check if qwen2.5vl model is installed
-ollama list | findstr /C:"qwen2.5vl" >nul 2>&1
-if errorlevel 1 (
-    echo Model 'qwen2.5vl' not found. Pulling from Ollama...
+REM Check if gemma4 unified model is installed
+ollama list | findstr /I "gemma4" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Model 'gemma4' not found. Pulling from Ollama...
     echo This is a one-time download and may take a few minutes.
     echo.
-    ollama pull qwen2.5vl
-    if errorlevel 1 (
-        echo Warning: Failed to pull qwen2.5vl model!
-        echo You can pull it manually later: ollama pull qwen2.5vl
+    ollama pull gemma4
+    if %errorlevel% neq 0 (
+        echo Warning: Failed to pull gemma4 model!
+        echo You can pull it manually later: ollama pull gemma4
         timeout /t 5
     ) else (
         echo Model pulled successfully!
     )
 ) else (
-    echo Model 'qwen2.5vl' is already installed.
+    echo Model 'gemma4' is already installed.
 )
 echo.
 

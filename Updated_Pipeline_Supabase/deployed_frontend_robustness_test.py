@@ -438,48 +438,23 @@ def validate_local_mode_checkup_action(page):
             print("INFO: local-mode checkup action skipped (status label unavailable in this variant)")
             return
 
-        # Test 1: Zero-Touch Installer Prompt (Ollama missing)
-        page.route(
-            options_url,
-            lambda route: route.fulfill(
-                status=200,
-                content_type="application/json",
-                body=(
-                    '{"success":true,'
-                    '"local":{"local_mode_possible":false,"ollama_installed":false,"ollama_running":false,"model_available":false},'
-                    '"counts":{"total_candidates":0,"pending_like":0,"quota_failed":0}}'
-                ),
-            ),
-        )
-        page.route("http://localhost:11434/", lambda route: route.abort())
+        # Test 1: LUNA Desktop App Missing (Ping to localhost fails)
+        page.route("http://localhost:5000/api/reports/recovery/options", lambda route: route.abort())
 
         dialog_messages.clear()
         checkup_btn.first.click()
         page.wait_for_timeout(1000)
 
-        missing_prompt_seen = any("LOCAL ENVIRONMENT MISSING" in msg for msg in dialog_messages)
+        missing_prompt_seen = any("LUNA LOCAL BACKEND IS NOT RUNNING" in msg for msg in dialog_messages)
         if not missing_prompt_seen:
-            raise RuntimeError(f"Expected Zero-Touch Installer prompt for missing Ollama not seen. Dialogs: {dialog_messages}")
+            raise RuntimeError(f"Expected LUNA Backend missing prompt not seen. Dialogs: {dialog_messages}")
         
-        page.unroute("http://localhost:11434/")
+        page.unroute("http://localhost:5000/api/reports/recovery/options")
 
-        # Test 1.5: Native Ollama present but No LUNA Backend
-        page.route("http://localhost:11434/", lambda route: route.fulfill(status=200, body="Ollama is running"))
-        dialog_messages.clear()
-        checkup_btn.first.click()
-        page.wait_for_timeout(1000)
-
-        native_ollama_prompt_seen = any("LUNA BACKEND NOT RUNNING NATIVELY" in msg for msg in dialog_messages)
-        if not native_ollama_prompt_seen:
-             raise RuntimeError(f"Expected Native Ollama warning not seen. Dialogs: {dialog_messages}")
-        
-        page.unroute("http://localhost:11434/")
-        page.unroute(options_url)
-
-
-        # Test 2: Standard checkup flow (Ollama installed but model missing)
+        # Test 2: Standard checkup flow (LUNA running, Ollama installed but model missing)
+        # Note: We must mock http://localhost:5000/... because the new logic enforces it!
         page.route(
-            options_url,
+            "http://localhost:5000/api/reports/recovery/options",
             lambda route: route.fulfill(
                 status=200,
                 content_type="application/json",

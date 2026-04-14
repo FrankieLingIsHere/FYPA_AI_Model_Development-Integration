@@ -2655,19 +2655,47 @@ const LivePage = {
 
                 let options = null;
                 try {
-                    // Probe local LUNA backend directly first (in case user accessed this via Cloud URL)
+                    // Probe local LUNA backend directly. 
+                    // As requested: "dont touch the cloud backend at all, thats the logic!"
+                    // Local Mode Checkup MUST exclusively evaluate the physical machine.
                     const localResponse = await fetch('http://localhost:5000/api/reports/recovery/options', { mode: 'cors', cache: 'no-store' });
                     if (localResponse.ok) options = await localResponse.json();
                 } catch (e) {
                     console.log("Direct ping to local LUNA backend (port 5000) failed.", e);
                 }
 
-                if (!options) {
-                    options = await API.getReportRecoveryOptions();
-                }
-
+                // If options is STILL null, it means localhost:5000 is NOT running!
                 if (!options || options.success === false) {
-                    throw new Error((options && options.error) || 'Failed to fetch local mode diagnostics');
+                    alert(
+                        '⚠ WARNING: LUNA LOCAL BACKEND IS NOT RUNNING ⚠\n\n'
+                        + 'The Local Mode Checkup ONLY checks your physical device (localhost). '
+                        + 'It could not detect the LUNA Desktop App running on port 5000.\n\n'
+                        + 'To use local mode, YOU MUST HAVE THE LUNA APP RUNNING NATIVELY.\n'
+                        + '- If you have downloaded it, double-click "start.bat".\n'
+                        + '- If you have NOT downloaded it, click the Download Installer button below.\n\n'
+                        + '(Note: If you already have Ollama installed, the installer will safely skip re-installing it.)'
+                    );
+
+                    if (localModeCheckupStatus) {
+                        localModeCheckupStatus.innerHTML = `
+                            <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
+                                <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
+                                    <i class="fas fa-exclamation-triangle"></i> Local LUNA Backend Required
+                                </strong>
+                                <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                   style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+                                   <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                </a>
+                                <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
+                                    Run "start.bat" if already downloaded. Otherwise, run this installer natively to construct your local environment.
+                                </div>
+                            </div>
+                        `;
+                    }
+                    setProviderStatus(`Local LUNA App not found natively on port 5000.`, 'warning');
+                    runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
+                    runLocalModeCheckupBtn.disabled = false;
+                    return;
                 }
 
                 const local = options.local || {};
@@ -2675,27 +2703,13 @@ const LivePage = {
                 let ollamaReachable = !!local.ollama_running || !!local.model_available;
                 let ready = !!local.local_mode_possible;
 
-                // If cloud reported no Ollama, verify native physical Ollama via opaque ping
-                let nativeOllamaExists = false;
-                try {
-                    await fetch('http://localhost:11434/', { mode: 'no-cors', cache: 'no-store' });
-                    nativeOllamaExists = true;
-                } catch (e) {
-                    nativeOllamaExists = false;
-                }
-
+                // If we reach here, LUNA IS running locally (localhost:5000 replied)!
+                // So if it STILL says ollama is not installed, it means their local machine TRULY lacks Ollama!
                 let prep = null;
-                const backendHost = (() => {
-                    try {
-                        const resolved = new URL((API_CONFIG && API_CONFIG.BASE_URL) || window.location.origin, window.location.origin);
-                        return resolved.host || window.location.host;
-                    } catch (error) {
-                        return window.location.host;
-                    }
-                })();
+                const backendHost = 'localhost:5000'; // Hardcoded truth since we only hit localhost.
 
-                // If BOTH the backend lacks Ollama AND the native ping fails
-                if (!ollamaInstalled && !ollamaReachable && !nativeOllamaExists) {
+                // If both the backend lacks Ollama, AND the native ping fails
+                if (!ollamaInstalled && !ollamaReachable) {
                     const isCloudBackend = backendHost !== 'localhost:5000' && backendHost !== '127.0.0.1:5000';
                     const promptSuffix = isCloudBackend
                         ? 'It looks like you are running on a cloud backend.\nTo enable zero-touch offline Local Mode natively on this device, you must run the automated LUNA Setup Installer.'
@@ -2734,38 +2748,8 @@ const LivePage = {
                     
                     setProviderStatus(`Local environment is missing on backend host (${backendHost}).`, 'warning');
                     showNotification(backendHint, 'warning');
-                    return;
-                }
-
-                // If native Ollama IS running, but we couldn't connect to the local LUNA Python backend
-                // (Meaning they are hitting the cloud BASE_URL and their local python app is off)
-                const usingCloudBackend = backendHost !== 'localhost:5000' && backendHost !== '127.0.0.1:5000';
-                if (nativeOllamaExists && usingCloudBackend && (!ollamaInstalled && !ollamaReachable)) {
-                    alert(
-                        '⚠ WARNING: LUNA BACKEND NOT RUNNING NATIVELY ⚠\n\n'
-                        + 'Ollama was detected running on your device! However, the LUNA Python Environment (localhost:5000) is NOT running.\n\n'
-                        + 'To use local inference models on this device, you must either:\n'
-                        + '1) Open your local LUNA directory and run "start.bat"\n'
-                        + '2) Or download the Zero-Touch Installer below, which will safely download the LUNA software without reinstalling Ollama.'
-                    );
-                    
-                    if (localModeCheckupStatus) {
-                        localModeCheckupStatus.innerHTML = `
-                            <div style="margin-top: 10px; padding: 12px; border: 1px solid var(--warning-color); border-radius: 6px; background-color: rgba(255, 152, 0, 0.1);">
-                                <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
-                                    <i class="fas fa-exclamation-triangle"></i> Local Python Backend Required
-                                </strong>
-                                <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
-                                   style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                   <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
-                                </a>
-                                <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                    Since Ollama is already installed, this script will strictly download the LUNA codebase and start the backend.
-                                </div>
-                            </div>
-                        `;
-                    }
-                    setProviderStatus(`LUNA Desktop App not found natively.`, 'warning');
+                    runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
+                    runLocalModeCheckupBtn.disabled = false;
                     return;
                 }
 

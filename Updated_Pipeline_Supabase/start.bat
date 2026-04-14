@@ -20,17 +20,8 @@ echo.
 set "VENV_PYTHON=%CD%\venv\Scripts\python.exe"
 set "VENV_PIP=%CD%\venv\Scripts\pip.exe"
 
-REM Check if .env file exists
-if not exist .env (
-    echo Error: .env file not found!
-    echo.
-    echo Please create .env file from .env.example:
-    echo   copy .env.example .env
-    echo.
-    echo Then edit .env with your Supabase credentials.
-    pause
-    exit /b 1
-)
+REM CLOUD_URL is required for Zero-Touch Provisioning
+set CLOUD_URL=https://YOUR_DASHBOARD_URL_HERE
 
 REM Check if venv exists and activate it
 if exist venv\Scripts\activate.bat goto ActivateVenv
@@ -90,6 +81,32 @@ echo Dependencies installed.
 echo.
 
 :SkipInstall
+
+echo.
+echo ==========================================
+echo Checking Device Provisioning...
+echo ==========================================
+echo.
+
+REM Check if .env file exists. If not, trigger remote provisioning!
+if not exist .env (
+    echo No local credentials found! Starting Zero-Touch Provisioning...
+    echo.
+    
+    if "%CLOUD_URL%"=="https://YOUR_DASHBOARD_URL_HERE" (
+        echo [ERROR] CLOUD_URL is not configured in start.bat!
+        echo Please edit start.bat and set CLOUD_URL to your dashboard URL.
+        pause
+        exit /b 1
+    )
+    
+    "%VENV_PYTHON%" provision.py
+    if %errorlevel% neq 0 (
+        echo Provisioning failed or was aborted.
+        pause
+        exit /b 1
+    )
+)
 
 echo.
 echo ==========================================

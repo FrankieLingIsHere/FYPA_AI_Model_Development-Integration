@@ -6089,6 +6089,249 @@ def cleanup():
 
 
 # =========================================================================
+# ZERO-TOUCH DEVICE PROVISIONING & NOTIFICATIONS
+# =========================================================================
+
+PENDING_DEVICES_FILE = Path('pending_devices.json')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
+
+def _load_pending_devices():
+    if not PENDING_DEVICES_FILE.exists():
+        return {}
+    try:
+        with open(PENDING_DEVICES_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_pending_devices(data):
+    with open(PENDING_DEVICES_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def notify_admin(machine_id, status="pending", token=None):
+    """Send notification to admin via webhook and/or email"""
+    webhook_url = os.getenv('NOTIFICATION_WEBHOOK_URL', '').strip()
+    cloud_url = os.getenv('CLOUD_URL', 'Your Cloud Dashboard')
+    
+    if status == "pending":
+        magic_link = f"{cloud_url}/admin/devices/quick-approve?machine_id={machine_id}&token={token}" if token else f"{cloud_url}/admin/devices"
+        subject = "🚨 New Edge Node Request"
+        message_plain = f"New Device Request: Machine ID {machine_id} is requesting to join the cluster!\n\nApprove instantly: {magic_link}\n\nOr manage devices: {cloud_url}/admin/devices"
+        webhook_msg = f"🚨 **New Device Request**: Machine `{machine_id}` is requesting to join the cluster!\n👉 **Approve Instantly**: {magic_link}"
+    else:
+        subject = "✅ Edge Node Approved"
+        message_plain = f"Device Approved: Machine ID {machine_id} has been approved and provisioned."
+        webhook_msg = f"✅ **Device Approved**: Machine `{machine_id}` has been approved and provisioned."
+        
+    # Send Webhook
+    if webhook_url:
+        try:
+            payload = {"content": webhook_msg, "text": webhook_msg}
+            requests.post(webhook_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=5)
+        except Exception as e:
+            logger.error(f"Failed to send webhook notification: {e}")
+            
+    # Send Email
+    smtp_server = os.getenv('SMTP_SERVER', '').strip()
+    admin_email = os.getenv('ADMIN_EMAIL', '').strip()
+    
+    if smtp_server and admin_email:
+        try:
+            smtp_port = int(os.getenv('SMTP_PORT', '587'))
+            smtp_user = os.getenv('SMTP_USERNAME', '').strip()
+            smtp_pass = os.getenv('SMTP_PASSWORD', '').strip()
+            
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user or "luna-system@localhost"
+            msg['To'] = admin_email
+            msg['Subject'] = subject
+            msg.attach(MIMEText(message_plain, 'plain'))
+            
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            if smtp_user and smtp_pass:
+                server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            logger.error(f"Failed to send email notification: {e}")
+
+@app.route('/api/provision/request', methods=['POST'])
+def provision_request():
+    data = request.get_json() or {}
+    machine_id = data.get('machine_id')
+    if not machine_id:
+        return jsonify({"error": "Missing machine_id"}), 400
+        
+    devices = _load_pending_devices()
+    if machine_id not in devices:
+        import secrets
+        approval_token = secrets.token_urlsafe(32)
+        devices[machine_id] = {
+            "status": "pending",
+            "requested_at": datetime.now().isoformat(),
+            "token": approval_token
+        }
+        _save_pending_devices(devices)
+        notify_admin(machine_id, "pending", token=approval_token)
+        
+    return jsonify({"status": "stored", "machine_id": machine_id})
+
+@app.route('/api/provision/status', methods=['GET'])
+def provision_status():
+    machine_id = request.args.get('machine_id')
+    if not machine_id:
+        return jsonify({"error": "Missing machine_id"}), 400
+        
+    devices = _load_pending_devices()
+    device = devices.get(machine_id)
+    
+    if not device:
+        return jsonify({"status": "not_found"}), 404
+        
+    if device.get("status") == "approved":
+        # Provide the DB url and keys to the device
+        db_url = os.getenv('SUPABASE_DB_URL', '')
+        supa_url = os.getenv('SUPABASE_URL', '')
+        supa_service = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
+        
+        # Remove from pending queue
+        del devices[machine_id]
+        _save_pending_devices(devices)
+        
+        return jsonify({
+            "status": "approved",
+            "credentials": {
+                "SUPABASE_DB_URL": db_url,
+                "SUPABASE_URL": supa_url,
+                "SUPABASE_SERVICE_ROLE_KEY": supa_service
+            }
+        })
+        
+    return jsonify({"status": "pending"})
+
+@app.route('/admin/devices', methods=['GET', 'POST'])
+def admin_devices():
+    if not ADMIN_PASSWORD:
+        return "ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.", 403
+        
+    # Basic Auth Check
+    auth = request.authorization
+    if not auth or auth.password != ADMIN_PASSWORD:
+        return Response(
+            "Could not verify your access level for that URL.\n"
+            "You have to login with proper credentials", 401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+    devices = _load_pending_devices()
+    
+    if request.method == 'POST':
+        action = request.form.get('action')
+        machine_id = request.form.get('machine_id')
+        
+        if machine_id in devices:
+            if action == 'approve':
+                devices[machine_id]['status'] = 'approved'
+                _save_pending_devices(devices)
+                notify_admin(machine_id, "approved")
+            elif action == 'reject':
+                del devices[machine_id]
+                _save_pending_devices(devices)
+                
+        return redirect('/admin/devices')
+        
+    from flask import render_template_string
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LUNA Device Provisioning</title>
+        <style>
+            body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
+            .card { border: 1px solid #ccc; padding: 15px; margin-bottom: 10px; border-radius: 8px; }
+            .btn { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; color: white; margin-right: 10px;}
+            .btn-approve { background-color: #28a745; }
+            .btn-reject { background-color: #dc3545; }
+        </style>
+    </head>
+    <body>
+        <h2>🛡️ Edge Device Provisioning Queue</h2>
+        <p>Review and verify these pending hardware deployments before they can join the main cluster.</p>
+        <hr>
+        {% if devices %}
+            {% for m_id, details in devices.items() %}
+            <div class="card">
+                <h3>Machine ID: {{ m_id }}</h3>
+                <p>Status: <strong>{{ details.status }}</strong></p>
+                <p>Requested At: {{ details.requested_at }}</p>
+                {% if details.status == 'pending' %}
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="machine_id" value="{{ m_id }}">
+                    <button type="submit" name="action" value="approve" class="btn btn-approve">Approve Device</button>
+                    <button type="submit" name="action" value="reject" class="btn btn-reject">Reject</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+            <p><i>No pending device queries.</i></p>
+        {% endif %}
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, devices=devices)
+
+@app.route('/admin/devices/quick-approve', methods=['GET'])
+def admin_devices_quick_approve():
+    if not ADMIN_PASSWORD:
+        return "ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.", 403
+        
+    auth = request.authorization
+    if not auth or auth.password != ADMIN_PASSWORD:
+        return Response(
+            "Could not verify your access level for that URL.\n"
+            "You have to login with proper credentials to approve this device", 401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+    machine_id = request.args.get('machine_id')
+    token = request.args.get('token')
+    
+    if not machine_id or not token:
+        return "Missing machine_id or token", 400
+        
+    devices = _load_pending_devices()
+    device = devices.get(machine_id)
+    
+    if not device:
+        return "Device not found or already processed", 404
+        
+    if device.get('token') != token:
+        return "Invalid or expired token", 403
+        
+    if device.get('status') == 'pending':
+        device['status'] = 'approved'
+        _save_pending_devices(devices)
+        notify_admin(machine_id, "approved")
+        
+    html_response = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Edge Node Approved</title><style>body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; text-align: center; }} .btn {{ padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }}</style></head>
+    <body>
+        <h2>✅ Device Approved Successfully!</h2>
+        <p>Machine <strong>{machine_id}</strong> has been granted access. The edge node is now provisioning securely.</p>
+        <br><br>
+        <a href='/admin/devices' class='btn'>Return to Admin Dashboard</a>
+    </body>
+    </html>
+    """
+    return html_response
+
+# =========================================================================
 # MAIN
 # =========================================================================
 

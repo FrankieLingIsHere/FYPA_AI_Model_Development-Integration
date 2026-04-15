@@ -6771,6 +6771,7 @@ def _issue_installer_redirect(machine_id: str) -> Response:
     return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
 import smtplib
+import socket
 import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -6821,6 +6822,15 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             smtp_user = os.getenv('SMTP_USERNAME', '').strip()
             smtp_pass = os.getenv('SMTP_PASSWORD', '').strip()
+            strip_pw_spaces = str(os.getenv('SMTP_PASSWORD_STRIP_SPACES', 'true')).strip().lower() not in {
+                '0', 'false', 'no', 'off'
+            }
+            if strip_pw_spaces:
+                smtp_pass = smtp_pass.replace(' ', '')
+
+            force_ipv4 = str(os.getenv('SMTP_FORCE_IPV4', 'true')).strip().lower() not in {
+                '0', 'false', 'no', 'off'
+            }
             try:
                 smtp_timeout_seconds = max(1, int(os.getenv('SMTP_TIMEOUT_SECONDS', '8')))
             except Exception:
@@ -6832,12 +6842,47 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
             msg['Subject'] = subject
             msg.attach(MIMEText(message_plain, 'plain'))
 
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=smtp_timeout_seconds)
-            server.starttls()
-            if smtp_user and smtp_pass:
-                server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-            server.quit()
+            smtp_hosts = [smtp_server]
+            if force_ipv4:
+                try:
+                    ipv4_hosts = []
+                    for addr_info in socket.getaddrinfo(smtp_server, smtp_port, socket.AF_INET, socket.SOCK_STREAM):
+                        ip_addr = str((addr_info[4] or ('',))[0] or '').strip()
+                        if ip_addr and ip_addr not in ipv4_hosts:
+                            ipv4_hosts.append(ip_addr)
+                    if ipv4_hosts:
+                        smtp_hosts = ipv4_hosts + [smtp_server]
+                except Exception as resolve_err:
+                    logger.warning(f'Failed to resolve IPv4 SMTP hosts for {smtp_server}: {resolve_err}')
+
+            last_smtp_error = None
+            for smtp_host in smtp_hosts:
+                server = None
+                try:
+                    server = smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout_seconds)
+                    if smtp_host != smtp_server:
+                        # Keep original host for TLS SNI/cert hostname logic.
+                        server._host = smtp_server  # type: ignore[attr-defined]
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                    if smtp_user and smtp_pass:
+                        server.login(smtp_user, smtp_pass)
+                    server.send_message(msg)
+                    server.quit()
+                    last_smtp_error = None
+                    break
+                except Exception as send_err:
+                    last_smtp_error = send_err
+                    logger.warning(f'Failed SMTP attempt via {smtp_host}:{smtp_port}: {send_err}')
+                    if server is not None:
+                        try:
+                            server.quit()
+                        except Exception:
+                            pass
+
+            if last_smtp_error is not None:
+                raise last_smtp_error
         except Exception as e:
             logger.error(f'Failed to send email notification: {e}')
 

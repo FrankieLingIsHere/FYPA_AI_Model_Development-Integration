@@ -22,6 +22,8 @@ Configure these environment variables on the cloud backend.
 
 ### Optional notifications
 - `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `ADMIN_EMAIL`
+- `SMTP_TIMEOUT_SECONDS` (default 8 seconds)
+- `NOTIFICATION_ASYNC` (default true)
 - `NOTIFICATION_WEBHOOK_URL`
 
 ## 2) Local Edge Preparation
@@ -134,6 +136,8 @@ Use this table for cloud deployment and local edge bootstrap.
 | `SMTP_USERNAME` (optional) | sender account email/username | Email provider account | Any time |
 | `SMTP_PASSWORD` (optional) | app password / SMTP credential | Email provider security/app-password page | Any time |
 | `ADMIN_EMAIL` (optional) | approver mailbox (e.g. `admin@company.com`) | Your chosen destination inbox | Any time |
+| `SMTP_TIMEOUT_SECONDS` (optional) | integer seconds (e.g. `8`) | Your backend env setting | Any time |
+| `NOTIFICATION_ASYNC` (optional) | `true` or `false` | Your backend env setting | Any time |
 
 Recommended secret generation:
 

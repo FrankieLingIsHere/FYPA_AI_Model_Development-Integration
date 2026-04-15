@@ -6771,11 +6771,12 @@ def _issue_installer_redirect(machine_id: str) -> Response:
     return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
 import smtplib
+import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-def notify_admin(machine_id, status='pending', token=None):
+def _notify_admin_sync(machine_id, status='pending', token=None):
     """Send notification to admin via webhook and/or email."""
     webhook_url = os.getenv('NOTIFICATION_WEBHOOK_URL', '').strip()
     cloud_url = os.getenv('CLOUD_URL', 'Your Cloud Dashboard')
@@ -6820,6 +6821,10 @@ def notify_admin(machine_id, status='pending', token=None):
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             smtp_user = os.getenv('SMTP_USERNAME', '').strip()
             smtp_pass = os.getenv('SMTP_PASSWORD', '').strip()
+            try:
+                smtp_timeout_seconds = max(1, int(os.getenv('SMTP_TIMEOUT_SECONDS', '8')))
+            except Exception:
+                smtp_timeout_seconds = 8
 
             msg = MIMEMultipart()
             msg['From'] = smtp_user or 'luna-system@localhost'
@@ -6827,7 +6832,7 @@ def notify_admin(machine_id, status='pending', token=None):
             msg['Subject'] = subject
             msg.attach(MIMEText(message_plain, 'plain'))
 
-            server = smtplib.SMTP(smtp_server, smtp_port)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=smtp_timeout_seconds)
             server.starttls()
             if smtp_user and smtp_pass:
                 server.login(smtp_user, smtp_pass)
@@ -6836,6 +6841,27 @@ def notify_admin(machine_id, status='pending', token=None):
         except Exception as e:
             logger.error(f'Failed to send email notification: {e}')
 
+
+def notify_admin(machine_id, status='pending', token=None):
+    """Dispatch admin notifications without blocking request lifecycle."""
+    async_enabled = str(os.getenv('NOTIFICATION_ASYNC', 'true')).strip().lower() not in {
+        '0', 'false', 'no', 'off'
+    }
+
+    if not async_enabled:
+        _notify_admin_sync(machine_id, status=status, token=token)
+        return
+
+    try:
+        threading.Thread(
+            target=_notify_admin_sync,
+            args=(machine_id, status, token),
+            daemon=True,
+            name='notify-admin',
+        ).start()
+    except Exception as e:
+        logger.error(f'Failed to start async admin notification worker: {e}')
+        _notify_admin_sync(machine_id, status=status, token=token)
 
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():

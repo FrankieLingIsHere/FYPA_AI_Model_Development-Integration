@@ -3246,6 +3246,411 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
     return normalized
 
 
+LOCAL_MODE_PROVISION_STATE_FILE = Path('local_mode_provision_state.json')
+LOCAL_MODE_MACHINE_ID_FILE = Path('machine_id.txt')
+
+
+def _local_mode_normalize_cloud_url(raw_url: str) -> str:
+    value = str(raw_url or '').strip()
+    if not value:
+        return ''
+    if not re.match(r'^https?://', value, flags=re.IGNORECASE):
+        value = f"https://{value}"
+    return value.rstrip('/')
+
+
+def _local_mode_is_placeholder_secret(value: str) -> bool:
+    normalized = str(value or '').strip().lower()
+    if not normalized:
+        return True
+    placeholder_markers = (
+        'your-project-id',
+        'your-service-role-key',
+        'your-db-password',
+        'example.supabase.co',
+        'postgresql://postgres:your-db-password',
+        'postgres://postgres:your-db-password',
+    )
+    return any(marker in normalized for marker in placeholder_markers)
+
+
+def _local_mode_has_supabase_credentials() -> bool:
+    db_url = os.getenv('SUPABASE_DB_URL', '').strip()
+    supa_url = os.getenv('SUPABASE_URL', '').strip()
+    service_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+    return not any(_local_mode_is_placeholder_secret(v) for v in (db_url, supa_url, service_key))
+
+
+def _local_mode_load_provision_state() -> Dict[str, Any]:
+    if not LOCAL_MODE_PROVISION_STATE_FILE.exists():
+        return {}
+    try:
+        with open(LOCAL_MODE_PROVISION_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
+    with open(LOCAL_MODE_PROVISION_STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+
+def _local_mode_get_or_create_machine_id() -> str:
+    existing = ''
+    if LOCAL_MODE_MACHINE_ID_FILE.exists():
+        try:
+            existing = str(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8')).strip()
+        except Exception:
+            existing = ''
+
+    if existing and re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', existing):
+        return existing
+
+    machine_id = f"Edge-{secrets.token_hex(6).upper()}"
+    LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
+    return machine_id
+
+
+def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = Path('.env')) -> None:
+    env_lines: List[str] = []
+    if env_path.exists():
+        env_lines = env_path.read_text(encoding='utf-8').splitlines()
+    elif Path('.env.example').exists():
+        env_lines = Path('.env.example').read_text(encoding='utf-8').splitlines()
+
+    key_pattern = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=')
+    replaced_keys: set = set()
+
+    for index, line in enumerate(env_lines):
+        match = key_pattern.match(line)
+        if not match:
+            continue
+        key = match.group(1)
+        if key in updates:
+            env_lines[index] = f"{key}={str(updates[key]).strip()}"
+            replaced_keys.add(key)
+
+    if env_lines and env_lines[-1].strip() != '':
+        env_lines.append('')
+
+    for key, value in updates.items():
+        if key not in replaced_keys:
+            env_lines.append(f"{key}={str(value).strip()}")
+
+    env_path.write_text('\n'.join(env_lines).rstrip() + '\n', encoding='utf-8')
+
+
+def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
+    required_keys = ('SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')
+    resolved_credentials = {
+        key: str(credentials.get(key) or '').strip()
+        for key in required_keys
+    }
+
+    if any(_local_mode_is_placeholder_secret(value) for value in resolved_credentials.values()):
+        return {
+            'success': False,
+            'error': 'Received invalid provisioning credentials from cloud exchange.',
+        }
+
+    _local_mode_upsert_env_values(resolved_credentials)
+    for key, value in resolved_credentials.items():
+        os.environ[key] = value
+
+    reinit_success = False
+    reinit_error = None
+    try:
+        reinit_success = bool(initialize_pipeline_components())
+    except Exception as e:
+        reinit_error = str(e)
+
+    return {
+        'success': True,
+        'reinitialized': reinit_success,
+        'reinit_error': reinit_error,
+    }
+
+
+@app.route('/api/local-mode/provisioning/status', methods=['GET'])
+def api_local_mode_provisioning_status():
+    cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
+    state = _local_mode_load_provision_state()
+    machine_id = str(state.get('machine_id') or '').strip() or _local_mode_get_or_create_machine_id()
+
+    return jsonify({
+        'success': True,
+        'status': str(state.get('status') or 'idle').strip().lower(),
+        'machine_id': machine_id,
+        'cloud_url': cloud_url,
+        'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
+        'credentials_present': _local_mode_has_supabase_credentials(),
+        'updated_at': state.get('updated_at'),
+        'requested_at': state.get('requested_at'),
+        'provisioned_at': state.get('provisioned_at'),
+    })
+
+
+@app.route('/api/local-mode/provisioning/auto', methods=['POST'])
+def api_local_mode_auto_provisioning():
+    """Auto-trigger cloud approval + bootstrap credential exchange for local mode access."""
+    payload = request.get_json(silent=True) or {}
+    cloud_url = _local_mode_normalize_cloud_url(
+        payload.get('cloud_url')
+        or os.getenv('CLOUD_URL')
+        or ''
+    )
+
+    if not cloud_url:
+        return jsonify({
+            'success': False,
+            'status': 'cloud_url_missing',
+            'error': 'CLOUD_URL is not configured. Auto-provisioning cannot contact the cloud dashboard.',
+            'hint': 'Set CLOUD_URL in local .env to your deployed cloud dashboard URL.',
+        }), 400
+
+    machine_id = _local_mode_get_or_create_machine_id()
+    admin_portal_url = f"{cloud_url}/admin/devices"
+
+    if _local_mode_has_supabase_credentials():
+        return jsonify({
+            'success': True,
+            'status': 'credentials_present',
+            'provisioned': True,
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        })
+
+    state = _local_mode_load_provision_state()
+    provision_secret = str(state.get('provision_secret') or '').strip()
+
+    def _request_new_secret() -> Tuple[bool, str, str]:
+        try:
+            response = requests.post(
+                f"{cloud_url}/api/provision/request",
+                json={'machine_id': machine_id},
+                timeout=12,
+            )
+            body = response.json() if response.content else {}
+        except Exception as e:
+            return False, '', f'Failed to request provisioning approval: {e}'
+
+        if not response.ok:
+            err = str((body or {}).get('error') or f'Provision request failed ({response.status_code})')
+            return False, '', err
+
+        secret = str((body or {}).get('provision_secret') or '').strip()
+        if not secret:
+            return False, '', 'Cloud response missing provision_secret.'
+
+        return True, secret, ''
+
+    if not provision_secret or str(state.get('cloud_url') or '') != cloud_url:
+        requested, provision_secret, request_error = _request_new_secret()
+        if not requested:
+            return jsonify({
+                'success': False,
+                'status': 'request_failed',
+                'error': request_error,
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+            }), 502
+
+        state = {
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'cloud_url': cloud_url,
+            'status': 'pending_approval',
+            'requested_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        _local_mode_save_provision_state(state)
+
+    try:
+        status_response = requests.get(
+            f"{cloud_url}/api/provision/status",
+            params={
+                'machine_id': machine_id,
+                'provision_secret': provision_secret,
+            },
+            timeout=10,
+        )
+        status_body = status_response.json() if status_response.content else {}
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'status': 'poll_failed',
+            'error': f'Failed to poll provisioning status: {e}',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    if status_response.status_code in (401, 404):
+        retry_ok, retry_secret, retry_error = _request_new_secret()
+        if not retry_ok:
+            return jsonify({
+                'success': False,
+                'status': 'request_failed',
+                'error': retry_error,
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+            }), 502
+
+        state = {
+            'machine_id': machine_id,
+            'provision_secret': retry_secret,
+            'cloud_url': cloud_url,
+            'status': 'pending_approval',
+            'requested_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        _local_mode_save_provision_state(state)
+
+        return jsonify({
+            'success': True,
+            'status': 'pending_approval',
+            'message': 'Provision request re-submitted. Waiting for admin approval.',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        })
+
+    if status_response.status_code == 403:
+        state.update({
+            'machine_id': machine_id,
+            'cloud_url': cloud_url,
+            'status': 'rejected',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+        _local_mode_save_provision_state(state)
+        return jsonify({
+            'success': False,
+            'status': 'rejected',
+            'error': 'Provision request was rejected by administrator.',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 403
+
+    if not status_response.ok:
+        return jsonify({
+            'success': False,
+            'status': 'poll_failed',
+            'error': str((status_body or {}).get('error') or f'Provision status request failed ({status_response.status_code})'),
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    current_status = str((status_body or {}).get('status') or 'pending').strip().lower()
+    state.update({
+        'machine_id': machine_id,
+        'provision_secret': provision_secret,
+        'cloud_url': cloud_url,
+        'status': current_status,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+    _local_mode_save_provision_state(state)
+
+    if current_status == 'pending':
+        return jsonify({
+            'success': True,
+            'status': 'pending_approval',
+            'message': 'Provision request submitted. Waiting for admin approval.',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        })
+
+    bootstrap_token = str((status_body or {}).get('bootstrap_token') or '').strip()
+    if not bootstrap_token:
+        return jsonify({
+            'success': False,
+            'status': 'bootstrap_missing',
+            'error': 'Cloud approval status did not include bootstrap_token.',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    try:
+        exchange_response = requests.post(
+            f"{cloud_url}/api/provision/bootstrap-exchange",
+            json={
+                'machine_id': machine_id,
+                'provision_secret': provision_secret,
+                'bootstrap_token': bootstrap_token,
+            },
+            timeout=12,
+        )
+        exchange_body = exchange_response.json() if exchange_response.content else {}
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'status': 'exchange_failed',
+            'error': f'Failed to exchange bootstrap token: {e}',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    if not exchange_response.ok:
+        return jsonify({
+            'success': False,
+            'status': 'exchange_failed',
+            'error': str((exchange_body or {}).get('error') or f'Bootstrap exchange failed ({exchange_response.status_code})'),
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    credentials = (exchange_body or {}).get('credentials')
+    if not isinstance(credentials, dict):
+        return jsonify({
+            'success': False,
+            'status': 'exchange_failed',
+            'error': 'Bootstrap exchange did not return credentials payload.',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
+    apply_result = _local_mode_apply_supabase_credentials(credentials)
+    if not apply_result.get('success'):
+        return jsonify({
+            'success': False,
+            'status': 'apply_failed',
+            'error': str(apply_result.get('error') or 'Failed applying provisioned credentials locally.'),
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 500
+
+    state.update({
+        'status': 'provisioned',
+        'provisioned_at': datetime.now(timezone.utc).isoformat(),
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    })
+    _local_mode_save_provision_state(state)
+
+    return jsonify({
+        'success': True,
+        'status': 'provisioned',
+        'provisioned': True,
+        'message': 'Admin approval completed and Supabase credentials are now configured locally.',
+        'machine_id': machine_id,
+        'admin_portal_url': admin_portal_url,
+        'cloud_url': cloud_url,
+        'reinitialized': bool(apply_result.get('reinitialized')),
+        'reinit_error': apply_result.get('reinit_error'),
+    })
+
+
 @app.route('/api/local-mode/prepare', methods=['POST'])
 def api_prepare_local_mode():
     """One-click local mode bootstrap: start Ollama, pull model if needed, and optionally switch local-first routing."""

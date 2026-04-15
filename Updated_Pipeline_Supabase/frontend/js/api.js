@@ -625,6 +625,53 @@ const API = {
         }
     },
 
+    async autoProvisionLocalModeCredentials(options = {}) {
+        try {
+            const payload = {};
+            if (options.cloudUrl) {
+                payload.cloud_url = String(options.cloudUrl).trim();
+            }
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/auto`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    error: data.error || data.message || `Auto-provisioning failed (${response.status})`
+                };
+            }
+
+            return data;
+        } catch (error) {
+            console.error('Error auto-provisioning local mode credentials:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getLocalModeProvisioningStatus() {
+        try {
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    error: data.error || data.message || 'Failed to fetch local provisioning status'
+                };
+            }
+            return data;
+        } catch (error) {
+            console.error('Error fetching local provisioning status:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
     async switchPipelineMode(mode) {
         const normalized = String(mode || '').trim().toLowerCase();
         if (normalized !== 'local' && normalized !== 'cloud') {

@@ -2,6 +2,8 @@ import os
 import sys
 import unittest
 import base64
+import json
+from unittest.mock import patch, Mock
 
 # Ensure we can import luna_app
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -15,7 +17,14 @@ os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
 os.environ['SUPABASE_URL'] = 'https://example.supabase.co'
 os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'
 
-from luna_app import app, _load_pending_devices, PENDING_DEVICES_FILE, BOOTSTRAP_TOKEN_STATE_FILE
+from luna_app import (
+    app,
+    _load_pending_devices,
+    PENDING_DEVICES_FILE,
+    BOOTSTRAP_TOKEN_STATE_FILE,
+    LOCAL_MODE_PROVISION_STATE_FILE,
+    LOCAL_MODE_MACHINE_ID_FILE,
+)
 
 
 class ProvisioningActionTest(unittest.TestCase):
@@ -28,6 +37,10 @@ class ProvisioningActionTest(unittest.TestCase):
             PENDING_DEVICES_FILE.unlink()
         if BOOTSTRAP_TOKEN_STATE_FILE.exists():
             BOOTSTRAP_TOKEN_STATE_FILE.unlink()
+        if LOCAL_MODE_PROVISION_STATE_FILE.exists():
+            LOCAL_MODE_PROVISION_STATE_FILE.unlink()
+        if LOCAL_MODE_MACHINE_ID_FILE.exists():
+            LOCAL_MODE_MACHINE_ID_FILE.unlink()
 
     @classmethod
     def tearDownClass(cls):
@@ -35,6 +48,18 @@ class ProvisioningActionTest(unittest.TestCase):
             PENDING_DEVICES_FILE.unlink()
         if BOOTSTRAP_TOKEN_STATE_FILE.exists():
             BOOTSTRAP_TOKEN_STATE_FILE.unlink()
+        if LOCAL_MODE_PROVISION_STATE_FILE.exists():
+            LOCAL_MODE_PROVISION_STATE_FILE.unlink()
+        if LOCAL_MODE_MACHINE_ID_FILE.exists():
+            LOCAL_MODE_MACHINE_ID_FILE.unlink()
+
+    def _mock_http_response(self, status_code, payload):
+        response = Mock()
+        response.status_code = status_code
+        response.ok = 200 <= status_code < 300
+        response.content = json.dumps(payload).encode('utf-8')
+        response.json.return_value = payload
+        return response
 
     def _admin_auth_headers(self):
         auth_string = base64.b64encode(b'admin:test-magic-password').decode('utf-8')
@@ -172,6 +197,117 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_replay = self.client.get(f'/api/bootstrap/installer?token={installer_token}')
         self.assertEqual(installer_replay.status_code, 403)
         installer_replay.close()
+
+    def test_local_auto_provision_requires_cloud_url(self):
+        previous_cloud_url = os.environ.pop('CLOUD_URL', None)
+        try:
+            response = self.client.post('/api/local-mode/provisioning/auto', json={})
+            self.assertEqual(response.status_code, 400)
+            payload = response.json or {}
+            self.assertEqual(payload.get('status'), 'cloud_url_missing')
+            self.assertIn('CLOUD_URL', str(payload.get('error') or ''))
+        finally:
+            if previous_cloud_url is not None:
+                os.environ['CLOUD_URL'] = previous_cloud_url
+
+    @patch('luna_app.requests.get')
+    @patch('luna_app.requests.post')
+    def test_local_auto_provision_pending_approval(self, mock_post, mock_get):
+        os.environ['CLOUD_URL'] = 'https://cloud.example.test'
+
+        mock_post.return_value = self._mock_http_response(
+            200,
+            {'status': 'stored', 'provision_secret': 'local-secret-001'},
+        )
+        mock_get.return_value = self._mock_http_response(
+            200,
+            {'status': 'pending'},
+        )
+
+        with patch('luna_app._local_mode_has_supabase_credentials', return_value=False):
+            response = self.client.post('/api/local-mode/provisioning/auto', json={})
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json or {}
+        self.assertTrue(payload.get('success'))
+        self.assertEqual(payload.get('status'), 'pending_approval')
+        self.assertTrue(str(payload.get('machine_id') or '').strip())
+        self.assertEqual(payload.get('admin_portal_url'), 'https://cloud.example.test/admin/devices')
+
+        self.assertTrue(LOCAL_MODE_PROVISION_STATE_FILE.exists())
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(persisted.get('status'), 'pending')
+        self.assertEqual(str(persisted.get('provision_secret') or ''), 'local-secret-001')
+
+        self.assertEqual(mock_post.call_count, 1)
+        request_url = str(mock_post.call_args_list[0].args[0])
+        self.assertIn('/api/provision/request', request_url)
+
+    @patch('luna_app._local_mode_apply_supabase_credentials')
+    @patch('luna_app.requests.get')
+    @patch('luna_app.requests.post')
+    def test_local_auto_provision_approved_auto_exchanges_and_applies_credentials(
+        self,
+        mock_post,
+        mock_get,
+        mock_apply_credentials,
+    ):
+        os.environ['CLOUD_URL'] = 'https://cloud.example.test'
+
+        expected_credentials = {
+            'SUPABASE_DB_URL': 'postgres://auto:test@localhost:5432/test',
+            'SUPABASE_URL': 'https://auto-example.supabase.co',
+            'SUPABASE_SERVICE_ROLE_KEY': 'auto-service-role-key',
+        }
+
+        request_response = self._mock_http_response(
+            200,
+            {'status': 'stored', 'provision_secret': 'local-secret-002'},
+        )
+        exchange_response = self._mock_http_response(
+            200,
+            {'status': 'provisioned', 'credentials': expected_credentials},
+        )
+        mock_post.side_effect = [request_response, exchange_response]
+
+        mock_get.return_value = self._mock_http_response(
+            200,
+            {'status': 'approved', 'bootstrap_token': 'bootstrap-xyz'},
+        )
+
+        mock_apply_credentials.return_value = {
+            'success': True,
+            'reinitialized': True,
+            'reinit_error': None,
+        }
+
+        with patch('luna_app._local_mode_has_supabase_credentials', return_value=False):
+            response = self.client.post('/api/local-mode/provisioning/auto', json={})
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json or {}
+        self.assertTrue(payload.get('success'))
+        self.assertEqual(payload.get('status'), 'provisioned')
+        self.assertTrue(payload.get('provisioned'))
+        self.assertTrue(payload.get('reinitialized'))
+        self.assertEqual(payload.get('admin_portal_url'), 'https://cloud.example.test/admin/devices')
+
+        self.assertEqual(mock_post.call_count, 2)
+        first_url = str(mock_post.call_args_list[0].args[0])
+        second_url = str(mock_post.call_args_list[1].args[0])
+        self.assertIn('/api/provision/request', first_url)
+        self.assertIn('/api/provision/bootstrap-exchange', second_url)
+
+        second_payload = mock_post.call_args_list[1].kwargs.get('json') or {}
+        self.assertEqual(second_payload.get('bootstrap_token'), 'bootstrap-xyz')
+        self.assertTrue(str(second_payload.get('machine_id') or '').strip())
+
+        mock_apply_credentials.assert_called_once_with(expected_credentials)
+
+        self.assertTrue(LOCAL_MODE_PROVISION_STATE_FILE.exists())
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(persisted.get('status'), 'provisioned')
+        self.assertTrue(str(persisted.get('provisioned_at') or '').strip())
 
 
 if __name__ == '__main__':

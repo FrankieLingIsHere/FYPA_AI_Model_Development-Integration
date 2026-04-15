@@ -2647,6 +2647,74 @@ const LivePage = {
 
             const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
             const REQUIRED_SPACE_NOTE = 'Required local storage for local mode: minimum 10 GB free (recommended 18 GB) when using single-model Gemma setup.';
+            const PROVISION_POLL_INTERVAL_MS = 5000;
+            const PROVISION_MAX_POLL_ATTEMPTS = 18;
+
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            async function autoProvisionCredentialsFromCheckup() {
+                const firstAttempt = await API.autoProvisionLocalModeCredentials();
+                const status = String((firstAttempt && firstAttempt.status) || '').toLowerCase();
+
+                if (!firstAttempt || firstAttempt.success === false) {
+                    const err = String((firstAttempt && firstAttempt.error) || 'Unable to trigger provisioning request.');
+                    setProviderStatus(`${err} Local mode can still run offline, but cloud sync requires provisioning approval.`, 'warning');
+                    return { success: false, blocking: false, status };
+                }
+
+                if (status === 'credentials_present' || status === 'provisioned') {
+                    setProviderStatus('Supabase credentials are already configured for this local backend.', 'success');
+                    return { success: true, blocking: false, status };
+                }
+
+                if (status !== 'pending_approval') {
+                    return { success: false, blocking: false, status };
+                }
+
+                const machineId = String(firstAttempt.machine_id || '').trim();
+                const adminPortalUrl = String(firstAttempt.admin_portal_url || '').trim();
+
+                setProviderStatus('Provision request submitted. Waiting for admin approval to receive Supabase credentials...', 'warning');
+                showNotification('Admin approval is required before cloud credentials can be applied locally.', 'warning');
+
+                const openAdminPortal = confirm(
+                    'Admin approval is required for this local mode access request.\n\n'
+                    + (machineId ? `Machine ID: ${machineId}\n` : '')
+                    + (adminPortalUrl ? `Admin portal: ${adminPortalUrl}\n\n` : '\n')
+                    + 'Open the admin portal now?'
+                );
+                if (openAdminPortal && adminPortalUrl) {
+                    try {
+                        window.open(adminPortalUrl, '_blank', 'noopener');
+                    } catch (openErr) {
+                        console.warn('Could not open admin portal automatically:', openErr);
+                    }
+                }
+
+                for (let attempt = 0; attempt < PROVISION_MAX_POLL_ATTEMPTS; attempt += 1) {
+                    await wait(PROVISION_POLL_INTERVAL_MS);
+                    const pollResult = await API.autoProvisionLocalModeCredentials();
+                    const pollStatus = String((pollResult && pollResult.status) || '').toLowerCase();
+
+                    if (pollResult && pollResult.success && (pollStatus === 'credentials_present' || pollStatus === 'provisioned')) {
+                        setProviderStatus('Admin approval completed. Supabase credentials are now configured locally.', 'success');
+                        showNotification('Provisioning completed. Cloud sync is now available.', 'success');
+                        return { success: true, blocking: false, status: pollStatus };
+                    }
+
+                    if (pollStatus === 'rejected') {
+                        const rejectedReason = String((pollResult && pollResult.error) || 'Provision request was rejected by administrator.');
+                        setProviderStatus(rejectedReason, 'error');
+                        showNotification(rejectedReason, 'error');
+                        return { success: false, blocking: true, status: pollStatus };
+                    }
+                }
+
+                const pendingMsg = 'Provision request is still pending admin approval. Local mode can continue offline now; cloud sync will activate once approval is completed.';
+                setProviderStatus(pendingMsg, 'warning');
+                showNotification(pendingMsg, 'warning');
+                return { success: false, blocking: false, status: 'pending_approval' };
+            }
 
             try {
                 runLocalModeCheckupBtn.disabled = true;
@@ -2731,6 +2799,7 @@ const LivePage = {
                     }
 
                     setProviderStatus('Local environment missing on physical device.', 'warning');
+                    await autoProvisionCredentialsFromCheckup();
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
                     return;
@@ -2786,6 +2855,7 @@ const LivePage = {
                     
                     setProviderStatus(`Local environment is missing on backend host (${backendHost}).`, 'warning');
                     showNotification(backendHint, 'warning');
+                    await autoProvisionCredentialsFromCheckup();
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
                     return;
@@ -2828,6 +2898,12 @@ const LivePage = {
                     const prepError = String((prep && prep.error) || local.error || 'Local mode is still not ready after checkup.');
                     setProviderStatus(prepError, 'warning');
                     showNotification(prepError, 'warning');
+                }
+
+                const provisionResult = await autoProvisionCredentialsFromCheckup();
+                if (provisionResult && provisionResult.blocking) {
+                    updateLocalModeCheckupStatus();
+                    return;
                 }
 
                 updateLocalModeCheckupStatus();

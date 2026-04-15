@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/static/LUNA_LocalInstaller.bat", "destination": "https://fypaaimodeldevelopment-integration-production.up.railway.app/api/bootstrap/installer/request" },
+    { "source": "/LUNA_LocalInstaller.bat", "destination": "https://fypaaimodeldevelopment-integration-production.up.railway.app/api/bootstrap/installer/request" },
     { "source": "/static/(.*)", "destination": "/$1" },
     { "source": "/api/(.*)", "destination": "https://fypaaimodeldevelopment-integration-production.up.railway.app/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }

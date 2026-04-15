@@ -131,6 +131,20 @@ class ProvisioningActionTest(unittest.TestCase):
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
 
+        request_unauth = self.client.get('/api/bootstrap/installer/request')
+        self.assertEqual(request_unauth.status_code, 401)
+        request_unauth.close()
+
+        request_auth = self.client.get(
+            '/api/bootstrap/installer/request',
+            headers=self._admin_auth_headers(),
+            follow_redirects=False,
+        )
+        self.assertIn(request_auth.status_code, (301, 302, 303, 307, 308))
+        location = str(request_auth.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+        request_auth.close()
+
         direct_static = self.client.get('/static/LUNA_LocalInstaller.bat')
         self.assertEqual(direct_static.status_code, 403)
         direct_static.close()

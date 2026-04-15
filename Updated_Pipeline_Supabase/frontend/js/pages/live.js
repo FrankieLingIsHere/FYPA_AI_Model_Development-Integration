@@ -2649,6 +2649,8 @@ const LivePage = {
             const REQUIRED_SPACE_NOTE = 'Required local storage for local mode: minimum 10 GB free (recommended 18 GB) when using single-model Gemma setup.';
             const PROVISION_POLL_INTERVAL_MS = 5000;
             const PROVISION_MAX_POLL_ATTEMPTS = 18;
+            const INSTALLER_MACHINE_ID_STORAGE_KEY = 'luna_installer_machine_id_v1';
+            const INSTALLER_PROVISION_SECRET_STORAGE_KEY = 'luna_installer_provision_secret_v1';
 
             const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2716,6 +2718,193 @@ const LivePage = {
                 return { success: false, blocking: false, status: 'pending_approval' };
             }
 
+            function getOrCreateInstallerMachineId() {
+                try {
+                    const existing = String(localStorage.getItem(INSTALLER_MACHINE_ID_STORAGE_KEY) || '').trim();
+                    if (/^[A-Za-z0-9._:-]{3,120}$/.test(existing)) {
+                        return existing;
+                    }
+                } catch (storageErr) {
+                    console.warn('Unable to read installer machine id from localStorage:', storageErr);
+                }
+
+                const generated = `Web-${Math.random().toString(16).slice(2, 10).toUpperCase()}`;
+                try {
+                    localStorage.setItem(INSTALLER_MACHINE_ID_STORAGE_KEY, generated);
+                } catch (storageErr) {
+                    console.warn('Unable to persist installer machine id to localStorage:', storageErr);
+                }
+                return generated;
+            }
+
+            function getInstallerProvisionSecret() {
+                try {
+                    return String(localStorage.getItem(INSTALLER_PROVISION_SECRET_STORAGE_KEY) || '').trim();
+                } catch (storageErr) {
+                    console.warn('Unable to read installer provision secret from localStorage:', storageErr);
+                    return '';
+                }
+            }
+
+            function setInstallerProvisionSecret(secret) {
+                const value = String(secret || '').trim();
+                try {
+                    if (value) {
+                        localStorage.setItem(INSTALLER_PROVISION_SECRET_STORAGE_KEY, value);
+                    } else {
+                        localStorage.removeItem(INSTALLER_PROVISION_SECRET_STORAGE_KEY);
+                    }
+                } catch (storageErr) {
+                    console.warn('Unable to persist installer provision secret to localStorage:', storageErr);
+                }
+            }
+
+            async function requestInstallerAccessAndDownload(options = {}) {
+                const autoRequestOnly = !!options.autoRequestOnly;
+                const machineId = getOrCreateInstallerMachineId();
+                let provisionSecret = getInstallerProvisionSecret();
+
+                async function requestApproval() {
+                    try {
+                        const response = await fetch(`${API_CONFIG.BASE_URL}/api/provision/request`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ machine_id: machineId })
+                        });
+                        const payload = await response.json().catch(() => ({}));
+
+                        if (!response.ok) {
+                            return {
+                                ok: false,
+                                error: String(payload.error || payload.message || `Approval request failed (${response.status})`)
+                            };
+                        }
+
+                        const secret = String(payload.provision_secret || '').trim();
+                        if (!secret) {
+                            return {
+                                ok: false,
+                                error: 'Approval request succeeded but provision_secret was missing.'
+                            };
+                        }
+
+                        setInstallerProvisionSecret(secret);
+                        return { ok: true, secret };
+                    } catch (error) {
+                        return { ok: false, error: `Failed to submit approval request: ${error.message}` };
+                    }
+                }
+
+                if (!provisionSecret) {
+                    const approvalResult = await requestApproval();
+                    if (!approvalResult.ok) {
+                        const requestError = String(approvalResult.error || 'Unable to request installer approval.');
+                        setProviderStatus(requestError, 'error');
+                        showNotification(requestError, 'error');
+                        return { success: false, status: 'request_failed' };
+                    }
+
+                    provisionSecret = String(approvalResult.secret || '').trim();
+                    const requestMessage = `Installer approval request sent to admin for machine ${machineId}.`;
+                    setProviderStatus(`${requestMessage} Waiting for approval...`, 'warning');
+
+                    if (autoRequestOnly) {
+                        return { success: true, status: 'pending_approval' };
+                    }
+                }
+
+                try {
+                    const statusResponse = await fetch(
+                        `${API_CONFIG.BASE_URL}/api/provision/status?machine_id=${encodeURIComponent(machineId)}&provision_secret=${encodeURIComponent(provisionSecret)}`
+                    );
+                    const statusPayload = await statusResponse.json().catch(() => ({}));
+                    const currentStatus = String(statusPayload.status || '').toLowerCase();
+
+                    if (statusResponse.status === 401 || statusResponse.status === 404) {
+                        setInstallerProvisionSecret('');
+                        const retryResult = await requestApproval();
+                        if (!retryResult.ok) {
+                            const retryError = String(retryResult.error || 'Failed to refresh installer approval request.');
+                            setProviderStatus(retryError, 'error');
+                            showNotification(retryError, 'error');
+                            return { success: false, status: 'request_failed' };
+                        }
+                        setProviderStatus('Installer approval request refreshed and sent to admin. Please retry once approved.', 'warning');
+                        return { success: false, status: 'pending_approval' };
+                    }
+
+                    if (statusResponse.status === 403 || currentStatus === 'rejected') {
+                        setInstallerProvisionSecret('');
+                        const rejectMessage = String(statusPayload.error || 'Installer approval request was rejected by administrator.');
+                        setProviderStatus(rejectMessage, 'error');
+                        showNotification(rejectMessage, 'error');
+                        return { success: false, status: 'rejected' };
+                    }
+
+                    if (!statusResponse.ok) {
+                        const statusError = String(statusPayload.error || statusPayload.message || `Unable to check installer approval status (${statusResponse.status})`);
+                        setProviderStatus(statusError, 'warning');
+                        return { success: false, status: 'status_failed' };
+                    }
+
+                    if (currentStatus !== 'approved' && currentStatus !== 'provisioned') {
+                        setProviderStatus(`Installer approval is still pending for machine ${machineId}.`, 'warning');
+                        showNotification('Installer request pending admin approval. Please try again shortly.', 'warning');
+                        return { success: false, status: 'pending_approval' };
+                    }
+
+                    const installerToken = String(statusPayload.installer_token || '').trim();
+                    if (!installerToken) {
+                        setProviderStatus('Approved, but installer download token is not ready yet. Please retry in a few seconds.', 'warning');
+                        return { success: false, status: 'token_missing' };
+                    }
+
+                    setProviderStatus('Installer approved. Starting download now...', 'success');
+                    showNotification('Installer approved. Download starting now.', 'success');
+                    window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer?token=${encodeURIComponent(installerToken)}`);
+                    return { success: true, status: 'downloading' };
+                } catch (error) {
+                    const downloadError = `Failed to check/download installer: ${error.message}`;
+                    setProviderStatus(downloadError, 'warning');
+                    showNotification(downloadError, 'warning');
+                    return { success: false, status: 'status_failed' };
+                }
+            }
+
+            function attachInstallerAccessButtonHandlers() {
+                if (!localModeCheckupStatus) {
+                    return;
+                }
+
+                const buttons = localModeCheckupStatus.querySelectorAll('[data-installer-link="pending-approval"]');
+                buttons.forEach((button) => {
+                    if (!(button instanceof HTMLElement)) {
+                        return;
+                    }
+                    if (button.dataset.boundInstallerAction === 'true') {
+                        return;
+                    }
+
+                    button.dataset.boundInstallerAction = 'true';
+                    button.addEventListener('click', async (event) => {
+                        event.preventDefault();
+                        if (button.dataset.loadingInstallerAction === 'true') {
+                            return;
+                        }
+
+                        button.dataset.loadingInstallerAction = 'true';
+                        const originalLabel = button.innerHTML;
+                        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking approval...';
+                        try {
+                            await requestInstallerAccessAndDownload();
+                        } finally {
+                            button.dataset.loadingInstallerAction = 'false';
+                            button.innerHTML = originalLabel;
+                        }
+                    });
+                });
+            }
+
             try {
                 runLocalModeCheckupBtn.disabled = true;
                 runLocalModeCheckupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
@@ -2762,13 +2951,14 @@ const LivePage = {
                                     </strong>
                                     <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                       <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
+                                       <i class="fas fa-cloud-download-alt"></i> Check Approval and Download Installer
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access.
+                                        Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved.
                                     </div>
                                 </div>
                             `;
+                            attachInstallerAccessButtonHandlers();
                         }
                     } else {
                         alert(
@@ -2788,18 +2978,19 @@ const LivePage = {
                                     </strong>
                                     <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                       <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
+                                       <i class="fas fa-cloud-download-alt"></i> Check Approval and Download Installer
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access. Space required: ~18GB.
+                                        Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB.
                                     </div>
                                 </div>
                             `;
+                            attachInstallerAccessButtonHandlers();
                         }
                     }
 
-                    setProviderStatus('Local environment missing on physical device. Approval request is being sent to admin automatically.', 'warning');
-                    await autoProvisionCredentialsFromCheckup();
+                    setProviderStatus('Local environment missing on physical device. Installer approval request is being sent to admin automatically.', 'warning');
+                    await requestInstallerAccessAndDownload({ autoRequestOnly: true });
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
                     return;
@@ -2844,18 +3035,19 @@ const LivePage = {
                                 </strong>
                                 <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                    style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                   <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
+                                   <i class="fas fa-cloud-download-alt"></i> Check Approval and Download Installer
                                 </a>
                                 <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                    Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access. Space required: ~18GB.
+                                    Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB.
                                 </div>
                             </div>
                         `;
+                        attachInstallerAccessButtonHandlers();
                     }
                     
-                    setProviderStatus(`Local environment is missing on backend host (${backendHost}).`, 'warning');
+                    setProviderStatus(`Local environment is missing on backend host (${backendHost}). Installer approval request is being sent to admin automatically.`, 'warning');
                     showNotification(backendHint, 'warning');
-                    await autoProvisionCredentialsFromCheckup();
+                    await requestInstallerAccessAndDownload({ autoRequestOnly: true });
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
                     return;

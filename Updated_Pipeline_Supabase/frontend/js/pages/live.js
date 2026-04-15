@@ -2760,12 +2760,12 @@ const LivePage = {
                                     <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                         <i class="fas fa-exclamation-triangle"></i> Local LUNA App Required (Ollama Detected)
                                     </strong>
-                                    <a href="/api/bootstrap/installer/request" 
+                                    <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                       <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                       <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Since Ollama was natively detected, this installer will strictly download LUNA source files without touching Ollama.
+                                        Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access.
                                     </div>
                                 </div>
                             `;
@@ -2786,19 +2786,19 @@ const LivePage = {
                                     <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                         <i class="fas fa-exclamation-triangle"></i> Local Environment Missing or Asleep
                                     </strong>
-                                    <a href="/api/bootstrap/installer/request" 
+                                    <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                       <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                       <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Run this natively to automate installing your environment. (If Ollama is already installed, it will just wake it up). Space required: ~18GB.
+                                        Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access. Space required: ~18GB.
                                     </div>
                                 </div>
                             `;
                         }
                     }
 
-                    setProviderStatus('Local environment missing on physical device.', 'warning');
+                    setProviderStatus('Local environment missing on physical device. Approval request is being sent to admin automatically.', 'warning');
                     await autoProvisionCredentialsFromCheckup();
                     runLocalModeCheckupBtn.innerHTML = 'Run Local Mode Checkup';
                     runLocalModeCheckupBtn.disabled = false;
@@ -2842,12 +2842,12 @@ const LivePage = {
                                 <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                     <i class="fas fa-exclamation-triangle"></i> Local Environment Missing
                                 </strong>
-                                <a href="/api/bootstrap/installer/request" 
+                                <a href="javascript:void(0)" data-installer-link="pending-approval" 
                                    style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                                   <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
+                                   <i class="fas fa-user-shield"></i> Installer Access Pending Admin Approval
                                 </a>
                                 <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                    Run this file natively on your Windows device to automate environment setup. Space required: ~18GB.
+                                    Approval request is sent to admin automatically. Once approved, rerun Local Mode Checkup to continue installer access. Space required: ~18GB.
                                 </div>
                             </div>
                         `;

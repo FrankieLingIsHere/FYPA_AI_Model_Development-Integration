@@ -6815,8 +6815,39 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         except Exception as e:
             logger.error(f'Failed to send webhook notification: {e}')
 
-    smtp_server = os.getenv('SMTP_SERVER', '').strip()
     admin_email = os.getenv('ADMIN_EMAIL', '').strip()
+
+    resend_api_key = os.getenv('RESEND_API_KEY', '').strip()
+    resend_from_email = os.getenv('RESEND_FROM_EMAIL', '').strip()
+    resend_api_base_url = os.getenv('RESEND_API_BASE_URL', 'https://api.resend.com').strip().rstrip('/')
+
+    if resend_api_key and resend_from_email and admin_email:
+        try:
+            resend_response = requests.post(
+                f"{resend_api_base_url}/emails",
+                headers={
+                    'Authorization': f'Bearer {resend_api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'from': resend_from_email,
+                    'to': [admin_email],
+                    'subject': subject,
+                    'text': message_plain,
+                },
+                timeout=8,
+            )
+            if resend_response.ok:
+                return
+
+            logger.warning(
+                f"Resend API email attempt failed ({resend_response.status_code}): "
+                f"{str(resend_response.text or '')[:240]}"
+            )
+        except Exception as resend_err:
+            logger.warning(f'Failed Resend API email attempt: {resend_err}')
+
+    smtp_server = os.getenv('SMTP_SERVER', '').strip()
     if smtp_server and admin_email:
         try:
             smtp_port = int(os.getenv('SMTP_PORT', '587'))

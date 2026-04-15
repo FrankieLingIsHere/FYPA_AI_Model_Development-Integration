@@ -26,6 +26,8 @@ Configure these environment variables on the cloud backend.
 - `SMTP_FORCE_IPV4` (default true; useful on hosted environments with flaky IPv6 egress)
 - `SMTP_PASSWORD_STRIP_SPACES` (default true; useful for Gmail app-password formatting)
 - `NOTIFICATION_ASYNC` (default true)
+- `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (optional HTTPS email fallback)
+- `RESEND_API_BASE_URL` (optional, default `https://api.resend.com`)
 - `NOTIFICATION_WEBHOOK_URL`
 
 ## 2) Local Edge Preparation
@@ -142,6 +144,9 @@ Use this table for cloud deployment and local edge bootstrap.
 | `SMTP_FORCE_IPV4` (optional) | `true` or `false` | Your backend env setting | Any time |
 | `SMTP_PASSWORD_STRIP_SPACES` (optional) | `true` or `false` | Your backend env setting | Any time |
 | `NOTIFICATION_ASYNC` (optional) | `true` or `false` | Your backend env setting | Any time |
+| `RESEND_API_KEY` (optional) | API key string from Resend dashboard | Resend account API keys | Any time |
+| `RESEND_FROM_EMAIL` (optional) | sender identity (e.g. `LUNA Alerts <alerts@your-domain.com>`) | Verified sender/domain in Resend | Any time |
+| `RESEND_API_BASE_URL` (optional) | default `https://api.resend.com` | Backend env setting | Any time |
 
 Recommended secret generation:
 

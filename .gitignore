@@ -1,0 +1,3 @@
+# Workspace-level ignores
+# Keep Verdent local agent assets out of source control
+.verdent/

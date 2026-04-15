@@ -104,7 +104,16 @@ if not exist ".env" (
     )
 )
 
-echo ALLOW_OFFLINE_LOCAL_MODE=true >> .env
+findstr /B /I "ALLOW_OFFLINE_LOCAL_MODE=" .env >nul 2>&1 || echo ALLOW_OFFLINE_LOCAL_MODE=true>> .env
+findstr /B /I "GEMINI_ENABLED=" .env >nul 2>&1 || echo GEMINI_ENABLED=false>> .env
+findstr /B /I "MODEL_API_ENABLED=" .env >nul 2>&1 || echo MODEL_API_ENABLED=false>> .env
+findstr /B /I "STARTUP_AUTO_PREPARE_LOCAL_MODE=" .env >nul 2>&1 || echo STARTUP_AUTO_PREPARE_LOCAL_MODE=true>> .env
+findstr /B /I "STARTUP_AUTO_PULL_LOCAL_MODEL=" .env >nul 2>&1 || echo STARTUP_AUTO_PULL_LOCAL_MODEL=true>> .env
+findstr /B /I "LOCAL_OLLAMA_UNIFIED_MODEL=" .env >nul 2>&1 || echo LOCAL_OLLAMA_UNIFIED_MODEL=gemma4>> .env
+findstr /B /I "OLLAMA_MODEL=" .env >nul 2>&1 || echo OLLAMA_MODEL=gemma4>> .env
+findstr /B /I "NLP_PROVIDER_ORDER=" .env >nul 2>&1 || echo NLP_PROVIDER_ORDER=ollama,local,gemini,model_api>> .env
+
+echo Local mode defaults ensured in .env ^(offline enabled, Gemini disabled, Ollama model aligned^)
 
 echo.
 echo [4/5] Setting up Virtual Environment...

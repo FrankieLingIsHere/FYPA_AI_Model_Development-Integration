@@ -25,7 +25,10 @@ import re
 import shutil
 import subprocess
 import html
-from urllib.parse import urlparse
+import hashlib
+import hmac
+import secrets
+from urllib.parse import urlparse, quote
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Thread
@@ -350,6 +353,18 @@ def _ensure_startup_sequence_running():
     if path.startswith('/static/') or path == '/favicon.ico':
         return None
     ensure_startup_thread()
+    return None
+
+@app.before_request
+def _protect_installer_static_asset():
+    """Prevent bypassing installer gating through direct static file access."""
+    if (request.path or '').strip() == '/static/LUNA_LocalInstaller.bat':
+        return Response(
+            "Installer download requires a signed one-time bootstrap token. "
+            "Request it via /api/bootstrap/installer/request.",
+            status=403,
+            mimetype='text/plain'
+        )
     return None
 
 # Directories
@@ -6093,64 +6108,320 @@ def cleanup():
 # =========================================================================
 
 PENDING_DEVICES_FILE = Path('pending_devices.json')
+BOOTSTRAP_TOKEN_STATE_FILE = Path('bootstrap_tokens.json')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
+PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
+INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
+BOOTSTRAP_JTI_RETENTION_SECONDS = int(os.getenv('BOOTSTRAP_JTI_RETENTION_SECONDS', '86400'))
 
-def _load_pending_devices():
+
+def _safe_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an integer env var with bounds and fallback."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = _safe_int_env(
+    'PROVISION_EXCHANGE_TOKEN_TTL_SECONDS',
+    PROVISION_EXCHANGE_TOKEN_TTL_SECONDS,
+    30,
+    3600,
+)
+INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = _safe_int_env(
+    'INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS',
+    INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
+    30,
+    3600,
+)
+BOOTSTRAP_JTI_RETENTION_SECONDS = _safe_int_env(
+    'BOOTSTRAP_JTI_RETENTION_SECONDS',
+    BOOTSTRAP_JTI_RETENTION_SECONDS,
+    300,
+    7 * 24 * 3600,
+)
+
+
+def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
+    """Ensure expected keys exist for backward-compatible pending-device records."""
+    if not isinstance(raw_record, dict):
+        return {
+            'status': 'pending',
+            'requested_at': datetime.now(timezone.utc).isoformat(),
+            'token': '',
+            'provision_secret_hash': '',
+            'approved_at': None,
+            'provisioned_at': None,
+        }
+
+    normalized = dict(raw_record)
+    normalized.setdefault('status', 'pending')
+    normalized.setdefault('requested_at', datetime.now(timezone.utc).isoformat())
+    normalized.setdefault('token', '')
+    normalized.setdefault('provision_secret_hash', '')
+    normalized.setdefault('approved_at', None)
+    normalized.setdefault('provisioned_at', None)
+    return normalized
+
+
+def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
     if not PENDING_DEVICES_FILE.exists():
         return {}
     try:
         with open(PENDING_DEVICES_FILE, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return {}
+            return {
+                str(machine_id): _normalize_pending_device_record(record)
+                for machine_id, record in data.items()
+            }
     except Exception:
         return {}
 
-def _save_pending_devices(data):
+
+def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> None:
     with open(PENDING_DEVICES_FILE, 'w') as f:
         json.dump(data, f, indent=2)
+
+
+def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
+    if not BOOTSTRAP_TOKEN_STATE_FILE.exists():
+        return {'used_jti': {}}
+    try:
+        with open(BOOTSTRAP_TOKEN_STATE_FILE, 'r') as f:
+            state = json.load(f)
+        if not isinstance(state, dict):
+            return {'used_jti': {}}
+        used = state.get('used_jti')
+        if not isinstance(used, dict):
+            used = {}
+        return {'used_jti': used}
+    except Exception:
+        return {'used_jti': {}}
+
+
+def _save_bootstrap_token_state(state: Dict[str, Dict[str, str]]) -> None:
+    with open(BOOTSTRAP_TOKEN_STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+
+def _prune_bootstrap_jti_state(state: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
+    used = state.get('used_jti') or {}
+    if not isinstance(used, dict):
+        return {'used_jti': {}}
+
+    now_epoch = time.time()
+    retained: Dict[str, str] = {}
+    for jti, used_at_iso in used.items():
+        try:
+            used_epoch = datetime.fromisoformat(str(used_at_iso)).timestamp()
+        except Exception:
+            continue
+        if (now_epoch - used_epoch) <= BOOTSTRAP_JTI_RETENTION_SECONDS:
+            retained[jti] = str(used_at_iso)
+    return {'used_jti': retained}
+
+
+def _is_bootstrap_jti_used(jti: str) -> bool:
+    state = _load_bootstrap_token_state()
+    state = _prune_bootstrap_jti_state(state)
+    _save_bootstrap_token_state(state)
+    return jti in (state.get('used_jti') or {})
+
+
+def _mark_bootstrap_jti_used(jti: str) -> None:
+    state = _load_bootstrap_token_state()
+    state = _prune_bootstrap_jti_state(state)
+    state.setdefault('used_jti', {})[jti] = datetime.now(timezone.utc).isoformat()
+    _save_bootstrap_token_state(state)
+
+
+def _get_bootstrap_signing_secret() -> str:
+    configured = os.getenv('BOOTSTRAP_TOKEN_SECRET', '').strip()
+    if configured:
+        return configured
+
+    fallback = (os.getenv('FLASK_SECRET_KEY', '').strip() or ADMIN_PASSWORD.strip())
+    if fallback:
+        return fallback
+
+    # This fallback keeps local development functional, but should never be used in production.
+    logger.warning('BOOTSTRAP_TOKEN_SECRET is not set; using insecure fallback secret')
+    return 'luna-insecure-bootstrap-secret'
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode('utf-8').rstrip('=')
+
+
+def _b64url_decode(value: str) -> bytes:
+    padding = '=' * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def _hash_provision_secret(secret_value: str) -> str:
+    return hashlib.sha256(secret_value.encode('utf-8')).hexdigest()
+
+
+def _is_valid_provision_secret(device: Dict[str, Any], supplied_secret: str) -> bool:
+    expected_hash = str(device.get('provision_secret_hash') or '').strip()
+    supplied_secret = str(supplied_secret or '').strip()
+    if not expected_hash or not supplied_secret:
+        return False
+    supplied_hash = _hash_provision_secret(supplied_secret)
+    return hmac.compare_digest(expected_hash, supplied_hash)
+
+
+def _issue_bootstrap_token(machine_id: str, purpose: str, ttl_seconds: int) -> str:
+    now_epoch = int(time.time())
+    payload = {
+        'machine_id': machine_id,
+        'purpose': purpose,
+        'iat': now_epoch,
+        'exp': now_epoch + max(30, int(ttl_seconds)),
+        'jti': secrets.token_urlsafe(18),
+        'one_time': True,
+    }
+    payload_blob = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    payload_part = _b64url_encode(payload_blob)
+    signature = hmac.new(
+        _get_bootstrap_signing_secret().encode('utf-8'),
+        payload_part.encode('utf-8'),
+        hashlib.sha256,
+    ).digest()
+    signature_part = _b64url_encode(signature)
+    return f"{payload_part}.{signature_part}"
+
+
+def _verify_bootstrap_token(
+    token: str,
+    expected_purpose: str,
+    expected_machine_id: Optional[str] = None,
+    consume: bool = False,
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    token = str(token or '').strip()
+    if '.' not in token:
+        return False, None, 'Invalid token format'
+
+    payload_part, signature_part = token.split('.', 1)
+    expected_signature = hmac.new(
+        _get_bootstrap_signing_secret().encode('utf-8'),
+        payload_part.encode('utf-8'),
+        hashlib.sha256,
+    ).digest()
+    expected_signature_part = _b64url_encode(expected_signature)
+    if not hmac.compare_digest(signature_part, expected_signature_part):
+        return False, None, 'Invalid token signature'
+
+    try:
+        payload = json.loads(_b64url_decode(payload_part).decode('utf-8'))
+    except Exception:
+        return False, None, 'Invalid token payload'
+
+    if str(payload.get('purpose') or '') != expected_purpose:
+        return False, None, 'Token purpose mismatch'
+
+    if expected_machine_id and str(payload.get('machine_id') or '') != str(expected_machine_id):
+        return False, None, 'Token machine mismatch'
+
+    now_epoch = int(time.time())
+    try:
+        exp_epoch = int(payload.get('exp'))
+    except (TypeError, ValueError):
+        return False, None, 'Token expiration is missing'
+
+    if exp_epoch <= now_epoch:
+        return False, None, 'Token expired'
+
+    jti = str(payload.get('jti') or '').strip()
+    if not jti:
+        return False, None, 'Token identifier is missing'
+
+    if payload.get('one_time', True):
+        if _is_bootstrap_jti_used(jti):
+            return False, None, 'Token already used'
+        if consume:
+            _mark_bootstrap_jti_used(jti)
+
+    return True, payload, ''
+
+
+def _get_provision_secret_from_request() -> str:
+    return (
+        request.args.get('provision_secret')
+        or request.headers.get('X-Provision-Secret')
+        or ''
+    ).strip()
+
+
+def _issue_installer_redirect(machine_id: str) -> Response:
+    installer_token = _issue_bootstrap_token(
+        machine_id,
+        'installer_download',
+        INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
+    )
+    return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-def notify_admin(machine_id, status="pending", token=None):
-    """Send notification to admin via webhook and/or email"""
+
+def notify_admin(machine_id, status='pending', token=None):
+    """Send notification to admin via webhook and/or email."""
     webhook_url = os.getenv('NOTIFICATION_WEBHOOK_URL', '').strip()
     cloud_url = os.getenv('CLOUD_URL', 'Your Cloud Dashboard')
-    
-    if status == "pending":
-        magic_link = f"{cloud_url}/admin/devices/quick-approve?machine_id={machine_id}&token={token}" if token else f"{cloud_url}/admin/devices"
-        subject = "🚨 New Edge Node Request"
-        message_plain = f"New Device Request: Machine ID {machine_id} is requesting to join the cluster!\n\nApprove instantly: {magic_link}\n\nOr manage devices: {cloud_url}/admin/devices"
-        webhook_msg = f"🚨 **New Device Request**: Machine `{machine_id}` is requesting to join the cluster!\n👉 **Approve Instantly**: {magic_link}"
+
+    if status == 'pending':
+        magic_link = (
+            f"{cloud_url}/admin/devices/quick-approve?machine_id={machine_id}&token={token}"
+            if token
+            else f"{cloud_url}/admin/devices"
+        )
+        subject = 'New Edge Node Request'
+        message_plain = (
+            f"New Device Request: Machine ID {machine_id} is requesting to join the cluster!\n\n"
+            f"Approve instantly: {magic_link}\n\n"
+            f"Or manage devices: {cloud_url}/admin/devices"
+        )
+        webhook_msg = (
+            f"New Device Request: Machine `{machine_id}` is requesting to join the cluster. "
+            f"Approve instantly: {magic_link}"
+        )
     else:
-        subject = "✅ Edge Node Approved"
+        subject = 'Edge Node Approved'
         message_plain = f"Device Approved: Machine ID {machine_id} has been approved and provisioned."
-        webhook_msg = f"✅ **Device Approved**: Machine `{machine_id}` has been approved and provisioned."
-        
-    # Send Webhook
+        webhook_msg = f"Device Approved: Machine `{machine_id}` has been approved and provisioned."
+
     if webhook_url:
         try:
-            payload = {"content": webhook_msg, "text": webhook_msg}
-            requests.post(webhook_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=5)
+            payload = {'content': webhook_msg, 'text': webhook_msg}
+            requests.post(
+                webhook_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=5,
+            )
         except Exception as e:
-            logger.error(f"Failed to send webhook notification: {e}")
-            
-    # Send Email
+            logger.error(f'Failed to send webhook notification: {e}')
+
     smtp_server = os.getenv('SMTP_SERVER', '').strip()
     admin_email = os.getenv('ADMIN_EMAIL', '').strip()
-    
     if smtp_server and admin_email:
         try:
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             smtp_user = os.getenv('SMTP_USERNAME', '').strip()
             smtp_pass = os.getenv('SMTP_PASSWORD', '').strip()
-            
+
             msg = MIMEMultipart()
-            msg['From'] = smtp_user or "luna-system@localhost"
+            msg['From'] = smtp_user or 'luna-system@localhost'
             msg['To'] = admin_email
             msg['Subject'] = subject
             msg.attach(MIMEText(message_plain, 'plain'))
-            
+
             server = smtplib.SMTP(smtp_server, smtp_port)
             server.starttls()
             if smtp_user and smtp_pass:
@@ -6158,92 +6429,245 @@ def notify_admin(machine_id, status="pending", token=None):
             server.send_message(msg)
             server.quit()
         except Exception as e:
-            logger.error(f"Failed to send email notification: {e}")
+            logger.error(f'Failed to send email notification: {e}')
+
 
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
     data = request.get_json() or {}
-    machine_id = data.get('machine_id')
+    machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
-        return jsonify({"error": "Missing machine_id"}), 400
-        
+        return jsonify({'error': 'Missing machine_id'}), 400
+
+    if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+        return jsonify({'error': 'Invalid machine_id format'}), 400
+
+    approval_token = secrets.token_urlsafe(32)
+    provision_secret = secrets.token_urlsafe(48)
+
     devices = _load_pending_devices()
-    if machine_id not in devices:
-        import secrets
-        approval_token = secrets.token_urlsafe(32)
-        devices[machine_id] = {
-            "status": "pending",
-            "requested_at": datetime.now().isoformat(),
-            "token": approval_token
-        }
-        _save_pending_devices(devices)
-        notify_admin(machine_id, "pending", token=approval_token)
-        
-    return jsonify({"status": "stored", "machine_id": machine_id})
+    devices[machine_id] = {
+        'status': 'pending',
+        'requested_at': datetime.now(timezone.utc).isoformat(),
+        'token': approval_token,
+        'provision_secret_hash': _hash_provision_secret(provision_secret),
+        'approved_at': None,
+        'provisioned_at': None,
+    }
+    _save_pending_devices(devices)
+    notify_admin(machine_id, 'pending', token=approval_token)
+
+    return jsonify({
+        'status': 'stored',
+        'machine_id': machine_id,
+        'provision_secret': provision_secret,
+    })
+
 
 @app.route('/api/provision/status', methods=['GET'])
 def provision_status():
-    machine_id = request.args.get('machine_id')
+    machine_id = (request.args.get('machine_id') or '').strip()
     if not machine_id:
-        return jsonify({"error": "Missing machine_id"}), 400
-        
+        return jsonify({'error': 'Missing machine_id'}), 400
+
+    provision_secret = _get_provision_secret_from_request()
+    if not provision_secret:
+        return jsonify({'error': 'Missing provision_secret'}), 401
+
     devices = _load_pending_devices()
     device = devices.get(machine_id)
-    
     if not device:
-        return jsonify({"status": "not_found"}), 404
-        
-    if device.get("status") == "approved":
-        # Provide the DB url and keys to the device
-        db_url = os.getenv('SUPABASE_DB_URL', '')
-        supa_url = os.getenv('SUPABASE_URL', '')
-        supa_service = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
-        
-        # Remove from pending queue
-        del devices[machine_id]
-        _save_pending_devices(devices)
-        
+        return jsonify({'status': 'not_found'}), 404
+
+    if not _is_valid_provision_secret(device, provision_secret):
+        return jsonify({'error': 'Invalid provision_secret'}), 401
+
+    current_status = str(device.get('status') or 'pending').strip().lower()
+    if current_status in ('approved', 'provisioned'):
+        bootstrap_token = _issue_bootstrap_token(
+            machine_id,
+            'provision_exchange',
+            PROVISION_EXCHANGE_TOKEN_TTL_SECONDS,
+        )
+        installer_token = _issue_bootstrap_token(
+            machine_id,
+            'installer_download',
+            INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
+        )
         return jsonify({
-            "status": "approved",
-            "credentials": {
-                "SUPABASE_DB_URL": db_url,
-                "SUPABASE_URL": supa_url,
-                "SUPABASE_SERVICE_ROLE_KEY": supa_service
-            }
+            'status': current_status,
+            'machine_id': machine_id,
+            'bootstrap_token': bootstrap_token,
+            'installer_token': installer_token,
+            'bootstrap_exchange_endpoint': '/api/provision/bootstrap-exchange',
+            'installer_download_endpoint': '/api/bootstrap/installer',
         })
-        
-    return jsonify({"status": "pending"})
+
+    if current_status == 'rejected':
+        return jsonify({'status': 'rejected'}), 403
+
+    return jsonify({'status': 'pending'})
+
+
+@app.route('/api/provision/bootstrap-exchange', methods=['POST'])
+def provision_bootstrap_exchange():
+    data = request.get_json() or {}
+    machine_id = str(data.get('machine_id') or '').strip()
+    provision_secret = str(data.get('provision_secret') or '').strip()
+    bootstrap_token = str(data.get('bootstrap_token') or '').strip()
+
+    if not machine_id:
+        return jsonify({'error': 'Missing machine_id'}), 400
+    if not provision_secret:
+        return jsonify({'error': 'Missing provision_secret'}), 400
+    if not bootstrap_token:
+        return jsonify({'error': 'Missing bootstrap_token'}), 400
+
+    devices = _load_pending_devices()
+    device = devices.get(machine_id)
+    if not device:
+        return jsonify({'status': 'not_found'}), 404
+
+    if not _is_valid_provision_secret(device, provision_secret):
+        return jsonify({'error': 'Invalid provision_secret'}), 401
+
+    current_status = str(device.get('status') or 'pending').strip().lower()
+    if current_status not in ('approved', 'provisioned'):
+        return jsonify({'error': 'Device is not approved for bootstrap exchange'}), 409
+
+    token_ok, _, token_error = _verify_bootstrap_token(
+        bootstrap_token,
+        expected_purpose='provision_exchange',
+        expected_machine_id=machine_id,
+        consume=True,
+    )
+    if not token_ok:
+        return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
+
+    db_url = os.getenv('SUPABASE_DB_URL', '').strip()
+    supa_url = os.getenv('SUPABASE_URL', '').strip()
+    supa_service = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+
+    if not db_url or not supa_url or not supa_service:
+        return jsonify({'error': 'Provisioning credentials are not configured on the server'}), 503
+
+    device['status'] = 'provisioned'
+    device['provisioned_at'] = datetime.now(timezone.utc).isoformat()
+    devices[machine_id] = device
+    _save_pending_devices(devices)
+
+    return jsonify({
+        'status': 'provisioned',
+        'credentials': {
+            'SUPABASE_DB_URL': db_url,
+            'SUPABASE_URL': supa_url,
+            'SUPABASE_SERVICE_ROLE_KEY': supa_service,
+        },
+    })
+
+
+@app.route('/api/bootstrap/installer/request', methods=['GET'])
+def request_bootstrap_installer():
+    machine_id = (request.args.get('machine_id') or '').strip()
+    provision_secret = (
+        request.args.get('provision_secret')
+        or request.headers.get('X-Provision-Secret')
+        or ''
+    ).strip()
+
+    if machine_id or provision_secret:
+        if not machine_id or not provision_secret:
+            return jsonify({'error': 'machine_id and provision_secret are both required'}), 400
+
+        devices = _load_pending_devices()
+        device = devices.get(machine_id)
+        if not device:
+            return jsonify({'error': 'Unknown machine_id'}), 404
+
+        current_status = str(device.get('status') or 'pending').strip().lower()
+        if current_status not in ('approved', 'provisioned'):
+            return jsonify({'error': 'Device is not approved for installer access'}), 403
+
+        if not _is_valid_provision_secret(device, provision_secret):
+            return jsonify({'error': 'Invalid provision_secret'}), 401
+
+        return _issue_installer_redirect(machine_id)
+
+    if not ADMIN_PASSWORD:
+        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot issue installer token.', 403
+
+    auth = request.authorization
+    if not auth or auth.password != ADMIN_PASSWORD:
+        return Response(
+            'Could not verify your access level for that URL.\n'
+            'You have to login with proper credentials to issue an installer token',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'}
+        )
+
+    return _issue_installer_redirect(machine_id or 'admin-installer')
+
+
+@app.route('/api/bootstrap/installer', methods=['GET'])
+def download_bootstrap_installer():
+    token = (request.args.get('token') or request.args.get('bootstrap_token') or '').strip()
+    if not token:
+        return jsonify({'error': 'Missing bootstrap token'}), 401
+
+    token_ok, token_payload, token_error = _verify_bootstrap_token(
+        token,
+        expected_purpose='installer_download',
+        consume=True,
+    )
+    if not token_ok or token_payload is None:
+        return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
+
+    installer_name = 'LUNA_LocalInstaller.bat'
+    installer_dir = Path(app.static_folder or 'frontend') / 'static'
+    installer_path = installer_dir / installer_name
+    if not installer_path.exists():
+        return jsonify({'error': 'Installer asset not found'}), 404
+
+    return send_from_directory(
+        str(installer_dir),
+        installer_name,
+        as_attachment=True,
+        download_name=installer_name,
+    )
+
 
 @app.route('/admin/devices', methods=['GET', 'POST'])
 def admin_devices():
     if not ADMIN_PASSWORD:
-        return "ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.", 403
-        
-    # Basic Auth Check
+        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
+
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD:
         return Response(
-            "Could not verify your access level for that URL.\n"
-            "You have to login with proper credentials", 401,
-            {'WWW-Authenticate': 'Basic realm="Login Required"'})
+            'Could not verify your access level for that URL.\n'
+            'You have to login with proper credentials',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'}
+        )
 
     devices = _load_pending_devices()
-    
+
     if request.method == 'POST':
         action = request.form.get('action')
         machine_id = request.form.get('machine_id')
-        
+
         if machine_id in devices:
             if action == 'approve':
                 devices[machine_id]['status'] = 'approved'
+                devices[machine_id]['approved_at'] = datetime.now(timezone.utc).isoformat()
                 _save_pending_devices(devices)
-                notify_admin(machine_id, "approved")
+                notify_admin(machine_id, 'approved')
             elif action == 'reject':
                 del devices[machine_id]
                 _save_pending_devices(devices)
-                
+
         return redirect('/admin/devices')
-        
+
     from flask import render_template_string
     html_template = """
     <!DOCTYPE html>
@@ -6253,13 +6677,14 @@ def admin_devices():
         <style>
             body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
             .card { border: 1px solid #ccc; padding: 15px; margin-bottom: 10px; border-radius: 8px; }
-            .btn { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; color: white; margin-right: 10px;}
+            .btn { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; color: white; margin-right: 10px; text-decoration: none; display: inline-block;}
             .btn-approve { background-color: #28a745; }
             .btn-reject { background-color: #dc3545; }
+            .btn-installer { background-color: #007bff; }
         </style>
     </head>
     <body>
-        <h2>🛡️ Edge Device Provisioning Queue</h2>
+        <h2>Edge Device Provisioning Queue</h2>
         <p>Review and verify these pending hardware deployments before they can join the main cluster.</p>
         <hr>
         {% if devices %}
@@ -6268,12 +6693,16 @@ def admin_devices():
                 <h3>Machine ID: {{ m_id }}</h3>
                 <p>Status: <strong>{{ details.status }}</strong></p>
                 <p>Requested At: {{ details.requested_at }}</p>
+                {% if details.approved_at %}<p>Approved At: {{ details.approved_at }}</p>{% endif %}
+                {% if details.provisioned_at %}<p>Provisioned At: {{ details.provisioned_at }}</p>{% endif %}
                 {% if details.status == 'pending' %}
                 <form method="POST" style="display:inline;">
                     <input type="hidden" name="machine_id" value="{{ m_id }}">
                     <button type="submit" name="action" value="approve" class="btn btn-approve">Approve Device</button>
                     <button type="submit" name="action" value="reject" class="btn btn-reject">Reject</button>
                 </form>
+                {% else %}
+                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-installer">Issue One-Time Installer Download</a>
                 {% endif %}
             </div>
             {% endfor %}
@@ -6285,45 +6714,60 @@ def admin_devices():
     """
     return render_template_string(html_template, devices=devices)
 
+
 @app.route('/admin/devices/quick-approve', methods=['GET'])
 def admin_devices_quick_approve():
     if not ADMIN_PASSWORD:
-        return "ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.", 403
-        
+        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
+
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD:
         return Response(
-            "Could not verify your access level for that URL.\n"
-            "You have to login with proper credentials to approve this device", 401,
-            {'WWW-Authenticate': 'Basic realm="Login Required"'})
+            'Could not verify your access level for that URL.\n'
+            'You have to login with proper credentials to approve this device',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'}
+        )
 
-    machine_id = request.args.get('machine_id')
-    token = request.args.get('token')
-    
+    machine_id = (request.args.get('machine_id') or '').strip()
+    token = (request.args.get('token') or '').strip()
+
     if not machine_id or not token:
-        return "Missing machine_id or token", 400
-        
+        return 'Missing machine_id or token', 400
+
     devices = _load_pending_devices()
     device = devices.get(machine_id)
-    
+
     if not device:
-        return "Device not found or already processed", 404
-        
-    if device.get('token') != token:
-        return "Invalid or expired token", 403
-        
-    if device.get('status') == 'pending':
+        return 'Device not found or already processed', 404
+
+    if str(device.get('token') or '') != token:
+        return 'Invalid or expired token', 403
+
+    if str(device.get('status') or '') == 'pending':
         device['status'] = 'approved'
+        device['approved_at'] = datetime.now(timezone.utc).isoformat()
+        devices[machine_id] = device
         _save_pending_devices(devices)
-        notify_admin(machine_id, "approved")
-        
+        notify_admin(machine_id, 'approved')
+
+    installer_request_link = f"/api/bootstrap/installer/request?machine_id={quote(machine_id)}"
+
     html_response = f"""
     <!DOCTYPE html>
     <html>
-    <head><title>Edge Node Approved</title><style>body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; text-align: center; }} .btn {{ padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }}</style></head>
+    <head>
+        <title>Edge Node Approved</title>
+        <style>
+            body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; text-align: center; }}
+            .btn {{ padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; display: inline-block; }}
+        </style>
+    </head>
     <body>
-        <h2>✅ Device Approved Successfully!</h2>
-        <p>Machine <strong>{machine_id}</strong> has been granted access. The edge node is now provisioning securely.</p>
+        <h2>Device Approved Successfully</h2>
+        <p>Machine <strong>{html.escape(machine_id)}</strong> has been granted access.</p>
+        <br><br>
+        <a href='{installer_request_link}' class='btn'>Issue One-Time Installer Download</a>
         <br><br>
         <a href='/admin/devices' class='btn'>Return to Admin Dashboard</a>
     </body>
@@ -6334,7 +6778,6 @@ def admin_devices_quick_approve():
 # =========================================================================
 # MAIN
 # =========================================================================
-
 if __name__ == '__main__':
     import atexit
     atexit.register(cleanup)

@@ -2692,7 +2692,7 @@ const LivePage = {
                                     <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                         <i class="fas fa-exclamation-triangle"></i> Local LUNA App Required (Ollama Detected)
                                     </strong>
-                                    <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                    <a href="/api/bootstrap/installer/request" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                                        <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
                                     </a>
@@ -2718,7 +2718,7 @@ const LivePage = {
                                     <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                         <i class="fas fa-exclamation-triangle"></i> Local Environment Missing or Asleep
                                     </strong>
-                                    <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                    <a href="/api/bootstrap/installer/request" 
                                        style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                                        <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
                                     </a>
@@ -2773,7 +2773,7 @@ const LivePage = {
                                 <strong style="color: var(--warning-color); display: block; margin-bottom: 8px;">
                                     <i class="fas fa-exclamation-triangle"></i> Local Environment Missing
                                 </strong>
-                                <a href="/static/LUNA_LocalInstaller.bat" download="LUNA_LocalInstaller.bat" 
+                                <a href="/api/bootstrap/installer/request" 
                                    style="display: inline-block; padding: 8px 16px; background-color: var(--primary-color); color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                                    <i class="fas fa-download"></i> Download Zero-Touch Installer (.bat)
                                 </a>

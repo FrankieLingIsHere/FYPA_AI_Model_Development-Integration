@@ -62,12 +62,6 @@
                 </a>
             </li>
             <li>
-                <a href="#settings" class="sidebar-link" data-page="settings">
-                    <i class="fas fa-gear"></i>
-                    <span>Settings</span>
-                </a>
-            </li>
-            <li>
                 <a href="#reports" class="sidebar-link" data-page="reports">
                     <i class="fas fa-file-alt"></i>
                     <span>Reports</span>
@@ -88,14 +82,6 @@
         </ul>
 
         <div class="sidebar-bottom">
-            <div id="networkStatusBadge" class="network-badge network-good" title="Network quality" style="margin: 0.3rem 1rem 0.2rem 1rem; width: fit-content;">
-                <i class="fas fa-wifi" aria-hidden="true"></i>
-                <span id="networkStatusText">Online</span>
-            </div>
-            <div id="realtimeStatusBadge" class="realtime-badge realtime-connecting" title="Realtime sync status" style="margin: 0.25rem 1rem 0.2rem 1rem; width: fit-content;">
-                <i class="fas fa-circle-notch fa-spin"></i>
-                <span>Connecting</span>
-            </div>
             <div class="sidebar-link nav-timezone" style="border-left-color: transparent; cursor: default;">
                 <i class="fas fa-clock"></i>
                 <select id="timezone-selector" class="timezone-select">
@@ -115,12 +101,24 @@
                     <option value="10">Sydney (UTC+10)</option>
                 </select>
             </div>
+            <a href="#settings" class="sidebar-link sidebar-settings-link" data-page="settings">
+                <i class="fas fa-gear"></i>
+                <span>Settings</span>
+            </a>
         </div>
     </nav>
 
     <!-- Main Content Area -->
-    <main id="app" class="main-content">
-        <!-- Pages will be dynamically loaded here -->
+    <main class="main-content">
+        <div class="main-content-statusbar">
+            <div id="networkStatusBadge" class="network-badge network-good" title="Network quality">
+                <i class="fas fa-wifi" aria-hidden="true"></i>
+                <span id="networkStatusText">Online</span>
+            </div>
+        </div>
+        <div id="app">
+            <!-- Pages will be dynamically loaded here -->
+        </div>
     </main>
 
     <!-- Mobile Orientation Guard -->

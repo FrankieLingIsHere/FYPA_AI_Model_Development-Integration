@@ -1784,6 +1784,10 @@ body.is-phone-device .handbook-content {
     font-weight: 600;
 }
 
+.sidebar-settings-link {
+    margin-top: auto;
+}
+
 /* Main Content override for sidebar layout */
 .main-content {
     margin-left: 80px;
@@ -1792,6 +1796,21 @@ body.is-phone-device .handbook-content {
     overflow-y: auto;
     padding: 24px;
     transition: margin-left 0.25s ease;
+}
+
+.main-content-statusbar {
+    display: flex;
+    justify-content: flex-end;
+    position: sticky;
+    top: 0.45rem;
+    z-index: 95;
+    margin-bottom: 0.6rem;
+    pointer-events: none;
+}
+
+.main-content-statusbar .network-badge {
+    pointer-events: auto;
+    box-shadow: var(--shadow-sm);
 }
 
 .mb-4 {

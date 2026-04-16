@@ -1726,18 +1726,17 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
 
                 if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                     failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
-                    logger.error(f"❌ Local mode unavailable for {report_id}: {failure_reason}")
-                    if db_manager:
-                        try:
-                            db_manager.update_detection_status(report_id, 'failed', failure_reason)
-                        except Exception as status_err:
-                            logger.warning(f"Could not update status for local-mode failure: {status_err}")
-                    update_report_progress(
-                        current=report_id,
-                        status='error',
-                        error_message=failure_reason
+                    logger.warning(
+                        f"⚠️ Local mode unavailable for {report_id}: {failure_reason}. "
+                        "Continuing with detection-only fallback report generation."
                     )
-                    return
+                    caption = (
+                        "Caption unavailable due to local-mode provider issue. "
+                        f"{failure_reason} "
+                        "Report generated using detection-only fallback analysis."
+                    )
+                    with open(caption_path, 'w', encoding='utf-8') as f:
+                        f.write(caption)
                     
             else:
                 caption = "Caption generation returned empty"
@@ -2008,13 +2007,17 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 
                     if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                         failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
-                        logger.error(f"❌ Local mode unavailable for {report_id}: {failure_reason}")
-                        if db_manager:
-                            try:
-                                db_manager.update_detection_status(report_id, 'failed', failure_reason)
-                            except Exception as status_err:
-                                logger.warning(f"Could not update status for local-mode failure: {status_err}")
-                        return
+                        logger.warning(
+                            f"⚠️ Local mode unavailable for {report_id}: {failure_reason}. "
+                            "Continuing with detection-only fallback report generation."
+                        )
+                        caption = (
+                            "Caption unavailable due to local-mode provider issue. "
+                            f"{failure_reason} "
+                            "Report generated using detection-only fallback analysis."
+                        )
+                        with open(caption_path, 'w', encoding='utf-8') as f:
+                            f.write(caption)
                 else:
                     logger.error("Caption generation returned None or empty string")
                     caption = "Caption generation returned empty"
@@ -3797,6 +3800,17 @@ def api_local_mode_auto_provisioning():
             'cloud_url': cloud_url,
         }), 403
 
+    if status_response.status_code == 503:
+        return jsonify({
+            'success': False,
+            'status': 'cloud_credentials_missing',
+            'error': str((status_body or {}).get('error') or 'Cloud provisioning credentials are not configured yet.'),
+            'missing_env_keys': (status_body or {}).get('missing_env_keys') or [],
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+        }), 502
+
     if not status_response.ok:
         return jsonify({
             'success': False,
@@ -3829,6 +3843,16 @@ def api_local_mode_auto_provisioning():
 
     bootstrap_token = str((status_body or {}).get('bootstrap_token') or '').strip()
     if not bootstrap_token:
+        if (status_body or {}).get('bootstrap_exchange_ready') is False:
+            return jsonify({
+                'success': False,
+                'status': 'cloud_credentials_missing',
+                'error': str((status_body or {}).get('error') or 'Cloud provisioning credentials are not configured yet.'),
+                'missing_env_keys': (status_body or {}).get('missing_env_keys') or [],
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+            }), 502
         return jsonify({
             'success': False,
             'status': 'bootstrap_missing',
@@ -3967,9 +3991,76 @@ def api_prepare_local_mode():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _parse_report_id_timestamp(report_id: str) -> datetime:
+    """Parse report timestamp from report_id with a safe fallback."""
+    try:
+        return datetime.strptime(str(report_id), '%Y%m%d_%H%M%S')
+    except Exception:
+        return datetime.now()
+
+
+def _read_local_violation_metadata(violation_dir: Path) -> Dict[str, Any]:
+    """Read local metadata.json for a violation folder when available."""
+    metadata_path = violation_dir / 'metadata.json'
+    if not metadata_path.exists():
+        return {}
+
+    try:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
+    """Collect pending/failed local reports from filesystem for offline recovery."""
+    if not VIOLATIONS_DIR.exists():
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+    for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+        if not violation_dir.is_dir():
+            continue
+        if len(candidates) >= max(1, int(limit or 1)):
+            break
+
+        report_id = violation_dir.name
+        original_path = violation_dir / 'original.jpg'
+        report_html_path = violation_dir / 'report.html'
+        if not original_path.exists() or report_html_path.exists():
+            continue
+
+        metadata = _read_local_violation_metadata(violation_dir)
+        failure_path = violation_dir / 'generation_failure.txt'
+        failure_reason = str(metadata.get('failure_reason') or '').strip()
+        if failure_path.exists() and not failure_reason:
+            try:
+                with open(failure_path, 'r', encoding='utf-8') as f:
+                    failure_reason = f.read().strip().splitlines()[-1][:300]
+            except Exception:
+                failure_reason = ''
+
+        status = 'failed' if failure_path.exists() else 'pending'
+        violation_type = str(metadata.get('violation_type') or '').strip()
+        detection_count = metadata.get('violation_count', metadata.get('detection_count', 0))
+
+        candidates.append({
+            'report_id': report_id,
+            'status': status,
+            'error_message': failure_reason,
+            'device_id': metadata.get('device_id') or 'offline_local_cache',
+            'timestamp': _parse_report_id_timestamp(report_id).isoformat(),
+            'violation_count': int(detection_count or 0),
+            'violation_types': [violation_type] if violation_type else [],
+        })
+
+    return candidates
+
+
 def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
     if db_manager is None:
-        return []
+        return _collect_local_recovery_candidates(limit)
 
     rows = []
     try:
@@ -3998,7 +4089,10 @@ def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
             'report_id': report_id,
             'status': status,
             'error_message': error_message,
-            'device_id': (row or {}).get('device_id')
+            'device_id': (row or {}).get('device_id'),
+            'timestamp': (_iso_or_none((row or {}).get('timestamp')) if '_iso_or_none' in globals() else None),
+            'violation_count': (row or {}).get('violation_count'),
+            'violation_types': [],
         })
 
     return candidates
@@ -4359,19 +4453,18 @@ def api_report_recovery_execute():
     if mode not in ('local', 'failover'):
         return jsonify({'success': False, 'error': 'mode must be either "local" or "failover"'}), 400
 
-    if db_manager is None:
-        return jsonify({'success': False, 'error': 'Database not available'}), 503
     if violation_queue is None:
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
 
+    local_mode_warning = None
     if mode == 'local':
         diagnostics = _get_local_mode_diagnostics()
         if not diagnostics.get('local_mode_possible'):
-            return jsonify({
-                'success': False,
-                'error': 'Local mode is not currently feasible on this backend host.',
-                'local': diagnostics
-            }), 400
+            local_mode_warning = (
+                'Local mode is not currently feasible on this backend host. '
+                'Continuing with detection-only fallback where possible.'
+            )
+            logger.warning(local_mode_warning)
 
     if not ensure_queue_worker_running():
         return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
@@ -4392,27 +4485,38 @@ def api_report_recovery_execute():
     for item in candidates:
         report_id = item.get('report_id')
         try:
-            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+            event = db_manager.get_detection_event(report_id) if (db_manager is not None and hasattr(db_manager, 'get_detection_event')) else None
             violation_dir = VIOLATIONS_DIR.absolute() / report_id
             original_path = violation_dir / 'original.jpg'
             annotated_path = violation_dir / 'annotated.jpg'
 
-            if not original_path.exists() or event is None:
+            if not original_path.exists():
                 skipped_count += 1
                 continue
 
             detections = []
-            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            violation = db_manager.get_violation(report_id) if (db_manager is not None and hasattr(db_manager, 'get_violation')) else None
             if violation and isinstance(violation.get('detection_data'), dict):
                 detections = violation['detection_data'].get('detections', []) or []
 
+            local_violation_types = []
+            if isinstance(item.get('violation_types'), list):
+                local_violation_types = [str(v).strip() for v in item.get('violation_types') if str(v).strip()]
+            elif item.get('violation_type'):
+                local_violation_types = [str(item.get('violation_type')).strip()]
+
             violation_summary_text = (violation or {}).get('violation_summary') if isinstance(violation, dict) else ''
+            fallback_count = (
+                event.get('violation_count') if isinstance(event, dict) else None
+            ) or item.get('violation_count')
             violation_types, resolved_violation_count = _resolve_violation_types_and_count(
                 detections,
                 event=event,
                 violation_summary=violation_summary_text,
-                fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
+                fallback_count=fallback_count,
             )
+            if not violation_types and local_violation_types:
+                violation_types = local_violation_types
 
             if not annotated_path.exists():
                 try:
@@ -4423,9 +4527,18 @@ def api_report_recovery_execute():
                 except Exception:
                     pass
 
+            event_ts = event.get('timestamp') if isinstance(event, dict) else None
+            item_ts = item.get('timestamp')
+            if event_ts is not None:
+                ts_value = event_ts.isoformat() if hasattr(event_ts, 'isoformat') else str(event_ts)
+            elif isinstance(item_ts, str) and item_ts.strip():
+                ts_value = item_ts
+            else:
+                ts_value = _parse_report_id_timestamp(report_id).isoformat()
+
             violation_data = {
                 'report_id': report_id,
-                'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
+                'timestamp': ts_value,
                 'detections': detections,
                 'violation_types': violation_types,
                 'violation_count': resolved_violation_count,
@@ -4434,9 +4547,15 @@ def api_report_recovery_execute():
                 'violation_dir': str(violation_dir)
             }
 
+            device_id = (event.get('device_id') if isinstance(event, dict) else None)
+            if not device_id:
+                device_id = str(item.get('device_id') or '').strip() or (
+                    'recovery_pipeline_offline' if db_manager is None else 'recovery_pipeline'
+                )
+
             enqueued = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id=(event.get('device_id') if isinstance(event, dict) else None) or 'recovery_pipeline',
+                device_id=device_id,
                 report_id=report_id,
                 severity='CRITICAL'
             )
@@ -4445,7 +4564,11 @@ def api_report_recovery_execute():
                 skipped_count += 1
                 continue
 
-            db_manager.update_detection_status(report_id, 'pending')
+            if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+                try:
+                    db_manager.update_detection_status(report_id, 'pending')
+                except Exception as status_err:
+                    logger.warning(f"Could not update pending status for {report_id}: {status_err}")
             enqueued_count += 1
 
         except Exception as e:
@@ -4455,6 +4578,8 @@ def api_report_recovery_execute():
     return jsonify({
         'success': True,
         'mode': mode,
+        'offline_local_cache_mode': db_manager is None,
+        'local_mode_warning': local_mode_warning,
         'applied_nlp_provider_order': applied_order,
         'total_candidates': len(candidates),
         'enqueued': enqueued_count,
@@ -4703,9 +4828,6 @@ def api_pending_reports():
 @app.route('/api/report/<report_id>/generate-now', methods=['POST'])
 def api_generate_report_now(report_id):
     """Force a report into the processing queue with highest priority."""
-    if db_manager is None:
-        return jsonify({'success': False, 'error': 'Database not available'}), 503
-
     if violation_queue is None:
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
 
@@ -4713,44 +4835,68 @@ def api_generate_report_now(report_id):
         payload = request.get_json(silent=True) or {}
         force_reprocess = bool(payload.get('force', False))
 
-        event = db_manager.get_detection_event(report_id)
-        if not event:
-            return jsonify({'success': False, 'error': 'Report not found'}), 404
-
-        current_status = (event.get('status') or '').lower()
-        if current_status == 'completed' and not force_reprocess:
-            return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
-
-        if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
-            queue_stats = violation_queue.get_stats()
-            return jsonify({
-                'success': True,
-                'message': 'Report is already queued or generating',
-                'already_queued': True,
-                'report_id': report_id,
-                'queue_size': queue_stats.get('current_size', 0),
-                'worker_running': _is_queue_worker_alive()
-            })
-
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
+        report_html_path = violation_dir / 'report.html'
+        local_metadata = _read_local_violation_metadata(violation_dir)
 
-        violation = db_manager.get_violation(report_id)
+        event = None
+        violation = None
 
-        if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
-            try:
-                original_key = violation.get('original_image_key')
-                if original_key:
-                    blob = storage_manager.download_file_content(original_key)
-                    if blob:
-                        violation_dir.mkdir(parents=True, exist_ok=True)
-                        if isinstance(blob, str):
-                            blob = blob.encode('utf-8')
-                        original_path.write_bytes(blob)
-                        logger.info(f"Recovered original image from Supabase for report {report_id}")
-            except Exception as recover_err:
-                logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+        if db_manager is not None:
+            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+
+            current_status = str((event or {}).get('status') or '').lower()
+            if current_status == 'completed' and not force_reprocess:
+                return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
+
+            if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
+                queue_stats = violation_queue.get_stats()
+                return jsonify({
+                    'success': True,
+                    'message': 'Report is already queued or generating',
+                    'already_queued': True,
+                    'report_id': report_id,
+                    'queue_size': queue_stats.get('current_size', 0),
+                    'worker_running': _is_queue_worker_alive()
+                })
+
+            if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
+                try:
+                    original_key = violation.get('original_image_key')
+                    if original_key:
+                        blob = storage_manager.download_file_content(original_key)
+                        if blob:
+                            violation_dir.mkdir(parents=True, exist_ok=True)
+                            if isinstance(blob, str):
+                                blob = blob.encode('utf-8')
+                            original_path.write_bytes(blob)
+                            logger.info(f"Recovered original image from Supabase for report {report_id}")
+                except Exception as recover_err:
+                    logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+        else:
+            if report_html_path.exists() and not force_reprocess:
+                return jsonify({
+                    'success': True,
+                    'message': 'Local report is already completed',
+                    'already_completed': True,
+                    'offline_local_cache_mode': True,
+                    'report_id': report_id,
+                })
+
+        if event is None and not violation_dir.exists():
+            return jsonify({'success': False, 'error': 'Report not found'}), 404
+
+        if event is None and report_html_path.exists() and not force_reprocess:
+            return jsonify({
+                'success': True,
+                'message': 'Local report is already completed',
+                'already_completed': True,
+                'offline_local_cache_mode': db_manager is None,
+                'report_id': report_id,
+            })
 
         if not original_path.exists():
             return jsonify({
@@ -4761,16 +4907,24 @@ def api_generate_report_now(report_id):
         detections = []
         violation_types = []
 
-        if violation and isinstance(violation.get('detection_data'), dict):
+        if isinstance(violation, dict) and isinstance(violation.get('detection_data'), dict):
             detections = violation['detection_data'].get('detections', []) or []
 
-        violation_summary_text = violation.get('violation_summary') if isinstance(violation, dict) else ''
+        local_violation_type = str(local_metadata.get('violation_type') or '').strip()
+        local_violation_types = [local_violation_type] if local_violation_type else []
+
+        violation_summary_text = violation.get('violation_summary') if isinstance(violation, dict) else local_violation_type
+        fallback_count = (
+            event.get('violation_count') if isinstance(event, dict) else None
+        ) or local_metadata.get('violation_count') or local_metadata.get('detection_count')
         violation_types, resolved_violation_count = _resolve_violation_types_and_count(
             detections,
             event=event,
             violation_summary=violation_summary_text,
-            fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
+            fallback_count=fallback_count,
         )
+        if not violation_types and local_violation_types:
+            violation_types = local_violation_types
 
         if not annotated_path.exists():
             try:
@@ -4784,9 +4938,29 @@ def api_generate_report_now(report_id):
         if not ensure_queue_worker_running():
             return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
+        if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):
+            try:
+                db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=_parse_report_id_timestamp(report_id).isoformat(),
+                    person_count=0,
+                    violation_count=max(1, int(resolved_violation_count or 1)),
+                    severity='HIGH',
+                    status='pending'
+                )
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else event
+            except Exception as insert_err:
+                logger.warning(f"Could not create pending detection event for {report_id}: {insert_err}")
+
+        event_ts = event.get('timestamp') if isinstance(event, dict) else None
+        if event_ts is not None:
+            timestamp_value = event_ts.isoformat() if hasattr(event_ts, 'isoformat') else str(event_ts)
+        else:
+            timestamp_value = _parse_report_id_timestamp(report_id).isoformat()
+
         violation_data = {
             'report_id': report_id,
-            'timestamp': event.get('timestamp').isoformat() if event.get('timestamp') else datetime.now().isoformat(),
+            'timestamp': timestamp_value,
             'detections': detections,
             'violation_types': violation_types,
             'violation_count': resolved_violation_count,
@@ -4795,9 +4969,15 @@ def api_generate_report_now(report_id):
             'violation_dir': str(violation_dir)
         }
 
+        device_id = (event.get('device_id') if isinstance(event, dict) else None)
+        if not device_id:
+            device_id = str(local_metadata.get('device_id') or '').strip() or (
+                'manual_regenerate_offline' if db_manager is None else f'manual_regenerate_{report_id}'
+            )
+
         enqueued = violation_queue.enqueue(
             violation_data=violation_data,
-            device_id=event.get('device_id') or f'manual_regenerate_{report_id}',
+            device_id=device_id,
             report_id=report_id,
             severity='CRITICAL'
         )
@@ -4812,7 +4992,11 @@ def api_generate_report_now(report_id):
                 'worker_running': _is_queue_worker_alive()
             }), 409
 
-        db_manager.update_detection_status(report_id, 'pending')
+        if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            try:
+                db_manager.update_detection_status(report_id, 'pending')
+            except Exception as status_err:
+                logger.warning(f"Could not update pending status for {report_id}: {status_err}")
 
         queue_stats = violation_queue.get_stats()
         return jsonify({
@@ -4820,6 +5004,8 @@ def api_generate_report_now(report_id):
             'message': 'Report moved to the front of queue for generation' + (' (reprocess mode)' if force_reprocess else ''),
             'report_id': report_id,
             'force_reprocess': force_reprocess,
+            'offline_local_cache_mode': db_manager is None,
+            'db_event_available': event is not None,
             'queue_size': queue_stats.get('current_size', 0),
             'worker_running': _is_queue_worker_alive()
         })
@@ -7017,6 +7203,20 @@ def _get_provision_secret_from_request() -> str:
     ).strip()
 
 
+def _get_server_provisioning_credentials() -> Tuple[Dict[str, str], List[str]]:
+    """Return server provisioning credentials and which required keys are missing/placeholder."""
+    required_keys = ('SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')
+    credentials = {
+        key: str(os.getenv(key) or '').strip()
+        for key in required_keys
+    }
+    missing_keys = [
+        key for key, value in credentials.items()
+        if _local_mode_is_placeholder_secret(value)
+    ]
+    return credentials, missing_keys
+
+
 def _issue_installer_redirect(machine_id: str) -> Response:
     installer_token = _issue_bootstrap_token(
         machine_id,
@@ -7074,12 +7274,25 @@ def _resolve_installer_template_context(
     )
     installer_version = commit_hint[:12] if commit_hint else datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
 
+    server_credentials, missing_keys = _get_server_provisioning_credentials()
+    if missing_keys:
+        installer_supabase_url = ''
+        installer_supabase_db_url = ''
+        installer_supabase_service_key = ''
+    else:
+        installer_supabase_url = _sanitize_batch_template_value(server_credentials.get('SUPABASE_URL', ''))
+        installer_supabase_db_url = _sanitize_batch_template_value(server_credentials.get('SUPABASE_DB_URL', ''))
+        installer_supabase_service_key = _sanitize_batch_template_value(server_credentials.get('SUPABASE_SERVICE_ROLE_KEY', ''))
+
     return {
         '__LUNA_REPO_ZIP_URL__': repo_zip_url,
         '__LUNA_SOURCE_ROOT__': source_root,
         '__LUNA_CLOUD_URL__': cloud_url,
         '__LUNA_INSTALLER_VERSION__': installer_version,
         '__LUNA_MACHINE_ID__': machine_id,
+        '__LUNA_SUPABASE_URL__': installer_supabase_url,
+        '__LUNA_SUPABASE_DB_URL__': installer_supabase_db_url,
+        '__LUNA_SUPABASE_SERVICE_ROLE_KEY__': installer_supabase_service_key,
     }
 
 
@@ -7335,6 +7548,16 @@ def provision_status():
 
     current_status = str(device.get('status') or 'pending').strip().lower()
     if current_status in ('approved', 'provisioned'):
+        _, missing_keys = _get_server_provisioning_credentials()
+        if missing_keys:
+            return jsonify({
+                'status': current_status,
+                'machine_id': machine_id,
+                'bootstrap_exchange_ready': False,
+                'error': 'Provisioning credentials are not configured on the cloud server.',
+                'missing_env_keys': missing_keys,
+            }), 503
+
         bootstrap_token = _issue_bootstrap_token(
             machine_id,
             'provision_exchange',
@@ -7348,6 +7571,7 @@ def provision_status():
         return jsonify({
             'status': current_status,
             'machine_id': machine_id,
+            'bootstrap_exchange_ready': True,
             'bootstrap_token': bootstrap_token,
             'installer_token': installer_token,
             'bootstrap_exchange_endpoint': '/api/provision/bootstrap-exchange',
@@ -7395,12 +7619,16 @@ def provision_bootstrap_exchange():
     if not token_ok:
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
 
-    db_url = os.getenv('SUPABASE_DB_URL', '').strip()
-    supa_url = os.getenv('SUPABASE_URL', '').strip()
-    supa_service = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+    credentials, missing_keys = _get_server_provisioning_credentials()
+    if missing_keys:
+        return jsonify({
+            'error': 'Provisioning credentials are not configured on the server',
+            'missing_env_keys': missing_keys,
+        }), 503
 
-    if not db_url or not supa_url or not supa_service:
-        return jsonify({'error': 'Provisioning credentials are not configured on the server'}), 503
+    db_url = credentials.get('SUPABASE_DB_URL', '')
+    supa_url = credentials.get('SUPABASE_URL', '')
+    supa_service = credentials.get('SUPABASE_SERVICE_ROLE_KEY', '')
 
     device['status'] = 'provisioned'
     device['provisioned_at'] = datetime.now(timezone.utc).isoformat()

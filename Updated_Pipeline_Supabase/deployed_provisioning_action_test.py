@@ -14,7 +14,7 @@ os.environ['SERVE_FRONTEND'] = 'false'
 os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
 os.environ['BOOTSTRAP_TOKEN_SECRET'] = 'test-bootstrap-secret'
 os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
-os.environ['SUPABASE_URL'] = 'https://example.supabase.co'
+os.environ['SUPABASE_URL'] = 'https://projtest123.supabase.co'
 os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'
 
 from luna_app import (
@@ -128,7 +128,33 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(new_secret_status.status_code, 200)
         payload = new_secret_status.json or {}
         self.assertEqual(payload.get('status'), 'approved')
+        self.assertTrue(payload.get('bootstrap_exchange_ready'))
         self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
+
+    def test_approved_status_requires_server_provisioning_credentials(self):
+        machine_id = 'TEST-EDGE-CREDS-REQUIRED-001'
+        provision_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        with patch.dict(os.environ, {
+            'SUPABASE_DB_URL': '',
+            'SUPABASE_URL': '',
+            'SUPABASE_SERVICE_ROLE_KEY': '',
+        }, clear=False):
+            status_response = self.client.get(
+                f'/api/provision/status?machine_id={machine_id}&provision_secret={provision_secret}'
+            )
+
+        self.assertEqual(status_response.status_code, 503)
+        payload = status_response.json or {}
+        self.assertEqual(payload.get('status'), 'approved')
+        self.assertFalse(payload.get('bootstrap_exchange_ready'))
+        self.assertNotIn('bootstrap_token', payload)
+        self.assertNotIn('installer_token', payload)
+        self.assertEqual(
+            set(payload.get('missing_env_keys') or []),
+            {'SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'}
+        )
 
     def test_bootstrap_exchange_flow_is_one_time(self):
         machine_id = 'TEST-EDGE-BOOTSTRAP-001'
@@ -143,6 +169,7 @@ class ProvisioningActionTest(unittest.TestCase):
 
         # Requirement 1: status must not directly return credentials anymore.
         self.assertNotIn('credentials', payload)
+        self.assertTrue(payload.get('bootstrap_exchange_ready'))
         bootstrap_token = payload.get('bootstrap_token')
         self.assertTrue(bootstrap_token)
 
@@ -225,9 +252,15 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertNotIn('__LUNA_SOURCE_ROOT__', rendered_installer)
         self.assertNotIn('__LUNA_CLOUD_URL__', rendered_installer)
         self.assertNotIn('__LUNA_INSTALLER_VERSION__', rendered_installer)
+        self.assertNotIn('__LUNA_SUPABASE_URL__', rendered_installer)
+        self.assertNotIn('__LUNA_SUPABASE_DB_URL__', rendered_installer)
+        self.assertNotIn('__LUNA_SUPABASE_SERVICE_ROLE_KEY__', rendered_installer)
         self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
         self.assertIn('set "LUNA_CLOUD_URL=', rendered_installer)
+        self.assertIn('set "LUNA_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
+        self.assertIn('set "LUNA_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
+        self.assertIn('set "LUNA_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
         self.assertTrue(str(installer_download.headers.get('X-Luna-Installer-Version') or '').strip())
         self.assertEqual(
             installer_download.headers.get('Cache-Control'),

@@ -19,10 +19,16 @@ set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
 set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"
 set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
 set "LUNA_MACHINE_ID=__LUNA_MACHINE_ID__"
+set "LUNA_SUPABASE_URL=__LUNA_SUPABASE_URL__"
+set "LUNA_SUPABASE_DB_URL=__LUNA_SUPABASE_DB_URL__"
+set "LUNA_SUPABASE_SERVICE_ROLE_KEY=__LUNA_SUPABASE_SERVICE_ROLE_KEY__"
 set "LUNA_FORCE_SOURCE_REFRESH=false"
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
 if /I "!LUNA_MACHINE_ID!"=="__LUNA_MACHINE_ID__" set "LUNA_MACHINE_ID="
+if /I "!LUNA_SUPABASE_URL!"=="__LUNA_SUPABASE_URL__" set "LUNA_SUPABASE_URL="
+if /I "!LUNA_SUPABASE_DB_URL!"=="__LUNA_SUPABASE_DB_URL__" set "LUNA_SUPABASE_DB_URL="
+if /I "!LUNA_SUPABASE_SERVICE_ROLE_KEY!"=="__LUNA_SUPABASE_SERVICE_ROLE_KEY__" set "LUNA_SUPABASE_SERVICE_ROLE_KEY="
 
 echo Installer version: !LUNA_INSTALLER_VERSION!
 echo Installer source archive: !LUNA_REPO_ZIP_URL!
@@ -50,6 +56,20 @@ if not "!LUNA_MACHINE_ID!"=="" (
 )
 
 set "LUNA_APP_DIR=!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
+if exist "!LUNA_APP_DIR!\.env" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$envPath='!LUNA_APP_DIR!\.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
+      "$updates=[ordered]@{}; if(-not [string]::IsNullOrWhiteSpace($env:LUNA_CLOUD_URL)){ $updates['CLOUD_URL']=$env:LUNA_CLOUD_URL }; " ^
+      "if((-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_DB_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_SERVICE_ROLE_KEY))){ $updates['SUPABASE_URL']=$env:LUNA_SUPABASE_URL; $updates['SUPABASE_DB_URL']=$env:LUNA_SUPABASE_DB_URL; $updates['SUPABASE_SERVICE_ROLE_KEY']=$env:LUNA_SUPABASE_SERVICE_ROLE_KEY }; " ^
+      "if($updates.Count -gt 0){ $keyPattern='^\s*([A-Za-z_][A-Za-z0-9_]*)\s*='; $seen=@{}; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $keyPattern){ $k=$Matches[1]; if($updates.ContainsKey($k)){ if(-not $seen.ContainsKey($k)){ $lines[$i]=($k + '=' + $updates[$k]); $seen[$k]=$true } else { $lines[$i]='' } } } }; foreach($k in $updates.Keys){ if(-not $seen.ContainsKey($k)){ $lines += ($k + '=' + $updates[$k]) } }; $lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8 }"
+
+    if %errorlevel% neq 0 (
+        echo Warning: Could not pre-sync existing .env values from installer payload.
+    ) else (
+        echo Existing .env synchronized from installer payload before launch/reinstall decision.
+    )
+)
+
 if exist "!LUNA_APP_DIR!\start.bat" (
     echo.
     echo Existing local installation detected:
@@ -196,6 +216,23 @@ if not "!LUNA_CLOUD_URL!"=="" (
     )
 ) else (
     echo Warning: Installer cloud URL not provided by source endpoint. CLOUD_URL was left unchanged.
+)
+
+if not "!LUNA_SUPABASE_URL!"=="" if not "!LUNA_SUPABASE_DB_URL!"=="" if not "!LUNA_SUPABASE_SERVICE_ROLE_KEY!"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
+      "$updates=[ordered]@{ 'SUPABASE_URL'=$env:LUNA_SUPABASE_URL; 'SUPABASE_DB_URL'=$env:LUNA_SUPABASE_DB_URL; 'SUPABASE_SERVICE_ROLE_KEY'=$env:LUNA_SUPABASE_SERVICE_ROLE_KEY }; " ^
+      "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
+      "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
+
+    if %errorlevel% neq 0 (
+        echo Warning: Could not apply provisioned Supabase credentials into .env automatically.
+    ) else (
+        echo Supabase credentials applied from approved installer payload.
+    )
+) else (
+    echo Provisioned Supabase credentials were not embedded in this installer package.
+    echo Auto-provisioning will continue in the background at runtime.
 )
 
 echo.

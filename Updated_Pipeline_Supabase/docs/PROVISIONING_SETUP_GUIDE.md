@@ -37,7 +37,9 @@ Configure these environment variables on the cloud backend.
 2. Set the cloud URL in your local launcher/provisioning script to the deployed backend URL.
 3. Run provisioning from the edge machine.
 
-No Supabase credentials are embedded in the installer or distributed in cleartext at this stage.
+Installer delivery is token-gated. For approved devices, the one-time downloaded installer can include cloud URL and server-side Supabase credentials when those credentials are configured on the cloud backend.
+
+If credentials are not embedded (for example, cloud credentials not configured yet), runtime bootstrap exchange remains the fallback path.
 
 ## 3) Secure Provisioning Flow
 
@@ -53,11 +55,12 @@ The backend now enforces this sequence:
 6. After approval, status endpoint returns short-lived one-time tokens:
   - `bootstrap_token` for credential exchange
   - `installer_token` for installer download
-7. Local backend exchanges credentials through `POST /api/provision/bootstrap-exchange` with:
+7. Installer download (`/api/bootstrap/installer?token=...`) can now pre-seed local `.env` with cloud URL and Supabase credentials (when cloud credentials are configured).
+8. If installer did not include credentials, local backend exchanges credentials through `POST /api/provision/bootstrap-exchange` with:
   - `machine_id`
   - `provision_secret`
   - `bootstrap_token`
-8. Local backend writes received Supabase credentials into local `.env` and applies them to runtime.
+9. Local backend writes received Supabase credentials into local `.env` and applies them to runtime.
 
 Legacy/manual equivalent sequence remains available:
 
@@ -75,7 +78,7 @@ Legacy/manual equivalent sequence remains available:
   - `provision_secret`
   - `bootstrap_token`
 
-Credentials are returned only by the bootstrap-exchange endpoint, not by status polling.
+Status polling still does not return credentials directly.
 
 Re-issuing a `provision_secret` for an already approved device keeps its approved/provisioned status (it does not downgrade back to pending).
 

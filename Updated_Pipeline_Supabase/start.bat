@@ -90,10 +90,10 @@ REM Check if venv exists and activate it
 if not exist venv\Scripts\activate.bat (
     echo Virtual environment not found. Creating...
     py -3 -m venv venv
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         python -m venv venv
     )
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo Failed to create virtual environment!
         pause
         exit /b 1
@@ -128,10 +128,10 @@ if not exist "%VENV_PIP%" (
 
 REM Check if requirements need to be installed
 "%VENV_PIP%" show flask >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo Installing dependencies...
     "%VENV_PIP%" install -r requirements.txt
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo Failed to install dependencies!
         pause
         exit /b 1

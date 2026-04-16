@@ -31,11 +31,11 @@ echo.
 set "PYTHON_EXE="
 echo Checking for compatible Python installation...
 py -3 --version >nul 2>&1
-if %errorlevel% equ 0 (
+if not errorlevel 1 (
     set "PYTHON_EXE=py -3"
 ) else (
     python --version >nul 2>&1
-    if %errorlevel% equ 0 (
+    if not errorlevel 1 (
         set "PYTHON_EXE=python"
     )
 )
@@ -65,11 +65,11 @@ if "!PYTHON_EXE!"=="" (
 )
 
 where ollama >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo Ollama is missing. Launching Ollama installer...
     winget install --id Ollama.Ollama -e
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo.
         echo Falling back to direct download for Ollama...
         curl -L https://ollama.com/download/OllamaSetup.exe -o OllamaSetup.exe

@@ -1,4 +1,4 @@
-// Live Monitoring Page Component
+﻿// Live Monitoring Page Component
 const LivePage = {
     queueRefreshInterval: null,
     reliabilityRefreshInterval: null,
@@ -106,7 +106,7 @@ const LivePage = {
                                     <i class="fas fa-cloud-upload-alt" style="font-size: 4rem; color: var(--primary-color); opacity: 0.7; margin-bottom: 1rem;"></i>
                                     <p style="margin: 0; font-size: 1.1rem; font-weight: bold;">Drop image here or click to browse</p>
                                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.5rem;">
-                                        Supports JPG, PNG • Max 10MB
+                                        Supports JPG, PNG â€¢ Max 10MB
                                     </p>
                                 </label>
                             </div>
@@ -204,7 +204,7 @@ const LivePage = {
                                 <div>
                                     <h4 style="margin-bottom: 0.5rem;">Current Violation Rules:</h4>
                                     <ul style="margin-left: 1.5rem; margin-top: 1rem; line-height: 2;">
-                                        <li><strong>NO-Hardhat detection</strong> → Triggers violation immediately</li>
+                                        <li><strong>NO-Hardhat detection</strong> â†’ Triggers violation immediately</li>
                                         <li>Confidence threshold: 10%</li>
                                         <li>Detection quality: High-resolution frames</li>
                                         <li>Processing: GPU-accelerated inference</li>
@@ -2428,7 +2428,7 @@ const LivePage = {
                 return 'No failures in selected window';
             }
 
-            return pairs.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`).join(' • ');
+            return pairs.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`).join(' â€¢ ');
         }
 
         async function updateReliabilityStatus(options = {}) {
@@ -2683,6 +2683,7 @@ const LivePage = {
                     'Admin approval is required for this local mode access request.\n\n'
                     + (machineId ? `Machine ID: ${machineId}\n` : '')
                     + (adminPortalUrl ? `Admin portal: ${adminPortalUrl}\n\n` : '\n')
+                    + 'Note: this machine ID is for local backend cloud-sync approval. Installer download requests may show a separate installer ID.\n\n'
                     + 'Open the admin portal now?'
                 );
                 if (openAdminPortal && adminPortalUrl) {
@@ -2805,7 +2806,7 @@ const LivePage = {
                     }
 
                     provisionSecret = String(approvalResult.secret || '').trim();
-                    const requestMessage = `Installer approval request sent to admin for machine ${machineId}.`;
+                    const requestMessage = `Installer approval request sent to admin for installer ID ${machineId}.`;
                     setProviderStatus(`${requestMessage} Waiting for approval...`, 'warning');
 
                     if (autoRequestOnly) {
@@ -2934,9 +2935,9 @@ const LivePage = {
 
                     if (nativeOllamaExists) {
                         alert(
-                            '⚠ WARNING: LOCAL LUNA APP NOT FOUND ⚠\n\n'
-                            + '✅ Good news: We detected Ollama is ALREADY running natively on your device!\n\n'
-                            + '❌ Bad news: The LUNA Python Desktop App is NOT running on port 5000.\n\n'
+                            'âš  WARNING: LOCAL LUNA APP NOT FOUND âš \n\n'
+                            + 'âœ… Good news: We detected Ollama is ALREADY running natively on your device!\n\n'
+                            + 'âŒ Bad news: The LUNA Python Desktop App is NOT running on port 5000.\n\n'
                             + 'To use local mode, you must run the LUNA backend software so it can orchestrate AI and computer vision tasks.\n'
                             + '- If you already downloaded LUNA, run "start.bat" in its folder.\n'
                             + '- If not, click the Download Installer below. It will safely skip reinstalling Ollama and ONLY download the LUNA software.\n\n'
@@ -2962,10 +2963,10 @@ const LivePage = {
                         }
                     } else {
                         alert(
-                            '⚠ WARNING: LOCAL ENVIRONMENT NOT DETECTED RUNNING ⚠\n\n'
+                            'âš  WARNING: LOCAL ENVIRONMENT NOT DETECTED RUNNING âš \n\n'
                             + 'The Local Mode Checkup could not detect the LUNA Desktop App OR Ollama actively running on your physical device.\n\n'
-                            + '• If you already installed Ollama, please make sure the Ollama app is OPEN (check your system tray).\n'
-                            + '• To use offline local mode, you must construct the entire AI environment natively.\n\n'
+                            + 'â€¢ If you already installed Ollama, please make sure the Ollama app is OPEN (check your system tray).\n'
+                            + 'â€¢ To use offline local mode, you must construct the entire AI environment natively.\n\n'
                             + 'Please click the "Download Zero-Touch Installer" button below to fully automate installing Python 3.11, Ollama, and LUNA.\n'
                             + '(If you have an outdated Python version like 2.7, it will securely upgrade it to 3.10+).'
                         );
@@ -2981,7 +2982,7 @@ const LivePage = {
                                        <i class="fas fa-cloud-download-alt"></i> Check Approval and Download Installer
                                     </a>
                                     <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                        Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB.
+                                        Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB. Installer ID can differ from local backend machine ID shown in cloud-sync status.
                                     </div>
                                 </div>
                             `;
@@ -3014,13 +3015,13 @@ const LivePage = {
                         : 'You can download the fully automated Zero-Touch Local Installer to cleanly construct your AI environment.';
                     
                     alert(
-                        '⚠ WARNING: LOCAL ENVIRONMENT MISSING ⚠\n\n'
+                        'âš  WARNING: LOCAL ENVIRONMENT MISSING âš \n\n'
                         + 'Local Python Environment and Ollama were not found.\n\n'
                         + `${promptSuffix}\n\n`
                         + 'WHAT THIS SCRIPT DOES:\n'
-                        + '• Prompts you to install Python 3.11\n'
-                        + '• Prompts you to install Ollama\n'
-                        + '• Downloads the LUNA Backend System\n\n'
+                        + 'â€¢ Prompts you to install Python 3.11\n'
+                        + 'â€¢ Prompts you to install Ollama\n'
+                        + 'â€¢ Downloads the LUNA Backend System\n\n'
                         + `${REQUIRED_SPACE_NOTE}\n\n`
                         + 'A secure download link will now appear below the checkup button.'
                     );
@@ -3038,7 +3039,7 @@ const LivePage = {
                                    <i class="fas fa-cloud-download-alt"></i> Check Approval and Download Installer
                                 </a>
                                 <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary);">
-                                    Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB.
+                                    Approval request is sent to admin automatically. Click this button anytime to check approval and auto-download once approved. Space required: ~18GB. Installer ID can differ from local backend machine ID shown in cloud-sync status.
                                 </div>
                             </div>
                         `;
@@ -3637,3 +3638,4 @@ const LivePage = {
         }
     }
 };
+

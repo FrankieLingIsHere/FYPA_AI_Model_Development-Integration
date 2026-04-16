@@ -18,9 +18,11 @@ set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
 set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
 set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"
 set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
+set "LUNA_MACHINE_ID=__LUNA_MACHINE_ID__"
 set "LUNA_FORCE_SOURCE_REFRESH=false"
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
+if /I "!LUNA_MACHINE_ID!"=="__LUNA_MACHINE_ID__" set "LUNA_MACHINE_ID="
 
 echo Installer version: !LUNA_INSTALLER_VERSION!
 echo Installer source archive: !LUNA_REPO_ZIP_URL!
@@ -34,6 +36,17 @@ set "LOCAL_LAUNCHER_BAT=%INSTALL_DIR%\Start_LUNA_Local_Mode.bat"
 copy /Y "%~f0" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
 if errorlevel 1 (
     echo Warning: Could not update local launcher copy at !LOCAL_LAUNCHER_BAT!
+)
+
+if not "!LUNA_MACHINE_ID!"=="" (
+    set "LUNA_STATE_DIR_PATH=C:\LUNA_System\LUNA_LocalState"
+    if not exist "!LUNA_STATE_DIR_PATH!" mkdir "!LUNA_STATE_DIR_PATH!"
+    >"!LUNA_STATE_DIR_PATH!\machine_id.txt" echo !LUNA_MACHINE_ID!
+    if errorlevel 1 (
+        echo Warning: Could not seed local machine ID into !LUNA_STATE_DIR_PATH!\machine_id.txt
+    ) else (
+        echo Seeded local machine ID from approved installer token: !LUNA_MACHINE_ID!
+    )
 )
 
 set "LUNA_APP_DIR=!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"

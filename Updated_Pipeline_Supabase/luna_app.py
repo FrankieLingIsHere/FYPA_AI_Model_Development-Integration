@@ -3614,8 +3614,16 @@ def _ensure_startup_local_auto_provision_worker() -> None:
 
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
 def api_local_mode_provisioning_status():
-    cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
     state = _local_mode_load_provision_state()
+    cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
+    state_cloud_url = _local_mode_normalize_cloud_url(str(state.get('cloud_url') or '').strip())
+    if (
+        (not cloud_url or _local_mode_cloud_url_is_placeholder(cloud_url))
+        and state_cloud_url
+        and not _local_mode_cloud_url_is_placeholder(state_cloud_url)
+    ):
+        cloud_url = state_cloud_url
+
     machine_id = str(state.get('machine_id') or '').strip() or _local_mode_get_or_create_machine_id()
     raw_status = str(state.get('status') or 'idle').strip().lower()
     normalized_status = 'pending_approval' if raw_status == 'pending' else raw_status
@@ -3654,6 +3662,13 @@ def api_local_mode_auto_provisioning():
             'error': 'CLOUD_URL is not configured. Auto-provisioning cannot contact the cloud dashboard.',
             'hint': 'Set CLOUD_URL in local .env to your deployed cloud dashboard URL.',
         }), 400
+
+    if not _local_mode_cloud_url_is_placeholder(cloud_url):
+        try:
+            _local_mode_upsert_env_values({'CLOUD_URL': cloud_url})
+            os.environ['CLOUD_URL'] = cloud_url
+        except Exception as cloud_url_err:
+            logger.warning(f"Failed to persist CLOUD_URL during local auto-provision: {cloud_url_err}")
 
     machine_id = _local_mode_get_or_create_machine_id()
     admin_portal_url = f"{cloud_url}/admin/devices"
@@ -7034,7 +7049,10 @@ def _resolve_installer_cloud_url(request_host_url: str = '') -> str:
     return normalized_explicit
 
 
-def _resolve_installer_template_context(request_host_url: str = '') -> Dict[str, str]:
+def _resolve_installer_template_context(
+    request_host_url: str = '',
+    installer_machine_id: str = '',
+) -> Dict[str, str]:
     repo_zip_url = _sanitize_batch_template_value(
         os.getenv('INSTALLER_REPO_ZIP_URL', DEFAULT_INSTALLER_REPO_ZIP_URL)
     ) or DEFAULT_INSTALLER_REPO_ZIP_URL
@@ -7042,6 +7060,11 @@ def _resolve_installer_template_context(request_host_url: str = '') -> Dict[str,
         os.getenv('INSTALLER_SOURCE_ROOT', DEFAULT_INSTALLER_SOURCE_ROOT)
     ) or DEFAULT_INSTALLER_SOURCE_ROOT
     cloud_url = _resolve_installer_cloud_url(request_host_url)
+    machine_id = _sanitize_batch_template_value(installer_machine_id)
+    if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+        machine_id = ''
+    if machine_id.lower() == 'admin-installer':
+        machine_id = ''
 
     commit_hint = (
         str(os.getenv('RAILWAY_GIT_COMMIT_SHA', '')).strip()
@@ -7056,12 +7079,20 @@ def _resolve_installer_template_context(request_host_url: str = '') -> Dict[str,
         '__LUNA_SOURCE_ROOT__': source_root,
         '__LUNA_CLOUD_URL__': cloud_url,
         '__LUNA_INSTALLER_VERSION__': installer_version,
+        '__LUNA_MACHINE_ID__': machine_id,
     }
 
 
-def _render_installer_batch_script(template_path: Path, request_host_url: str = '') -> Tuple[str, str]:
+def _render_installer_batch_script(
+    template_path: Path,
+    request_host_url: str = '',
+    installer_machine_id: str = '',
+) -> Tuple[str, str]:
     content = template_path.read_text(encoding='utf-8')
-    context = _resolve_installer_template_context(request_host_url=request_host_url)
+    context = _resolve_installer_template_context(
+        request_host_url=request_host_url,
+        installer_machine_id=installer_machine_id,
+    )
     for token, replacement in context.items():
         content = content.replace(token, replacement)
     return content, context.get('__LUNA_INSTALLER_VERSION__', 'unknown')
@@ -7442,6 +7473,8 @@ def download_bootstrap_installer():
     if not token_ok or token_payload is None:
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
 
+    installer_machine_id = str((token_payload or {}).get('machine_id') or '').strip()
+
     installer_name = 'LUNA_LocalInstaller.bat'
     installer_dir = Path(app.static_folder or 'frontend') / 'static'
     installer_path = installer_dir / installer_name
@@ -7452,6 +7485,7 @@ def download_bootstrap_installer():
         installer_content, installer_version = _render_installer_batch_script(
             installer_path,
             request_host_url=request.host_url,
+            installer_machine_id=installer_machine_id,
         )
     except Exception as render_exc:
         logger.error(f"Failed to render installer template: {render_exc}")

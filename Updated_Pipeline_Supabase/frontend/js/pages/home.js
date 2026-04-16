@@ -5,6 +5,8 @@ const HomePage = {
     _timezoneChangeHandler: null,
     _provisioningHandler: null,
     _runLocalCheckupHandler: null,
+    _redownloadInstallerHandler: null,
+    _latestProvisioningStatus: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
 
@@ -55,6 +57,9 @@ const HomePage = {
                         <div class="home-local-mode-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem;">
                             <button id="homeRunLocalCheckupBtn" class="btn btn-primary" type="button">
                                 <i class="fas fa-wifi"></i> Local Mode Checkup
+                            </button>
+                            <button id="homeRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: none;">
+                                <i class="fas fa-download"></i> Re-download Installer BAT
                             </button>
                         </div>
                     </div>
@@ -154,6 +159,31 @@ const HomePage = {
             runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
         }
 
+        const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
+        if (redownloadInstallerBtn) {
+            this._redownloadInstallerHandler = () => {
+                const latest = this._latestProvisioningStatus || {};
+                const status = String(latest.status || '').toLowerCase();
+                const machineId = String(latest.machineId || latest.machine_id || '').trim();
+                const isProvisioned = status === 'provisioned' || status === 'credentials_present';
+
+                if (!isProvisioned || !machineId) {
+                    const message = 'Installer re-download is available after this device is fully provisioned.';
+                    if (typeof NotificationManager !== 'undefined') {
+                        NotificationManager.warning(message);
+                    } else {
+                        alert(message);
+                    }
+                    return;
+                }
+
+                window.location.assign(
+                    `${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?machine_id=${encodeURIComponent(machineId)}`
+                );
+            };
+            redownloadInstallerBtn.addEventListener('click', this._redownloadInstallerHandler);
+        }
+
         if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.get === 'function') {
             this.renderProvisioningStatus(window.PPEProvisioningStatus.get());
         } else {
@@ -199,6 +229,13 @@ const HomePage = {
         }
         this._runLocalCheckupHandler = null;
 
+        const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
+        if (redownloadInstallerBtn && this._redownloadInstallerHandler) {
+            redownloadInstallerBtn.removeEventListener('click', this._redownloadInstallerHandler);
+        }
+        this._redownloadInstallerHandler = null;
+        this._latestProvisioningStatus = null;
+
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);
             this._fallbackInterval = null;
@@ -232,14 +269,29 @@ const HomePage = {
         const badgeEl = document.getElementById('homeProvisionBadge');
         const messageEl = document.getElementById('homeProvisionMessage');
         const machineEl = document.getElementById('homeProvisionMachine');
+        const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
 
         if (!badgeEl || !messageEl || !machineEl) {
             return;
         }
 
+        this._latestProvisioningStatus = statusPayload && typeof statusPayload === 'object'
+            ? { ...statusPayload }
+            : null;
+
         const status = String((statusPayload && statusPayload.status) || 'idle').toLowerCase();
         const machineId = String((statusPayload && (statusPayload.machineId || statusPayload.machine_id)) || '').trim();
         const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
+        const isProvisioned = status === 'provisioned' || status === 'credentials_present';
+
+        if (redownloadInstallerBtn) {
+            const canRedownload = isProvisioned && !!machineId;
+            redownloadInstallerBtn.style.display = canRedownload ? 'inline-flex' : 'none';
+            redownloadInstallerBtn.disabled = !canRedownload;
+            redownloadInstallerBtn.title = canRedownload
+                ? 'Download a fresh one-time installer link'
+                : 'Installer re-download is available after provisioning completes.';
+        }
 
         badgeEl.className = 'badge badge-info';
         machineEl.textContent = '';

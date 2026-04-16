@@ -292,6 +292,78 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(pending_resp.status_code, 403)
         pending_resp.close()
 
+    def test_local_mode_status_recovers_canonical_machine_id_from_saved_secret(self):
+        canonical_machine_id = 'Web-897DE863'
+        drifted_machine_id = 'Edge-405D88DCC9E4'
+        provision_secret = self._request_device(canonical_machine_id)
+
+        LOCAL_MODE_MACHINE_ID_FILE.write_text(drifted_machine_id, encoding='utf-8')
+        LOCAL_MODE_PROVISION_STATE_FILE.write_text(
+            json.dumps({
+                'machine_id': drifted_machine_id,
+                'provision_secret': provision_secret,
+                'status': 'pending_approval',
+                'requested_at': '2026-04-16T00:00:00+00:00',
+                'updated_at': '2026-04-16T00:00:00+00:00',
+            }),
+            encoding='utf-8',
+        )
+
+        response = self.client.get('/api/local-mode/provisioning/status')
+        self.assertEqual(response.status_code, 200)
+        payload = response.json or {}
+        self.assertEqual(payload.get('machine_id'), canonical_machine_id)
+
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(str(persisted.get('machine_id') or ''), canonical_machine_id)
+        self.assertEqual(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8').strip(), canonical_machine_id)
+
+    def test_installer_request_recovers_from_local_state_machine_id_drift(self):
+        canonical_machine_id = 'Web-897DE863'
+        drifted_machine_id = 'Edge-405D88DCC9E4'
+        provision_secret = self._request_device(canonical_machine_id)
+        self._approve_device(canonical_machine_id)
+
+        LOCAL_MODE_MACHINE_ID_FILE.write_text(drifted_machine_id, encoding='utf-8')
+        LOCAL_MODE_PROVISION_STATE_FILE.write_text(
+            json.dumps({
+                'machine_id': drifted_machine_id,
+                'provision_secret': provision_secret,
+                'status': 'approved',
+                'requested_at': '2026-04-16T00:00:00+00:00',
+                'updated_at': '2026-04-16T00:00:00+00:00',
+            }),
+            encoding='utf-8',
+        )
+
+        installer_redirect = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={drifted_machine_id}',
+            follow_redirects=False,
+        )
+        self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        location = str(installer_redirect.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+        installer_redirect.close()
+
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(str(persisted.get('machine_id') or ''), canonical_machine_id)
+        self.assertEqual(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8').strip(), canonical_machine_id)
+
+    def test_installer_request_can_resolve_machine_id_from_provision_secret(self):
+        canonical_machine_id = 'Web-897DE863'
+        wrong_machine_id = 'Edge-405D88DCC9E4'
+        provision_secret = self._request_device(canonical_machine_id)
+        self._approve_device(canonical_machine_id)
+
+        installer_redirect = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={wrong_machine_id}&provision_secret={provision_secret}',
+            follow_redirects=False,
+        )
+        self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        location = str(installer_redirect.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+        installer_redirect.close()
+
     def test_local_auto_provision_requires_cloud_url(self):
         previous_cloud_url = os.environ.pop('CLOUD_URL', None)
         try:

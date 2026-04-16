@@ -3427,8 +3427,21 @@ def _local_mode_get_or_create_machine_id() -> str:
         return existing
 
     machine_id = f"Edge-{secrets.token_hex(6).upper()}"
-    LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
+    _local_mode_write_machine_id(machine_id)
     return machine_id
+
+
+def _local_mode_write_machine_id(machine_id: str) -> None:
+    normalized = str(machine_id or '').strip()
+    if not normalized:
+        return
+    if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', normalized):
+        return
+
+    try:
+        LOCAL_MODE_MACHINE_ID_FILE.write_text(normalized, encoding='utf-8')
+    except Exception as machine_id_err:
+        logger.warning(f"Unable to persist local machine_id '{normalized}': {machine_id_err}")
 
 
 def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = Path('.env')) -> None:
@@ -3628,6 +3641,16 @@ def api_local_mode_provisioning_status():
         cloud_url = state_cloud_url
 
     machine_id = str(state.get('machine_id') or '').strip() or _local_mode_get_or_create_machine_id()
+    provision_secret = str(state.get('provision_secret') or '').strip()
+    if provision_secret:
+        resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
+        if resolved_machine_id and resolved_machine_id != machine_id:
+            machine_id = resolved_machine_id
+            state['machine_id'] = machine_id
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            _local_mode_save_provision_state(state)
+            _local_mode_write_machine_id(machine_id)
+
     raw_status = str(state.get('status') or 'idle').strip().lower()
     normalized_status = 'pending_approval' if raw_status == 'pending' else raw_status
 
@@ -3673,7 +3696,23 @@ def api_local_mode_auto_provisioning():
         except Exception as cloud_url_err:
             logger.warning(f"Failed to persist CLOUD_URL during local auto-provision: {cloud_url_err}")
 
-    machine_id = _local_mode_get_or_create_machine_id()
+    state = _local_mode_load_provision_state()
+    state_machine_id = str(state.get('machine_id') or '').strip()
+    if state_machine_id and re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', state_machine_id):
+        machine_id = state_machine_id
+    else:
+        machine_id = _local_mode_get_or_create_machine_id()
+
+    provision_secret = str(state.get('provision_secret') or '').strip()
+    if provision_secret:
+        resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
+        if resolved_machine_id and resolved_machine_id != machine_id:
+            machine_id = resolved_machine_id
+            state['machine_id'] = machine_id
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            _local_mode_save_provision_state(state)
+            _local_mode_write_machine_id(machine_id)
+
     admin_portal_url = f"{cloud_url}/admin/devices"
 
     if _local_mode_has_supabase_credentials():
@@ -3685,9 +3724,6 @@ def api_local_mode_auto_provisioning():
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
         })
-
-    state = _local_mode_load_provision_state()
-    provision_secret = str(state.get('provision_secret') or '').strip()
 
     def _request_new_secret() -> Tuple[bool, str, str]:
         try:
@@ -7121,6 +7157,111 @@ def _is_valid_provision_secret(device: Dict[str, Any], supplied_secret: str) -> 
     return hmac.compare_digest(expected_hash, supplied_hash)
 
 
+def _find_machine_id_by_provision_secret_hash(
+    provision_secret_hash: str,
+    devices: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    target_hash = str(provision_secret_hash or '').strip()
+    if not target_hash:
+        return ''
+
+    records = devices if isinstance(devices, dict) else _load_pending_devices()
+    for machine_id, record in records.items():
+        if not isinstance(record, dict):
+            continue
+        record_hash = str(record.get('provision_secret_hash') or '').strip()
+        if record_hash and hmac.compare_digest(record_hash, target_hash):
+            return str(machine_id).strip()
+    return ''
+
+
+def _find_machine_id_by_provision_secret(
+    provision_secret: str,
+    devices: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    supplied_secret = str(provision_secret or '').strip()
+    if not supplied_secret:
+        return ''
+    return _find_machine_id_by_provision_secret_hash(_hash_provision_secret(supplied_secret), devices=devices)
+
+
+def _resolve_pending_device(
+    machine_id: str,
+    devices: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    requested_machine_id = str(machine_id or '').strip()
+    if not requested_machine_id:
+        return '', None
+
+    records = devices if isinstance(devices, dict) else _load_pending_devices()
+
+    direct = records.get(requested_machine_id)
+    if isinstance(direct, dict):
+        return requested_machine_id, direct
+
+    requested_lower = requested_machine_id.lower()
+    for existing_machine_id, record in records.items():
+        if not isinstance(record, dict):
+            continue
+        if str(existing_machine_id).strip().lower() == requested_lower:
+            resolved_machine_id = str(existing_machine_id).strip()
+            return resolved_machine_id, record
+
+    if '-' in requested_machine_id:
+        prefix, suffix = requested_machine_id.split('-', 1)
+        prefix_lower = prefix.lower()
+        alias_candidates: List[str] = []
+        if prefix_lower == 'edge':
+            alias_candidates.append(f'Web-{suffix}')
+        elif prefix_lower == 'web':
+            alias_candidates.append(f'Edge-{suffix}')
+
+        for candidate in alias_candidates:
+            candidate_record = records.get(candidate)
+            if isinstance(candidate_record, dict):
+                return candidate, candidate_record
+
+            candidate_lower = candidate.lower()
+            for existing_machine_id, record in records.items():
+                if not isinstance(record, dict):
+                    continue
+                if str(existing_machine_id).strip().lower() == candidate_lower:
+                    resolved_machine_id = str(existing_machine_id).strip()
+                    return resolved_machine_id, record
+
+    return '', None
+
+
+def _resolve_machine_id_from_local_provision_state(
+    requested_machine_id: str,
+    devices: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    requested = str(requested_machine_id or '').strip()
+    if not requested:
+        return ''
+
+    local_state = _local_mode_load_provision_state()
+    local_machine_id = str(local_state.get('machine_id') or '').strip()
+    local_secret = str(local_state.get('provision_secret') or '').strip()
+    if not local_machine_id or not local_secret:
+        return ''
+
+    if local_machine_id != requested:
+        return ''
+
+    resolved_machine_id = _find_machine_id_by_provision_secret(local_secret, devices=devices)
+    if not resolved_machine_id:
+        return ''
+
+    if resolved_machine_id != local_machine_id:
+        local_state['machine_id'] = resolved_machine_id
+        local_state['updated_at'] = datetime.now(timezone.utc).isoformat()
+        _local_mode_save_provision_state(local_state)
+        _local_mode_write_machine_id(resolved_machine_id)
+
+    return resolved_machine_id
+
+
 def _issue_bootstrap_token(machine_id: str, purpose: str, ttl_seconds: int) -> str:
     now_epoch = int(time.time())
     payload = {
@@ -7659,7 +7800,21 @@ def request_bootstrap_installer():
             return jsonify({'error': 'Invalid machine_id format'}), 400
 
         devices = _load_pending_devices()
-        device = devices.get(machine_id)
+        resolved_machine_id, device = _resolve_pending_device(machine_id, devices=devices)
+
+        if not device and provision_secret:
+            resolved_from_secret = _find_machine_id_by_provision_secret(provision_secret, devices=devices)
+            if resolved_from_secret:
+                resolved_machine_id, device = _resolve_pending_device(resolved_from_secret, devices=devices)
+
+        if not device:
+            resolved_from_local_state = _resolve_machine_id_from_local_provision_state(
+                machine_id,
+                devices=devices,
+            )
+            if resolved_from_local_state:
+                resolved_machine_id, device = _resolve_pending_device(resolved_from_local_state, devices=devices)
+
         if not device:
             return jsonify({'error': 'Unknown machine_id'}), 404
 
@@ -7672,11 +7827,11 @@ def request_bootstrap_installer():
 
         if not provision_secret:
             logger.info(
-                f"Issuing installer token for approved/provisioned machine_id={machine_id} "
+                f"Issuing installer token for approved/provisioned machine_id={resolved_machine_id} "
                 "without provision_secret (recovery convenience path)."
             )
 
-        return _issue_installer_redirect(machine_id)
+        return _issue_installer_redirect(resolved_machine_id)
 
     if provision_secret:
         return jsonify({'error': 'machine_id is required when provision_secret is provided'}), 400

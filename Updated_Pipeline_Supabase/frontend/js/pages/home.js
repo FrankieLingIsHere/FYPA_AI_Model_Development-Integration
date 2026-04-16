@@ -300,6 +300,10 @@ const HomePage = {
             badgeEl.className = 'badge badge-success';
             badgeEl.textContent = 'Provisioned';
             messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
+        } else if (status === 'credentials_present') {
+            badgeEl.className = 'badge badge-success';
+            badgeEl.textContent = 'Credentials Detected';
+            messageEl.textContent = 'Cloud credentials are already configured on this backend. Local checkup is optional unless you need a new provisioning cycle.';
         } else if (status === 'pending_approval') {
             badgeEl.className = 'badge badge-warning';
             badgeEl.textContent = 'Pending Approval';

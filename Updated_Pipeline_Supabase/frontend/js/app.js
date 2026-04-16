@@ -63,15 +63,14 @@ function notifyApp(message, type = 'info') {
 }
 
 function normalizeProvisioningStatus(rawStatus, credentialsPresent) {
-    if (credentialsPresent) {
-        return 'provisioned';
-    }
-
     const normalized = String(rawStatus || '').trim().toLowerCase();
     if (normalized === 'pending' || normalized === 'pending_approval') {
         return 'pending_approval';
     }
-    if (normalized === 'credentials_present' || normalized === 'provisioned') {
+    if (normalized === 'credentials_present') {
+        return 'credentials_present';
+    }
+    if (normalized === 'provisioned') {
         return 'provisioned';
     }
     if (normalized === 'rejected') {
@@ -81,7 +80,10 @@ function normalizeProvisioningStatus(rawStatus, credentialsPresent) {
         return 'error';
     }
     if (normalized === 'idle') {
-        return 'idle';
+        return credentialsPresent ? 'credentials_present' : 'idle';
+    }
+    if (credentialsPresent) {
+        return 'credentials_present';
     }
     return normalized || 'idle';
 }
@@ -160,6 +162,8 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
 
     if (nextState.status === 'provisioned') {
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
+    } else if (nextState.status === 'credentials_present') {
+        notifyApp('Cloud credentials are already configured on this backend.', 'info');
     } else if (nextState.status === 'rejected') {
         notifyApp('Local mode approval request was rejected. Contact admin and rerun checkup.', 'error');
     } else if (nextState.status === 'pending_approval') {

@@ -41,67 +41,79 @@
         </div>
     </div>
 
-    <!-- Navigation -->
-    <nav class="navbar">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <i class="fas fa-hard-hat"></i>
-                <span>PPE Safety Monitor</span>
-            </div>
-            <button id="navToggle" class="nav-toggle" type="button" aria-label="Toggle navigation menu" aria-expanded="false">
-                <i class="fas fa-bars"></i>
-            </button>
-            <button id="navMoreToggle" class="nav-more-toggle" type="button" aria-label="Open quick settings" aria-expanded="false">
-                <i class="fas fa-ellipsis-vertical"></i>
-            </button>
-            <div id="networkStatusBadge" class="network-badge network-good" title="Network quality">
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <a href="#home" class="sidebar-header" style="text-decoration: none; color: inherit; cursor: pointer;">
+            <i class="fas fa-hard-hat sidebar-logo"></i>
+            <span class="sidebar-title">PPE Safety</span>
+        </a>
+
+        <ul class="sidebar-menu sidebar-main">
+            <li>
+                <a href="#home" class="sidebar-link active" data-page="home">
+                    <i class="fas fa-home"></i>
+                    <span>Home</span>
+                </a>
+            </li>
+            <li>
+                <a href="#live" class="sidebar-link" data-page="live">
+                    <i class="fas fa-video"></i>
+                    <span>Live Monitor</span>
+                </a>
+            </li>
+            <li>
+                <a href="#settings" class="sidebar-link" data-page="settings">
+                    <i class="fas fa-gear"></i>
+                    <span>Settings</span>
+                </a>
+            </li>
+            <li>
+                <a href="#reports" class="sidebar-link" data-page="reports">
+                    <i class="fas fa-file-alt"></i>
+                    <span>Reports</span>
+                </a>
+            </li>
+            <li>
+                <a href="#analytics" class="sidebar-link" data-page="analytics">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Analytics</span>
+                </a>
+            </li>
+            <li>
+                <a href="#about" class="sidebar-link" data-page="about">
+                    <i class="fas fa-info-circle"></i>
+                    <span>About</span>
+                </a>
+            </li>
+        </ul>
+
+        <div class="sidebar-bottom">
+            <div id="networkStatusBadge" class="network-badge network-good" title="Network quality" style="margin: 0.3rem 1rem 0.2rem 1rem; width: fit-content;">
                 <i class="fas fa-wifi" aria-hidden="true"></i>
                 <span id="networkStatusText">Online</span>
             </div>
-            <ul class="nav-menu">
-                <li><a href="#home" class="nav-link active" data-page="home">
-                    <i class="fas fa-home"></i> Home
-                </a></li>
-                <li><a href="#live" class="nav-link" data-page="live">
-                    <i class="fas fa-video"></i> Live Monitor
-                </a></li>
-                <li><a href="#settings" class="nav-link" data-page="settings">
-                    <i class="fas fa-gear"></i> Settings
-                </a></li>
-                <li><a href="#reports" class="nav-link" data-page="reports">
-                    <i class="fas fa-file-alt"></i> Reports
-                </a></li>
-                <li><a href="#analytics" class="nav-link" data-page="analytics">
-                    <i class="fas fa-chart-line"></i> Analytics
-                </a></li>
-                <li><a href="#about" class="nav-link" data-page="about">
-                    <i class="fas fa-info-circle"></i> About
-                </a></li>
-            </ul>
-            <div id="navMorePanel" class="nav-right-tools nav-more-panel">
-                <div id="realtimeStatusBadge" class="realtime-badge realtime-connecting" title="Realtime sync status">
-                    <i class="fas fa-circle-notch fa-spin"></i>
-                    <span>Connecting</span>
-                </div>
-                <div class="nav-timezone">
-                    <i class="fas fa-clock"></i>
-                    <select id="timezone-selector" class="timezone-select">
-                        <option value="8">🇲🇾 Malaysia (UTC+8)</option>
-                        <option value="8">🇸🇬 Singapore (UTC+8)</option>
-                        <option value="8">🇨🇳 China (UTC+8)</option>
-                        <option value="9">🇯🇵 Japan (UTC+9)</option>
-                        <option value="5.5">🇮🇳 India (UTC+5:30)</option>
-                        <option value="7">🇹🇭 Thailand (UTC+7)</option>
-                        <option value="4">🇦🇪 Dubai (UTC+4)</option>
-                        <option value="0">🇬🇧 UK (UTC+0)</option>
-                        <option value="1">🇫🇷 France (UTC+1)</option>
-                        <option value="-5">🇺🇸 US Eastern (UTC-5)</option>
-                        <option value="-6">🇺🇸 US Central (UTC-6)</option>
-                        <option value="-7">🇺🇸 US Mountain (UTC-7)</option>
-                        <option value="-8">🇺🇸 US Pacific (UTC-8)</option>
-                        <option value="10">🇦🇺 Sydney (UTC+10)</option>
-                    </select>
-                </div>
+            <div id="realtimeStatusBadge" class="realtime-badge realtime-connecting" title="Realtime sync status" style="margin: 0.25rem 1rem 0.2rem 1rem; width: fit-content;">
+                <i class="fas fa-circle-notch fa-spin"></i>
+                <span>Connecting</span>
+            </div>
+            <div class="sidebar-link nav-timezone" style="border-left-color: transparent; cursor: default;">
+                <i class="fas fa-clock"></i>
+                <select id="timezone-selector" class="timezone-select">
+                    <option value="8">Malaysia (UTC+8)</option>
+                    <option value="8">Singapore (UTC+8)</option>
+                    <option value="8">China (UTC+8)</option>
+                    <option value="9">Japan (UTC+9)</option>
+                    <option value="5.5">India (UTC+5:30)</option>
+                    <option value="7">Thailand (UTC+7)</option>
+                    <option value="4">Dubai (UTC+4)</option>
+                    <option value="0">UK (UTC+0)</option>
+                    <option value="1">France (UTC+1)</option>
+                    <option value="-5">US Eastern (UTC-5)</option>
+                    <option value="-6">US Central (UTC-6)</option>
+                    <option value="-7">US Mountain (UTC-7)</option>
+                    <option value="-8">US Pacific (UTC-8)</option>
+                    <option value="10">Sydney (UTC+10)</option>
+                </select>
             </div>
         </div>
     </nav>
@@ -145,6 +157,7 @@
     <script src="/static/js/router.js"></script>
     <script src="/static/js/pages/home.js"></script>
     <script src="/static/js/pages/live.js"></script>
+    <script src="/static/js/pages/settings.js"></script>
     <script src="/static/js/pages/reports.js"></script>
     <script src="/static/js/pages/analytics.js"></script>
     <script src="/static/js/pages/about.js"></script>

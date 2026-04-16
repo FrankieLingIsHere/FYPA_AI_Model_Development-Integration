@@ -347,8 +347,8 @@ async function initializeWithStartupGate() {
 
     Router.register('home', HomePage);
     Router.register('live', LivePage);
-    Router.register('settings', LivePage);
-    Router.register('settings-checkup', LivePage);
+    Router.register('settings', SettingsPage);
+    Router.register('settings-checkup', SettingsPage);
     Router.register('reports', ReportsPage);
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);
@@ -875,7 +875,7 @@ function setupResponsiveMobileUX() {
     const navMorePanel = document.getElementById('navMorePanel');
     const overlay = document.getElementById('mobileOrientationOverlay');
     const retryBtn = document.getElementById('orientationRetryBtn');
-    const navLinks = Array.from(document.querySelectorAll('.nav-link'));
+    const navLinks = Array.from(document.querySelectorAll('.nav-link, .sidebar-link'));
 
     if (!body) return;
 

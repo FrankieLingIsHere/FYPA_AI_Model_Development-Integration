@@ -17,6 +17,7 @@ pause
 set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
 set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
 set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
+set "LUNA_FORCE_SOURCE_REFRESH=true"
 
 echo Installer version: !LUNA_INSTALLER_VERSION!
 echo Installer source archive: !LUNA_REPO_ZIP_URL!
@@ -88,8 +89,18 @@ echo.
 echo [2/5] Downloading LUNA Source Code...
 echo.
 if exist "!LUNA_SOURCE_ROOT!" (
-    echo Source code folder already exists. Skipping download.
-) else (
+    if /I "!LUNA_FORCE_SOURCE_REFRESH!"=="true" (
+        echo Existing source folder found. Refreshing to latest snapshot...
+        rmdir /s /q "!LUNA_SOURCE_ROOT!"
+        if exist "!LUNA_SOURCE_ROOT!" (
+            echo Warning: Could not remove existing source folder. Continuing with current snapshot.
+        )
+    ) else (
+        echo Source code folder already exists. Skipping download.
+    )
+)
+
+if not exist "!LUNA_SOURCE_ROOT!" (
     echo Downloading from GitHub...
     curl -L "!LUNA_REPO_ZIP_URL!" -o luna.zip
     echo Extracting files...

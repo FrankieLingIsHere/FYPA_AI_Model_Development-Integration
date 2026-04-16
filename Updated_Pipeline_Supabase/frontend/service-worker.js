@@ -1,9 +1,9 @@
 // PPE Safety Monitor - Service Worker
 // Offline support for app shell, read-only API payloads, and violation images.
 
-const STATIC_CACHE = 'ppe-monitor-static-v6';
-const API_CACHE = 'ppe-monitor-api-v6';
-const IMAGE_CACHE = 'ppe-monitor-images-v6';
+const STATIC_CACHE = 'ppe-monitor-static-v7';
+const API_CACHE = 'ppe-monitor-api-v7';
+const IMAGE_CACHE = 'ppe-monitor-images-v7';
 
 const STATIC_ASSETS = [
   '/',
@@ -86,6 +86,15 @@ function isLiveOrMutatingApi(url) {
   );
 }
 
+function isNoStoreStatusApi(url) {
+  return (
+    url.pathname === '/api/local-mode/provisioning/status' ||
+    url.pathname === '/api/providers/runtime-status' ||
+    url.pathname === '/api/reports/recovery/options' ||
+    url.pathname === '/api/system/startup-status'
+  );
+}
+
 function isViolationImageRequest(url) {
   return /\/image\/.+\/(annotated|original)\.jpg$/i.test(url.pathname);
 }
@@ -136,6 +145,21 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isApiGetRequest(request, url)) {
+    if (isNoStoreStatusApi(url)) {
+      event.respondWith(
+        fetch(request, { cache: 'no-store' }).catch(() => {
+          return new Response(
+            JSON.stringify({ error: 'Status endpoint unavailable while offline.' }),
+            {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' }
+            }
+          );
+        })
+      );
+      return;
+    }
+
     if (isLiveOrMutatingApi(url)) {
       event.respondWith(
         fetch(request).catch(() => {

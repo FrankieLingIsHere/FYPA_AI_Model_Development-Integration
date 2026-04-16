@@ -551,7 +551,9 @@ const API = {
 
     async getProviderRuntimeStatus() {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.PROVIDER_RUNTIME_STATUS}`);
+            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.PROVIDER_RUNTIME_STATUS}`, {
+                cache: 'no-store'
+            });
             if (!response.ok) throw new Error('Failed to fetch provider runtime status');
             return await response.json();
         } catch (error) {
@@ -562,7 +564,9 @@ const API = {
 
     async getReportRecoveryOptions() {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/options`);
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/options`, {
+                cache: 'no-store'
+            });
             if (!response.ok) throw new Error('Failed to fetch recovery options');
             return await response.json();
         } catch (error) {
@@ -656,7 +660,9 @@ const API = {
 
     async getLocalModeProvisioningStatus() {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status`);
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status`, {
+                cache: 'no-store'
+            });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 return {

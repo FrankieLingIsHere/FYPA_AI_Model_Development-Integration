@@ -11,6 +11,10 @@ const LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
 const LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
 const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v1';
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
+let localModePolicyState = {
+    checkupCompleted: false,
+    autoSetupAllowed: false
+};
 let provisioningTrackerBootstrapped = false;
 let provisioningStatusPollBusy = false;
 let provisioningStatusPollInterval = null;
@@ -25,19 +29,31 @@ let provisioningStatusState = {
 };
 let provisioningLastAnnouncedStatus = '';
 
+function purgeLegacyLocalModeStatusCache() {
+    try {
+        localStorage.removeItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY);
+        localStorage.removeItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY);
+        localStorage.removeItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
+    } catch (error) {
+        console.warn('Unable to clear legacy local-mode cache keys:', error);
+    }
+}
+
+purgeLegacyLocalModeStatusCache();
+
 function getLocalModePolicy() {
     return {
-        checkupCompleted: localStorage.getItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY) === 'true',
-        autoSetupAllowed: localStorage.getItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY) === 'true'
+        checkupCompleted: !!localModePolicyState.checkupCompleted,
+        autoSetupAllowed: !!localModePolicyState.autoSetupAllowed
     };
 }
 
 function setLocalModePolicy({ checkupCompleted, autoSetupAllowed } = {}) {
     if (checkupCompleted !== undefined) {
-        localStorage.setItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY, checkupCompleted ? 'true' : 'false');
+        localModePolicyState.checkupCompleted = !!checkupCompleted;
     }
     if (autoSetupAllowed !== undefined) {
-        localStorage.setItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY, autoSetupAllowed ? 'true' : 'false');
+        localModePolicyState.autoSetupAllowed = !!autoSetupAllowed;
     }
     window.dispatchEvent(new CustomEvent('ppe-local-mode:policy-changed', {
         detail: {
@@ -123,28 +139,6 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
     };
 }
 
-function readProvisioningStateFromStorage() {
-    try {
-        const raw = localStorage.getItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
-        if (!raw) {
-            return null;
-        }
-        const parsed = JSON.parse(raw);
-        return coerceProvisioningStatusState(parsed, provisioningStatusState);
-    } catch (error) {
-        console.warn('Unable to read local provisioning status cache:', error);
-        return null;
-    }
-}
-
-function saveProvisioningStateToStorage(state) {
-    try {
-        localStorage.setItem(LOCAL_MODE_PROVISIONING_STATUS_KEY, JSON.stringify(state));
-    } catch (error) {
-        console.warn('Unable to persist local provisioning status cache:', error);
-    }
-}
-
 function hasProvisioningStateChanged(previousState, nextState) {
     if (!previousState) return true;
     return previousState.status !== nextState.status
@@ -163,7 +157,7 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
     if (nextState.status === 'provisioned') {
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
     } else if (nextState.status === 'credentials_present') {
-        notifyApp('Cloud credentials are already configured on this backend.', 'info');
+        notifyApp('Cloud credentials are present on this backend, but approval state may still be idle until Local Mode Checkup is approved.', 'warning');
     } else if (nextState.status === 'rejected') {
         notifyApp('Local mode approval request was rejected. Contact admin and rerun checkup.', 'error');
     } else if (nextState.status === 'pending_approval') {
@@ -181,9 +175,6 @@ function publishProvisioningState(nextState, options = {}) {
     provisioningStatusState = normalized;
 
     if (changed || options.forceDispatch) {
-        if (!options.skipPersist) {
-            saveProvisioningStateToStorage(normalized);
-        }
         window.dispatchEvent(new CustomEvent('ppe-provisioning:status', {
             detail: { ...normalized }
         }));
@@ -231,12 +222,6 @@ function initializeProvisioningStatusTracker() {
     if (provisioningTrackerBootstrapped) return;
     provisioningTrackerBootstrapped = true;
 
-    const persisted = readProvisioningStateFromStorage();
-    if (persisted) {
-        provisioningStatusState = persisted;
-        provisioningLastAnnouncedStatus = persisted.status || '';
-    }
-
     window.PPEProvisioningStatus = {
         get: () => ({ ...provisioningStatusState }),
         refresh: (options = {}) => refreshProvisioningStatus(options || {}),
@@ -249,11 +234,10 @@ function initializeProvisioningStatusTracker() {
 
     publishProvisioningState({
         ...provisioningStatusState,
-        source: 'startup-cache',
+        source: 'startup-default',
         measuredAt: Date.now()
     }, {
         forceDispatch: true,
-        skipPersist: true,
         notify: false
     });
 

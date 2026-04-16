@@ -2178,7 +2178,12 @@ def api_startup_status():
         status_code = 500
     elif not snapshot.get('ready'):
         status_code = 202
-    return jsonify(snapshot), status_code
+    response = jsonify(snapshot)
+    response.status_code = status_code
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @app.route('/favicon.ico')
@@ -3654,7 +3659,7 @@ def api_local_mode_provisioning_status():
     raw_status = str(state.get('status') or 'idle').strip().lower()
     normalized_status = 'pending_approval' if raw_status == 'pending' else raw_status
 
-    return jsonify({
+    response = jsonify({
         'success': True,
         'status': normalized_status,
         'machine_id': machine_id,
@@ -3665,6 +3670,10 @@ def api_local_mode_provisioning_status():
         'requested_at': state.get('requested_at'),
         'provisioned_at': state.get('provisioned_at'),
     })
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @app.route('/api/local-mode/provisioning/auto', methods=['GET', 'POST'])
@@ -4449,13 +4458,17 @@ def api_provider_runtime_status():
         local_diag = _get_local_mode_diagnostics()
         capacity = _estimate_remaining_report_capacity(settings, runtime_snapshot, local_diag)
 
-        return jsonify({
+        response = jsonify({
             'success': True,
             'settings': settings,
             'runtime': runtime_snapshot,
             'local': local_diag,
             'capacity': capacity,
         })
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     except Exception as e:
         logger.error(f"Error building provider runtime status: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4469,7 +4482,7 @@ def api_report_recovery_options():
     quota_failed = [c for c in candidates if c.get('status') == 'failed']
     pending_like = [c for c in candidates if c.get('status') in ('pending', 'queued', 'processing', 'generating')]
 
-    return jsonify({
+    response = jsonify({
         'success': True,
         'local': diagnostics,
         'counts': {
@@ -4479,6 +4492,10 @@ def api_report_recovery_options():
         },
         'current_nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
     })
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 @app.route('/api/reports/recovery/execute', methods=['POST'])

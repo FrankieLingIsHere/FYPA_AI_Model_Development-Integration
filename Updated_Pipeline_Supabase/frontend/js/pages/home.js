@@ -165,7 +165,7 @@ const HomePage = {
                 const latest = this._latestProvisioningStatus || {};
                 const status = String(latest.status || '').toLowerCase();
                 const machineId = String(latest.machineId || latest.machine_id || '').trim();
-                const isProvisioned = status === 'provisioned' || status === 'credentials_present';
+                const isProvisioned = status === 'provisioned';
 
                 if (!isProvisioned || !machineId) {
                     const message = 'Installer re-download is available after this device is fully provisioned.';
@@ -282,7 +282,7 @@ const HomePage = {
         const status = String((statusPayload && statusPayload.status) || 'idle').toLowerCase();
         const machineId = String((statusPayload && (statusPayload.machineId || statusPayload.machine_id)) || '').trim();
         const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
-        const isProvisioned = status === 'provisioned' || status === 'credentials_present';
+            const isProvisioned = status === 'provisioned';
 
         if (redownloadInstallerBtn) {
             const canRedownload = isProvisioned && !!machineId;
@@ -303,7 +303,7 @@ const HomePage = {
         } else if (status === 'credentials_present') {
             badgeEl.className = 'badge badge-success';
             badgeEl.textContent = 'Credentials Detected';
-            messageEl.textContent = 'Cloud credentials are already configured on this backend. Local checkup is optional unless you need a new provisioning cycle.';
+                messageEl.textContent = 'Cloud credentials are present on this backend, but this machine is not approved/provisioned yet.';
         } else if (status === 'pending_approval') {
             badgeEl.className = 'badge badge-warning';
             badgeEl.textContent = 'Pending Approval';

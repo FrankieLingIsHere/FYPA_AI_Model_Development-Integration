@@ -7915,6 +7915,24 @@ def admin_devices():
         action = request.form.get('action')
         machine_id = request.form.get('machine_id')
 
+        if action == 'reset_all':
+            cleared_devices = len(devices)
+            token_state = _load_bootstrap_token_state()
+            used_jti = token_state.get('used_jti') if isinstance(token_state, dict) else {}
+            cleared_tokens = len(used_jti) if isinstance(used_jti, dict) else 0
+
+            _save_pending_devices({})
+            _save_bootstrap_token_state({'used_jti': {}})
+
+            logger.warning(
+                f"Admin reset provisioning records: cleared_devices={cleared_devices}, "
+                f"cleared_bootstrap_tokens={cleared_tokens}"
+            )
+
+            return redirect(
+                f"/admin/devices?reset_all=1&cleared_devices={cleared_devices}&cleared_tokens={cleared_tokens}"
+            )
+
         if machine_id in devices:
             if action == 'approve':
                 devices[machine_id]['status'] = 'approved'
@@ -7926,6 +7944,16 @@ def admin_devices():
                 _save_pending_devices(devices)
 
         return redirect('/admin/devices')
+
+    reset_all = str(request.args.get('reset_all') or '').strip() == '1'
+    try:
+        cleared_devices = int(request.args.get('cleared_devices') or 0)
+    except (TypeError, ValueError):
+        cleared_devices = 0
+    try:
+        cleared_tokens = int(request.args.get('cleared_tokens') or 0)
+    except (TypeError, ValueError):
+        cleared_tokens = 0
 
     from flask import render_template_string
     html_template = """
@@ -7940,11 +7968,28 @@ def admin_devices():
             .btn-approve { background-color: #28a745; }
             .btn-reject { background-color: #dc3545; }
             .btn-installer { background-color: #007bff; }
+            .btn-reset { background-color: #6f42c1; }
+            .notice { border: 1px solid #c3e6cb; background: #e9f7ef; color: #1e4620; padding: 10px 12px; border-radius: 6px; margin: 15px 0; }
         </style>
     </head>
     <body>
         <h2>Edge Device Provisioning Queue</h2>
         <p>Review and verify these pending hardware deployments before they can join the main cluster.</p>
+        <form method="POST" style="margin: 12px 0 16px 0;">
+            <button
+                type="submit"
+                name="action"
+                value="reset_all"
+                class="btn btn-reset"
+                onclick="return confirm('Reset ALL provisioning records and one-time bootstrap tokens? This affects cloud-side admin records.')"
+            >Reset All Provisioning Records</button>
+        </form>
+        {% if reset_all %}
+            <div class="notice">
+                Global reset completed. Cleared devices: <strong>{{ cleared_devices }}</strong>;
+                cleared bootstrap tokens: <strong>{{ cleared_tokens }}</strong>.
+            </div>
+        {% endif %}
         <hr>
         {% if devices %}
             {% for m_id, details in devices.items() %}
@@ -7971,7 +8016,13 @@ def admin_devices():
     </body>
     </html>
     """
-    return render_template_string(html_template, devices=devices)
+    return render_template_string(
+        html_template,
+        devices=devices,
+        reset_all=reset_all,
+        cleared_devices=cleared_devices,
+        cleared_tokens=cleared_tokens,
+    )
 
 
 @app.route('/admin/devices/quick-approve', methods=['GET'])

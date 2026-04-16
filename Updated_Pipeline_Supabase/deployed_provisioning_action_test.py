@@ -364,6 +364,33 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
 
+    def test_admin_reset_all_clears_cloud_provisioning_records(self):
+        self._request_device('TEST-EDGE-RESET-001')
+        self._request_device('TEST-EDGE-RESET-002')
+        BOOTSTRAP_TOKEN_STATE_FILE.write_text(
+            json.dumps({'used_jti': {'jti-1': '2026-04-16T00:00:00+00:00'}}),
+            encoding='utf-8',
+        )
+
+        response = self.client.post(
+            '/admin/devices',
+            data={'action': 'reset_all'},
+            headers=self._admin_auth_headers(),
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        location = str(response.headers.get('Location') or '')
+        self.assertIn('/admin/devices?reset_all=1', location)
+        self.assertIn('cleared_devices=2', location)
+        self.assertIn('cleared_tokens=1', location)
+
+        devices_after_reset = _load_pending_devices()
+        self.assertEqual(devices_after_reset, {})
+
+        self.assertTrue(BOOTSTRAP_TOKEN_STATE_FILE.exists())
+        token_state = json.loads(BOOTSTRAP_TOKEN_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(token_state.get('used_jti'), {})
+
     def test_local_auto_provision_requires_cloud_url(self):
         previous_cloud_url = os.environ.pop('CLOUD_URL', None)
         try:

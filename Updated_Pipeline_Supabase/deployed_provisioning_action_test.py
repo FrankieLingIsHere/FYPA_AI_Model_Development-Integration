@@ -217,6 +217,12 @@ class ProvisioningActionTest(unittest.TestCase):
             payload = response.json or {}
             self.assertEqual(payload.get('status'), 'cloud_url_missing')
             self.assertIn('CLOUD_URL', str(payload.get('error') or ''))
+
+            # Browser-opened endpoint uses GET; ensure it does not fail with 405.
+            get_response = self.client.get('/api/local-mode/provisioning/auto')
+            self.assertEqual(get_response.status_code, 400)
+            get_payload = get_response.json or {}
+            self.assertEqual(get_payload.get('status'), 'cloud_url_missing')
         finally:
             if previous_cloud_url is not None:
                 os.environ['CLOUD_URL'] = previous_cloud_url

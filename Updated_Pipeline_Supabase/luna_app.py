@@ -3447,10 +3447,14 @@ def api_local_mode_provisioning_status():
     })
 
 
-@app.route('/api/local-mode/provisioning/auto', methods=['POST'])
+@app.route('/api/local-mode/provisioning/auto', methods=['GET', 'POST'])
 def api_local_mode_auto_provisioning():
     """Auto-trigger cloud approval + bootstrap credential exchange for local mode access."""
     payload = request.get_json(silent=True) or {}
+    if request.method == 'GET':
+        query_cloud_url = str(request.args.get('cloud_url') or '').strip()
+        if query_cloud_url and not payload.get('cloud_url'):
+            payload['cloud_url'] = query_cloud_url
     cloud_url = _local_mode_normalize_cloud_url(
         payload.get('cloud_url')
         or os.getenv('CLOUD_URL')

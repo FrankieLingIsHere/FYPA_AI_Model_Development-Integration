@@ -3,6 +3,9 @@ const HomePage = {
     _realtimeHandler: null,
     _connectionHandler: null,
     _timezoneChangeHandler: null,
+    _provisioningHandler: null,
+    _runLocalCheckupHandler: null,
+    _openSettingsHandler: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
 
@@ -36,6 +39,27 @@ const HomePage = {
                                 <span class="value" id="highSeverityCount">0</span>
                             </div>
 
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card home-local-mode-card">
+                    <div class="card-header home-local-mode-header">
+                        <span><i class="fas fa-plug-circle-check"></i> Local Mode Approval</span>
+                        <span id="homeProvisionBadge" class="badge badge-info">Checking...</span>
+                    </div>
+                    <div class="card-content home-local-mode-content">
+                        <p id="homeProvisionMessage" style="margin: 0; color: var(--text-color);">
+                            Loading latest local mode provisioning status...
+                        </p>
+                        <p id="homeProvisionMachine" style="margin: 0.45rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;"></p>
+                        <div class="home-local-mode-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem;">
+                            <button id="homeRunLocalCheckupBtn" class="btn btn-primary" type="button">
+                                <i class="fas fa-wifi"></i> Local Mode Checkup
+                            </button>
+                            <button id="homeOpenSettingsBtn" class="btn btn-secondary" type="button">
+                                <i class="fas fa-gear"></i> Open Settings
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -120,6 +144,42 @@ const HomePage = {
 
         this._timezoneChangeHandler = () => this.refreshData();
         window.addEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
+
+        this._provisioningHandler = (event) => {
+            this.renderProvisioningStatus((event && event.detail) || null);
+        };
+        window.addEventListener('ppe-provisioning:status', this._provisioningHandler);
+
+        const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
+        if (runCheckupBtn) {
+            this._runLocalCheckupHandler = () => {
+                Router.navigate('settings-checkup');
+            };
+            runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
+        }
+
+        const openSettingsBtn = document.getElementById('homeOpenSettingsBtn');
+        if (openSettingsBtn) {
+            this._openSettingsHandler = () => {
+                Router.navigate('settings');
+            };
+            openSettingsBtn.addEventListener('click', this._openSettingsHandler);
+        }
+
+        if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.get === 'function') {
+            this.renderProvisioningStatus(window.PPEProvisioningStatus.get());
+        } else {
+            this.renderProvisioningStatus(null);
+        }
+
+        if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.refresh === 'function') {
+            window.PPEProvisioningStatus.refresh({
+                source: 'home-mount',
+                force: true,
+                notify: false
+            });
+        }
+
         this.syncFallbackPolling();
     },
 
@@ -140,6 +200,23 @@ const HomePage = {
             window.removeEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
             this._timezoneChangeHandler = null;
         }
+        if (this._provisioningHandler) {
+            window.removeEventListener('ppe-provisioning:status', this._provisioningHandler);
+            this._provisioningHandler = null;
+        }
+
+        const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
+        if (runCheckupBtn && this._runLocalCheckupHandler) {
+            runCheckupBtn.removeEventListener('click', this._runLocalCheckupHandler);
+        }
+        this._runLocalCheckupHandler = null;
+
+        const openSettingsBtn = document.getElementById('homeOpenSettingsBtn');
+        if (openSettingsBtn && this._openSettingsHandler) {
+            openSettingsBtn.removeEventListener('click', this._openSettingsHandler);
+        }
+        this._openSettingsHandler = null;
+
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);
             this._fallbackInterval = null;
@@ -167,6 +244,57 @@ const HomePage = {
         this.renderViolationTypes(stats);
         this.renderRecentViolations(stats.recentViolations || []);
         this.calculateSafetyScore(stats);
+    },
+
+    renderProvisioningStatus(statusPayload) {
+        const badgeEl = document.getElementById('homeProvisionBadge');
+        const messageEl = document.getElementById('homeProvisionMessage');
+        const machineEl = document.getElementById('homeProvisionMachine');
+
+        if (!badgeEl || !messageEl || !machineEl) {
+            return;
+        }
+
+        const status = String((statusPayload && statusPayload.status) || 'idle').toLowerCase();
+        const machineId = String((statusPayload && (statusPayload.machineId || statusPayload.machine_id)) || '').trim();
+        const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
+
+        badgeEl.className = 'badge badge-info';
+        machineEl.textContent = '';
+
+        if (status === 'provisioned') {
+            badgeEl.className = 'badge badge-success';
+            badgeEl.textContent = 'Provisioned';
+            messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
+        } else if (status === 'pending_approval') {
+            badgeEl.className = 'badge badge-warning';
+            badgeEl.textContent = 'Pending Approval';
+            messageEl.textContent = 'Approval request is pending. This page updates automatically when admin approves.';
+        } else if (status === 'rejected') {
+            badgeEl.className = 'badge badge-danger';
+            badgeEl.textContent = 'Rejected';
+            messageEl.textContent = 'Approval request was rejected. Open Local Mode Checkup to submit a new request.';
+        } else if (status === 'error') {
+            badgeEl.className = 'badge badge-warning';
+            badgeEl.textContent = 'Status Error';
+            messageEl.textContent = 'Unable to refresh provisioning status right now. Retrying in background.';
+        } else {
+            badgeEl.className = 'badge badge-info';
+            badgeEl.textContent = 'Not Requested';
+            messageEl.textContent = 'No approval request yet. Run Local Mode Checkup to begin local provisioning.';
+        }
+
+        if (machineId) {
+            machineEl.textContent = `Machine ID: ${machineId}`;
+            if (adminPortalUrl) {
+                machineEl.textContent += ` | Admin portal: ${adminPortalUrl}`;
+            }
+            return;
+        }
+
+        if (adminPortalUrl) {
+            machineEl.textContent = `Admin portal: ${adminPortalUrl}`;
+        }
     },
 
     /* ================= SUMMARY ================= */

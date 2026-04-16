@@ -65,9 +65,10 @@ const Router = {
 
     // Update active navigation link
     updateActiveNav(path) {
+        const activePath = path === 'settings-checkup' ? 'settings' : path;
         document.querySelectorAll('.sidebar-link, .nav-link').forEach(link => {
             link.classList.remove('active');
-            if (link.dataset.page === path) {
+            if (link.dataset.page === activePath) {
                 link.classList.add('active');
             }
         });

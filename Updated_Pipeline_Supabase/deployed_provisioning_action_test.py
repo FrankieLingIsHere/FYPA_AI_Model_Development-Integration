@@ -195,9 +195,11 @@ class ProvisioningActionTest(unittest.TestCase):
         rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
         self.assertNotIn('__LUNA_REPO_ZIP_URL__', rendered_installer)
         self.assertNotIn('__LUNA_SOURCE_ROOT__', rendered_installer)
+        self.assertNotIn('__LUNA_CLOUD_URL__', rendered_installer)
         self.assertNotIn('__LUNA_INSTALLER_VERSION__', rendered_installer)
         self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
+        self.assertIn('set "LUNA_CLOUD_URL=', rendered_installer)
         self.assertTrue(str(installer_download.headers.get('X-Luna-Installer-Version') or '').strip())
         self.assertEqual(
             installer_download.headers.get('Cache-Control'),

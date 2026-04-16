@@ -16,11 +16,15 @@ pause
 
 set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
 set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
+set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"
 set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
 set "LUNA_FORCE_SOURCE_REFRESH=true"
 
+if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
+
 echo Installer version: !LUNA_INSTALLER_VERSION!
 echo Installer source archive: !LUNA_REPO_ZIP_URL!
+if not "!LUNA_CLOUD_URL!"=="" echo Installer cloud backend URL: !LUNA_CLOUD_URL!
 
 set "INSTALL_DIR=C:\LUNA_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
@@ -133,6 +137,21 @@ if %errorlevel% neq 0 (
     echo Warning: Could not normalize .env local defaults. Proceeding with existing values.
 ) else (
     echo Local mode defaults normalized in .env ^(offline enabled, Gemini disabled, Ollama-only routing aligned^)
+)
+
+if not "!LUNA_CLOUD_URL!"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
+      "$key='CLOUD_URL'; $value='!LUNA_CLOUD_URL!'; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) }; " ^
+      "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
+
+    if %errorlevel% neq 0 (
+        echo Warning: Could not write CLOUD_URL into .env automatically.
+    ) else (
+        echo CLOUD_URL configured from installer source endpoint.
+    )
+) else (
+    echo Warning: Installer cloud URL not provided by source endpoint. CLOUD_URL was left unchanged.
 )
 
 echo.

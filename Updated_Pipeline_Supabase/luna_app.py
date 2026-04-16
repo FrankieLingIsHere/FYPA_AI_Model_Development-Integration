@@ -6830,13 +6830,32 @@ def _sanitize_batch_template_value(raw_value: str) -> str:
     return str(raw_value or '').replace('\r', '').replace('\n', '').strip()
 
 
-def _resolve_installer_template_context() -> Dict[str, str]:
+def _resolve_installer_cloud_url(request_host_url: str = '') -> str:
+    """Pick a usable cloud URL for installer bootstrap with Railway host fallback."""
+    explicit_cloud_url = _sanitize_batch_template_value(
+        os.getenv('INSTALLER_CLOUD_URL', '') or os.getenv('CLOUD_URL', '')
+    )
+    normalized_explicit = _local_mode_normalize_cloud_url(explicit_cloud_url) if explicit_cloud_url else ''
+    normalized_host = _local_mode_normalize_cloud_url(request_host_url) if request_host_url else ''
+
+    # Prefer explicit cloud URL when configured to a non-placeholder value.
+    if normalized_explicit and not normalized_explicit.lower().startswith('https://your'):
+        return normalized_explicit
+
+    if normalized_host:
+        return normalized_host
+
+    return normalized_explicit
+
+
+def _resolve_installer_template_context(request_host_url: str = '') -> Dict[str, str]:
     repo_zip_url = _sanitize_batch_template_value(
         os.getenv('INSTALLER_REPO_ZIP_URL', DEFAULT_INSTALLER_REPO_ZIP_URL)
     ) or DEFAULT_INSTALLER_REPO_ZIP_URL
     source_root = _sanitize_batch_template_value(
         os.getenv('INSTALLER_SOURCE_ROOT', DEFAULT_INSTALLER_SOURCE_ROOT)
     ) or DEFAULT_INSTALLER_SOURCE_ROOT
+    cloud_url = _resolve_installer_cloud_url(request_host_url)
 
     commit_hint = (
         str(os.getenv('RAILWAY_GIT_COMMIT_SHA', '')).strip()
@@ -6849,13 +6868,14 @@ def _resolve_installer_template_context() -> Dict[str, str]:
     return {
         '__LUNA_REPO_ZIP_URL__': repo_zip_url,
         '__LUNA_SOURCE_ROOT__': source_root,
+        '__LUNA_CLOUD_URL__': cloud_url,
         '__LUNA_INSTALLER_VERSION__': installer_version,
     }
 
 
-def _render_installer_batch_script(template_path: Path) -> Tuple[str, str]:
+def _render_installer_batch_script(template_path: Path, request_host_url: str = '') -> Tuple[str, str]:
     content = template_path.read_text(encoding='utf-8')
-    context = _resolve_installer_template_context()
+    context = _resolve_installer_template_context(request_host_url=request_host_url)
     for token, replacement in context.items():
         content = content.replace(token, replacement)
     return content, context.get('__LUNA_INSTALLER_VERSION__', 'unknown')
@@ -7228,7 +7248,10 @@ def download_bootstrap_installer():
         return jsonify({'error': 'Installer asset not found'}), 404
 
     try:
-        installer_content, installer_version = _render_installer_batch_script(installer_path)
+        installer_content, installer_version = _render_installer_batch_script(
+            installer_path,
+            request_host_url=request.host_url,
+        )
     except Exception as render_exc:
         logger.error(f"Failed to render installer template: {render_exc}")
         return jsonify({'error': 'Failed to render installer asset'}), 500

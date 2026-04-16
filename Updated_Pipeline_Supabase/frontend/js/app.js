@@ -347,8 +347,8 @@ async function initializeWithStartupGate() {
 
     Router.register('home', HomePage);
     Router.register('live', LivePage);
-    Router.register('settings', SettingsPage);
-    Router.register('settings-checkup', SettingsPage);
+    Router.register('settings', LivePage);
+    Router.register('settings-checkup', LivePage);
     Router.register('reports', ReportsPage);
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);

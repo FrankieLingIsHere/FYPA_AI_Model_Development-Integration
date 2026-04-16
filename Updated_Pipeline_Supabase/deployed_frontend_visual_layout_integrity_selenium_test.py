@@ -108,8 +108,28 @@ def main() -> int:
             raise RuntimeError("Timezone selector is missing from sidebar")
 
         with suppress(Exception):
+            live_links = driver.find_elements(By.CSS_SELECTOR, ".sidebar .sidebar-link[data-page='live']")
+            if live_links:
+                live_links[0].click()
+                wait.until(lambda d: "#live" in (d.current_url or ""))
+
+            quick_settings_launchers = driver.find_elements(By.ID, "quickRecommendedSettingsBtn")
+            if quick_settings_launchers:
+                raise RuntimeError("Live page still exposes quick settings launcher; settings windows must only open via sidebar Settings")
+
             settings_links[0].click()
             wait.until(lambda d: "#settings" in (d.current_url or ""))
+
+            wait.until(
+                lambda d: (
+                    (d.find_element(By.ID, "settingsModal").get_attribute("aria-hidden") == "false")
+                    or ("open" in ((d.find_element(By.ID, "settingsModal").get_attribute("class") or "").split()))
+                )
+            )
+
+            settings_close_button = driver.find_elements(By.ID, "closeSettingsWindowBtn")
+            if not settings_close_button:
+                raise RuntimeError("Settings route does not render the expected popup window controls")
 
         print("PASS: selenium visual layout integrity checks")
         return 0

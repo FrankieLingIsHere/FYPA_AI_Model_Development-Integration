@@ -11,28 +11,67 @@ VERCEL_URL = os.environ.get(
 STRICT_FRONTEND_ASSETS = os.environ.get("LUNA_FRONTEND_ASSETS_STRICT", "0") != "0"
 
 
+def _looks_like_html(payload: str) -> bool:
+    head = (payload or "").lstrip()[:512].lower()
+    return head.startswith("<!doctype html") or head.startswith("<html") or "<html" in head
+
+
+def fetch_asset_text(base_url: str, candidate_paths, label: str):
+    errors = []
+    for path in candidate_paths:
+        url = f"{base_url}{path}"
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+        except Exception as exc:
+            errors.append(f"{url} -> {exc}")
+            continue
+
+        payload = response.text or ""
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        # Some route fallbacks return index.html with 200; reject that for JS assets.
+        if "text/html" in content_type or _looks_like_html(payload):
+            errors.append(f"{url} -> HTML fallback returned")
+            continue
+
+        return payload, url
+
+    raise RuntimeError(
+        f"Unable to fetch {label} from expected asset paths: " + "; ".join(errors)
+    )
+
+
+def has_marker_group(text: str, markers) -> bool:
+    return all(marker in text for marker in markers)
+
+
 def main() -> int:
-    app_js_url = f"{VERCEL_URL}/js/app.js"
-    live_js_url = f"{VERCEL_URL}/js/pages/live.js"
-    reports_js_url = f"{VERCEL_URL}/js/pages/reports.js"
-    notifications_js_url = f"{VERCEL_URL}/js/notifications.js"
     index_url = f"{VERCEL_URL}/"
 
-    app_js = requests.get(app_js_url, timeout=30)
-    app_js.raise_for_status()
-    live_js = requests.get(live_js_url, timeout=30)
-    live_js.raise_for_status()
-    reports_js = requests.get(reports_js_url, timeout=30)
-    reports_js.raise_for_status()
-    notifications_js = requests.get(notifications_js_url, timeout=30)
-    notifications_js.raise_for_status()
+    app_text, app_js_url = fetch_asset_text(
+        VERCEL_URL,
+        ["/static/js/app.js", "/js/app.js"],
+        "app.js",
+    )
+    live_text, live_js_url = fetch_asset_text(
+        VERCEL_URL,
+        ["/static/js/pages/live.js", "/js/pages/live.js"],
+        "pages/live.js",
+    )
+    reports_text, reports_js_url = fetch_asset_text(
+        VERCEL_URL,
+        ["/static/js/pages/reports.js", "/js/pages/reports.js"],
+        "pages/reports.js",
+    )
+    notifications_text, notifications_js_url = fetch_asset_text(
+        VERCEL_URL,
+        ["/static/js/notifications.js", "/js/notifications.js"],
+        "notifications.js",
+    )
+
     index_html = requests.get(index_url, timeout=30)
     index_html.raise_for_status()
 
-    app_text = app_js.text
-    live_text = live_js.text
-    reports_text = reports_js.text
-    notifications_text = notifications_js.text
     index_text = index_html.text
 
     required_app_markers = [
@@ -71,12 +110,32 @@ def main() -> int:
         "label: document.getElementById('networkStatusText')",
     ]
     required_live_markers = [
-        "id=\"liveToolbarSettingsBtn\"",
-        "toolbarSettingsClickHandler",
-        "liveToolbarSettingsBtn.addEventListener('click'",
+        "id=\"settingsModal\"",
         "id=\"nlpProviderOrderSelect\"",
         "id=\"visionProviderOrderSelect\"",
         "id=\"embeddingProviderOrderSelect\"",
+    ]
+    live_settings_trigger_marker_alternatives = [
+        [
+            "id=\"reopenSettingsWindowBtn\"",
+            "reopenSettingsWindowBtn.addEventListener('click', openSettingsWindow);",
+        ],
+        [
+            "id=\"liveToolbarSettingsBtn\"",
+            "liveToolbarSettingsBtn.addEventListener('click'",
+            "toolbarSettingsClickHandler",
+        ],
+    ]
+    live_settings_route_marker_alternatives = [
+        [
+            "const isSettingsRoute = APP_STATE.currentPage === 'settings' || APP_STATE.currentPage === 'settings-checkup';",
+            ".settings-route .live-mode-tabs",
+            ".settings-route .live-monitor-card",
+            ".settings-route .settings-route-panel",
+        ],
+        [
+            "toolbarSettingsClickHandler",
+        ],
     ]
     required_reports_markers = [
         "focusReport(reportId, { openModal = false } = {})",
@@ -117,6 +176,14 @@ def main() -> int:
     for marker in required_live_markers:
         if marker not in live_text:
             missing.append(f"live.js missing marker: {marker}")
+    if not any(has_marker_group(live_text, option) for option in live_settings_trigger_marker_alternatives):
+        missing.append(
+            "live.js missing settings trigger markers (expected reopen button or toolbar settings handler variant)"
+        )
+    if not any(has_marker_group(live_text, option) for option in live_settings_route_marker_alternatives):
+        missing.append(
+            "live.js missing settings-route markers (expected settings-route panel behavior or toolbar handler variant)"
+        )
     for marker in required_reports_markers:
         if marker not in reports_text:
             missing.append(f"reports.js missing marker: {marker}")
@@ -139,6 +206,11 @@ def main() -> int:
             print(f" - {line}")
         return 0
 
+    print("INFO: validated asset URLs")
+    print(f" - app.js: {app_js_url}")
+    print(f" - live.js: {live_js_url}")
+    print(f" - reports.js: {reports_js_url}")
+    print(f" - notifications.js: {notifications_js_url}")
     print("PASS: deployed frontend assets include settings visibility fixes")
     return 0
 

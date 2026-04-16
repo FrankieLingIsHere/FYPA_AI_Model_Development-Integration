@@ -5,11 +5,11 @@ echo ========================================================
 echo LUNA PPE SAFETY MONITOR - ZERO-TOUCH LOCAL INSTALLER
 echo ========================================================
 echo.
-echo This script will automatically download and set up the 
-echo LUNA Local Backend on this machine so it can run 
+echo This script will automatically download and set up the
+echo LUNA Local Backend on this machine so it can run
 echo completely offline.
 echo.
-echo Please ensure you are running this as Administrator if 
+echo Please ensure you are running this as Administrator if
 echo Python or Ollama need to be installed.
 echo.
 pause
@@ -18,7 +18,7 @@ set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
 set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
 set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"
 set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
-set "LUNA_FORCE_SOURCE_REFRESH=true"
+set "LUNA_FORCE_SOURCE_REFRESH=false"
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
 
@@ -29,8 +29,39 @@ if not "!LUNA_CLOUD_URL!"=="" echo Installer cloud backend URL: !LUNA_CLOUD_URL!
 set "INSTALL_DIR=C:\LUNA_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
+set "LOCAL_LAUNCHER_BAT=%INSTALL_DIR%\Start_LUNA_Local_Mode.bat"
 
-echo [1/5] Checking System Dependencies...
+copy /Y "%~f0" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+if errorlevel 1 (
+    echo Warning: Could not update local launcher copy at !LOCAL_LAUNCHER_BAT!
+)
+
+set "LUNA_APP_DIR=!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
+if exist "!LUNA_APP_DIR!\start.bat" (
+    echo.
+    echo Existing local installation detected:
+    echo   !LUNA_APP_DIR!
+    echo.
+    choice /C LR /N /M "Press L to launch now (recommended), or R to reinstall/refresh source: "
+    if errorlevel 2 (
+        set "LUNA_FORCE_SOURCE_REFRESH=true"
+        echo Reinstall/refresh mode selected.
+        echo.
+    ) else (
+        echo Launching existing LUNA local backend...
+        cd /d "!LUNA_APP_DIR!"
+        start cmd /k "start.bat"
+        echo.
+        echo Existing installation launched.
+        echo You can keep using the same launcher BAT:
+        echo   !LOCAL_LAUNCHER_BAT!
+        pause
+        exit /b 0
+    )
+)
+
+echo.
+echo [1/6] Checking System Dependencies...
 echo.
 
 set "PYTHON_EXE="
@@ -59,7 +90,7 @@ if "!PYTHON_EXE!"=="" (
 ) else (
     !PYTHON_EXE! -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
     if !errorlevel! neq 0 (
-        echo [ERROR] Outdated Python detected! 
+        echo [ERROR] Outdated Python detected!
         echo LUNA requires Python 3.10 or higher ^(You have an older version like 2.7 or 3.9^).
         echo Launching Python 3.11 installer natively...
         winget install --id Python.Python.3.11 -e
@@ -90,7 +121,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/5] Downloading LUNA Source Code...
+echo [2/6] Downloading LUNA Source Code...
 echo.
 if exist "!LUNA_SOURCE_ROOT!" (
     if /I "!LUNA_FORCE_SOURCE_REFRESH!"=="true" (
@@ -115,7 +146,7 @@ if not exist "!LUNA_SOURCE_ROOT!" (
 cd "!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
 
 echo.
-echo [3/5] Configuring Environment...
+echo [3/6] Configuring Environment...
 echo.
 if not exist ".env" (
     if exist ".env.example" (
@@ -128,10 +159,10 @@ if not exist ".env" (
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
-        "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma4'; 'OLLAMA_MODEL'='gemma4'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info' }; " ^
-  "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
-  "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
-  "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
+    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma4'; 'OLLAMA_MODEL'='gemma4'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info' }; " ^
+    "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
+    "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
+    "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
 
 if %errorlevel% neq 0 (
     echo Warning: Could not normalize .env local defaults. Proceeding with existing values.
@@ -155,12 +186,12 @@ if not "!LUNA_CLOUD_URL!"=="" (
 )
 
 echo.
-echo [4/5] Setting up Virtual Environment...
+echo [4/6] Setting up Virtual Environment...
 echo.
 if not exist "venv\Scripts\activate.bat" (
     !PYTHON_EXE! -m venv venv
     if !errorlevel! neq 0 (
-        echo "Failed to create python environment. Please reopen this terminal to refresh PATH and run start.bat manually."
+        echo Failed to create python environment. Please reopen this terminal to refresh PATH and run start.bat manually.
         explorer .
         pause
         exit /b 1
@@ -171,9 +202,9 @@ echo.
 echo [5/6] Launching LUNA Background Server...
 echo.
 echo ========================================================
-echo SETUP COMPLETE!  
-echo The backend is now starting in a new window. 
-echo The first boot may take 2-5 minutes to download AI 
+echo SETUP COMPLETE!
+echo The backend is now starting in a new window.
+echo The first boot may take 2-5 minutes to download AI
 echo dependencies in that new black window.
 echo ========================================================
 echo.
@@ -182,16 +213,22 @@ start cmd /k "start.bat"
 
 echo [6/6] Creating Desktop Shortcut for Future Use...
 set "SHORTCUT_PATH=%USERPROFILE%\Desktop\Start LUNA Local Mode.lnk"
-set "TARGET_PATH=%CD%\start.bat"
-set "WORKING_DIR=%CD%"
+copy /Y "%~f0" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+if errorlevel 1 (
+    echo Warning: Could not refresh local launcher copy at !LOCAL_LAUNCHER_BAT!
+)
+set "TARGET_PATH=%LOCAL_LAUNCHER_BAT%"
+set "WORKING_DIR=%INSTALL_DIR%"
 
 powershell -Command "$wshell = New-Object -ComObject WScript.Shell; $shortcut = $wshell.CreateShortcut('%SHORTCUT_PATH%'); $shortcut.TargetPath = '%TARGET_PATH%'; $shortcut.WorkingDirectory = '%WORKING_DIR%'; $shortcut.Description = 'Launch LUNA Offline Mode'; $shortcut.Save()"
 
 echo.
 echo --------------------------------------------------------
-echo A shortcut "Start LUNA Local Mode" has been placed on 
-echo your Desktop. YOU NO LONGER NEED THIS INSTALLER FILE!
-echo Double-click that shortcut anytime you want to launch.
+echo A shortcut "Start LUNA Local Mode" has been placed on
+echo your Desktop and points to the same installer-launcher BAT.
+echo Double-click the same BAT/shortcut anytime to launch.
+echo If LUNA is already installed, it launches directly.
+echo Reinstall/refresh is optional and only needed for recovery.
 echo --------------------------------------------------------
 echo You can safely close this installer window now.
 pause

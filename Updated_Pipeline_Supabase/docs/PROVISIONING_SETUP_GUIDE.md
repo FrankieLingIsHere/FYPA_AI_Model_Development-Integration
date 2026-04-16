@@ -170,6 +170,13 @@ After the user triggers checkup once, the rest can run silently:
 
 No manual credential copy-paste is required in normal flow.
 
+User experience rule:
+
+- End users should keep using the same launcher BAT/desktop shortcut created by installer.
+- If LUNA is already installed, clicking that same BAT launches the existing app directly.
+- Users do not need to manually switch to running `start.bat` themselves.
+- Reinstall/refresh is optional and only for recovery/update scenarios.
+
 ### Q4: If I received the local installer link, does that mean this machine is already provisioned?
 
 No.

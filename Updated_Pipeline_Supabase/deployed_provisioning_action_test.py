@@ -192,6 +192,17 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_download = self.client.get(f'/api/bootstrap/installer?token={installer_token}')
         self.assertEqual(installer_download.status_code, 200)
         self.assertIn(b'ZERO-TOUCH LOCAL INSTALLER', installer_download.data)
+        rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
+        self.assertNotIn('__LUNA_REPO_ZIP_URL__', rendered_installer)
+        self.assertNotIn('__LUNA_SOURCE_ROOT__', rendered_installer)
+        self.assertNotIn('__LUNA_INSTALLER_VERSION__', rendered_installer)
+        self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
+        self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
+        self.assertTrue(str(installer_download.headers.get('X-Luna-Installer-Version') or '').strip())
+        self.assertEqual(
+            installer_download.headers.get('Cache-Control'),
+            'no-store, no-cache, must-revalidate, max-age=0',
+        )
         installer_download.close()
 
         installer_replay = self.client.get(f'/api/bootstrap/installer?token={installer_token}')

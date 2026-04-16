@@ -187,13 +187,29 @@ MODEL_API_CONFIG = {
 # RAG CONFIGURATION
 # =========================================================================
 
+def _resolve_rag_data_source() -> Path:
+    explicit_path = str(os.getenv('RAG_DATA_SOURCE', '')).strip()
+    if explicit_path:
+        return Path(explicit_path)
+
+    candidates = [
+        BASE_DIR / 'pipeline' / 'backend' / 'integration' / 'safety_knowledge.txt',
+        BASE_DIR / 'NLP_Luna' / 'Trim1.csv',
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
+
 RAG_CONFIG = {
     'enabled': True,  # Enable RAG with regulation data
     'use_chroma': False,  # Disabled — Gemini uses direct regulation injection instead of ChromaDB
     'chroma_path': BASE_DIR / 'pipeline' / 'backend' / 'chroma_db',
     'collection_name': 'dosh_guidelines',  # Actual collection name
     'embedding_model': 'nomic-embed-text',  # Ollama embedding model (only used if use_chroma=True)
-    'data_source': BASE_DIR / 'pipeline' / 'backend' / 'integration' / 'safety_knowledge.txt',  # Fallback CSV
+    'data_source': _resolve_rag_data_source(),
     'regulations_file': BASE_DIR / 'pipeline' / 'backend' / 'data' / 'malaysian_regulations.json',
     'num_similar_incidents': 2,
     'chunk_size': 500,

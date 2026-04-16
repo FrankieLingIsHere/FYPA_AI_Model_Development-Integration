@@ -14,6 +14,13 @@ echo Python or Ollama need to be installed.
 echo.
 pause
 
+set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
+set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
+set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"
+
+echo Installer version: !LUNA_INSTALLER_VERSION!
+echo Installer source archive: !LUNA_REPO_ZIP_URL!
+
 set "INSTALL_DIR=C:\LUNA_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
@@ -80,17 +87,17 @@ if %errorlevel% neq 0 (
 echo.
 echo [2/5] Downloading LUNA Source Code...
 echo.
-if exist "FYPA_AI_Model_Development-Integration-main" (
+if exist "!LUNA_SOURCE_ROOT!" (
     echo Source code folder already exists. Skipping download.
 ) else (
     echo Downloading from GitHub...
-    curl -L https://github.com/FrankieLingIsHere/FYPA_AI_Model_Development-Integration/archive/refs/heads/main.zip -o luna.zip
+    curl -L "!LUNA_REPO_ZIP_URL!" -o luna.zip
     echo Extracting files...
     powershell -command "Expand-Archive -Force luna.zip ."
     del luna.zip
 )
 
-cd FYPA_AI_Model_Development-Integration-main\Updated_Pipeline_Supabase
+cd "!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
 
 echo.
 echo [3/5] Configuring Environment...
@@ -104,16 +111,18 @@ if not exist ".env" (
     )
 )
 
-findstr /B /I "ALLOW_OFFLINE_LOCAL_MODE=" .env >nul 2>&1 || echo ALLOW_OFFLINE_LOCAL_MODE=true>> .env
-findstr /B /I "GEMINI_ENABLED=" .env >nul 2>&1 || echo GEMINI_ENABLED=false>> .env
-findstr /B /I "MODEL_API_ENABLED=" .env >nul 2>&1 || echo MODEL_API_ENABLED=false>> .env
-findstr /B /I "STARTUP_AUTO_PREPARE_LOCAL_MODE=" .env >nul 2>&1 || echo STARTUP_AUTO_PREPARE_LOCAL_MODE=true>> .env
-findstr /B /I "STARTUP_AUTO_PULL_LOCAL_MODEL=" .env >nul 2>&1 || echo STARTUP_AUTO_PULL_LOCAL_MODEL=true>> .env
-findstr /B /I "LOCAL_OLLAMA_UNIFIED_MODEL=" .env >nul 2>&1 || echo LOCAL_OLLAMA_UNIFIED_MODEL=gemma4>> .env
-findstr /B /I "OLLAMA_MODEL=" .env >nul 2>&1 || echo OLLAMA_MODEL=gemma4>> .env
-findstr /B /I "NLP_PROVIDER_ORDER=" .env >nul 2>&1 || echo NLP_PROVIDER_ORDER=ollama,local,gemini,model_api>> .env
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
+    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma4'; 'OLLAMA_MODEL'='gemma4'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true' }; " ^
+  "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
+  "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
+  "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
 
-echo Local mode defaults ensured in .env ^(offline enabled, Gemini disabled, Ollama model aligned^)
+if %errorlevel% neq 0 (
+    echo Warning: Could not normalize .env local defaults. Proceeding with existing values.
+) else (
+    echo Local mode defaults normalized in .env ^(offline enabled, Gemini disabled, Ollama-only routing aligned^)
+)
 
 echo.
 echo [4/5] Setting up Virtual Environment...

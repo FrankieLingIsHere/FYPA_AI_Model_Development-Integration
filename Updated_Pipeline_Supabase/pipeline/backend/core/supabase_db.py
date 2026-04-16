@@ -877,9 +877,16 @@ def create_db_manager_from_env() -> SupabaseDatabaseManager:
         SupabaseDatabaseManager instance
     """
     db_url = os.getenv('SUPABASE_DB_URL')
-    
-    if not db_url:
-        raise ValueError("SUPABASE_DB_URL must be set in environment")
+
+    normalized = str(db_url or '').strip().lower()
+    placeholder_markers = (
+        'your-project-id',
+        'your-db-password',
+        'example.supabase.co',
+    )
+
+    if not db_url or any(marker in normalized for marker in placeholder_markers):
+        raise ValueError("SUPABASE_DB_URL must be set to a real project connection string")
     
     connect_timeout = int(os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
     return SupabaseDatabaseManager(db_url, connect_timeout=connect_timeout)

@@ -50,7 +50,7 @@ import requests
 
 # Load environment variables
 from dotenv import load_dotenv
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 # Import project modules
 from infer_image import predict_image, resolve_model_path
@@ -187,6 +187,7 @@ def _set_cached_rendered_report_html(report_id: str, report_html_key: str, conte
 try:
     from pipeline.backend.core.violation_detector import ViolationDetector
     from pipeline.backend.integration.caption_generator import CaptionGenerator
+    from pipeline.backend.core.report_generator import ReportGenerator
     from pipeline.backend.core.supabase_report_generator import create_supabase_report_generator
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
@@ -354,6 +355,7 @@ def _ensure_startup_sequence_running():
         return None
     ensure_startup_thread()
     return None
+
 
 @app.before_request
 def _protect_installer_static_asset():
@@ -885,6 +887,16 @@ def get_startup_state_snapshot() -> Dict[str, Any]:
         }
 
 
+def _is_offline_local_fallback_available(local_diag: Optional[Dict[str, Any]]) -> bool:
+    """Allow startup to continue in offline mode when local runtime is reachable, even if model pull failed."""
+    diagnostics = local_diag or {}
+
+    if bool(diagnostics.get('local_mode_possible')):
+        return True
+
+    return bool(diagnostics.get('ollama_installed') and diagnostics.get('ollama_running'))
+
+
 def _run_startup_sequence():
     """Background startup sequence so frontend can show setup progress."""
     try:
@@ -1012,9 +1024,11 @@ def _run_startup_sequence():
 
         _set_startup_progress(68, 'Verifying Supabase database connection')
         if db_manager is None:
-            local_diag = _get_local_mode_diagnostics()
-            if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
-                _set_startup_step('supabase_database', 'ok', 'Supabase DB unavailable; running local-only mode until reconnect')
+            if ALLOW_OFFLINE_LOCAL_MODE:
+                if _local_mode_has_supabase_credentials():
+                    _set_startup_step('supabase_database', 'ok', 'Supabase DB unavailable; running local-only mode until reconnect')
+                else:
+                    _set_startup_step('supabase_database', 'ok', 'Supabase credentials pending provisioning; local-only mode active')
             else:
                 _set_startup_step('supabase_database', 'error', 'Database manager is unavailable')
                 raise RuntimeError('Supabase database manager is not available')
@@ -1027,8 +1041,7 @@ def _run_startup_sequence():
                     _ = cur.fetchone()
                 _set_startup_step('supabase_database', 'ok', 'Database query test passed')
             except Exception as db_exc:
-                local_diag = _get_local_mode_diagnostics()
-                if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                if ALLOW_OFFLINE_LOCAL_MODE:
                     _set_startup_step('supabase_database', 'ok', f'Supabase DB unreachable; local-only mode active ({db_exc})')
                 else:
                     _set_startup_step('supabase_database', 'error', str(db_exc))
@@ -1036,9 +1049,11 @@ def _run_startup_sequence():
 
         _set_startup_progress(82, 'Verifying Supabase storage connection')
         if storage_manager is None:
-            local_diag = _get_local_mode_diagnostics()
-            if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
-                _set_startup_step('supabase_storage', 'ok', 'Supabase Storage unavailable; local artifacts will sync after reconnect')
+            if ALLOW_OFFLINE_LOCAL_MODE:
+                if _local_mode_has_supabase_credentials():
+                    _set_startup_step('supabase_storage', 'ok', 'Supabase Storage unavailable; local artifacts will sync after reconnect')
+                else:
+                    _set_startup_step('supabase_storage', 'ok', 'Supabase credentials pending provisioning; local artifacts stay local until approval')
             else:
                 _set_startup_step('supabase_storage', 'error', 'Storage manager is unavailable')
                 raise RuntimeError('Supabase storage manager is not available')
@@ -1048,8 +1063,7 @@ def _run_startup_sequence():
                 _ = storage_manager.client.storage.list_buckets()
                 _set_startup_step('supabase_storage', 'ok', 'Storage buckets reachable')
             except Exception as storage_exc:
-                local_diag = _get_local_mode_diagnostics()
-                if ALLOW_OFFLINE_LOCAL_MODE and local_diag.get('local_mode_possible'):
+                if ALLOW_OFFLINE_LOCAL_MODE:
                     _set_startup_step('supabase_storage', 'ok', f'Supabase Storage unreachable; local-only mode active ({storage_exc})')
                 else:
                     _set_startup_step('supabase_storage', 'error', str(storage_exc))
@@ -1132,6 +1146,22 @@ def initialize_pipeline_components():
     """Initialize violation detector, caption generator, report generator, and Supabase managers."""
     global violation_detector, caption_generator, report_generator, db_manager, storage_manager
     global violation_queue, queue_worker_thread, queue_worker_running
+
+    def _can_run_local_offline() -> bool:
+        if not ALLOW_OFFLINE_LOCAL_MODE:
+            return False
+        try:
+            local_diag = _get_local_mode_diagnostics()
+            # Keep offline mode available even before model pull completes.
+            return bool(local_diag.get('local_mode_possible') or local_diag.get('ollama_installed'))
+        except Exception:
+            return True
+
+    def _supabase_credentials_ready() -> bool:
+        try:
+            return _local_mode_has_supabase_credentials()
+        except Exception:
+            return True
     
     if not FULL_PIPELINE_AVAILABLE:
         logger.warning("Full pipeline not available - skipping component initialization")
@@ -1152,50 +1182,74 @@ def initialize_pipeline_components():
         if db_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
-            try:
-                db_manager = _run_with_timeout(
-                    create_db_manager_from_env,
-                    STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
-                    'db-manager-init'
+            if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
+                logger.warning(
+                    "Offline Mode Allowed: Supabase DB credentials are missing/placeholder. "
+                    "Deferring DB initialization until provisioning completes."
                 )
-                
-                # Fix any stuck reports from previous sessions
-                if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
-                    _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
-                    logger.info("Checking for stuck reports...")
-                    fixed = _run_with_timeout(
-                        db_manager.fix_stuck_reports,
-                        int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
-                        'fix_stuck_reports'
+                db_manager = None
+            else:
+                try:
+                    db_manager = _run_with_timeout(
+                        create_db_manager_from_env,
+                        STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
+                        'db-manager-init'
                     )
-                    if fixed > 0:
-                        logger.info(f"✓ Fixed {fixed} stuck reports")
-            except Exception as db_exc:
-                if ALLOW_OFFLINE_LOCAL_MODE:
-                    logger.warning(f"Offline Mode Allowed: Skipping Supabase DB initialization error: {db_exc}")
-                    db_manager = None
-                else:
-                    raise
+                except Exception as db_init_error:
+                    if _can_run_local_offline():
+                        logger.warning(
+                            f"Offline Mode Allowed: Skipping Supabase DB initialization error: {db_init_error}"
+                        )
+                        db_manager = None
+                    else:
+                        raise
+            
+            # Fix any stuck reports from previous sessions
+            if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
+                _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
+                logger.info("Checking for stuck reports...")
+                fixed = _run_with_timeout(
+                    db_manager.fix_stuck_reports,
+                    int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
+                    'fix_stuck_reports'
+                )
+                if fixed > 0:
+                    logger.info(f"✓ Fixed {fixed} stuck reports")
         
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
-            try:
-                storage_manager = _run_with_timeout(
-                    create_storage_manager_from_env,
-                    STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
-                    'storage-manager-init'
+            if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
+                logger.warning(
+                    "Offline Mode Allowed: Supabase Storage credentials are missing/placeholder. "
+                    "Deferring Storage initialization until provisioning completes."
                 )
-            except Exception as storage_exc:
-                if ALLOW_OFFLINE_LOCAL_MODE:
-                    logger.warning(f"Offline Mode Allowed: Skipping Supabase Storage initialization error: {storage_exc}")
-                    storage_manager = None
-                else:
-                    raise
+                storage_manager = None
+            else:
+                try:
+                    storage_manager = _run_with_timeout(
+                        create_storage_manager_from_env,
+                        STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
+                        'storage-manager-init'
+                    )
+                except Exception as storage_init_error:
+                    if _can_run_local_offline():
+                        logger.warning(
+                            f"Offline Mode Allowed: Skipping Supabase Storage initialization error: {storage_init_error}"
+                        )
+                        storage_manager = None
+                    else:
+                        raise
             
         if report_generator is None:
-            _set_startup_step('pipeline_components', 'pending', 'Initializing report generator')
-            logger.info("Initializing report generator...")
+            use_supabase_generator = db_manager is not None and storage_manager is not None
+            if use_supabase_generator:
+                _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
+                logger.info("Initializing Supabase report generator...")
+            else:
+                _set_startup_step('pipeline_components', 'pending', 'Initializing local report generator fallback')
+                logger.info("Initializing local report generator fallback...")
+
             report_config = {
                 'OLLAMA_CONFIG': OLLAMA_CONFIG,
                 'GEMINI_CONFIG': GEMINI_CONFIG,
@@ -1207,22 +1261,20 @@ def initialize_pipeline_components():
                 'VIOLATIONS_DIR': VIOLATIONS_DIR,
                 'SUPABASE_CONFIG': SUPABASE_CONFIG
             }
-            
-            if db_manager is not None and storage_manager is not None:
-                logger.info("Using SupabaseReportGenerator with active cloud connections.")
-                from pipeline.backend.core.supabase_report_generator import SupabaseReportGenerator
+            if use_supabase_generator:
                 report_generator = _run_with_timeout(
-                    lambda: SupabaseReportGenerator(report_config, storage_manager, db_manager),
+                    lambda: create_supabase_report_generator(report_config),
                     STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
                     'report-generator-init'
                 )
             else:
-                logger.info("Offline mode active or Supabase disconnected: Using local ReportGenerator fallback.")
-                from pipeline.backend.core.report_generator import ReportGenerator
+                if not _can_run_local_offline():
+                    raise RuntimeError('Supabase report generator is unavailable and local-offline mode is not ready')
+
                 report_generator = _run_with_timeout(
                     lambda: ReportGenerator(report_config),
                     STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
-                    'report-generator-init'
+                    'report-generator-local-init'
                 )
         
         # Initialize violation queue for handling multiple violations
@@ -3102,6 +3154,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
         'ollama_running': ollama_running,
         'model_available': model_available,
         'local_mode_possible': bool(ollama_running and model_available),
+        'offline_fallback_available': bool(ollama_running and bool(ollama_executable)),
         'pull_command': f"ollama pull {ollama_model}",
         'start_command': f'"{ollama_executable}" serve' if ollama_executable else 'ollama serve',
         'install_url': install_guidance.get('install_url'),
@@ -3378,10 +3431,12 @@ def api_local_mode_provisioning_status():
     cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
     state = _local_mode_load_provision_state()
     machine_id = str(state.get('machine_id') or '').strip() or _local_mode_get_or_create_machine_id()
+    raw_status = str(state.get('status') or 'idle').strip().lower()
+    normalized_status = 'pending_approval' if raw_status == 'pending' else raw_status
 
     return jsonify({
         'success': True,
-        'status': str(state.get('status') or 'idle').strip().lower(),
+        'status': normalized_status,
         'machine_id': machine_id,
         'cloud_url': cloud_url,
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
@@ -4212,19 +4267,10 @@ def api_sync_local_cache_to_supabase():
     max_items = max(1, min(max_items, 500))
     dry_run = bool(payload.get('dry_run', False))
 
-    global db_manager, storage_manager
     if db_manager is None:
-        try:
-            db_manager = create_db_manager_from_env()
-        except Exception as e:
-            logger.error(f"Failed to auto-init db_manager during sync: {e}")
-            return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
+        return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
     if storage_manager is None:
-        try:
-            storage_manager = create_storage_manager_from_env()
-        except Exception as e:
-            logger.error(f"Failed to auto-init storage_manager during sync: {e}")
-            return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
+        return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
     if violation_queue is None:
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
     if not dry_run and not ensure_queue_worker_running():
@@ -6518,6 +6564,10 @@ ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
 INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
 BOOTSTRAP_JTI_RETENTION_SECONDS = int(os.getenv('BOOTSTRAP_JTI_RETENTION_SECONDS', '86400'))
+DEFAULT_INSTALLER_REPO_ZIP_URL = (
+    'https://github.com/FrankieLingIsHere/FYPA_AI_Model_Development-Integration/archive/refs/heads/main.zip'
+)
+DEFAULT_INSTALLER_SOURCE_ROOT = 'FYPA_AI_Model_Development-Integration-main'
 
 
 def _safe_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -6770,6 +6820,43 @@ def _issue_installer_redirect(machine_id: str) -> Response:
     )
     return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
+
+def _sanitize_batch_template_value(raw_value: str) -> str:
+    """Remove newlines from values before injecting into batch templates."""
+    return str(raw_value or '').replace('\r', '').replace('\n', '').strip()
+
+
+def _resolve_installer_template_context() -> Dict[str, str]:
+    repo_zip_url = _sanitize_batch_template_value(
+        os.getenv('INSTALLER_REPO_ZIP_URL', DEFAULT_INSTALLER_REPO_ZIP_URL)
+    ) or DEFAULT_INSTALLER_REPO_ZIP_URL
+    source_root = _sanitize_batch_template_value(
+        os.getenv('INSTALLER_SOURCE_ROOT', DEFAULT_INSTALLER_SOURCE_ROOT)
+    ) or DEFAULT_INSTALLER_SOURCE_ROOT
+
+    commit_hint = (
+        str(os.getenv('RAILWAY_GIT_COMMIT_SHA', '')).strip()
+        or str(os.getenv('VERCEL_GIT_COMMIT_SHA', '')).strip()
+        or str(os.getenv('RENDER_GIT_COMMIT', '')).strip()
+        or str(os.getenv('GITHUB_SHA', '')).strip()
+    )
+    installer_version = commit_hint[:12] if commit_hint else datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
+
+    return {
+        '__LUNA_REPO_ZIP_URL__': repo_zip_url,
+        '__LUNA_SOURCE_ROOT__': source_root,
+        '__LUNA_INSTALLER_VERSION__': installer_version,
+    }
+
+
+def _render_installer_batch_script(template_path: Path) -> Tuple[str, str]:
+    content = template_path.read_text(encoding='utf-8')
+    context = _resolve_installer_template_context()
+    for token, replacement in context.items():
+        content = content.replace(token, replacement)
+    return content, context.get('__LUNA_INSTALLER_VERSION__', 'unknown')
+
+
 import smtplib
 import socket
 import threading
@@ -6938,6 +7025,7 @@ def notify_admin(machine_id, status='pending', token=None):
     except Exception as e:
         logger.error(f'Failed to start async admin notification worker: {e}')
         _notify_admin_sync(machine_id, status=status, token=token)
+
 
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
@@ -7135,12 +7223,22 @@ def download_bootstrap_installer():
     if not installer_path.exists():
         return jsonify({'error': 'Installer asset not found'}), 404
 
-    return send_from_directory(
-        str(installer_dir),
-        installer_name,
-        as_attachment=True,
-        download_name=installer_name,
-    )
+    try:
+        installer_content, installer_version = _render_installer_batch_script(installer_path)
+    except Exception as render_exc:
+        logger.error(f"Failed to render installer template: {render_exc}")
+        return jsonify({'error': 'Failed to render installer asset'}), 500
+
+    response = Response(installer_content, mimetype='application/x-msdownload')
+    response.headers['Content-Disposition'] = f'attachment; filename="{installer_name}"'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.headers['X-Luna-Installer-Version'] = installer_version
+    response.headers['X-Luna-Installer-SHA256'] = hashlib.sha256(
+        installer_content.encode('utf-8')
+    ).hexdigest()
+    return response
 
 
 @app.route('/admin/devices', methods=['GET', 'POST'])
@@ -7282,9 +7380,11 @@ def admin_devices_quick_approve():
     """
     return html_response
 
+
 # =========================================================================
 # MAIN
 # =========================================================================
+
 if __name__ == '__main__':
     import atexit
     atexit.register(cleanup)

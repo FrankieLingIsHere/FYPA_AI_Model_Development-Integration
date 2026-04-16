@@ -386,10 +386,23 @@ def create_storage_manager_from_env() -> SupabaseStorageManager:
     """
     supabase_url = os.getenv('SUPABASE_URL')
     supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+    normalized_url = str(supabase_url or '').strip().lower()
+    normalized_key = str(supabase_key or '').strip().lower()
+    placeholder_markers = (
+        'your-project-id',
+        'your-service-role-key',
+        'example.supabase.co',
+    )
     
-    if not supabase_url or not supabase_key:
+    if (
+        not supabase_url
+        or not supabase_key
+        or any(marker in normalized_url for marker in placeholder_markers)
+        or any(marker in normalized_key for marker in placeholder_markers)
+    ):
         raise ValueError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in environment"
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set to real project values"
         )
     
     images_bucket = os.getenv('SUPABASE_IMAGES_BUCKET', 'violation-images')

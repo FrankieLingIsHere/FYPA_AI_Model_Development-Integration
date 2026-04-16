@@ -88,6 +88,8 @@ startup_state = {
         'queue_worker': {'label': 'Queue worker', 'status': 'pending', 'detail': None}
     }
 }
+startup_auto_provision_thread_lock = Lock()
+startup_auto_provision_thread = None
 
 # In-memory cache for rendered report HTML source payloads to reduce repeated
 # storage fetch latency when the same report is opened multiple times.
@@ -249,6 +251,24 @@ STARTUP_AUTO_PREPARE_LOCAL_MODE = os.getenv('STARTUP_AUTO_PREPARE_LOCAL_MODE', '
 STARTUP_AUTO_PULL_LOCAL_MODEL = os.getenv('STARTUP_AUTO_PULL_LOCAL_MODEL', 'true').lower() == 'true'
 STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS', '6'))
 STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS', '240'))
+STARTUP_AUTO_PROVISION_LOCAL_MODE = os.getenv('STARTUP_AUTO_PROVISION_LOCAL_MODE', 'false').lower() == 'true'
+try:
+    STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = int(
+        os.getenv('STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS', '15')
+    )
+except (TypeError, ValueError):
+    STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = 15
+STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = max(
+    5,
+    min(STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS, 300),
+)
+try:
+    STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = int(
+        os.getenv('STARTUP_AUTO_PROVISION_MAX_ATTEMPTS', '120')
+    )
+except (TypeError, ValueError):
+    STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = 120
+STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = max(0, min(STARTUP_AUTO_PROVISION_MAX_ATTEMPTS, 100000))
 ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 LOCAL_OLLAMA_UNIFIED_MODEL = str(
@@ -1076,6 +1096,7 @@ def _run_startup_sequence():
         _set_startup_step('queue_worker', 'ok', 'Queue worker is running')
 
         _set_startup_progress(99, 'Finalizing startup')
+        _ensure_startup_local_auto_provision_worker()
         _set_startup_ready()
         logger.info('✅ Startup sequence completed. System is ready.')
 
@@ -1147,6 +1168,19 @@ def initialize_pipeline_components():
     global violation_detector, caption_generator, report_generator, db_manager, storage_manager
     global violation_queue, queue_worker_thread, queue_worker_running
 
+    def _log_supabase_offline(message: str) -> None:
+        """Log deferred Supabase init messages with configurable severity for local/offline runs."""
+        level = str(os.getenv('SUPABASE_OFFLINE_LOG_LEVEL', 'warning') or 'warning').strip().lower()
+        if level in ('none', 'silent', 'off'):
+            return
+        if level == 'debug':
+            logger.debug(message)
+            return
+        if level == 'info':
+            logger.info(message)
+            return
+        logger.warning(message)
+
     def _can_run_local_offline() -> bool:
         if not ALLOW_OFFLINE_LOCAL_MODE:
             return False
@@ -1183,7 +1217,7 @@ def initialize_pipeline_components():
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
             if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
-                logger.warning(
+                _log_supabase_offline(
                     "Offline Mode Allowed: Supabase DB credentials are missing/placeholder. "
                     "Deferring DB initialization until provisioning completes."
                 )
@@ -1197,7 +1231,7 @@ def initialize_pipeline_components():
                     )
                 except Exception as db_init_error:
                     if _can_run_local_offline():
-                        logger.warning(
+                        _log_supabase_offline(
                             f"Offline Mode Allowed: Skipping Supabase DB initialization error: {db_init_error}"
                         )
                         db_manager = None
@@ -1220,7 +1254,7 @@ def initialize_pipeline_components():
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
             if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
-                logger.warning(
+                _log_supabase_offline(
                     "Offline Mode Allowed: Supabase Storage credentials are missing/placeholder. "
                     "Deferring Storage initialization until provisioning completes."
                 )
@@ -1234,7 +1268,7 @@ def initialize_pipeline_components():
                     )
                 except Exception as storage_init_error:
                     if _can_run_local_offline():
-                        logger.warning(
+                        _log_supabase_offline(
                             f"Offline Mode Allowed: Skipping Supabase Storage initialization error: {storage_init_error}"
                         )
                         storage_manager = None
@@ -3299,8 +3333,23 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
     return normalized
 
 
-LOCAL_MODE_PROVISION_STATE_FILE = Path('local_mode_provision_state.json')
-LOCAL_MODE_MACHINE_ID_FILE = Path('machine_id.txt')
+def _resolve_local_mode_state_dir() -> Path:
+    configured = os.path.expandvars(str(os.getenv('LUNA_STATE_DIR') or '').strip())
+    if not configured:
+        return Path('.')
+
+    try:
+        state_dir = Path(configured).expanduser()
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return state_dir
+    except Exception as state_err:
+        logger.warning(f"Invalid LUNA_STATE_DIR '{configured}': {state_err}. Falling back to current directory.")
+        return Path('.')
+
+
+LOCAL_MODE_STATE_DIR = _resolve_local_mode_state_dir()
+LOCAL_MODE_PROVISION_STATE_FILE = LOCAL_MODE_STATE_DIR / 'local_mode_provision_state.json'
+LOCAL_MODE_MACHINE_ID_FILE = LOCAL_MODE_STATE_DIR / 'machine_id.txt'
 
 
 def _local_mode_normalize_cloud_url(raw_url: str) -> str:
@@ -3310,6 +3359,19 @@ def _local_mode_normalize_cloud_url(raw_url: str) -> str:
     if not re.match(r'^https?://', value, flags=re.IGNORECASE):
         value = f"https://{value}"
     return value.rstrip('/')
+
+
+def _local_mode_cloud_url_is_placeholder(value: str) -> bool:
+    normalized = str(value or '').strip().lower()
+    if not normalized:
+        return True
+    placeholder_markers = (
+        'your-cloud-dashboard-url',
+        '<your-railway-domain>',
+        'your-railway-domain',
+        'your cloud dashboard',
+    )
+    return any(marker in normalized for marker in placeholder_markers)
 
 
 def _local_mode_is_placeholder_secret(value: str) -> bool:
@@ -3424,6 +3486,130 @@ def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[
         'reinitialized': reinit_success,
         'reinit_error': reinit_error,
     }
+
+
+def _extract_json_response_payload(response_result: Any) -> Tuple[Dict[str, Any], int]:
+    """Normalize Flask route return values into payload/status for internal callers."""
+    status_code = 200
+    response_obj: Any = response_result
+
+    if isinstance(response_result, tuple):
+        if len(response_result) >= 1:
+            response_obj = response_result[0]
+        if len(response_result) >= 2 and isinstance(response_result[1], int):
+            status_code = int(response_result[1])
+
+    if hasattr(response_obj, 'status_code'):
+        try:
+            status_code = int(getattr(response_obj, 'status_code') or status_code)
+        except Exception:
+            pass
+
+    if isinstance(response_obj, dict):
+        return response_obj, status_code
+
+    if hasattr(response_obj, 'get_json'):
+        try:
+            payload = response_obj.get_json(silent=True)
+            return payload if isinstance(payload, dict) else {}, status_code
+        except Exception:
+            return {}, status_code
+
+    return {}, status_code
+
+
+def _run_local_mode_auto_provision_once(cloud_url_override: str = '') -> Tuple[Dict[str, Any], int]:
+    request_payload: Dict[str, Any] = {}
+    normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url_override)
+    if normalized_cloud_url:
+        request_payload['cloud_url'] = normalized_cloud_url
+
+    with app.test_request_context(
+        '/api/local-mode/provisioning/auto',
+        method='POST',
+        json=request_payload,
+    ):
+        response_result = api_local_mode_auto_provisioning()
+
+    return _extract_json_response_payload(response_result)
+
+
+def _startup_local_auto_provision_worker() -> None:
+    logger.info(
+        "Startup auto-provision worker started "
+        f"(interval={STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS}s, "
+        f"max_attempts={STARTUP_AUTO_PROVISION_MAX_ATTEMPTS})"
+    )
+
+    attempts = 0
+    while True:
+        if _local_mode_has_supabase_credentials():
+            logger.info('Startup auto-provision: credentials already present; worker exiting.')
+            return
+
+        cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
+        if not cloud_url or _local_mode_cloud_url_is_placeholder(cloud_url):
+            logger.info('Startup auto-provision skipped: CLOUD_URL is missing or placeholder.')
+            return
+
+        attempts += 1
+        try:
+            payload, status_code = _run_local_mode_auto_provision_once(cloud_url)
+        except Exception as provision_exc:
+            if attempts == 1 or attempts % 4 == 0:
+                logger.warning(f'Startup auto-provision attempt {attempts} failed: {provision_exc}')
+        else:
+            status = str(payload.get('status') or '').strip().lower()
+            success = bool(payload.get('success'))
+
+            if success and status in ('credentials_present', 'provisioned'):
+                logger.info('Startup auto-provision completed: Supabase credentials are active locally.')
+                return
+
+            if status == 'rejected':
+                logger.warning('Startup auto-provision stopped: request rejected by admin.')
+                return
+
+            if attempts == 1 or attempts % 4 == 0:
+                detail = str(payload.get('error') or payload.get('message') or f'HTTP {status_code}')
+                logger.info(
+                    f"Startup auto-provision attempt {attempts}: status={status or 'unknown'}, detail={detail}"
+                )
+
+        if STARTUP_AUTO_PROVISION_MAX_ATTEMPTS > 0 and attempts >= STARTUP_AUTO_PROVISION_MAX_ATTEMPTS:
+            logger.info(
+                'Startup auto-provision stopped after max attempts '
+                f'({STARTUP_AUTO_PROVISION_MAX_ATTEMPTS}).'
+            )
+            return
+
+        time.sleep(STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS)
+
+
+def _ensure_startup_local_auto_provision_worker() -> None:
+    global startup_auto_provision_thread
+
+    if not STARTUP_AUTO_PROVISION_LOCAL_MODE:
+        return
+    if not ALLOW_OFFLINE_LOCAL_MODE:
+        return
+    if _local_mode_has_supabase_credentials():
+        return
+
+    cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
+    if not cloud_url or _local_mode_cloud_url_is_placeholder(cloud_url):
+        return
+
+    with startup_auto_provision_thread_lock:
+        if startup_auto_provision_thread and startup_auto_provision_thread.is_alive():
+            return
+
+        startup_auto_provision_thread = Thread(
+            target=_startup_local_auto_provision_worker,
+            daemon=True,
+            name='startup-auto-provision',
+        )
+        startup_auto_provision_thread.start()
 
 
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
@@ -7061,23 +7247,38 @@ def provision_request():
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
         return jsonify({'error': 'Invalid machine_id format'}), 400
 
-    approval_token = secrets.token_urlsafe(32)
     provision_secret = secrets.token_urlsafe(48)
 
     devices = _load_pending_devices()
+    existing = devices.get(machine_id) if isinstance(devices.get(machine_id), dict) else {}
+    existing_status = str((existing or {}).get('status') or 'pending').strip().lower()
+
+    # Re-requesting a secret for an already approved/provisioned device should not
+    # downgrade it back to pending, otherwise local re-installs can never auto-finish.
+    preserve_status = existing_status in ('approved', 'provisioned')
+    effective_status = existing_status if preserve_status else 'pending'
+
+    if preserve_status:
+        approval_token = str((existing or {}).get('token') or '').strip() or secrets.token_urlsafe(32)
+    else:
+        approval_token = secrets.token_urlsafe(32)
+
     devices[machine_id] = {
-        'status': 'pending',
+        'status': effective_status,
         'requested_at': datetime.now(timezone.utc).isoformat(),
         'token': approval_token,
         'provision_secret_hash': _hash_provision_secret(provision_secret),
-        'approved_at': None,
-        'provisioned_at': None,
+        'approved_at': (existing or {}).get('approved_at') if preserve_status else None,
+        'provisioned_at': (existing or {}).get('provisioned_at') if effective_status == 'provisioned' else None,
     }
     _save_pending_devices(devices)
-    notify_admin(machine_id, 'pending', token=approval_token)
+
+    if not preserve_status:
+        notify_admin(machine_id, 'pending', token=approval_token)
 
     return jsonify({
         'status': 'stored',
+        'device_status': effective_status,
         'machine_id': machine_id,
         'provision_secret': provision_secret,
     })

@@ -102,6 +102,34 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(valid_secret.status_code, 200)
         self.assertEqual(valid_secret.json.get('status'), 'pending')
 
+    def test_re_request_for_approved_device_preserves_approval_status(self):
+        machine_id = 'TEST-EDGE-REISSUE-001'
+        first_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
+        self.assertEqual(reissue.status_code, 200)
+        reissue_payload = reissue.json or {}
+        self.assertEqual(reissue_payload.get('status'), 'stored')
+        self.assertEqual(reissue_payload.get('device_status'), 'approved')
+
+        second_secret = str(reissue_payload.get('provision_secret') or '').strip()
+        self.assertTrue(second_secret)
+        self.assertNotEqual(first_secret, second_secret)
+
+        old_secret_status = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}&provision_secret={first_secret}'
+        )
+        self.assertEqual(old_secret_status.status_code, 401)
+
+        new_secret_status = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}&provision_secret={second_secret}'
+        )
+        self.assertEqual(new_secret_status.status_code, 200)
+        payload = new_secret_status.json or {}
+        self.assertEqual(payload.get('status'), 'approved')
+        self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
+
     def test_bootstrap_exchange_flow_is_one_time(self):
         machine_id = 'TEST-EDGE-BOOTSTRAP-001'
         provision_secret = self._request_device(machine_id)

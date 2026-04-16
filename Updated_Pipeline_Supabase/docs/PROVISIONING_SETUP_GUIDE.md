@@ -19,6 +19,7 @@ Configure these environment variables on the cloud backend.
 - `PROVISION_EXCHANGE_TOKEN_TTL_SECONDS` (default 300)
 - `INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS` (default 600)
 - `BOOTSTRAP_JTI_RETENTION_SECONDS` (default 86400)
+- `LUNA_STATE_DIR` (recommended local default: `C:\LUNA_System\LUNA_LocalState`)
 
 ### Optional notifications
 - `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `ADMIN_EMAIL`
@@ -75,6 +76,8 @@ Legacy/manual equivalent sequence remains available:
   - `bootstrap_token`
 
 Credentials are returned only by the bootstrap-exchange endpoint, not by status polling.
+
+Re-issuing a `provision_secret` for an already approved device keeps its approved/provisioned status (it does not downgrade back to pending).
 
 ## 4) Installer Delivery Security
 
@@ -166,3 +169,22 @@ After the user triggers checkup once, the rest can run silently:
 5. Runtime environment is updated and pipeline components are reinitialized.
 
 No manual credential copy-paste is required in normal flow.
+
+### Q4: If I received the local installer link, does that mean this machine is already provisioned?
+
+No.
+
+Receiving installer link means only installer delivery was authorized via a one-time installer token. It does not mean this machine has already completed credential provisioning.
+
+Provisioning is completed only after:
+
+1. Device approval (`approved`/`provisioned` state) and
+2. Successful one-time bootstrap exchange (`/api/provision/bootstrap-exchange`) that returns Supabase credentials.
+
+Credentials are never embedded in the installer payload itself.
+
+If local source files are refreshed/reinstalled, keep `LUNA_STATE_DIR` on a stable path so `machine_id` and provisioning state persist across updates.
+
+For full security control inventory and leakage-prevention controls, see:
+
+- `docs/SECURITY_FRAMEWORKS_CREDENTIAL_PROTECTION_2026-04-16.md`

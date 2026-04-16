@@ -7654,9 +7654,9 @@ def request_bootstrap_installer():
         or ''
     ).strip()
 
-    if machine_id or provision_secret:
-        if not machine_id or not provision_secret:
-            return jsonify({'error': 'machine_id and provision_secret are both required'}), 400
+    if machine_id:
+        if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+            return jsonify({'error': 'Invalid machine_id format'}), 400
 
         devices = _load_pending_devices()
         device = devices.get(machine_id)
@@ -7667,10 +7667,19 @@ def request_bootstrap_installer():
         if current_status not in ('approved', 'provisioned'):
             return jsonify({'error': 'Device is not approved for installer access'}), 403
 
-        if not _is_valid_provision_secret(device, provision_secret):
+        if provision_secret and not _is_valid_provision_secret(device, provision_secret):
             return jsonify({'error': 'Invalid provision_secret'}), 401
 
+        if not provision_secret:
+            logger.info(
+                f"Issuing installer token for approved/provisioned machine_id={machine_id} "
+                "without provision_secret (recovery convenience path)."
+            )
+
         return _issue_installer_redirect(machine_id)
+
+    if provision_secret:
+        return jsonify({'error': 'machine_id is required when provision_secret is provided'}), 400
 
     if not ADMIN_PASSWORD:
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot issue installer token.', 403

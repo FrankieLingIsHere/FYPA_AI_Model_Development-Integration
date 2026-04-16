@@ -211,6 +211,15 @@ class ProvisioningActionTest(unittest.TestCase):
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
 
+        request_machine_only = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+            follow_redirects=False,
+        )
+        self.assertIn(request_machine_only.status_code, (301, 302, 303, 307, 308))
+        machine_only_location = str(request_machine_only.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', machine_only_location)
+        request_machine_only.close()
+
         request_unauth = self.client.get('/api/bootstrap/installer/request')
         self.assertEqual(request_unauth.status_code, 401)
         request_unauth.close()
@@ -271,6 +280,17 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_replay = self.client.get(f'/api/bootstrap/installer?token={installer_token}')
         self.assertEqual(installer_replay.status_code, 403)
         installer_replay.close()
+
+    def test_machine_only_installer_request_rejects_pending_device(self):
+        machine_id = 'TEST-EDGE-INSTALLER-PENDING-001'
+        _ = self._request_device(machine_id)
+
+        pending_resp = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+            follow_redirects=False,
+        )
+        self.assertEqual(pending_resp.status_code, 403)
+        pending_resp.close()
 
     def test_local_auto_provision_requires_cloud_url(self):
         previous_cloud_url = os.environ.pop('CLOUD_URL', None)

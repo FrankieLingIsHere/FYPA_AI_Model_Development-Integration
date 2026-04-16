@@ -88,6 +88,8 @@ Installer access is token-gated:
 
 - Direct static path `/static/LUNA_LocalInstaller.bat` is blocked.
 - Use `/api/bootstrap/installer/request` to issue a one-time installer token.
+  - For approved/provisioned devices, `machine_id` alone is sufficient for reissuing a fresh installer link (recovery path for deleted/expired downloads).
+  - `provision_secret` is still accepted and validated when provided.
 - Download via `/api/bootstrap/installer?token=...`.
 - Replay of the same token is rejected.
 

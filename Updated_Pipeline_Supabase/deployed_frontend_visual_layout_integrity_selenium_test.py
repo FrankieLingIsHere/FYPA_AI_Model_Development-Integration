@@ -117,6 +117,13 @@ def main() -> int:
             if quick_settings_launchers:
                 raise RuntimeError("Live page still exposes quick settings launcher; settings windows must only open via sidebar Settings")
 
+            open_settings_buttons = driver.find_elements(
+                By.XPATH,
+                "//button[contains(normalize-space(.), 'Open Settings')]"
+            )
+            if open_settings_buttons:
+                raise RuntimeError("Live page still exposes an in-page Open Settings button; launch must be sidebar Settings only")
+
             settings_links[0].click()
             wait.until(lambda d: "#settings" in (d.current_url or ""))
 

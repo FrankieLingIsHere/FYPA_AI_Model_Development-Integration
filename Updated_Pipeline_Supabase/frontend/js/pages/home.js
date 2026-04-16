@@ -5,7 +5,6 @@ const HomePage = {
     _timezoneChangeHandler: null,
     _provisioningHandler: null,
     _runLocalCheckupHandler: null,
-    _openSettingsHandler: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
 
@@ -56,9 +55,6 @@ const HomePage = {
                         <div class="home-local-mode-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem;">
                             <button id="homeRunLocalCheckupBtn" class="btn btn-primary" type="button">
                                 <i class="fas fa-wifi"></i> Local Mode Checkup
-                            </button>
-                            <button id="homeOpenSettingsBtn" class="btn btn-secondary" type="button">
-                                <i class="fas fa-gear"></i> Open Settings
                             </button>
                         </div>
                     </div>
@@ -158,14 +154,6 @@ const HomePage = {
             runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
         }
 
-        const openSettingsBtn = document.getElementById('homeOpenSettingsBtn');
-        if (openSettingsBtn) {
-            this._openSettingsHandler = () => {
-                Router.navigate('settings');
-            };
-            openSettingsBtn.addEventListener('click', this._openSettingsHandler);
-        }
-
         if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.get === 'function') {
             this.renderProvisioningStatus(window.PPEProvisioningStatus.get());
         } else {
@@ -210,12 +198,6 @@ const HomePage = {
             runCheckupBtn.removeEventListener('click', this._runLocalCheckupHandler);
         }
         this._runLocalCheckupHandler = null;
-
-        const openSettingsBtn = document.getElementById('homeOpenSettingsBtn');
-        if (openSettingsBtn && this._openSettingsHandler) {
-            openSettingsBtn.removeEventListener('click', this._openSettingsHandler);
-        }
-        this._openSettingsHandler = null;
 
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);

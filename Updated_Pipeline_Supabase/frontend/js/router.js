@@ -22,18 +22,34 @@ const Router = {
         const { updateHash = true } = options;
         const normalizedPath = this.normalizePath(path);
         const component = this.routes[normalizedPath];
+
+        const emitSettingsOpenIntent = () => {
+            if (normalizedPath !== 'settings' && normalizedPath !== 'settings-checkup') {
+                return;
+            }
+
+            window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
+                detail: {
+                    focusLocalCheckup: normalizedPath === 'settings-checkup'
+                }
+            }));
+        };
+
         if (component) {
             if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
                 this.updateActiveNav(normalizedPath);
                 if (updateHash && window.location.hash !== `#${normalizedPath}`) {
                     window.location.hash = normalizedPath;
                 }
+                emitSettingsOpenIntent();
                 return;
             }
 
             APP_STATE.currentPage = normalizedPath;
             this.render(component);
             this.updateActiveNav(normalizedPath);
+
+            emitSettingsOpenIntent();
 
             // Update URL hash
             if (updateHash && window.location.hash !== `#${normalizedPath}`) {

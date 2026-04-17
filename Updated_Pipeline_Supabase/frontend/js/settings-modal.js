@@ -427,7 +427,7 @@ const GlobalSettingsModal = {
         const status = this.normalizeLocalProvisionStatus(statusRaw);
         const machineId = String(machineIdRaw || '').trim();
         if (!machineId) return false;
-        return status === 'approved' || status === 'provisioned' || status === 'credentials_present';
+        return status === 'approved' || status === 'provisioned';
     },
 
     updateInstallerRedownloadButton() {
@@ -773,9 +773,15 @@ const GlobalSettingsModal = {
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
             const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
-            if (status === 'provisioned' || status === 'credentials_present') {
+            if (status === 'provisioned') {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
                 this.showNotification('Provisioning completed. Cloud sync is now available.', 'success');
+            } else if (status === 'approved') {
+                this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
+                this.showNotification('Device approved. Installer re-issue is now available.', 'success');
+            } else if (status === 'credentials_present') {
+                this.setProviderStatus('Cloud credentials are detected locally, but this machine is not approved/provisioned in admin records.', 'warning');
+                this.showNotification('Credentials detected locally, but this machine is not approved/provisioned in admin records.', 'warning');
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provision request submitted. Waiting for admin approval.', 'warning');
                 this.showNotification('Provision request submitted. Waiting for admin approval.', 'warning');
@@ -814,7 +820,7 @@ const GlobalSettingsModal = {
                 const pollResult = await API.autoProvisionLocalModeCredentials();
                 this.syncLocalProvisionStateFromPayload(pollResult || {});
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
-                if (pollStatus === 'provisioned' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
+                if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
                     this.stopLocalProvisionPolling();
                 }
             } catch (error) {

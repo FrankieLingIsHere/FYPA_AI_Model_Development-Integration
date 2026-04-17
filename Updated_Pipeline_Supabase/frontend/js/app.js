@@ -78,10 +78,13 @@ function notifyApp(message, type = 'info') {
     console.log(`[App:${type}] ${message}`);
 }
 
-function normalizeProvisioningStatus(rawStatus, credentialsPresent) {
+function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     const normalized = String(rawStatus || '').trim().toLowerCase();
     if (normalized === 'pending' || normalized === 'pending_approval') {
         return 'pending_approval';
+    }
+    if (normalized === 'approved') {
+        return 'approved';
     }
     if (normalized === 'credentials_present') {
         return 'credentials_present';
@@ -96,10 +99,7 @@ function normalizeProvisioningStatus(rawStatus, credentialsPresent) {
         return 'error';
     }
     if (normalized === 'idle') {
-        return credentialsPresent ? 'credentials_present' : 'idle';
-    }
-    if (credentialsPresent) {
-        return 'credentials_present';
+        return 'idle';
     }
     return normalized || 'idle';
 }
@@ -156,8 +156,10 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
 
     if (nextState.status === 'provisioned') {
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
+    } else if (nextState.status === 'approved') {
+        notifyApp('Local mode request is approved. You can re-issue installer access for this machine.', 'success');
     } else if (nextState.status === 'credentials_present') {
-        notifyApp('Cloud credentials are present on this backend, but approval state may still be idle until Local Mode Checkup is approved.', 'warning');
+        notifyApp('Cloud credentials are present locally, but this machine is not marked approved/provisioned in the admin dashboard.', 'warning');
     } else if (nextState.status === 'rejected') {
         notifyApp('Local mode approval request was rejected. Contact admin and rerun checkup.', 'error');
     } else if (nextState.status === 'pending_approval') {

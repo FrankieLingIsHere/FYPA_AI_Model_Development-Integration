@@ -4200,6 +4200,87 @@ def _ensure_startup_local_auto_provision_worker() -> None:
         startup_auto_provision_thread.start()
 
 
+def _normalize_cloud_provision_status(raw_status: Any) -> str:
+    normalized = str(raw_status or '').strip().lower()
+    if normalized in ('pending', 'pending_approval'):
+        return 'pending_approval'
+    if normalized in ('approved', 'provisioned', 'rejected'):
+        return normalized
+    if normalized in ('not_found', 'missing', 'unknown'):
+        return 'idle'
+    return normalized or 'idle'
+
+
+def _local_mode_fetch_authoritative_status(
+    cloud_url: str,
+    machine_id: str,
+    provision_secret: str,
+    timeout_seconds: int = 8,
+) -> Dict[str, Any]:
+    normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url)
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    normalized_secret = str(provision_secret or '').strip()
+
+    result: Dict[str, Any] = {
+        'checked': False,
+        'status': 'idle',
+        'raw_status': '',
+        'status_code': None,
+        'payload': {},
+        'error': '',
+    }
+
+    if not normalized_cloud_url or _local_mode_cloud_url_is_placeholder(normalized_cloud_url):
+        result['error'] = 'cloud_url_missing'
+        return result
+
+    if not normalized_machine_id:
+        result['error'] = 'machine_id_missing'
+        return result
+
+    if not normalized_secret:
+        result['error'] = 'provision_secret_missing'
+        return result
+
+    try:
+        response = requests.get(
+            f"{normalized_cloud_url}/api/provision/status",
+            params={
+                'machine_id': normalized_machine_id,
+                'provision_secret': normalized_secret,
+            },
+            timeout=max(3, int(timeout_seconds)),
+        )
+        body = response.json() if response.content else {}
+    except Exception as status_err:
+        result['error'] = f'cloud_status_poll_failed: {status_err}'
+        return result
+
+    raw_status = str((body or {}).get('status') or '').strip().lower()
+    normalized_status = _normalize_cloud_provision_status(raw_status)
+
+    if response.status_code == 403:
+        normalized_status = 'rejected'
+    elif response.status_code in (401, 404):
+        normalized_status = 'idle'
+    elif response.status_code == 503:
+        if normalized_status not in ('approved', 'provisioned', 'pending_approval'):
+            normalized_status = 'idle'
+    elif not response.ok:
+        if normalized_status not in ('approved', 'provisioned', 'pending_approval', 'rejected'):
+            normalized_status = 'idle'
+
+    result.update({
+        'checked': True,
+        'status': normalized_status,
+        'raw_status': raw_status,
+        'status_code': int(response.status_code),
+        'payload': body if isinstance(body, dict) else {},
+        'error': '',
+    })
+    return result
+
+
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
 def api_local_mode_provisioning_status():
     state = _local_mode_load_provision_state()
@@ -4233,8 +4314,36 @@ def api_local_mode_provisioning_status():
             _local_mode_save_provision_state(state)
             _local_mode_write_machine_id(machine_id)
 
-    raw_status = str(state.get('status') or 'idle').strip().lower()
-    normalized_status = 'pending_approval' if raw_status == 'pending' else raw_status
+    credentials_present = _local_mode_has_supabase_credentials()
+    cloud_state = _local_mode_fetch_authoritative_status(
+        cloud_url=cloud_url,
+        machine_id=machine_id,
+        provision_secret=provision_secret,
+        timeout_seconds=8,
+    )
+    authoritative_status = str(cloud_state.get('status') or '').strip().lower()
+
+    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+        normalized_status = authoritative_status
+    elif credentials_present:
+        normalized_status = 'credentials_present'
+    else:
+        normalized_status = 'idle'
+
+    if cloud_state.get('checked') and normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+        cached_status = 'pending' if normalized_status == 'pending_approval' else normalized_status
+        current_cached_status = str(state.get('status') or '').strip().lower()
+        if current_cached_status != cached_status:
+            state['status'] = cached_status
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            try:
+                _local_mode_save_provision_state(state)
+            except Exception as persist_status_err:
+                logger.debug(f"Unable to sync local cached status from cloud authority: {persist_status_err}")
+
+    status_source = 'cloud' if normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected') else (
+        'credentials' if normalized_status == 'credentials_present' else 'idle'
+    )
 
     response = jsonify({
         'success': True,
@@ -4242,7 +4351,10 @@ def api_local_mode_provisioning_status():
         'machine_id': machine_id,
         'cloud_url': cloud_url,
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
-        'credentials_present': _local_mode_has_supabase_credentials(),
+        'credentials_present': credentials_present,
+        'cloud_status_checked': bool(cloud_state.get('checked')),
+        'cloud_status_code': cloud_state.get('status_code'),
+        'status_source': status_source,
         'updated_at': state.get('updated_at'),
         'requested_at': state.get('requested_at'),
         'provisioned_at': state.get('provisioned_at'),
@@ -4301,14 +4413,30 @@ def api_local_mode_auto_provisioning():
 
     admin_portal_url = f"{cloud_url}/admin/devices"
 
-    if _local_mode_has_supabase_credentials():
+    credentials_present = _local_mode_has_supabase_credentials()
+    if credentials_present:
+        cloud_state = _local_mode_fetch_authoritative_status(
+            cloud_url=cloud_url,
+            machine_id=machine_id,
+            provision_secret=provision_secret,
+            timeout_seconds=8,
+        )
+        authoritative_status = str(cloud_state.get('status') or '').strip().lower()
+        if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+            effective_status = authoritative_status
+        else:
+            effective_status = 'credentials_present'
+
         return jsonify({
             'success': True,
-            'status': 'credentials_present',
-            'provisioned': True,
+            'status': effective_status,
+            'provisioned': effective_status == 'provisioned',
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
+            'credentials_present': True,
+            'cloud_status_checked': bool(cloud_state.get('checked')),
+            'cloud_status_code': cloud_state.get('status_code'),
         })
 
     def _request_new_secret() -> Tuple[bool, str, str]:

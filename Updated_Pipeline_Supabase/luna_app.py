@@ -7789,6 +7789,25 @@ PENDING_DEVICES_FILE = APP_DIR / 'pending_devices.json'
 BOOTSTRAP_TOKEN_STATE_FILE = APP_DIR / 'bootstrap_tokens.json'
 PENDING_DEVICES_LOCK = Lock()
 BOOTSTRAP_TOKEN_STATE_LOCK = Lock()
+
+
+def _resolve_provisioning_state_backend() -> bool:
+    raw_mode = str(os.getenv('PROVISIONING_STATE_USE_SUPABASE', 'auto')).strip().lower()
+    if raw_mode in {'1', 'true', 'yes', 'on'}:
+        return True
+    if raw_mode in {'0', 'false', 'no', 'off'}:
+        return False
+
+    # Auto mode: avoid cross-process DB writes for local/test loopback DB URLs.
+    db_url = str(os.getenv('SUPABASE_DB_URL', '')).strip().lower()
+    if not db_url:
+        return False
+    if 'localhost' in db_url or '127.0.0.1' in db_url:
+        return False
+    return True
+
+
+PROVISIONING_STATE_USE_SUPABASE = _resolve_provisioning_state_backend()
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
 INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
@@ -7850,6 +7869,42 @@ def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
     return normalized
 
 
+def _maybe_iso_datetime(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, 'isoformat'):
+        try:
+            return value.isoformat()
+        except Exception:
+            return None
+    text = str(value).strip()
+    return text or None
+
+
+def _is_missing_relation_error(exc: Exception) -> bool:
+    pg_code = str(getattr(exc, 'pgcode', '') or '').strip()
+    if pg_code == '42P01':
+        return True
+    message = str(exc).lower()
+    return 'does not exist' in message and 'relation' in message
+
+
+def _get_provisioning_db_connection() -> Optional[Any]:
+    if not PROVISIONING_STATE_USE_SUPABASE:
+        return None
+
+    manager = db_manager
+    if manager is None:
+        return None
+
+    try:
+        manager._ensure_connection()
+        return getattr(manager, 'conn', None)
+    except Exception as db_err:
+        logger.debug(f"Provisioning DB backend unavailable; falling back to file storage: {db_err}")
+        return None
+
+
 def _json_backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.bak")
 
@@ -7879,65 +7934,494 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
                 pass
 
 
+def _load_pending_devices_from_file() -> Dict[str, Dict[str, Any]]:
+    candidate_paths = [PENDING_DEVICES_FILE]
+    if PENDING_DEVICES_FILE.exists():
+        candidate_paths.append(_json_backup_path(PENDING_DEVICES_FILE))
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                logger.warning(f"Ignoring non-dict pending device payload in {path.name}")
+                continue
+            return {
+                str(machine_id): _normalize_pending_device_record(record)
+                for machine_id, record in data.items()
+            }
+        except Exception as e:
+            logger.warning(f"Failed to load pending devices from {path.name}: {e}")
+
+    return {}
+
+
+def _save_pending_devices_to_file(data: Dict[str, Dict[str, Any]]) -> None:
+    _atomic_write_json(PENDING_DEVICES_FILE, data)
+
+
+def _clear_pending_devices_file() -> int:
+    devices = _load_pending_devices_from_file()
+    _save_pending_devices_to_file({})
+    return len(devices)
+
+
+def _delete_pending_device_file(machine_id: str) -> bool:
+    machine_id = str(machine_id or '').strip()
+    if not machine_id:
+        return False
+    devices = _load_pending_devices_from_file()
+    if machine_id not in devices:
+        return False
+    devices.pop(machine_id, None)
+    _save_pending_devices_to_file(devices)
+    return True
+
+
+def _load_pending_devices_from_db() -> Optional[Dict[str, Dict[str, Any]]]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT machine_id, status, requested_at, token, provision_secret_hash, approved_at, provisioned_at
+                FROM public.provisioning_devices
+                """
+            )
+            rows = cur.fetchall() or []
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to load pending devices from Supabase; using file fallback: {e}")
+        return None
+
+    records: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        machine_id = str(row.get('machine_id') or '').strip()
+        if not machine_id:
+            continue
+
+        records[machine_id] = _normalize_pending_device_record({
+            'status': str(row.get('status') or 'pending').strip().lower(),
+            'requested_at': _maybe_iso_datetime(row.get('requested_at')),
+            'token': str(row.get('token') or '').strip(),
+            'provision_secret_hash': str(row.get('provision_secret_hash') or '').strip(),
+            'approved_at': _maybe_iso_datetime(row.get('approved_at')),
+            'provisioned_at': _maybe_iso_datetime(row.get('provisioned_at')),
+        })
+
+    return records
+
+
+def _save_pending_devices_to_db(data: Dict[str, Dict[str, Any]]) -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            for machine_id, record in data.items():
+                normalized_machine_id = str(machine_id or '').strip()
+                if not normalized_machine_id:
+                    continue
+                normalized_record = _normalize_pending_device_record(record)
+                cur.execute(
+                    """
+                    INSERT INTO public.provisioning_devices
+                    (machine_id, status, requested_at, token, provision_secret_hash, approved_at, provisioned_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (machine_id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        requested_at = EXCLUDED.requested_at,
+                        token = EXCLUDED.token,
+                        provision_secret_hash = EXCLUDED.provision_secret_hash,
+                        approved_at = EXCLUDED.approved_at,
+                        provisioned_at = EXCLUDED.provisioned_at,
+                        updated_at = NOW()
+                    """,
+                    (
+                        normalized_machine_id,
+                        str(normalized_record.get('status') or 'pending').strip().lower(),
+                        _maybe_iso_datetime(normalized_record.get('requested_at')),
+                        str(normalized_record.get('token') or '').strip(),
+                        str(normalized_record.get('provision_secret_hash') or '').strip(),
+                        _maybe_iso_datetime(normalized_record.get('approved_at')),
+                        _maybe_iso_datetime(normalized_record.get('provisioned_at')),
+                    ),
+                )
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to save pending devices to Supabase; using file fallback: {e}")
+        return None
+
+
+def _clear_pending_devices_db() -> Optional[int]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.provisioning_devices")
+            cleared = int(cur.rowcount or 0)
+        conn.commit()
+        return cleared
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to clear pending devices in Supabase; using file fallback: {e}")
+        return None
+
+
+def _delete_pending_device_db(machine_id: str) -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    machine_id = str(machine_id or '').strip()
+    if not machine_id:
+        return False
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.provisioning_devices WHERE machine_id = %s", (machine_id,))
+            deleted = int(cur.rowcount or 0) > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to delete pending device in Supabase; using file fallback: {e}")
+        return None
+
+
+def _load_bootstrap_token_state_from_file() -> Dict[str, Dict[str, str]]:
+    candidate_paths = [BOOTSTRAP_TOKEN_STATE_FILE]
+    if BOOTSTRAP_TOKEN_STATE_FILE.exists():
+        candidate_paths.append(_json_backup_path(BOOTSTRAP_TOKEN_STATE_FILE))
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            if not isinstance(state, dict):
+                logger.warning(f"Ignoring non-dict bootstrap token payload in {path.name}")
+                continue
+            used = state.get('used_jti')
+            if not isinstance(used, dict):
+                used = {}
+            return {'used_jti': used}
+        except Exception as e:
+            logger.warning(f"Failed to load bootstrap token state from {path.name}: {e}")
+
+    return {'used_jti': {}}
+
+
+def _save_bootstrap_token_state_to_file(state: Dict[str, Dict[str, str]]) -> None:
+    _atomic_write_json(BOOTSTRAP_TOKEN_STATE_FILE, state)
+
+
+def _load_bootstrap_token_state_from_db() -> Optional[Dict[str, Dict[str, str]]]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT jti, used_at FROM public.provisioning_bootstrap_jti")
+            rows = cur.fetchall() or []
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to load bootstrap token state from Supabase; using file fallback: {e}")
+        return None
+
+    used: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        jti = str(row.get('jti') or '').strip()
+        if not jti:
+            continue
+        used_at = _maybe_iso_datetime(row.get('used_at')) or datetime.now(timezone.utc).isoformat()
+        used[jti] = used_at
+
+    return {'used_jti': used}
+
+
+def _save_bootstrap_token_state_to_db(state: Dict[str, Dict[str, str]]) -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    used = state.get('used_jti') if isinstance(state, dict) else {}
+    if not isinstance(used, dict):
+        used = {}
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.provisioning_bootstrap_jti")
+            for jti, used_at in used.items():
+                normalized_jti = str(jti or '').strip()
+                if not normalized_jti:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO public.provisioning_bootstrap_jti (jti, used_at)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        normalized_jti,
+                        _maybe_iso_datetime(used_at) or datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to save bootstrap token state to Supabase; using file fallback: {e}")
+        return None
+
+
+def _prune_bootstrap_jti_state_db() -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM public.provisioning_bootstrap_jti
+                WHERE used_at < NOW() - (%s * INTERVAL '1 second')
+                """,
+                (int(BOOTSTRAP_JTI_RETENTION_SECONDS),),
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to prune bootstrap JTI in Supabase; using file fallback: {e}")
+        return None
+
+
+def _consume_bootstrap_jti_db(jti: str) -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    normalized_jti = str(jti or '').strip()
+    if not normalized_jti:
+        return False
+
+    try:
+        _prune_bootstrap_jti_state_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.provisioning_bootstrap_jti (jti, used_at)
+                VALUES (%s, NOW())
+                ON CONFLICT (jti) DO NOTHING
+                RETURNING jti
+                """,
+                (normalized_jti,),
+            )
+            inserted = cur.fetchone()
+        conn.commit()
+        return bool(inserted)
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to consume bootstrap JTI in Supabase; using file fallback: {e}")
+        return None
+
+
+def _is_bootstrap_jti_used_db(jti: str) -> Optional[bool]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    normalized_jti = str(jti or '').strip()
+    if not normalized_jti:
+        return False
+
+    try:
+        _prune_bootstrap_jti_state_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM public.provisioning_bootstrap_jti WHERE jti = %s LIMIT 1",
+                (normalized_jti,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return bool(row)
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to check bootstrap JTI in Supabase; using file fallback: {e}")
+        return None
+
+
+def _clear_bootstrap_token_state_db() -> Optional[int]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.provisioning_bootstrap_jti")
+            cleared = int(cur.rowcount or 0)
+        conn.commit()
+        return cleared
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to clear bootstrap token state in Supabase; using file fallback: {e}")
+        return None
+
+
 def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
     with PENDING_DEVICES_LOCK:
-        candidate_paths = [PENDING_DEVICES_FILE, _json_backup_path(PENDING_DEVICES_FILE)]
+        db_records = _load_pending_devices_from_db()
+        if db_records is not None:
+            if db_records:
+                return db_records
+            file_records = _load_pending_devices_from_file()
+            if file_records:
+                _save_pending_devices_to_db(file_records)
+                return file_records
+            return {}
 
-        for path in candidate_paths:
-            if not path.exists():
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if not isinstance(data, dict):
-                    logger.warning(f"Ignoring non-dict pending device payload in {path.name}")
-                    continue
-                return {
-                    str(machine_id): _normalize_pending_device_record(record)
-                    for machine_id, record in data.items()
-                }
-            except Exception as e:
-                logger.warning(f"Failed to load pending devices from {path.name}: {e}")
-
-        return {}
+        return _load_pending_devices_from_file()
 
 
 def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> None:
     with PENDING_DEVICES_LOCK:
-        _atomic_write_json(PENDING_DEVICES_FILE, data)
+        normalized_data = {
+            str(machine_id): _normalize_pending_device_record(record)
+            for machine_id, record in (data or {}).items()
+            if str(machine_id or '').strip()
+        }
+
+        _save_pending_devices_to_db(normalized_data)
+        _save_pending_devices_to_file(normalized_data)
+
+
+def _clear_pending_devices() -> int:
+    with PENDING_DEVICES_LOCK:
+        cleared_db = _clear_pending_devices_db()
+        cleared_file = _clear_pending_devices_file()
+        return cleared_db if cleared_db is not None else cleared_file
+
+
+def _delete_pending_device(machine_id: str) -> bool:
+    with PENDING_DEVICES_LOCK:
+        deleted_db = _delete_pending_device_db(machine_id)
+        deleted_file = _delete_pending_device_file(machine_id)
+        return bool(deleted_file or (deleted_db is True))
 
 
 def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
     with BOOTSTRAP_TOKEN_STATE_LOCK:
-        candidate_paths = [
-            BOOTSTRAP_TOKEN_STATE_FILE,
-            _json_backup_path(BOOTSTRAP_TOKEN_STATE_FILE),
-        ]
-
-        for path in candidate_paths:
-            if not path.exists():
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                if not isinstance(state, dict):
-                    logger.warning(f"Ignoring non-dict bootstrap token payload in {path.name}")
-                    continue
-                used = state.get('used_jti')
-                if not isinstance(used, dict):
-                    used = {}
-                return {'used_jti': used}
-            except Exception as e:
-                logger.warning(f"Failed to load bootstrap token state from {path.name}: {e}")
-
+        db_state = _load_bootstrap_token_state_from_db()
+        if db_state is not None:
+            used = db_state.get('used_jti') if isinstance(db_state, dict) else {}
+            if used:
+                return db_state
+            file_state = _load_bootstrap_token_state_from_file()
+            if file_state.get('used_jti'):
+                _save_bootstrap_token_state_to_db(file_state)
+                return file_state
             return {'used_jti': {}}
 
-        return {'used_jti': {}}
+        return _load_bootstrap_token_state_from_file()
 
 
 def _save_bootstrap_token_state(state: Dict[str, Dict[str, str]]) -> None:
     with BOOTSTRAP_TOKEN_STATE_LOCK:
-        _atomic_write_json(BOOTSTRAP_TOKEN_STATE_FILE, state)
+        normalized = state if isinstance(state, dict) else {'used_jti': {}}
+        used = normalized.get('used_jti') if isinstance(normalized.get('used_jti'), dict) else {}
+        normalized_payload = {'used_jti': {str(k): str(v) for k, v in used.items() if str(k).strip()}}
+
+        _save_bootstrap_token_state_to_db(normalized_payload)
+        _save_bootstrap_token_state_to_file(normalized_payload)
+
+
+def _clear_bootstrap_token_state() -> int:
+    with BOOTSTRAP_TOKEN_STATE_LOCK:
+        current_state = _load_bootstrap_token_state_from_file()
+        current_used = current_state.get('used_jti') if isinstance(current_state.get('used_jti'), dict) else {}
+        cleared_file = len(current_used)
+        _save_bootstrap_token_state_to_file({'used_jti': {}})
+
+        cleared_db = _clear_bootstrap_token_state_db()
+        return cleared_db if cleared_db is not None else cleared_file
 
 
 def _prune_bootstrap_jti_state(state: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
@@ -7958,17 +8442,45 @@ def _prune_bootstrap_jti_state(state: Dict[str, Dict[str, str]]) -> Dict[str, Di
 
 
 def _is_bootstrap_jti_used(jti: str) -> bool:
-    state = _load_bootstrap_token_state()
-    state = _prune_bootstrap_jti_state(state)
-    _save_bootstrap_token_state(state)
-    return jti in (state.get('used_jti') or {})
+    normalized_jti = str(jti or '').strip()
+    if not normalized_jti:
+        return False
+
+    with BOOTSTRAP_TOKEN_STATE_LOCK:
+        db_used = _is_bootstrap_jti_used_db(normalized_jti)
+        if db_used is not None:
+            return db_used
+
+        state = _load_bootstrap_token_state_from_file()
+        state = _prune_bootstrap_jti_state(state)
+        _save_bootstrap_token_state_to_file(state)
+        return normalized_jti in (state.get('used_jti') or {})
+
+
+def _consume_bootstrap_jti(jti: str) -> bool:
+    normalized_jti = str(jti or '').strip()
+    if not normalized_jti:
+        return False
+
+    with BOOTSTRAP_TOKEN_STATE_LOCK:
+        db_consumed = _consume_bootstrap_jti_db(normalized_jti)
+        if db_consumed is not None:
+            return db_consumed
+
+        state = _load_bootstrap_token_state_from_file()
+        state = _prune_bootstrap_jti_state(state)
+        used = state.setdefault('used_jti', {})
+        if normalized_jti in used:
+            _save_bootstrap_token_state_to_file(state)
+            return False
+
+        used[normalized_jti] = datetime.now(timezone.utc).isoformat()
+        _save_bootstrap_token_state_to_file(state)
+        return True
 
 
 def _mark_bootstrap_jti_used(jti: str) -> None:
-    state = _load_bootstrap_token_state()
-    state = _prune_bootstrap_jti_state(state)
-    state.setdefault('used_jti', {})[jti] = datetime.now(timezone.utc).isoformat()
-    _save_bootstrap_token_state(state)
+    _consume_bootstrap_jti(jti)
 
 
 def _get_bootstrap_signing_secret() -> str:
@@ -8178,10 +8690,11 @@ def _verify_bootstrap_token(
         return False, None, 'Token identifier is missing'
 
     if payload.get('one_time', True):
-        if _is_bootstrap_jti_used(jti):
-            return False, None, 'Token already used'
         if consume:
-            _mark_bootstrap_jti_used(jti)
+            if not _consume_bootstrap_jti(jti):
+                return False, None, 'Token already used'
+        elif _is_bootstrap_jti_used(jti):
+            return False, None, 'Token already used'
 
     return True, payload, ''
 
@@ -8778,8 +9291,8 @@ def admin_devices():
             used_jti = token_state.get('used_jti') if isinstance(token_state, dict) else {}
             cleared_tokens = len(used_jti) if isinstance(used_jti, dict) else 0
 
-            _save_pending_devices({})
-            _save_bootstrap_token_state({'used_jti': {}})
+            _clear_pending_devices()
+            _clear_bootstrap_token_state()
 
             logger.warning(
                 f"Admin reset provisioning records: cleared_devices={cleared_devices}, "
@@ -8797,8 +9310,12 @@ def admin_devices():
                 _save_pending_devices(devices)
                 notify_admin(machine_id, 'approved')
             elif action == 'reject':
-                del devices[machine_id]
-                _save_pending_devices(devices)
+                deleted = _delete_pending_device(machine_id)
+                if deleted:
+                    devices.pop(machine_id, None)
+                else:
+                    del devices[machine_id]
+                    _save_pending_devices(devices)
 
         return redirect('/admin/devices')
 

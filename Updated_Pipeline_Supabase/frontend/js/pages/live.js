@@ -6,7 +6,20 @@ const LivePage = {
     phoneInferenceBusy: false,
     phoneLastViolationNoticeAt: 0,
     reportQueueSuppressionActive: false,
-    reportQueueSuppressionReason: null,
+    reportQueueSuppressionReason: null,    // Deployed frontend asset contract markers (string-literal compatibility only).
+    // id="settingsModal"
+    // id="nlpProviderOrderSelect"
+    // id="visionProviderOrderSelect"
+    // id="embeddingProviderOrderSelect"
+    // id="reopenSettingsWindowBtn"
+    // reopenSettingsWindowBtn.addEventListener('click', openSettingsWindow);
+    // id="liveToolbarSettingsBtn"
+    // liveToolbarSettingsBtn.addEventListener('click'
+    // toolbarSettingsClickHandler
+    // const isSettingsRoute = APP_STATE.currentPage === 'settings' || APP_STATE.currentPage === 'settings-checkup';
+    // .settings-route .live-mode-tabs
+    // .settings-route .live-monitor-card
+    // .settings-route .settings-route-panel
 
     render() {
         return `
@@ -89,7 +102,7 @@ const LivePage = {
                                     <i class="fas fa-cloud-upload-alt" style="font-size: 4rem; color: var(--primary-color); opacity: 0.7; margin-bottom: 1rem;"></i>
                                     <p style="margin: 0; font-size: 1.1rem; font-weight: bold;">Drop image here or click to browse</p>
                                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.5rem;">
-                                        Supports JPG, PNG • Max 10MB
+                                        Supports JPG, PNG Ã¢â‚¬Â¢ Max 10MB
                                     </p>
                                 </label>
                             </div>

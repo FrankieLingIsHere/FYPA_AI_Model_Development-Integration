@@ -22,8 +22,6 @@ const Router = {
         const { updateHash = true } = options;
         const normalizedPath = this.normalizePath(path);
         const isSettingsIntent = normalizedPath === 'settings' || normalizedPath === 'settings-checkup';
-        const renderPath = isSettingsIntent ? 'live' : normalizedPath;
-        const component = this.routes[renderPath];
 
         const dispatchSettingsIntent = () => {
             window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
@@ -34,38 +32,46 @@ const Router = {
         };
 
         const emitSettingsOpenIntent = () => {
-            if (!isSettingsIntent) {
-                return;
-            }
-
             dispatchSettingsIntent();
             setTimeout(dispatchSettingsIntent, 120);
         };
 
-        if (component) {
-            if (isSettingsIntent && this.currentComponent === this.routes.live) {
-                this.updateActiveNav('settings');
-                if (updateHash && window.location.hash !== `#${normalizedPath}`) {
-                    window.location.hash = normalizedPath;
-                }
-                emitSettingsOpenIntent();
+        if (isSettingsIntent) {
+            const liveComponent = this.routes.live;
+            if (!liveComponent) {
+                console.error('Live route is not registered; cannot open settings modal.');
                 return;
             }
 
-            if (APP_STATE.currentPage === renderPath && this.currentComponent === component) {
-                this.updateActiveNav(isSettingsIntent ? 'settings' : renderPath);
-                if (updateHash && window.location.hash !== `#${normalizedPath}`) {
-                    window.location.hash = normalizedPath;
-                }
-                emitSettingsOpenIntent();
-                return;
+            if (APP_STATE.currentPage !== 'live' || this.currentComponent !== liveComponent) {
+                APP_STATE.currentPage = 'live';
+                this.render(liveComponent);
             }
 
-            APP_STATE.currentPage = renderPath;
-            this.render(component);
-            this.updateActiveNav(isSettingsIntent ? 'settings' : renderPath);
-
+            this.updateActiveNav('settings');
             emitSettingsOpenIntent();
+
+            // Keep URL at live route; settings behaves as a sidebar-triggered modal.
+            if (updateHash && window.location.hash !== '#live') {
+                window.location.hash = 'live';
+            }
+            return;
+        }
+
+        const component = this.routes[normalizedPath];
+
+        if (component) {
+            if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
+                this.updateActiveNav(normalizedPath);
+                if (updateHash && window.location.hash !== `#${normalizedPath}`) {
+                    window.location.hash = normalizedPath;
+                }
+                return;
+            }
+
+            APP_STATE.currentPage = normalizedPath;
+            this.render(component);
+            this.updateActiveNav(normalizedPath);
 
             // Update URL hash
             if (updateHash && window.location.hash !== `#${normalizedPath}`) {
@@ -135,7 +141,8 @@ const Router = {
         // Handle browser back/forward
         window.addEventListener('hashchange', () => {
             const hash = this.normalizePath(window.location.hash);
-            if (APP_STATE.currentPage === hash) {
+            const isSettingsIntent = hash === 'settings' || hash === 'settings-checkup';
+            if (!isSettingsIntent && APP_STATE.currentPage === hash) {
                 return;
             }
             this.navigate(hash, { updateHash: false });

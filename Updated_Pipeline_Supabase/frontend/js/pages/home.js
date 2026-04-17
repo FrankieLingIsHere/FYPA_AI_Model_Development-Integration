@@ -154,7 +154,27 @@ const HomePage = {
         const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
         if (runCheckupBtn) {
             this._runLocalCheckupHandler = () => {
-                Router.navigate('settings-checkup');
+                const settingsSidebarLink = document.querySelector('.sidebar-settings-link[data-page="settings"]');
+
+                // Keep settings entry rooted in the sidebar settings control.
+                if (settingsSidebarLink && typeof settingsSidebarLink.click === 'function') {
+                    settingsSidebarLink.click();
+                } else {
+                    Router.navigate('settings');
+                }
+
+                // Extra intent dispatch improves reliability when navigation/render timing is slow.
+                const emitIntent = () => {
+                    window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
+                        detail: {
+                            focusLocalCheckup: true,
+                            source: 'home-local-checkup'
+                        }
+                    }));
+                };
+
+                emitIntent();
+                setTimeout(emitIntent, 180);
             };
             runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
         }

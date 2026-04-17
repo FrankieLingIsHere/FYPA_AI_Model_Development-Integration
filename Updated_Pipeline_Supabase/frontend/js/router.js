@@ -3,6 +3,14 @@ const Router = {
     routes: {},
     currentComponent: null,
 
+    queueLiveSettingsIntent(intentKey) {
+        const normalized = intentKey === 'checkup' ? 'checkup' : 'settings';
+        window.__PPE_LIVE_SETTINGS_INTENT__ = {
+            intent: normalized,
+            requestedAt: Date.now()
+        };
+    },
+
     normalizePath(path) {
         const raw = String(path || '').trim();
         if (!raw) return 'home';
@@ -34,9 +42,12 @@ const Router = {
         const emitSettingsOpenIntent = () => {
             dispatchSettingsIntent();
             setTimeout(dispatchSettingsIntent, 120);
+            setTimeout(dispatchSettingsIntent, 320);
         };
 
         if (isSettingsIntent) {
+            this.queueLiveSettingsIntent(normalizedPath === 'settings-checkup' ? 'checkup' : 'settings');
+
             const liveComponent = this.routes.live;
             if (!liveComponent) {
                 console.error('Live route is not registered; cannot open settings modal.');

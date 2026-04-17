@@ -154,14 +154,7 @@ const HomePage = {
         const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
         if (runCheckupBtn) {
             this._runLocalCheckupHandler = () => {
-                const settingsSidebarLink = document.querySelector('.sidebar-settings-link[data-page="settings"]');
-
-                // Keep settings entry rooted in the sidebar settings control.
-                if (settingsSidebarLink && typeof settingsSidebarLink.click === 'function') {
-                    settingsSidebarLink.click();
-                } else {
-                    Router.navigate('settings');
-                }
+                Router.navigate('settings-checkup');
 
                 // Extra intent dispatch improves reliability when navigation/render timing is slow.
                 const emitIntent = () => {
@@ -175,6 +168,7 @@ const HomePage = {
 
                 emitIntent();
                 setTimeout(emitIntent, 180);
+                setTimeout(emitIntent, 420);
             };
             runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
         }

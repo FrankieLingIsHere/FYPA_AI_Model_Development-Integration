@@ -21,13 +21,11 @@ const Router = {
     navigate(path, options = {}) {
         const { updateHash = true } = options;
         const normalizedPath = this.normalizePath(path);
-        const component = this.routes[normalizedPath];
+        const isSettingsIntent = normalizedPath === 'settings' || normalizedPath === 'settings-checkup';
+        const renderPath = isSettingsIntent ? 'live' : normalizedPath;
+        const component = this.routes[renderPath];
 
-        const emitSettingsOpenIntent = () => {
-            if (normalizedPath !== 'settings' && normalizedPath !== 'settings-checkup') {
-                return;
-            }
-
+        const dispatchSettingsIntent = () => {
             window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
                 detail: {
                     focusLocalCheckup: normalizedPath === 'settings-checkup'
@@ -35,9 +33,18 @@ const Router = {
             }));
         };
 
+        const emitSettingsOpenIntent = () => {
+            if (!isSettingsIntent) {
+                return;
+            }
+
+            dispatchSettingsIntent();
+            setTimeout(dispatchSettingsIntent, 120);
+        };
+
         if (component) {
-            if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
-                this.updateActiveNav(normalizedPath);
+            if (isSettingsIntent && this.currentComponent === this.routes.live) {
+                this.updateActiveNav('settings');
                 if (updateHash && window.location.hash !== `#${normalizedPath}`) {
                     window.location.hash = normalizedPath;
                 }
@@ -45,9 +52,18 @@ const Router = {
                 return;
             }
 
-            APP_STATE.currentPage = normalizedPath;
+            if (APP_STATE.currentPage === renderPath && this.currentComponent === component) {
+                this.updateActiveNav(isSettingsIntent ? 'settings' : renderPath);
+                if (updateHash && window.location.hash !== `#${normalizedPath}`) {
+                    window.location.hash = normalizedPath;
+                }
+                emitSettingsOpenIntent();
+                return;
+            }
+
+            APP_STATE.currentPage = renderPath;
             this.render(component);
-            this.updateActiveNav(normalizedPath);
+            this.updateActiveNav(isSettingsIntent ? 'settings' : renderPath);
 
             emitSettingsOpenIntent();
 

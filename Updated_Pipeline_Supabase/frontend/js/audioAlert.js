@@ -218,21 +218,24 @@ const AudioAlert = (function () {
     function init() {
         document.addEventListener('DOMContentLoaded', () => {
             _loadState();
+            const sidebarBottom = document.querySelector('.sidebar-bottom');
 
             button = document.getElementById('enableVoice');
             if (!button) {
-                // Create fallback button in footer if missing
+                // Create fallback button in sidebar section if missing.
                 button = document.createElement('button');
                 button.id = 'enableVoice';
                 button.className = 'btn btn-danger sidebar-voice-btn';
-                document.body.appendChild(button);
+                if (sidebarBottom) {
+                    sidebarBottom.appendChild(button);
+                } else {
+                    document.body.appendChild(button);
+                }
             }
 
             // Test button (plays a short test phrase regardless of enabled state)
             let testBtn = document.getElementById('testVoice');
             if (!testBtn) {
-                // try to append to sidebar-bottom if present
-                const sidebarBottom = document.querySelector('.sidebar-bottom');
                 testBtn = document.createElement('button');
                 testBtn.id = 'testVoice';
                 testBtn.className = 'btn btn-secondary sidebar-voice-btn';

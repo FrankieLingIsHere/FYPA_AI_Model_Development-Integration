@@ -9,6 +9,7 @@ Manages violations in detection_events, violations, and flood_logs tables.
 import logging
 import os
 import json
+import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 
@@ -65,6 +66,52 @@ class SupabaseDatabaseManager:
         if self.conn is None or self.conn.closed:
             logger.warning("Database connection lost, reconnecting...")
             self._connect()
+
+    def _normalize_device_id(self, device_id: Optional[str]) -> Optional[str]:
+        """Normalize and validate camera device IDs before DB writes."""
+        normalized = str(device_id or '').strip()
+        if not normalized:
+            return None
+        if not re.fullmatch(r'[A-Za-z0-9._:-]{1,120}', normalized):
+            return None
+        return normalized
+
+    def _upsert_device_presence(self, device_id: str, status: str = 'active') -> None:
+        """Best-effort heartbeat into public.devices for known camera device IDs."""
+        normalized_device_id = self._normalize_device_id(device_id)
+        if not normalized_device_id:
+            return
+
+        normalized_status = str(status or 'active').strip().lower()
+        if normalized_status not in ('active', 'inactive', 'maintenance'):
+            normalized_status = 'active'
+
+        self._ensure_connection()
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public.devices (device_id, name, status, last_seen, config)
+                    VALUES (%s, %s, %s, NOW(), %s)
+                    ON CONFLICT (device_id) DO UPDATE
+                    SET
+                        status = EXCLUDED.status,
+                        last_seen = NOW(),
+                        config = COALESCE(public.devices.config, '{}'::jsonb) || EXCLUDED.config
+                    """,
+                    (
+                        normalized_device_id,
+                        f"Camera {normalized_device_id}",
+                        normalized_status,
+                        Json({'last_ingest_source': 'luna_backend'})
+                    ),
+                )
+
+            self.conn.commit()
+        except Exception as device_err:
+            self.conn.rollback()
+            logger.debug(f"Could not upsert device presence for {normalized_device_id}: {device_err}")
     
     def close(self):
         """Close database connection."""
@@ -83,6 +130,7 @@ class SupabaseDatabaseManager:
         person_count: int = 0,
         violation_count: int = 0,
         severity: str = 'HIGH',
+        device_id: Optional[str] = None,
         status: str = 'pending'
     ) -> Optional[str]:
         """
@@ -94,6 +142,7 @@ class SupabaseDatabaseManager:
             person_count: Number of people detected
             violation_count: Number of violations
             severity: Severity level (HIGH/MEDIUM/LOW)
+            device_id: Optional camera/source device identifier
             status: Processing status (pending/generating/completed/failed)
         
         Returns:
@@ -101,35 +150,74 @@ class SupabaseDatabaseManager:
         """
         self._ensure_connection()
         
-        try:
-            with self.conn.cursor() as cur:
-                # Try with status column first, fallback without if column doesn't exist
-                try:
-                    cur.execute("""
-                        INSERT INTO public.detection_events 
-                        (report_id, timestamp, person_count, violation_count, severity, status)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        RETURNING report_id
-                    """, (report_id, timestamp, person_count, violation_count, severity, status))
-                except Exception:
-                    # Fallback without status column
-                    cur.execute("""
-                        INSERT INTO public.detection_events 
-                        (report_id, timestamp, person_count, violation_count, severity)
-                        VALUES (%s, %s, %s, %s, %s)
-                        RETURNING report_id
-                    """, (report_id, timestamp, person_count, violation_count, severity))
-                
-                result = cur.fetchone()
+        normalized_device_id = self._normalize_device_id(device_id)
+        insert_attempts = []
+
+        if normalized_device_id:
+            insert_attempts.append((
+                """
+                INSERT INTO public.detection_events
+                (report_id, timestamp, device_id, person_count, violation_count, severity, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING report_id
+                """,
+                (report_id, timestamp, normalized_device_id, person_count, violation_count, severity, status),
+            ))
+            insert_attempts.append((
+                """
+                INSERT INTO public.detection_events
+                (report_id, timestamp, device_id, person_count, violation_count, severity)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING report_id
+                """,
+                (report_id, timestamp, normalized_device_id, person_count, violation_count, severity),
+            ))
+
+        insert_attempts.append((
+            """
+            INSERT INTO public.detection_events
+            (report_id, timestamp, person_count, violation_count, severity, status)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING report_id
+            """,
+            (report_id, timestamp, person_count, violation_count, severity, status),
+        ))
+        insert_attempts.append((
+            """
+            INSERT INTO public.detection_events
+            (report_id, timestamp, person_count, violation_count, severity)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING report_id
+            """,
+            (report_id, timestamp, person_count, violation_count, severity),
+        ))
+
+        result = None
+        last_error = None
+        for query, params in insert_attempts:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
+                    result = cur.fetchone()
                 self.conn.commit()
-                
-                logger.info(f"Inserted detection event: {report_id} (status: {status})")
-                return result['report_id'] if result else None
-                
-        except Exception as e:
-            self.conn.rollback()
-            logger.error(f"Failed to insert detection event: {e}")
+                break
+            except Exception as attempt_error:
+                self.conn.rollback()
+                last_error = attempt_error
+                result = None
+
+        if not result:
+            logger.error(f"Failed to insert detection event: {last_error}")
             return None
+
+        if normalized_device_id:
+            self._upsert_device_presence(normalized_device_id)
+
+        logger.info(
+            f"Inserted detection event: {report_id} "
+            f"(status: {status}, device_id: {normalized_device_id or 'n/a'})"
+        )
+        return result['report_id'] if result else None
     
     def update_detection_status(
         self,
@@ -484,7 +572,8 @@ class SupabaseDatabaseManager:
         original_image_key: Optional[str] = None,
         annotated_image_key: Optional[str] = None,
         report_html_key: Optional[str] = None,
-        report_pdf_key: Optional[str] = None
+        report_pdf_key: Optional[str] = None,
+        device_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Insert a violation record with storage keys.
@@ -499,21 +588,26 @@ class SupabaseDatabaseManager:
             annotated_image_key: Storage key for annotated image
             report_html_key: Storage key for HTML report
             report_pdf_key: Storage key for PDF report
+            device_id: Optional camera/source device identifier
         
         Returns:
             UUID of inserted violation or None
         """
         self._ensure_connection()
         
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO public.violations 
-                    (report_id, violation_summary, caption, nlp_analysis, detection_data,
-                     original_image_key, annotated_image_key, report_html_key, report_pdf_key)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (
+        normalized_device_id = self._normalize_device_id(device_id)
+
+        insert_attempts = []
+        if normalized_device_id:
+            insert_attempts.append((
+                """
+                INSERT INTO public.violations
+                (report_id, violation_summary, caption, nlp_analysis, detection_data,
+                 original_image_key, annotated_image_key, report_html_key, report_pdf_key, device_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
                     report_id,
                     violation_summary,
                     caption,
@@ -522,19 +616,58 @@ class SupabaseDatabaseManager:
                     original_image_key,
                     annotated_image_key,
                     report_html_key,
-                    report_pdf_key
-                ))
-                
-                result = cur.fetchone()
+                    report_pdf_key,
+                    normalized_device_id,
+                ),
+            ))
+
+        insert_attempts.append((
+            """
+            INSERT INTO public.violations
+            (report_id, violation_summary, caption, nlp_analysis, detection_data,
+             original_image_key, annotated_image_key, report_html_key, report_pdf_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                report_id,
+                violation_summary,
+                caption,
+                Json(nlp_analysis) if nlp_analysis else None,
+                Json(detection_data) if detection_data else None,
+                original_image_key,
+                annotated_image_key,
+                report_html_key,
+                report_pdf_key,
+            ),
+        ))
+
+        result = None
+        last_error = None
+        for query, params in insert_attempts:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
+                    result = cur.fetchone()
                 self.conn.commit()
-                
-                logger.info(f"Inserted violation: {report_id}")
-                return str(result['id']) if result else None
-                
-        except Exception as e:
-            self.conn.rollback()
-            logger.error(f"Failed to insert violation: {e}")
+                break
+            except Exception as attempt_error:
+                self.conn.rollback()
+                last_error = attempt_error
+                result = None
+
+        if not result:
+            logger.error(f"Failed to insert violation: {last_error}")
             return None
+
+        if normalized_device_id:
+            self._upsert_device_presence(normalized_device_id)
+
+        logger.info(
+            f"Inserted violation: {report_id} "
+            f"(device_id: {normalized_device_id or 'n/a'})"
+        )
+        return str(result['id']) if result else None
     
     def get_violation(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -787,6 +920,7 @@ class SupabaseDatabaseManager:
         event_type: str,
         message: str,
         report_id: Optional[str] = None,
+        device_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
@@ -796,6 +930,7 @@ class SupabaseDatabaseManager:
             event_type: Event type (e.g., 'upload', 'error', 'violation')
             message: Event message
             report_id: Associated report ID (optional)
+            device_id: Optional camera/source device identifier
             metadata: Additional metadata (stored as JSONB)
         
         Returns:
@@ -803,27 +938,149 @@ class SupabaseDatabaseManager:
         """
         self._ensure_connection()
         
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO public.flood_logs 
-                    (event_type, report_id, message, metadata)
-                    VALUES (%s, %s, %s, %s)
-                """, (
+        normalized_device_id = self._normalize_device_id(device_id)
+
+        insert_attempts = []
+        if normalized_device_id:
+            insert_attempts.append((
+                """
+                INSERT INTO public.flood_logs
+                (event_type, report_id, device_id, message, metadata)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
                     event_type,
                     report_id,
+                    normalized_device_id,
                     message,
-                    Json(metadata) if metadata else None
-                ))
-                
+                    Json(metadata) if metadata else None,
+                ),
+            ))
+
+        insert_attempts.append((
+            """
+            INSERT INTO public.flood_logs
+            (event_type, report_id, message, metadata)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (
+                event_type,
+                report_id,
+                message,
+                Json(metadata) if metadata else None,
+            ),
+        ))
+
+        last_error = None
+        for query, params in insert_attempts:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
                 self.conn.commit()
-                logger.debug(f"Logged event: {event_type}")
+                logger.debug(
+                    f"Logged event: {event_type} "
+                    f"(device_id: {normalized_device_id or 'n/a'})"
+                )
+                if normalized_device_id:
+                    self._upsert_device_presence(normalized_device_id)
                 return True
-                
+            except Exception as attempt_error:
+                self.conn.rollback()
+                last_error = attempt_error
+
+        logger.error(f"Failed to log event: {last_error}")
+        return False
+
+    def get_device_stats(self, device_id: str) -> Dict[str, Any]:
+        """Get aggregated status/severity counters for one camera device_id."""
+        self._ensure_connection()
+
+        normalized_device_id = self._normalize_device_id(device_id)
+        if not normalized_device_id:
+            return {
+                'device_id': str(device_id or '').strip(),
+                'total': 0,
+                'completed': 0,
+                'pending': 0,
+                'failed': 0,
+                'critical': 0,
+                'high': 0,
+                'last_detection': None,
+                'error': 'Invalid device_id format',
+            }
+
+        try:
+            with self.conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        SELECT
+                            COUNT(*)::BIGINT AS total,
+                            COUNT(*) FILTER (WHERE status = 'completed')::BIGINT AS completed,
+                            COUNT(*) FILTER (WHERE status IN ('pending', 'generating'))::BIGINT AS pending,
+                            COUNT(*) FILTER (WHERE status = 'failed')::BIGINT AS failed,
+                            COUNT(*) FILTER (WHERE severity = 'CRITICAL')::BIGINT AS critical,
+                            COUNT(*) FILTER (WHERE severity = 'HIGH')::BIGINT AS high,
+                            MAX(timestamp) AS last_detection
+                        FROM public.detection_events
+                        WHERE device_id = %s
+                        """,
+                        (normalized_device_id,),
+                    )
+                except Exception:
+                    self.conn.rollback()
+                    with self.conn.cursor() as fallback_cur:
+                        fallback_cur.execute(
+                            """
+                            SELECT
+                                COUNT(*)::BIGINT AS total,
+                                0::BIGINT AS completed,
+                                0::BIGINT AS pending,
+                                0::BIGINT AS failed,
+                                COUNT(*) FILTER (WHERE severity = 'CRITICAL')::BIGINT AS critical,
+                                COUNT(*) FILTER (WHERE severity = 'HIGH')::BIGINT AS high,
+                                MAX(timestamp) AS last_detection
+                            FROM public.detection_events
+                            WHERE device_id = %s
+                            """,
+                            (normalized_device_id,),
+                        )
+                        row = fallback_cur.fetchone() or {}
+                        return {
+                            'device_id': normalized_device_id,
+                            'total': int(row.get('total') or 0),
+                            'completed': int(row.get('completed') or 0),
+                            'pending': int(row.get('pending') or 0),
+                            'failed': int(row.get('failed') or 0),
+                            'critical': int(row.get('critical') or 0),
+                            'high': int(row.get('high') or 0),
+                            'last_detection': row.get('last_detection').isoformat() if row.get('last_detection') else None,
+                        }
+
+                row = cur.fetchone() or {}
+                return {
+                    'device_id': normalized_device_id,
+                    'total': int(row.get('total') or 0),
+                    'completed': int(row.get('completed') or 0),
+                    'pending': int(row.get('pending') or 0),
+                    'failed': int(row.get('failed') or 0),
+                    'critical': int(row.get('critical') or 0),
+                    'high': int(row.get('high') or 0),
+                    'last_detection': row.get('last_detection').isoformat() if row.get('last_detection') else None,
+                }
         except Exception as e:
-            self.conn.rollback()
-            logger.error(f"Failed to log event: {e}")
-            return False
+            logger.error(f"Failed to get device stats for {normalized_device_id}: {e}")
+            return {
+                'device_id': normalized_device_id,
+                'total': 0,
+                'completed': 0,
+                'pending': 0,
+                'failed': 0,
+                'critical': 0,
+                'high': 0,
+                'last_detection': None,
+                'error': str(e),
+            }
     
     def get_recent_logs(self, limit: int = 50, event_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """

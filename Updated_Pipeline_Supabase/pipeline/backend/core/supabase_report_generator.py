@@ -139,13 +139,19 @@ class SupabaseReportGenerator(ReportGenerator):
         except Exception as e:
             logger.error(f"Error validating caption: {e}")
             # Continue anyway
+
+        person_count = report_data.get('person_count', 0)
+        violation_count = report_data.get('violation_count', 0)
+        severity = report_data.get('severity', 'HIGH')
+        device_id = str(report_data.get('device_id') or '').strip()
+        if not device_id:
+            detection_metadata = report_data.get('detection_data')
+            if isinstance(detection_metadata, dict):
+                device_id = str(detection_metadata.get('device_id') or '').strip()
         
         # Step 2: Ensure detection event exists in Supabase Postgres
         try:
             timestamp = report_data.get('timestamp', datetime.now())
-            person_count = report_data.get('person_count', 0)
-            violation_count = report_data.get('violation_count', 0)
-            severity = report_data.get('severity', 'HIGH')
 
             existing_event = None
             if hasattr(self.db_manager, 'get_detection_event'):
@@ -168,6 +174,7 @@ class SupabaseReportGenerator(ReportGenerator):
                     person_count=person_count,
                     violation_count=violation_count,
                     severity=severity,
+                    device_id=device_id or None,
                     status='generating'
                 )
             
@@ -267,6 +274,8 @@ class SupabaseReportGenerator(ReportGenerator):
             metadata = {
                 'detections': detection_data
             }
+            if device_id:
+                metadata['device_id'] = device_id
             caption_provider = report_data.get('caption_provider')
             caption_model = report_data.get('caption_model')
             if caption_provider:
@@ -318,7 +327,8 @@ class SupabaseReportGenerator(ReportGenerator):
                         original_image_key=storage_keys.get('original_image_key'),
                         annotated_image_key=storage_keys.get('annotated_image_key'),
                         report_html_key=storage_keys.get('report_html_key'),
-                        report_pdf_key=storage_keys.get('report_pdf_key')
+                        report_pdf_key=storage_keys.get('report_pdf_key'),
+                        device_id=device_id or None
                     )
                     if violation_id:
                         logger.info(f"Inserted violation record after reprocessing fallback: {violation_id}")
@@ -334,7 +344,8 @@ class SupabaseReportGenerator(ReportGenerator):
                     original_image_key=storage_keys.get('original_image_key'),
                     annotated_image_key=storage_keys.get('annotated_image_key'),
                     report_html_key=storage_keys.get('report_html_key'),
-                    report_pdf_key=storage_keys.get('report_pdf_key')
+                    report_pdf_key=storage_keys.get('report_pdf_key'),
+                    device_id=device_id or None
                 )
 
                 if violation_id:
@@ -353,6 +364,7 @@ class SupabaseReportGenerator(ReportGenerator):
                     event_type='report_generated',
                     message=f"Report generated and uploaded: {report_id}",
                     report_id=report_id,
+                    device_id=device_id or None,
                     metadata={
                         'person_count': person_count,
                         'violation_count': violation_count,

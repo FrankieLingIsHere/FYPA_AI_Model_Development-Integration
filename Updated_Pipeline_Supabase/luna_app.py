@@ -1713,6 +1713,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
+        runtime_device_id = 'webcam_0'
         
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -1742,6 +1743,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
                     violation_count=len(violation_detections),
                     severity='HIGH',
+                    device_id=runtime_device_id,
                     status='pending'
                 )
                 logger.info(f"✓ Inserted PENDING detection event: {report_id}")
@@ -1763,7 +1765,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             
             success = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id='webcam_0',
+                device_id=runtime_device_id,
                 report_id=report_id,
                 severity='HIGH'
             )
@@ -1807,6 +1809,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     queued_violation_count = data.get('violation_count')
     original_path = Path(data['original_image_path'])
     annotated_path = Path(data['annotated_image_path'])
+    queue_device_id = (
+        str(getattr(queued_violation, 'device_id', '') or '').strip()
+        or str(data.get('device_id') or '').strip()
+        or 'webcam_0'
+    )
     
     logger.info(f"📄 Processing queued violation: {report_id}")
     
@@ -1985,6 +1992,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'violation_count': resolved_violation_count,
                 'caption': caption,
                 'image_caption': caption,
+                'device_id': queue_device_id,
                 'caption_provider': caption_provider,
                 'caption_model': caption_model,
                 'original_image_path': str(original_path),
@@ -2048,6 +2056,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'report_id': report_id,
         'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
         'violation_type': violation_types_formatted[0] if violation_types_formatted else 'PPE Violation',
+        'device_id': queue_device_id,
         'severity': 'HIGH',
         'location': 'Live Stream Monitor',
         'detection_count': len(detections),
@@ -2142,6 +2151,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         logger.info(f"   Pipeline available: {FULL_PIPELINE_AVAILABLE}")
         logger.info(f"   Caption generator: {'✓ Available' if caption_generator else '✗ Not initialized'}")
         logger.info(f"   Report generator: {'✓ Available' if report_generator else '✗ Not initialized'}")
+        runtime_device_id = 'webcam_0'
         
         # Create violation directory with absolute path
         timestamp = datetime.now()
@@ -2160,6 +2170,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
                     violation_count=len(violation_detections),
                     severity='HIGH',
+                    device_id=runtime_device_id,
                     status='pending'
                 )
                 logger.info(f"✓ Inserted PENDING detection event: {report_id} (visible in frontend now)")
@@ -2259,6 +2270,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'violation_count': len(violation_detections),
                     'caption': caption,
                     'image_caption': caption,
+                    'device_id': runtime_device_id,
                     'caption_provider': caption_provider,
                     'caption_model': caption_model,
                     'original_image_path': str(original_path),
@@ -5396,6 +5408,7 @@ def _sync_local_cache_candidates(
             'annotated_image_path': str(annotated_path if annotated_path.exists() else original_path),
             'violation_dir': str(violation_dir)
         }
+        event_device_id = (event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync'
 
         try:
             if not event and hasattr(db_manager, 'insert_detection_event'):
@@ -5405,12 +5418,13 @@ def _sync_local_cache_candidates(
                     person_count=0,
                     violation_count=max(1, violation_data['violation_count']),
                     severity='HIGH',
+                    device_id=event_device_id,
                     status='pending'
                 )
 
             queued = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id=(event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync',
+                device_id=event_device_id,
                 report_id=report_id,
                 severity='HIGH'
             )
@@ -5432,6 +5446,7 @@ def _sync_local_cache_candidates(
                         event_type='local_cache_sync_queued',
                         message=f'Queued local cache report for Supabase reconciliation ({reason})',
                         report_id=report_id,
+                        device_id=event_device_id,
                         metadata={
                             'reason': reason,
                             'source': 'sync_local_cache',
@@ -5712,6 +5727,12 @@ def api_generate_report_now(report_id):
         if not ensure_queue_worker_running():
             return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
+        device_id = (event.get('device_id') if isinstance(event, dict) else None)
+        if not device_id:
+            device_id = str(local_metadata.get('device_id') or '').strip() or (
+                'manual_regenerate_offline' if db_manager is None else f'manual_regenerate_{report_id}'
+            )
+
         if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):
             try:
                 db_manager.insert_detection_event(
@@ -5720,6 +5741,7 @@ def api_generate_report_now(report_id):
                     person_count=0,
                     violation_count=max(1, int(resolved_violation_count or 1)),
                     severity='HIGH',
+                    device_id=device_id,
                     status='pending'
                 )
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else event
@@ -5742,12 +5764,6 @@ def api_generate_report_now(report_id):
             'annotated_image_path': str(annotated_path),
             'violation_dir': str(violation_dir)
         }
-
-        device_id = (event.get('device_id') if isinstance(event, dict) else None)
-        if not device_id:
-            device_id = str(local_metadata.get('device_id') or '').strip() or (
-                'manual_regenerate_offline' if db_manager is None else f'manual_regenerate_{report_id}'
-            )
 
         enqueued = violation_queue.enqueue(
             violation_data=violation_data,

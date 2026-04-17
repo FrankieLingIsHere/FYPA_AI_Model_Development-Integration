@@ -24,6 +24,7 @@ set "LUNA_SUPABASE_DB_URL=__LUNA_SUPABASE_DB_URL__"
 set "LUNA_SUPABASE_SERVICE_ROLE_KEY=__LUNA_SUPABASE_SERVICE_ROLE_KEY__"
 set "LUNA_FORCE_SOURCE_REFRESH=false"
 set "LUNA_AUTO_UPDATE_ON_LAUNCH=true"
+set "LUNA_SELF_UPDATE_LAUNCHER=true"
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
 if /I "!LUNA_MACHINE_ID!"=="__LUNA_MACHINE_ID__" set "LUNA_MACHINE_ID="
@@ -83,6 +84,14 @@ if exist "!LUNA_APP_DIR!\start.bat" (
             echo Warning: Auto-update failed or was skipped. Launching existing local files.
         ) else (
             echo Local source snapshot updated successfully.
+        )
+        echo.
+
+        call :refresh_local_launcher_from_template
+        if errorlevel 1 (
+            echo Warning: Could not self-update launcher script from latest template.
+        ) else (
+            echo Launcher script refreshed to latest installer logic.
         )
         echo.
     )
@@ -327,3 +336,35 @@ exit /b 0
 if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 exit /b 1
+
+:refresh_local_launcher_from_template
+set "TEMPLATE_BAT=!LUNA_APP_DIR!\frontend\static\LUNA_LocalInstaller.bat"
+set "UPDATED_LAUNCHER=%TEMP%\luna_launcher_update_%RANDOM%_%RANDOM%.bat"
+
+if /I "!LUNA_SELF_UPDATE_LAUNCHER!" NEQ "true" exit /b 1
+if not exist "!TEMPLATE_BAT!" exit /b 1
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$current = Get-Content -Raw -Path '%~f0' -ErrorAction Stop; " ^
+  "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
+  "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
+  "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
+  "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding UTF8"
+
+if errorlevel 1 (
+    if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
+    exit /b 1
+)
+
+if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
+    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
+) else (
+    copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+    if errorlevel 1 (
+        del "!UPDATED_LAUNCHER!" >nul 2>&1
+        exit /b 1
+    )
+    del "!UPDATED_LAUNCHER!" >nul 2>&1
+)
+
+exit /b 0

@@ -179,6 +179,7 @@ User experience rule:
 
 - End users should keep using the same launcher BAT/desktop shortcut created by installer.
 - If LUNA is already installed, clicking that same BAT now performs a lightweight source refresh from the installer snapshot URL and then launches the app.
+- Launcher logic updates are also applied automatically from the refreshed installer template, so installer behavior can evolve without full reinstall.
 - Users do not need to manually switch to running `start.bat` themselves.
 - Full reinstall is no longer required for normal updates; existing `venv`, `.env`, and local runtime data are preserved.
 - Reinstall/refresh remains optional for recovery scenarios.

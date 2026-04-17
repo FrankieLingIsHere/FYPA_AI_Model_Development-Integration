@@ -8732,7 +8732,7 @@ def admin_devices():
                 <p>Requested At: {{ details.requested_at }}</p>
                 {% if details.approved_at %}<p>Approved At: {{ details.approved_at }}</p>{% endif %}
                 {% if details.provisioned_at %}<p>Provisioned At: {{ details.provisioned_at }}</p>{% endif %}
-                {% if details.status == 'pending' %}
+                {% if details.status in ['pending', 'pending_approval'] %}
                 <form method="POST" style="display:inline;">
                     <input type="hidden" name="machine_id" value="{{ m_id }}">
                     <button type="submit" name="action" value="approve" class="btn btn-approve">Approve Device</button>

@@ -539,6 +539,47 @@ const ReportsPage = {
         }
     },
 
+    getSourceInfo(violation) {
+        const rawScope = String((violation && violation.source_scope) || '').trim().toLowerCase();
+        const deviceId = String((violation && violation.device_id) || '').trim().toLowerCase();
+        const labelFromApi = String((violation && violation.source_label) || '').trim();
+
+        let scope = rawScope;
+        if (!scope) {
+            const localByDevice = deviceId === 'local_cache'
+                || deviceId === 'offline_local_cache'
+                || deviceId === 'local_cache_sync'
+                || deviceId.startsWith('local_')
+                || deviceId.startsWith('offline_');
+            scope = localByDevice ? 'local' : 'cloud';
+        }
+
+        if (scope === 'local') {
+            return {
+                scope,
+                label: labelFromApi || 'Local',
+                color: 'warning',
+                icon: 'fa-laptop'
+            };
+        }
+
+        if (scope === 'shared') {
+            return {
+                scope,
+                label: labelFromApi || 'Shared',
+                color: 'success',
+                icon: 'fa-link'
+            };
+        }
+
+        return {
+            scope: 'cloud',
+            label: labelFromApi || 'Cloud',
+            color: 'info',
+            icon: 'fa-cloud'
+        };
+    },
+
     // Handle report click with fallback for generating reports
     handleReportClick(violation) {
         if (this.isReportReady(violation)) {
@@ -1176,6 +1217,7 @@ const ReportsPage = {
             : 'Unknown time';
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
+        const sourceInfo = this.getSourceInfo(violation);
         const isReady = this.isReportReady(violation);
         const processAction = this.getProcessAction(violation);
         const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
@@ -1228,6 +1270,9 @@ const ReportsPage = {
                         ${violation.has_annotated ? '<span class="badge badge-success"><i class="fas fa-draw-polygon"></i> Annotated</span>' : ''}
                         <span class="badge badge-${statusInfo.color}">
                             <i class="fas ${statusInfo.icon}"></i> ${statusInfo.text}
+                        </span>
+                        <span class="badge badge-${sourceInfo.color}" title="Report source: ${sourceInfo.label}">
+                            <i class="fas ${sourceInfo.icon}"></i> ${sourceInfo.label}
                         </span>
                     </div>
                     

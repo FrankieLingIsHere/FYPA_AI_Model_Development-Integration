@@ -2422,6 +2422,72 @@ def api_violations():
     requested_limit = request.args.get('limit', 1000, type=int)
     limit = max(1, min(requested_limit or 1000, 5000))
 
+    def _normalize_source_scope(scope: Any) -> str:
+        normalized = str(scope or '').strip().lower()
+        if normalized in ('local', 'cloud', 'shared'):
+            return normalized
+        return ''
+
+    def _build_source_payload(scope: str, reason: str) -> Dict[str, str]:
+        normalized_scope = _normalize_source_scope(scope) or 'cloud'
+        label_map = {
+            'local': 'Local',
+            'cloud': 'Cloud',
+            'shared': 'Shared',
+        }
+        return {
+            'source_scope': normalized_scope,
+            'source_label': label_map.get(normalized_scope, 'Cloud'),
+            'source_reason': str(reason or '').strip() or 'inferred',
+        }
+
+    def _infer_report_source_scope(
+        *,
+        device_id: Any,
+        has_cloud_artifacts: bool,
+        has_local_artifacts: bool,
+        detection_data: Optional[Dict[str, Any]],
+        local_only: bool = False,
+    ) -> Tuple[str, str]:
+        if local_only:
+            return 'local', 'local_only_cache_row'
+
+        detection_data = detection_data if isinstance(detection_data, dict) else {}
+
+        explicit_scope = _normalize_source_scope(
+            detection_data.get('source_scope')
+            or detection_data.get('report_scope')
+            or detection_data.get('scope')
+        )
+        if explicit_scope:
+            return explicit_scope, 'detection_data.scope'
+
+        source_marker = str(
+            detection_data.get('source')
+            or detection_data.get('sync_source')
+            or ''
+        ).strip().lower()
+        if source_marker in ('sync_local_cache', 'local_cache'):
+            return ('shared', source_marker) if has_cloud_artifacts else ('local', source_marker)
+
+        device_key = str(device_id or '').strip().lower()
+        local_device_markers = {'local_cache', 'offline_local_cache', 'local_cache_sync'}
+        is_local_device = (
+            device_key in local_device_markers
+            or device_key.startswith('local_')
+            or device_key.startswith('offline_')
+        )
+
+        if has_cloud_artifacts and has_local_artifacts:
+            return 'shared', 'cloud_and_local_artifacts'
+        if has_cloud_artifacts and is_local_device:
+            return 'shared', 'cloud_record_local_device'
+        if has_cloud_artifacts:
+            return 'cloud', 'cloud_artifacts'
+        if has_local_artifacts or is_local_device:
+            return 'local', 'local_artifacts'
+        return 'cloud', 'default_cloud'
+
     if db_manager is None:
         # Fallback to local filesystem
         violations = []
@@ -2463,7 +2529,8 @@ def api_violations():
                             'status': status,
                             'severity': metadata.get('severity', 'HIGH'),
                             'violation_type': metadata.get('violation_type', 'PPE Violation'),
-                            'location': metadata.get('location', 'Unknown')
+                            'location': metadata.get('location', 'Unknown'),
+                            **_build_source_payload('local', 'filesystem_fallback')
                         })
                     except ValueError:
                         logger.warning(f"Skipping invalid report directory: {report_id}")
@@ -2486,10 +2553,20 @@ def api_violations():
             local_has_original = (local_violation_dir / 'original.jpg').exists()
             local_has_annotated = (local_violation_dir / 'annotated.jpg').exists()
             local_has_report = (local_violation_dir / 'report.html').exists()
+            has_local_artifacts = local_has_original or local_has_annotated or local_has_report
+            has_cloud_artifacts = bool(v.get('original_image_key')) or bool(v.get('annotated_image_key')) or bool(v.get('report_html_key'))
+
+            detection_data_parsed = v.get('detection_data')
+            if isinstance(detection_data_parsed, str):
+                try:
+                    detection_data_parsed = json.loads(detection_data_parsed)
+                except Exception:
+                    detection_data_parsed = None
+            if not isinstance(detection_data_parsed, dict):
+                detection_data_parsed = {}
 
             # Extract caption validation data if available
-            detection_data = v.get('detection_data') or {}
-            caption_validation = detection_data.get('caption_validation')
+            caption_validation = detection_data_parsed.get('caption_validation')
             
             # Determine status - use actual status if available, otherwise infer from data
             status = v.get('status', 'unknown')
@@ -2506,36 +2583,27 @@ def api_violations():
             # Extract missing PPE details from detection_data or violation_summary
             missing_ppe = []
             ppe_tags = []
-            detection_data_parsed = v.get('detection_data')
             resolved_person_count = None
             
             if detection_data_parsed:
-                # Try to parse violation details from stored detection data
-                if isinstance(detection_data_parsed, str):
-                    try:
-                        detection_data_parsed = json.loads(detection_data_parsed)
-                    except:
-                        detection_data_parsed = None
-                
-                if isinstance(detection_data_parsed, dict):
-                    detections = detection_data_parsed.get('detections', []) if isinstance(detection_data_parsed.get('detections', []), list) else []
-                    detected_people = [
-                        d for d in detections
-                        if isinstance(d, dict)
-                        and isinstance(d.get('class_name'), str)
-                        and 'person' in d['class_name'].lower()
-                        and not d['class_name'].lower().startswith('no-')
-                    ]
-                    if detected_people:
-                        resolved_person_count = len(detected_people)
+                detections = detection_data_parsed.get('detections', []) if isinstance(detection_data_parsed.get('detections', []), list) else []
+                detected_people = [
+                    d for d in detections
+                    if isinstance(d, dict)
+                    and isinstance(d.get('class_name'), str)
+                    and 'person' in d['class_name'].lower()
+                    and not d['class_name'].lower().startswith('no-')
+                ]
+                if detected_people:
+                    resolved_person_count = len(detected_people)
 
-                    # Extract from violation_summary field in detection data
-                    if 'violation_summary' in detection_data_parsed:
-                        for item in detection_data_parsed['violation_summary']:
-                            if 'Missing' in item:
-                                ppe_item = item.replace('Missing ', '').strip()
-                                missing_ppe.append(ppe_item)
-                                ppe_tags.append(ppe_item.replace(' ', '-').upper())
+                # Extract from violation_summary field in detection data
+                if 'violation_summary' in detection_data_parsed:
+                    for item in detection_data_parsed['violation_summary']:
+                        if 'Missing' in item:
+                            ppe_item = item.replace('Missing ', '').strip()
+                            missing_ppe.append(ppe_item)
+                            ppe_tags.append(ppe_item.replace(' ', '-').upper())
             
             # Fallback: parse from violation_summary string
             if not missing_ppe and v.get('violation_summary'):
@@ -2566,6 +2634,14 @@ def api_violations():
 
             if resolved_person_count is None:
                 resolved_person_count = v.get('person_count', 0)
+
+            source_scope, source_reason = _infer_report_source_scope(
+                device_id=v.get('device_id'),
+                has_cloud_artifacts=has_cloud_artifacts,
+                has_local_artifacts=has_local_artifacts,
+                detection_data=detection_data_parsed,
+                local_only=False,
+            )
             
             formatted_violations.append({
                 'report_id': report_id,
@@ -2585,7 +2661,8 @@ def api_violations():
                 'has_report': bool(v.get('report_html_key')) or local_has_report,
                 'detection_data': {
                     'caption_validation': caption_validation
-                } if caption_validation else None
+                } if caption_validation else None,
+                **_build_source_payload(source_scope, source_reason)
             })
 
         by_id: Dict[str, Dict[str, Any]] = {}
@@ -2617,6 +2694,11 @@ def api_violations():
                     existing['error_message'] = local_row.get('error_message')
                 if not existing.get('timestamp') and local_row.get('timestamp'):
                     existing['timestamp'] = local_row.get('timestamp')
+
+                if str(existing.get('source_scope') or '').strip().lower() == 'cloud':
+                    existing.update(_build_source_payload('shared', 'cloud_plus_local_cache'))
+                elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
+                    existing.update(_build_source_payload('local', 'local_cache_row'))
                 continue
 
             formatted_violations.append({
@@ -2635,7 +2717,8 @@ def api_violations():
                 'has_original': bool(local_row.get('has_original')),
                 'has_annotated': bool(local_row.get('has_annotated')),
                 'has_report': bool(local_row.get('has_report')),
-                'detection_data': None
+                'detection_data': None,
+                **_build_source_payload('local', 'local_cache_row')
             })
 
         formatted_violations.sort(

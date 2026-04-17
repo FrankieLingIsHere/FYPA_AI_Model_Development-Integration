@@ -7785,8 +7785,10 @@ def cleanup():
 # ZERO-TOUCH DEVICE PROVISIONING & NOTIFICATIONS
 # =========================================================================
 
-PENDING_DEVICES_FILE = Path('pending_devices.json')
-BOOTSTRAP_TOKEN_STATE_FILE = Path('bootstrap_tokens.json')
+PENDING_DEVICES_FILE = APP_DIR / 'pending_devices.json'
+BOOTSTRAP_TOKEN_STATE_FILE = APP_DIR / 'bootstrap_tokens.json'
+PENDING_DEVICES_LOCK = Lock()
+BOOTSTRAP_TOKEN_STATE_LOCK = Lock()
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
 INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
@@ -7848,46 +7850,94 @@ def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
-    if not PENDING_DEVICES_FILE.exists():
-        return {}
+def _json_backup_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.bak")
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = _json_backup_path(path)
+    tmp_path = path.with_name(f"{path.name}.tmp.{uuid.uuid4().hex}")
+
+    if path.exists():
+        try:
+            shutil.copy2(path, backup_path)
+        except Exception as backup_err:
+            logger.debug(f"Could not update JSON backup for {path.name}: {backup_err}")
+
     try:
-        with open(PENDING_DEVICES_FILE, 'r') as f:
-            data = json.load(f)
-            if not isinstance(data, dict):
-                return {}
-            return {
-                str(machine_id): _normalize_pending_device_record(record)
-                for machine_id, record in data.items()
-            }
-    except Exception:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
+    with PENDING_DEVICES_LOCK:
+        candidate_paths = [PENDING_DEVICES_FILE, _json_backup_path(PENDING_DEVICES_FILE)]
+
+        for path in candidate_paths:
+            if not path.exists():
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    logger.warning(f"Ignoring non-dict pending device payload in {path.name}")
+                    continue
+                return {
+                    str(machine_id): _normalize_pending_device_record(record)
+                    for machine_id, record in data.items()
+                }
+            except Exception as e:
+                logger.warning(f"Failed to load pending devices from {path.name}: {e}")
+
         return {}
 
 
 def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> None:
-    with open(PENDING_DEVICES_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+    with PENDING_DEVICES_LOCK:
+        _atomic_write_json(PENDING_DEVICES_FILE, data)
 
 
 def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
-    if not BOOTSTRAP_TOKEN_STATE_FILE.exists():
-        return {'used_jti': {}}
-    try:
-        with open(BOOTSTRAP_TOKEN_STATE_FILE, 'r') as f:
-            state = json.load(f)
-        if not isinstance(state, dict):
+    with BOOTSTRAP_TOKEN_STATE_LOCK:
+        candidate_paths = [
+            BOOTSTRAP_TOKEN_STATE_FILE,
+            _json_backup_path(BOOTSTRAP_TOKEN_STATE_FILE),
+        ]
+
+        for path in candidate_paths:
+            if not path.exists():
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                if not isinstance(state, dict):
+                    logger.warning(f"Ignoring non-dict bootstrap token payload in {path.name}")
+                    continue
+                used = state.get('used_jti')
+                if not isinstance(used, dict):
+                    used = {}
+                return {'used_jti': used}
+            except Exception as e:
+                logger.warning(f"Failed to load bootstrap token state from {path.name}: {e}")
+
             return {'used_jti': {}}
-        used = state.get('used_jti')
-        if not isinstance(used, dict):
-            used = {}
-        return {'used_jti': used}
-    except Exception:
+
         return {'used_jti': {}}
 
 
 def _save_bootstrap_token_state(state: Dict[str, Dict[str, str]]) -> None:
-    with open(BOOTSTRAP_TOKEN_STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=2)
+    with BOOTSTRAP_TOKEN_STATE_LOCK:
+        _atomic_write_json(BOOTSTRAP_TOKEN_STATE_FILE, state)
 
 
 def _prune_bootstrap_jti_state(state: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:

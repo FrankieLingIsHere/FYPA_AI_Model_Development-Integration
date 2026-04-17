@@ -82,6 +82,7 @@ if exist "!LUNA_APP_DIR!\start.bat" (
         call :refresh_existing_source_snapshot
         if errorlevel 1 (
             echo Warning: Auto-update failed or was skipped. Launching existing local files.
+            if not "!LUNA_UPDATE_ERROR!"=="" echo   Reason: !LUNA_UPDATE_ERROR!
         ) else (
             echo Local source snapshot updated successfully.
         )
@@ -90,6 +91,7 @@ if exist "!LUNA_APP_DIR!\start.bat" (
         call :safe_refresh_local_launcher
         if errorlevel 1 (
             echo Warning: Could not self-update launcher script from latest template.
+            if not "!LUNA_LAUNCHER_UPDATE_ERROR!"=="" echo   Reason: !LUNA_LAUNCHER_UPDATE_ERROR!
         ) else (
             echo Launcher script refreshed to latest installer logic.
         )
@@ -302,15 +304,46 @@ goto :eof
 set "UPDATE_ZIP=%TEMP%\luna_source_update.zip"
 set "UPDATE_STAGE=%TEMP%\luna_source_update_%RANDOM%_%RANDOM%"
 set "UPDATE_SOURCE_DIR="
+set "LUNA_UPDATE_ERROR="
 
-if "!LUNA_REPO_ZIP_URL!"=="" exit /b 1
-if /I "!LUNA_REPO_ZIP_URL!"=="__LUNA_REPO_ZIP_URL__" exit /b 1
+if "!LUNA_REPO_ZIP_URL!"=="" (
+    set "LUNA_UPDATE_ERROR=missing_repo_zip_url"
+    exit /b 1
+)
+if /I "!LUNA_REPO_ZIP_URL!"=="__LUNA_REPO_ZIP_URL__" (
+    set "LUNA_UPDATE_ERROR=placeholder_repo_zip_url"
+    exit /b 1
+)
 
-curl -L --connect-timeout 8 --max-time 60 "!LUNA_REPO_ZIP_URL!" -o "!UPDATE_ZIP!" >nul 2>&1
-if errorlevel 1 goto :refresh_existing_source_snapshot_fail
+set "UPDATE_DOWNLOAD_OK="
+curl.exe -fL --retry 2 --retry-delay 1 --connect-timeout 15 --max-time 180 "!LUNA_REPO_ZIP_URL!" -o "!UPDATE_ZIP!" >nul 2>&1
+if not errorlevel 1 set "UPDATE_DOWNLOAD_OK=1"
+
+if "!UPDATE_DOWNLOAD_OK!"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '!LUNA_REPO_ZIP_URL!' -OutFile '!UPDATE_ZIP!' -TimeoutSec 240; exit 0 } catch { exit 1 }" >nul 2>&1
+    if errorlevel 1 (
+        set "LUNA_UPDATE_ERROR=download_failed"
+        goto :refresh_existing_source_snapshot_fail
+    )
+)
+
+if not exist "!UPDATE_ZIP!" (
+    set "LUNA_UPDATE_ERROR=zip_missing_after_download"
+    goto :refresh_existing_source_snapshot_fail
+)
+
+for %%Z in ("!UPDATE_ZIP!") do (
+    if %%~zZ LSS 1024 (
+        set "LUNA_UPDATE_ERROR=zip_too_small"
+        goto :refresh_existing_source_snapshot_fail
+    )
+)
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Force '!UPDATE_ZIP!' '!UPDATE_STAGE!'" >nul 2>&1
-if errorlevel 1 goto :refresh_existing_source_snapshot_fail
+if errorlevel 1 (
+    set "LUNA_UPDATE_ERROR=zip_extract_failed"
+    goto :refresh_existing_source_snapshot_fail
+)
 
 if exist "!UPDATE_STAGE!\!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase\start.bat" (
     set "UPDATE_SOURCE_DIR=!UPDATE_STAGE!\!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
@@ -322,14 +355,21 @@ if exist "!UPDATE_STAGE!\!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase\start.bat"
     )
 )
 
-if "!UPDATE_SOURCE_DIR!"=="" goto :refresh_existing_source_snapshot_fail
+if "!UPDATE_SOURCE_DIR!"=="" (
+    set "LUNA_UPDATE_ERROR=source_dir_not_found"
+    goto :refresh_existing_source_snapshot_fail
+)
 
 robocopy "!UPDATE_SOURCE_DIR!" "!LUNA_APP_DIR!" /E /R:2 /W:1 /NFL /NDL /NP /XD ".git" "venv" "__pycache__" "Results" "reports" "violations" /XF ".env" >nul
 set "ROBOCOPY_CODE=!errorlevel!"
-if !ROBOCOPY_CODE! GEQ 8 goto :refresh_existing_source_snapshot_fail
+if !ROBOCOPY_CODE! GEQ 8 (
+    set "LUNA_UPDATE_ERROR=robocopy_failed_!ROBOCOPY_CODE!"
+    goto :refresh_existing_source_snapshot_fail
+)
 
 if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
+set "LUNA_UPDATE_ERROR="
 exit /b 0
 
 :refresh_existing_source_snapshot_fail
@@ -338,18 +378,21 @@ if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 exit /b 1
 
 :safe_refresh_local_launcher
-findstr /I /R /C:"^:refresh_local_launcher_from_template$" "%~f0" >nul 2>&1
-if errorlevel 1 exit /b 1
+set "LUNA_LAUNCHER_UPDATE_ERROR="
+call :refresh_local_launcher_from_template >nul 2>&1
+if not errorlevel 1 exit /b 0
 
-call :refresh_local_launcher_from_template
-exit /b %errorlevel%
-
-:refresh_local_launcher_from_template
 set "TEMPLATE_BAT=!LUNA_APP_DIR!\frontend\static\LUNA_LocalInstaller.bat"
 set "UPDATED_LAUNCHER=%TEMP%\luna_launcher_update_%RANDOM%_%RANDOM%.bat"
 
-if /I "!LUNA_SELF_UPDATE_LAUNCHER!" NEQ "true" exit /b 1
-if not exist "!TEMPLATE_BAT!" exit /b 1
+if /I "!LUNA_SELF_UPDATE_LAUNCHER!" NEQ "true" (
+    set "LUNA_LAUNCHER_UPDATE_ERROR=self_update_disabled"
+    exit /b 1
+)
+if not exist "!TEMPLATE_BAT!" (
+    set "LUNA_LAUNCHER_UPDATE_ERROR=template_missing"
+    exit /b 1
+)
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$current = Get-Content -Raw -Path '%~f0' -ErrorAction Stop; " ^
@@ -360,6 +403,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 
 if errorlevel 1 (
     if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
+    set "LUNA_LAUNCHER_UPDATE_ERROR=fallback_template_render_failed"
     exit /b 1
 )
 
@@ -369,9 +413,53 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
     copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
     if errorlevel 1 (
         del "!UPDATED_LAUNCHER!" >nul 2>&1
+        set "LUNA_LAUNCHER_UPDATE_ERROR=fallback_launcher_copy_failed"
         exit /b 1
     )
     del "!UPDATED_LAUNCHER!" >nul 2>&1
 )
 
+set "LUNA_LAUNCHER_UPDATE_ERROR="
+exit /b 0
+
+:refresh_local_launcher_from_template
+set "LUNA_LAUNCHER_UPDATE_ERROR="
+set "TEMPLATE_BAT=!LUNA_APP_DIR!\frontend\static\LUNA_LocalInstaller.bat"
+set "UPDATED_LAUNCHER=%TEMP%\luna_launcher_update_%RANDOM%_%RANDOM%.bat"
+
+if /I "!LUNA_SELF_UPDATE_LAUNCHER!" NEQ "true" (
+    set "LUNA_LAUNCHER_UPDATE_ERROR=self_update_disabled"
+    exit /b 1
+)
+if not exist "!TEMPLATE_BAT!" (
+    set "LUNA_LAUNCHER_UPDATE_ERROR=template_missing"
+    exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$current = Get-Content -Raw -Path '%~f0' -ErrorAction Stop; " ^
+  "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
+  "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
+  "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
+  "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding UTF8"
+
+if errorlevel 1 (
+    if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
+    set "LUNA_LAUNCHER_UPDATE_ERROR=template_render_failed"
+    exit /b 1
+)
+
+if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
+    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
+) else (
+    copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+    if errorlevel 1 (
+        del "!UPDATED_LAUNCHER!" >nul 2>&1
+        set "LUNA_LAUNCHER_UPDATE_ERROR=launcher_copy_failed"
+        exit /b 1
+    )
+    del "!UPDATED_LAUNCHER!" >nul 2>&1
+)
+
+set "LUNA_LAUNCHER_UPDATE_ERROR="
 exit /b 0

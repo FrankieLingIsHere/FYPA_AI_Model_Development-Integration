@@ -37,6 +37,11 @@ PROVIDER_MODE_MATRIX = [
         "name": "cloud-strict",
         "payload": {
             "routing_profile": "cloud",
+            "model_api_enabled": False,
+            "gemini_enabled": True,
+            "nlp_provider_order": "gemini",
+            "vision_provider_order": "gemini",
+            "embedding_provider_order": "model_api",
         },
         "expect": {
             "routing_profile": "cloud",
@@ -49,6 +54,11 @@ PROVIDER_MODE_MATRIX = [
         "name": "local-strict",
         "payload": {
             "routing_profile": "local",
+            "model_api_enabled": False,
+            "gemini_enabled": False,
+            "nlp_provider_order": "ollama",
+            "vision_provider_order": "ollama",
+            "embedding_provider_order": "ollama",
         },
         "expect": {
             "routing_profile": "local",
@@ -243,10 +253,23 @@ def run_provider_mode_matrix_probe(report_ids):
                 settings_after = require_json_dict("/api/settings/provider-routing", f"provider-routing-{mode_name}")
 
             expected = mode["expect"]
-            if str(settings_after.get("routing_profile") or "").strip().lower() != expected["routing_profile"]:
-                raise RuntimeError(
-                    f"provider mode {mode_name} routing_profile mismatch: {settings_after.get('routing_profile')}"
-                )
+
+            nlp_order = normalize_provider_order(settings_after.get("nlp_provider_order"))
+
+            routing_profile_value = settings_after.get("routing_profile")
+            routing_profile_text = str(routing_profile_value or "").strip().lower()
+            if routing_profile_text:
+                if routing_profile_text != expected["routing_profile"]:
+                    raise RuntimeError(
+                        f"provider mode {mode_name} routing_profile mismatch: {settings_after.get('routing_profile')}"
+                    )
+            else:
+                # Legacy/back-compat path: infer profile from effective NLP order when field is not exposed.
+                inferred_profile = "local" if (nlp_order and nlp_order[0] == "ollama") else "cloud"
+                if inferred_profile != expected["routing_profile"]:
+                    raise RuntimeError(
+                        f"provider mode {mode_name} profile inference mismatch: inferred={inferred_profile}, nlp_order={nlp_order}"
+                    )
             if bool(settings_after.get("model_api_enabled")) != bool(expected["model_api_enabled"]):
                 raise RuntimeError(
                     f"provider mode {mode_name} model_api_enabled mismatch: {settings_after.get('model_api_enabled')}"
@@ -256,7 +279,6 @@ def run_provider_mode_matrix_probe(report_ids):
                     f"provider mode {mode_name} gemini_enabled mismatch: {settings_after.get('gemini_enabled')}"
                 )
 
-            nlp_order = normalize_provider_order(settings_after.get("nlp_provider_order"))
             if not nlp_order or nlp_order[0] != expected["nlp_first"]:
                 raise RuntimeError(
                     f"provider mode {mode_name} nlp order mismatch: got {nlp_order}, expected first={expected['nlp_first']}"

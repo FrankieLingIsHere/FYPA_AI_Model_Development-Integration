@@ -6749,54 +6749,61 @@ def _read_local_report_with_trace(local_report_html: Path, trace_payload: Dict[s
 
 @app.route('/image/<report_id>/<filename>')
 def get_image(report_id, filename):
-    """Serve violation images from Supabase or local storage."""
+    """Serve violation images with local-first caching to reduce Supabase egress."""
+    if filename not in ['original.jpg', 'annotated.jpg']:
+        abort(400, description="Invalid filename")
+
+    violation_dir = VIOLATIONS_DIR / report_id
+    image_path = violation_dir / filename
+
+    def _serve_local_image(path: Path):
+        response = send_from_directory(str(path.parent), path.name)
+        # Permit browser reuse of stable /image URLs to lower repeat storage traffic.
+        response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=600, stale-if-error=604800'
+        return response
+
+    # Prefer local file immediately when available (works in offline/local-fallback mode).
+    if image_path.exists():
+        return _serve_local_image(image_path)
+
     if storage_manager is None or db_manager is None:
-        # Fallback to local filesystem
-        violation_dir = VIOLATIONS_DIR / report_id
-        
         if not violation_dir.exists():
             abort(404, description="Report not found")
-        
-        if filename not in ['original.jpg', 'annotated.jpg']:
-            abort(400, description="Invalid filename")
-        
-        image_path = violation_dir / filename
-        if not image_path.exists():
-            abort(404, description="Image not found")
-        
-        return send_from_directory(str(violation_dir), filename)
-    
-    # Use Supabase
+        abort(404, description="Image not found")
+
     try:
-        if filename not in ['original.jpg', 'annotated.jpg']:
-            abort(400, description="Invalid filename")
-        
-        # Get violation data from database
         violation = db_manager.get_violation(report_id)
-        
         if not violation:
             abort(404, description="Report not found")
-        
-        # Get storage key based on filename
-        if filename == 'original.jpg':
-            storage_key = violation.get('original_image_key')
-        else:
-            storage_key = violation.get('annotated_image_key')
-        
+
+        storage_key = violation.get('original_image_key') if filename == 'original.jpg' else violation.get('annotated_image_key')
         if not storage_key:
             abort(404, description="Image not found")
-        
-        # Get signed URL
-        signed_url = storage_manager.get_signed_url(storage_key)
-        
-        if not signed_url:
-            abort(404, description="Failed to generate signed URL")
-        
-        # Redirect to signed URL
-        return redirect(signed_url)
-        
+
+        blob = storage_manager.download_file_content(storage_key)
+        if not blob:
+            abort(404, description="Failed to fetch image")
+
+        if isinstance(blob, str):
+            blob = blob.encode('utf-8')
+
+        try:
+            violation_dir.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(blob)
+            return _serve_local_image(image_path)
+        except Exception as cache_err:
+            logger.warning(f"Could not persist cached image for {report_id}/{filename}: {cache_err}")
+
+        response = Response(blob, mimetype='image/jpeg')
+        response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=600, stale-if-error=604800'
+        return response
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching image from Supabase: {e}")
+        if image_path.exists():
+            return _serve_local_image(image_path)
         abort(500, description="Failed to fetch image")
 
 

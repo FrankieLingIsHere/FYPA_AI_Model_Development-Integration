@@ -1187,8 +1187,13 @@ const ReportsPage = {
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${violation.has_annotated ? 
-                        `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async" style="width: 100%; height: 100%; object-fit: cover;">` :
-                        `<div style="display: flex; align-items: center; justify-content: center; height: 100%;">
+                        `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async"
+                              onerror="if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
+                              style="width: 100%; height: 100%; object-fit: cover;">
+                         <div data-image-fallback style="display: none; align-items: center; justify-content: center; height: 100%;">
+                            <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
+                         </div>` :
+                        `<div data-image-fallback style="display: flex; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
                          </div>`
                     }

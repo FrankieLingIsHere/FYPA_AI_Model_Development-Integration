@@ -1,5 +1,11 @@
 // API Functions
 const API = {
+    imagePrefetchState: {
+        completed: new Set(),
+        inFlight: new Set(),
+        lastBatchAt: 0
+    },
+
     canonicalViolationKey(rawKey) {
         if (!rawKey) return null;
 
@@ -235,22 +241,54 @@ const API = {
 
     prefetchViolationImages(violations = []) {
         if (!Array.isArray(violations) || violations.length === 0) return;
+        if (navigator.onLine === false) return;
 
-        const urls = [];
-        violations.slice(0, 40).forEach((violation) => {
+        const now = Date.now();
+        const state = this.imagePrefetchState || { completed: new Set(), inFlight: new Set(), lastBatchAt: 0 };
+
+        // Prevent repeated broad prefetch storms across pages and refresh loops.
+        if (now - Number(state.lastBatchAt || 0) < 12000) {
+            return;
+        }
+        state.lastBatchAt = now;
+
+        const candidates = [];
+        violations.slice(0, 12).forEach((violation) => {
             if (!violation || !violation.report_id) return;
             if (violation.has_original) {
-                urls.push(this.getImageUrl(violation.report_id, 'original.jpg'));
+                candidates.push({
+                    key: `${violation.report_id}:original.jpg`,
+                    url: this.getImageUrl(violation.report_id, 'original.jpg')
+                });
             }
             if (violation.has_annotated) {
-                urls.push(this.getImageUrl(violation.report_id, 'annotated.jpg'));
+                candidates.push({
+                    key: `${violation.report_id}:annotated.jpg`,
+                    url: this.getImageUrl(violation.report_id, 'annotated.jpg')
+                });
             }
         });
 
-        urls.forEach((url) => {
-            fetch(url, { cache: 'force-cache' }).catch(() => {
-                // Ignore prefetch failures.
-            });
+        const selected = candidates
+            .filter((item) => !state.completed.has(item.key) && !state.inFlight.has(item.key))
+            .slice(0, 6);
+
+        selected.forEach((item, index) => {
+            state.inFlight.add(item.key);
+            setTimeout(() => {
+                fetch(item.url, { cache: 'force-cache' })
+                    .then((response) => {
+                        if (response && response.ok) {
+                            state.completed.add(item.key);
+                        }
+                    })
+                    .catch(() => {
+                        // Ignore prefetch failures; this is an optimization path.
+                    })
+                    .finally(() => {
+                        state.inFlight.delete(item.key);
+                    });
+            }, index * 90);
         });
     },
 

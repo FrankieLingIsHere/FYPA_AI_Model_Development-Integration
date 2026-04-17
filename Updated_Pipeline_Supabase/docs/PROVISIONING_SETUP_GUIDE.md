@@ -19,6 +19,7 @@ Configure these environment variables on the cloud backend.
 - `PROVISION_EXCHANGE_TOKEN_TTL_SECONDS` (default 300)
 - `INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS` (default 600)
 - `BOOTSTRAP_JTI_RETENTION_SECONDS` (default 86400)
+- `PROVISION_PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS` (default 300; throttles repeated pending-request admin alerts)
 - `LUNA_STATE_DIR` (recommended local default: `C:\LUNA_System\LUNA_LocalState`)
 
 ### Optional notifications
@@ -81,6 +82,9 @@ Legacy/manual equivalent sequence remains available:
 Status polling still does not return credentials directly.
 
 Re-issuing a `provision_secret` for an already approved device keeps its approved/provisioned status (it does not downgrade back to pending).
+
+For repeated requests from the same still-pending device, admin notifications are throttled by
+`PROVISION_PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS` to reduce alert spam while still allowing reminder notifications.
 
 ## 4) Installer Delivery Security
 

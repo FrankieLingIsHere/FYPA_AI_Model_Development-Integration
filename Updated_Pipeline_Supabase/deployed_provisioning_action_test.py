@@ -20,6 +20,7 @@ os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'
 from luna_app import (
     app,
     _load_pending_devices,
+    _save_pending_devices,
     PENDING_DEVICES_FILE,
     BOOTSTRAP_TOKEN_STATE_FILE,
     LOCAL_MODE_PROVISION_STATE_FILE,
@@ -130,6 +131,45 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('status'), 'approved')
         self.assertTrue(payload.get('bootstrap_exchange_ready'))
         self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
+
+    @patch('luna_app.notify_admin')
+    def test_re_request_pending_device_respects_notification_cooldown(self, mock_notify_admin):
+        machine_id = 'TEST-EDGE-PENDING-COOLDOWN-001'
+        _ = self._request_device(machine_id)
+        mock_notify_admin.reset_mock()
+
+        with patch('luna_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 3600):
+            reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
+
+        self.assertEqual(reissue.status_code, 200)
+        payload = reissue.json or {}
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('device_status'), 'pending')
+        self.assertFalse(payload.get('notification_dispatched'))
+        self.assertEqual(payload.get('notification_reason'), 'pending_rerequest_cooldown')
+        mock_notify_admin.assert_not_called()
+
+    @patch('luna_app.notify_admin')
+    def test_re_request_pending_device_notifies_after_cooldown(self, mock_notify_admin):
+        machine_id = 'TEST-EDGE-PENDING-COOLDOWN-002'
+        _ = self._request_device(machine_id)
+        mock_notify_admin.reset_mock()
+
+        devices = _load_pending_devices()
+        self.assertIn(machine_id, devices)
+        devices[machine_id]['requested_at'] = '2020-01-01T00:00:00+00:00'
+        _save_pending_devices(devices)
+
+        with patch('luna_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 60):
+            reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
+
+        self.assertEqual(reissue.status_code, 200)
+        payload = reissue.json or {}
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('device_status'), 'pending')
+        self.assertTrue(payload.get('notification_dispatched'))
+        self.assertEqual(payload.get('notification_reason'), 'pending_rerequest_notified')
+        mock_notify_admin.assert_called_once()
 
     def test_approved_status_requires_server_provisioning_credentials(self):
         machine_id = 'TEST-EDGE-CREDS-REQUIRED-001'

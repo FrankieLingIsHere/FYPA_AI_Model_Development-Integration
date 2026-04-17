@@ -2488,54 +2488,63 @@ def api_violations():
             return 'local', 'local_artifacts'
         return 'cloud', 'default_cloud'
 
+    def _collect_local_violation_rows(source_reason: str = 'filesystem_fallback') -> List[Dict[str, Any]]:
+        """Collect violation rows from local filesystem for local/offline fallback."""
+        local_violations: List[Dict[str, Any]] = []
+        if not VIOLATIONS_DIR.exists():
+            return local_violations
+
+        for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+            if not violation_dir.is_dir():
+                continue
+
+            report_id = violation_dir.name
+            try:
+                timestamp = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
+
+                metadata_file = violation_dir / 'metadata.json'
+                metadata = {}
+                if metadata_file.exists():
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+
+                has_report = (violation_dir / 'report.html').exists()
+                has_original = (violation_dir / 'original.jpg').exists()
+                has_annotated = (violation_dir / 'annotated.jpg').exists()
+
+                if has_report:
+                    status = 'completed'
+                elif has_annotated:
+                    status = 'generating'
+                elif has_original:
+                    status = 'pending'
+                else:
+                    status = 'pending'
+
+                local_violations.append({
+                    'report_id': report_id,
+                    'timestamp': timestamp.isoformat(),
+                    'has_original': has_original,
+                    'has_annotated': has_annotated,
+                    'has_report': has_report,
+                    'status': status,
+                    'severity': metadata.get('severity', 'HIGH'),
+                    'violation_type': metadata.get('violation_type', 'PPE Violation'),
+                    'location': metadata.get('location', 'Unknown'),
+                    **_build_source_payload('local', source_reason)
+                })
+            except ValueError:
+                logger.warning(f"Skipping invalid report directory: {report_id}")
+                continue
+
+        local_violations.sort(
+            key=lambda item: str(item.get('timestamp') or ''),
+            reverse=True,
+        )
+        return local_violations[:max(1, int(limit or 1))]
+
     if db_manager is None:
-        # Fallback to local filesystem
-        violations = []
-        if VIOLATIONS_DIR.exists():
-            for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
-                if violation_dir.is_dir():
-                    report_id = violation_dir.name
-                    try:
-                        timestamp = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
-                        
-                        # Get violation metadata if exists
-                        metadata_file = violation_dir / 'metadata.json'
-                        metadata = {}
-                        if metadata_file.exists():
-                            with open(metadata_file, 'r') as f:
-                                metadata = json.load(f)
-                        
-                        # Determine status from files present
-                        has_report = (violation_dir / 'report.html').exists()
-                        has_original = (violation_dir / 'original.jpg').exists()
-                        has_annotated = (violation_dir / 'annotated.jpg').exists()
-                        
-                        # Infer status from what files exist
-                        if has_report:
-                            status = 'completed'
-                        elif has_annotated:
-                            status = 'generating'  # Has annotated but no report yet
-                        elif has_original:
-                            status = 'pending'  # Just original image saved
-                        else:
-                            status = 'pending'
-                        
-                        violations.append({
-                            'report_id': report_id,
-                            'timestamp': timestamp.isoformat(),
-                            'has_original': has_original,
-                            'has_annotated': has_annotated,
-                            'has_report': has_report,
-                            'status': status,
-                            'severity': metadata.get('severity', 'HIGH'),
-                            'violation_type': metadata.get('violation_type', 'PPE Violation'),
-                            'location': metadata.get('location', 'Unknown'),
-                            **_build_source_payload('local', 'filesystem_fallback')
-                        })
-                    except ValueError:
-                        logger.warning(f"Skipping invalid report directory: {report_id}")
-                        continue
-        return jsonify(violations)
+        return jsonify(_collect_local_violation_rows('filesystem_fallback'))
     
     # Use Supabase - get ALL violations including pending
     try:
@@ -2731,7 +2740,14 @@ def api_violations():
         
     except Exception as e:
         logger.error(f"Error fetching violations from Supabase: {e}")
-        return jsonify({'error': 'Failed to fetch violations'}), 500
+        fallback_rows = _collect_local_violation_rows('filesystem_fallback_after_supabase_error')
+        if fallback_rows:
+            logger.warning(
+                f"Returning {len(fallback_rows)} local violation rows after Supabase fetch error"
+            )
+        else:
+            logger.warning("Supabase fetch error with no local violation rows; returning empty local fallback")
+        return jsonify(fallback_rows)
 
 
 @app.route('/api/stats')
@@ -8065,6 +8081,12 @@ BOOTSTRAP_JTI_RETENTION_SECONDS = _safe_int_env(
     300,
     7 * 24 * 3600,
 )
+PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS = _safe_int_env(
+    'PROVISION_PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS',
+    300,
+    0,
+    24 * 3600,
+)
 
 
 def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
@@ -8099,6 +8121,30 @@ def _maybe_iso_datetime(value: Any) -> Optional[str]:
             return None
     text = str(value).strip()
     return text or None
+
+
+def _parse_iso_epoch(value: Any) -> Optional[float]:
+    """Parse an ISO datetime string into epoch seconds."""
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    normalized = text
+    if normalized.endswith('Z'):
+        normalized = normalized[:-1] + '+00:00'
+
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    try:
+        return float(dt.timestamp())
+    except Exception:
+        return None
 
 
 def _is_missing_relation_error(exc: Exception) -> bool:
@@ -9085,6 +9131,20 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
     resend_api_key = os.getenv('RESEND_API_KEY', '').strip()
     resend_from_email = os.getenv('RESEND_FROM_EMAIL', '').strip()
     resend_api_base_url = os.getenv('RESEND_API_BASE_URL', 'https://api.resend.com').strip().rstrip('/')
+    smtp_server = os.getenv('SMTP_SERVER', '').strip()
+
+    if not webhook_url and not admin_email:
+        logger.warning(
+            'Admin notification requested but no channels are configured '
+            '(set NOTIFICATION_WEBHOOK_URL and/or ADMIN_EMAIL + SMTP/Resend).'
+        )
+        return
+
+    if admin_email and not smtp_server and not (resend_api_key and resend_from_email):
+        logger.warning(
+            'ADMIN_EMAIL is set but no email transport is configured '
+            '(set SMTP_* or RESEND_API_KEY + RESEND_FROM_EMAIL).'
+        )
 
     if resend_api_key and resend_from_email and admin_email:
         try:
@@ -9112,7 +9172,6 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         except Exception as resend_err:
             logger.warning(f'Failed Resend API email attempt: {resend_err}')
 
-    smtp_server = os.getenv('SMTP_SERVER', '').strip()
     if smtp_server and admin_email:
         try:
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
@@ -9235,7 +9294,30 @@ def provision_request():
     else:
         approval_token = secrets.token_urlsafe(32)
 
-    requested_at_value = existing_requested_at if repeated_pending_request and existing_requested_at else datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    requested_at_value = now_iso
+    notification_reason = 'new_pending_request'
+    notify_pending_request = not preserve_status
+
+    if preserve_status:
+        requested_at_value = existing_requested_at or now_iso
+        notification_reason = 'status_preserved'
+        notify_pending_request = False
+    elif repeated_pending_request:
+        prior_requested_epoch = _parse_iso_epoch(existing_requested_at)
+        cooldown_seconds = max(0, int(PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS or 0))
+        cooldown_elapsed = (
+            prior_requested_epoch is None
+            or (time.time() - prior_requested_epoch) >= cooldown_seconds
+        )
+        notify_pending_request = cooldown_elapsed
+
+        if cooldown_elapsed:
+            requested_at_value = now_iso
+            notification_reason = 'pending_rerequest_notified'
+        else:
+            requested_at_value = existing_requested_at or now_iso
+            notification_reason = 'pending_rerequest_cooldown'
 
     devices[machine_id] = {
         'status': effective_status,
@@ -9247,8 +9329,7 @@ def provision_request():
     }
     _save_pending_devices(devices)
 
-    # Avoid duplicate admin notifications if the same machine re-requests while still pending.
-    if not preserve_status and not repeated_pending_request:
+    if notify_pending_request:
         notify_admin(machine_id, 'pending', token=approval_token)
 
     return jsonify({
@@ -9256,6 +9337,8 @@ def provision_request():
         'device_status': effective_status,
         'machine_id': machine_id,
         'provision_secret': provision_secret,
+        'notification_dispatched': bool(notify_pending_request),
+        'notification_reason': notification_reason,
     })
 
 

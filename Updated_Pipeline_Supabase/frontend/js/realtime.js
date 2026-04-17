@@ -342,6 +342,11 @@ const RealtimeSync = {
                     return;
                 }
 
+                if (status === 'completed') {
+                    NotificationManager.reportReady(reportId);
+                    return;
+                }
+
                 if (status === 'failed' || status === 'partial' || status === 'skipped') {
                     NotificationManager.error(`Report ${reportId} failed: ${row.error_message || 'Unknown error'}`, {
                         title: 'Report Generation Issue',

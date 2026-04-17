@@ -35,6 +35,7 @@ from threading import Lock, Thread
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import time
+import uuid
 
 # Import timezone utility (configurable via .env)
 from timezone_utils import get_local_time, to_local_time, get_timezone_info
@@ -3927,27 +3928,74 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
         json.dump(state, f, indent=2)
 
 
+def _local_mode_normalize_machine_id(raw_machine_id: Any) -> str:
+    machine_id = str(raw_machine_id or '').strip()
+    if not machine_id:
+        return ''
+    if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+        return ''
+    return machine_id
+
+
+def _local_mode_generate_deterministic_machine_id() -> str:
+    seed_override = str(os.getenv('LUNA_MACHINE_ID_SEED') or '').strip()
+    seed_parts: List[str] = []
+
+    if seed_override:
+        seed_parts.append(seed_override)
+    else:
+        seed_parts.extend([
+            str(os.getenv('COMPUTERNAME') or '').strip(),
+            str(os.getenv('HOSTNAME') or '').strip(),
+            str(APP_DIR).strip(),
+            str(LOCAL_MODE_STATE_DIR).strip(),
+            str(sys.platform or '').strip(),
+        ])
+        try:
+            mac_int = int(uuid.getnode())
+            if mac_int > 0:
+                seed_parts.append(f"mac:{mac_int:012x}")
+        except Exception:
+            pass
+
+    seed_source = '|'.join(part for part in seed_parts if part) or 'luna-local-machine-seed'
+    suffix = hashlib.sha256(seed_source.encode('utf-8')).hexdigest()[:12].upper()
+    return f"Edge-{suffix}"
+
+
 def _local_mode_get_or_create_machine_id() -> str:
+    configured = _local_mode_normalize_machine_id(os.getenv('LUNA_MACHINE_ID', ''))
+    if configured:
+        _local_mode_write_machine_id(configured)
+        return configured
+
     existing = ''
     if LOCAL_MODE_MACHINE_ID_FILE.exists():
         try:
-            existing = str(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8')).strip()
+            existing = _local_mode_normalize_machine_id(
+                LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8')
+            )
         except Exception:
             existing = ''
 
-    if existing and re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', existing):
+    if existing:
         return existing
 
-    machine_id = f"Edge-{secrets.token_hex(6).upper()}"
+    state_machine_id = _local_mode_normalize_machine_id(
+        (_local_mode_load_provision_state() or {}).get('machine_id')
+    )
+    if state_machine_id:
+        _local_mode_write_machine_id(state_machine_id)
+        return state_machine_id
+
+    machine_id = _local_mode_generate_deterministic_machine_id()
     _local_mode_write_machine_id(machine_id)
     return machine_id
 
 
 def _local_mode_write_machine_id(machine_id: str) -> None:
-    normalized = str(machine_id or '').strip()
+    normalized = _local_mode_normalize_machine_id(machine_id)
     if not normalized:
-        return
-    if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', normalized):
         return
 
     try:
@@ -4152,7 +4200,17 @@ def api_local_mode_provisioning_status():
     ):
         cloud_url = state_cloud_url
 
-    machine_id = str(state.get('machine_id') or '').strip() or _local_mode_get_or_create_machine_id()
+    state_machine_id = _local_mode_normalize_machine_id(state.get('machine_id'))
+    machine_id = state_machine_id or _local_mode_get_or_create_machine_id()
+
+    if machine_id and machine_id != state_machine_id:
+        state['machine_id'] = machine_id
+        state['updated_at'] = datetime.now(timezone.utc).isoformat()
+        try:
+            _local_mode_save_provision_state(state)
+        except Exception as persist_state_err:
+            logger.warning(f"Unable to persist machine_id '{machine_id}' into local state: {persist_state_err}")
+
     provision_secret = str(state.get('provision_secret') or '').strip()
     if provision_secret:
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)

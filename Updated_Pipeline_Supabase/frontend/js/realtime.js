@@ -305,6 +305,15 @@ const RealtimeSync = {
 
     emitStatusNotifications(payload) {
         const reports = Array.isArray(payload.reports) ? payload.reports : [];
+        const nowEpochMs = Date.now();
+
+        const isRecentRow = (row) => {
+            const raw = row && (row.updated_at || row.timestamp);
+            if (!raw) return false;
+            const ts = Date.parse(raw);
+            if (!Number.isFinite(ts)) return false;
+            return (nowEpochMs - ts) <= 120000;
+        };
 
         reports.forEach((row) => {
             const reportId = row.report_id;
@@ -314,7 +323,35 @@ const RealtimeSync = {
             const prev = this.reportStatusCache[reportId];
             this.reportStatusCache[reportId] = status;
 
-            if (!prev || prev === status) {
+            if (!prev) {
+                if (!isRecentRow(row)) {
+                    return;
+                }
+
+                if (status === 'pending' || status === 'queued') {
+                    NotificationManager.reportGenerating(reportId, {
+                        title: 'Report Queued'
+                    });
+                    return;
+                }
+
+                if (status === 'generating' || status === 'processing') {
+                    NotificationManager.reportGenerating(reportId, {
+                        title: 'Report Generating'
+                    });
+                    return;
+                }
+
+                if (status === 'failed' || status === 'partial' || status === 'skipped') {
+                    NotificationManager.error(`Report ${reportId} failed: ${row.error_message || 'Unknown error'}`, {
+                        title: 'Report Generation Issue',
+                        duration: 8000
+                    });
+                }
+                return;
+            }
+
+            if (prev === status) {
                 return;
             }
 
@@ -331,8 +368,17 @@ const RealtimeSync = {
                 return;
             }
 
-            if (status === 'generating' && prev === 'pending') {
-                NotificationManager.reportGenerating(reportId);
+            if (status === 'pending' || status === 'queued') {
+                NotificationManager.reportGenerating(reportId, {
+                    title: 'Report Queued'
+                });
+                return;
+            }
+
+            if ((status === 'generating' || status === 'processing') && (prev === 'pending' || prev === 'queued')) {
+                NotificationManager.reportGenerating(reportId, {
+                    title: 'Report Generating'
+                });
             }
         });
 

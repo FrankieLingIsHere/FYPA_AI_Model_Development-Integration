@@ -1,3 +1,8 @@
 # Workspace-level ignores
 # Keep Verdent local agent assets out of source control
 .verdent/
+
+# Environment files generated during local runs/tests
+.env
+.env.local
+.env.*.local

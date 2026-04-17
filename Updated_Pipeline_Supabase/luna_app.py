@@ -52,6 +52,10 @@ import requests
 from dotenv import load_dotenv
 load_dotenv(override=False)
 
+APP_DIR = Path(__file__).resolve().parent
+LOCAL_ENV_PATH = APP_DIR / '.env'
+LOCAL_ENV_EXAMPLE_PATH = APP_DIR / '.env.example'
+
 # Import project modules
 from infer_image import predict_image, resolve_model_path
 from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
@@ -1661,7 +1665,7 @@ def queue_worker_loop():
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source: str = 'live') -> str:
+def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source: str = 'live') -> Optional[str]:
     """
     Capture a violation and add it to the processing queue.
     This is a FAST operation that saves images immediately and queues for report generation.
@@ -1770,13 +1774,13 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 return report_id
             else:
                 logger.error("Failed to add violation to queue")
-                return report_id  # Still return ID - images saved, just won't be processed
+                return None
         else:
             # Queue not available - log error but DON'T fallback to direct processing
             # (avoids concurrent Ollama calls that cause VRAM exhaustion)
             logger.error("Violation queue not initialized - violation captured but won't be processed")
             logger.error("Restart the server to initialize the queue worker")
-            return report_id  # Images are saved, can be reprocessed manually
+            return None
         
         return None
         
@@ -2570,6 +2574,62 @@ def api_violations():
                     'caption_validation': caption_validation
                 } if caption_validation else None
             })
+
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for item in formatted_violations:
+            item_report_id = str(item.get('report_id') or '').strip()
+            if item_report_id:
+                by_id[item_report_id] = item
+
+        local_rows = _collect_local_report_state_rows(limit=max(limit, 250))
+        for local_row in local_rows:
+            local_report_id = str(local_row.get('report_id') or '').strip()
+            if not local_report_id:
+                continue
+
+            local_status = str(local_row.get('status') or '').strip().lower() or 'pending'
+            existing = by_id.get(local_report_id)
+            if existing:
+                existing['has_original'] = bool(existing.get('has_original')) or bool(local_row.get('has_original'))
+                existing['has_annotated'] = bool(existing.get('has_annotated')) or bool(local_row.get('has_annotated'))
+                existing['has_report'] = bool(existing.get('has_report')) or bool(local_row.get('has_report'))
+
+                existing_status = str(existing.get('status') or '').strip().lower()
+                if local_status in ('completed', 'failed', 'skipped'):
+                    existing['status'] = local_status
+                elif local_status in ('pending', 'queued', 'processing', 'generating') and existing_status in ('unknown', ''):
+                    existing['status'] = local_status
+
+                if local_row.get('error_message') and not existing.get('error_message'):
+                    existing['error_message'] = local_row.get('error_message')
+                if not existing.get('timestamp') and local_row.get('timestamp'):
+                    existing['timestamp'] = local_row.get('timestamp')
+                continue
+
+            formatted_violations.append({
+                'report_id': local_report_id,
+                'timestamp': local_row.get('timestamp'),
+                'person_count': 0,
+                'violation_count': 0,
+                'severity': 'HIGH',
+                'status': local_status,
+                'device_id': 'local_cache',
+                'error_message': local_row.get('error_message'),
+                'violation_summary': 'Violation queued for report generation',
+                'missing_ppe': [],
+                'ppe_tags': [],
+                'violation_type': 'PPE Violation',
+                'has_original': bool(local_row.get('has_original')),
+                'has_annotated': bool(local_row.get('has_annotated')),
+                'has_report': bool(local_row.get('has_report')),
+                'detection_data': None
+            })
+
+        formatted_violations.sort(
+            key=lambda item: str(item.get('timestamp') or ''),
+            reverse=True
+        )
+        formatted_violations = formatted_violations[:max(1, int(limit or 1))]
         
         return jsonify(formatted_violations)
         
@@ -3007,6 +3067,118 @@ def _iso_or_none(value):
     return str(value)
 
 
+def _read_generation_failure_reason(failure_path: Path) -> Optional[str]:
+    """Read the latest generation failure reason from local cache."""
+    if not failure_path.exists():
+        return None
+
+    try:
+        with open(failure_path, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+        if not lines:
+            return None
+        return lines[-1][:400]
+    except Exception:
+        return None
+
+
+def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
+    """Collect local report lifecycle rows from filesystem artifacts."""
+    if not VIOLATIONS_DIR.exists():
+        return []
+
+    max_rows = max(1, int(limit or 1))
+    rows: List[Dict[str, Any]] = []
+
+    try:
+        violation_dirs = sorted(
+            (path for path in VIOLATIONS_DIR.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+            reverse=True
+        )
+    except Exception as e:
+        logger.debug(f"Unable to scan local violation cache for realtime rows: {e}")
+        return []
+
+    for violation_dir in violation_dirs:
+        if len(rows) >= max_rows:
+            break
+
+        report_id = str(violation_dir.name).strip()
+        if not report_id:
+            continue
+
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+        caption_path = violation_dir / 'caption.txt'
+        report_path = violation_dir / 'report.html'
+        failure_path = violation_dir / 'generation_failure.txt'
+        skipped_path = violation_dir / 'SKIPPED_NO_RETRY.txt'
+
+        has_original = original_path.exists()
+        has_annotated = annotated_path.exists()
+        has_report = report_path.exists()
+
+        status = 'pending'
+        error_message = None
+
+        if has_report:
+            status = 'completed'
+        elif failure_path.exists():
+            status = 'failed'
+            error_message = _read_generation_failure_reason(failure_path)
+        elif skipped_path.exists():
+            status = 'skipped'
+        elif has_annotated or caption_path.exists():
+            status = 'generating'
+        elif has_original:
+            status = 'pending'
+        else:
+            continue
+
+        timestamp_value = None
+        try:
+            timestamp_value = datetime.strptime(report_id, '%Y%m%d_%H%M%S').isoformat()
+        except Exception:
+            try:
+                timestamp_value = datetime.fromtimestamp(violation_dir.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                timestamp_value = None
+
+        updated_source = violation_dir
+        if has_report:
+            updated_source = report_path
+        elif failure_path.exists():
+            updated_source = failure_path
+        elif skipped_path.exists():
+            updated_source = skipped_path
+        elif caption_path.exists():
+            updated_source = caption_path
+        elif has_annotated:
+            updated_source = annotated_path
+        elif has_original:
+            updated_source = original_path
+
+        updated_at_value = None
+        try:
+            updated_at_value = datetime.fromtimestamp(updated_source.stat().st_mtime, tz=timezone.utc).isoformat()
+        except Exception:
+            updated_at_value = timestamp_value
+
+        rows.append({
+            'report_id': report_id,
+            'status': status,
+            'error_message': error_message,
+            'timestamp': timestamp_value,
+            'updated_at': updated_at_value,
+            'has_original': has_original,
+            'has_annotated': has_annotated,
+            'has_report': has_report,
+        })
+
+    return rows
+
+
 def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
     """Collect compact realtime state for frontend auto-refresh subscribers."""
     queue_data = {
@@ -3053,6 +3225,57 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                 })
         except Exception as e:
             logger.debug(f"Realtime report snapshot query failed: {e}")
+
+    local_rows = _collect_local_report_state_rows(limit=max(40, int(limit) * 2))
+    if local_rows:
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for row in report_rows:
+            report_id = str(row.get('report_id') or '').strip()
+            if report_id:
+                by_id[report_id] = row
+
+        for local_row in local_rows:
+            report_id = str(local_row.get('report_id') or '').strip()
+            if not report_id:
+                continue
+
+            existing = by_id.get(report_id)
+            local_status = str(local_row.get('status') or '').strip().lower() or 'unknown'
+
+            if existing:
+                existing_status = str(existing.get('status') or '').strip().lower()
+                if local_status in ('completed', 'failed', 'skipped') and existing_status in (
+                    'pending', 'queued', 'processing', 'generating', 'unknown', ''
+                ):
+                    existing['status'] = local_status
+                elif bool(local_row.get('has_report')) and existing_status in (
+                    'pending', 'queued', 'processing', 'generating', 'unknown', ''
+                ):
+                    existing['status'] = 'completed'
+
+                if not existing.get('error_message') and local_row.get('error_message'):
+                    existing['error_message'] = local_row.get('error_message')
+                if not existing.get('timestamp') and local_row.get('timestamp'):
+                    existing['timestamp'] = local_row.get('timestamp')
+                if not existing.get('updated_at') and local_row.get('updated_at'):
+                    existing['updated_at'] = local_row.get('updated_at')
+                continue
+
+            snapshot_row = {
+                'report_id': report_id,
+                'status': local_status,
+                'error_message': local_row.get('error_message'),
+                'timestamp': local_row.get('timestamp'),
+                'updated_at': local_row.get('updated_at')
+            }
+            report_rows.append(snapshot_row)
+            by_id[report_id] = snapshot_row
+
+    report_rows.sort(
+        key=lambda item: str(item.get('updated_at') or item.get('timestamp') or ''),
+        reverse=True
+    )
+    report_rows = report_rows[:max(1, int(limit or 1))]
 
     return {
         'server_time': datetime.now(timezone.utc).isoformat(),
@@ -3717,12 +3940,12 @@ def _local_mode_write_machine_id(machine_id: str) -> None:
         logger.warning(f"Unable to persist local machine_id '{normalized}': {machine_id_err}")
 
 
-def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = Path('.env')) -> None:
+def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = LOCAL_ENV_PATH) -> None:
     env_lines: List[str] = []
     if env_path.exists():
         env_lines = env_path.read_text(encoding='utf-8').splitlines()
-    elif Path('.env.example').exists():
-        env_lines = Path('.env.example').read_text(encoding='utf-8').splitlines()
+    elif LOCAL_ENV_EXAMPLE_PATH.exists():
+        env_lines = LOCAL_ENV_EXAMPLE_PATH.read_text(encoding='utf-8').splitlines()
 
     key_pattern = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=')
     replaced_keys: set = set()
@@ -5219,60 +5442,87 @@ def api_fix_stuck_reports():
 @app.route('/api/reports/pending')
 def api_pending_reports():
     """Get all reports that are still pending or generating."""
-    if db_manager is None:
-        # Fallback to local filesystem
-        pending = []
-        if VIOLATIONS_DIR.exists():
-            for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
-                if violation_dir.is_dir():
-                    if not (violation_dir / 'report.html').exists():
-                        try:
-                            timestamp = datetime.strptime(violation_dir.name, '%Y%m%d_%H%M%S')
-                            pending.append({
-                                'report_id': violation_dir.name,
-                                'timestamp': timestamp.isoformat(),
-                                'status': 'generating'
-                            })
-                        except ValueError:
-                            continue
-        return jsonify(pending[:10])
-    
-    # Use Supabase
-    try:
-        if hasattr(db_manager, 'get_pending_reports'):
-            all_items = db_manager.get_pending_reports(limit=200)
-        elif hasattr(db_manager, 'get_all_violations_with_status'):
-            all_items = db_manager.get_all_violations_with_status(limit=200)
-        elif hasattr(db_manager, 'get_recent_detection_events'):
-            all_items = db_manager.get_recent_detection_events(limit=200)
-        else:
-            all_items = []
+    pending_by_id: Dict[str, Dict[str, Any]] = {}
 
-        pending = []
-        for p in all_items:
-            status = str(p.get('status') or '').strip().lower()
-            has_report = bool(p.get('report_html_key'))
-            if status in ('pending', 'generating', 'queued', 'processing') or (not status and not has_report):
-                ts = p.get('timestamp')
+    # Always include local filesystem state for immediate queue/generation visibility.
+    local_rows = _collect_local_report_state_rows(limit=300)
+    for row in local_rows:
+        report_id = str(row.get('report_id') or '').strip()
+        status = str(row.get('status') or '').strip().lower()
+        if not report_id:
+            continue
+        if status not in ('pending', 'queued', 'processing', 'generating'):
+            continue
+
+        pending_by_id[report_id] = {
+            'report_id': report_id,
+            'timestamp': row.get('updated_at') or row.get('timestamp'),
+            'status': status,
+            'device_id': 'local_cache',
+            'severity': 'HIGH',
+            'has_original': bool(row.get('has_original')),
+            'has_annotated': bool(row.get('has_annotated')),
+            'has_report': bool(row.get('has_report')),
+        }
+
+    if db_manager is not None:
+        try:
+            if hasattr(db_manager, 'get_pending_reports'):
+                all_items = db_manager.get_pending_reports(limit=300)
+            elif hasattr(db_manager, 'get_all_violations_with_status'):
+                all_items = db_manager.get_all_violations_with_status(limit=300)
+            elif hasattr(db_manager, 'get_recent_detection_events'):
+                all_items = db_manager.get_recent_detection_events(limit=300)
+            else:
+                all_items = []
+
+            for p in all_items:
+                report_id = str((p or {}).get('report_id') or '').strip()
+                if not report_id:
+                    continue
+
+                status = str((p or {}).get('status') or '').strip().lower()
+                has_report = bool((p or {}).get('report_html_key'))
+                if status not in ('pending', 'generating', 'queued', 'processing') and (status or has_report):
+                    continue
+
+                ts = (p or {}).get('timestamp')
                 if hasattr(ts, 'isoformat'):
                     ts_value = ts.isoformat()
                 else:
                     ts_value = str(ts) if ts else None
 
-                pending.append({
-                    'report_id': p.get('report_id'),
+                merged = pending_by_id.get(report_id, {
+                    'report_id': report_id,
                     'timestamp': ts_value,
                     'status': status or 'pending',
-                    'device_id': p.get('device_id'),
-                    'severity': p.get('severity')
+                    'device_id': (p or {}).get('device_id'),
+                    'severity': (p or {}).get('severity'),
+                    'has_original': False,
+                    'has_annotated': False,
+                    'has_report': has_report,
                 })
 
-        formatted = pending[:10]
-        return jsonify(formatted)
-        
-    except Exception as e:
-        logger.error(f"Error fetching pending reports: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to fetch pending reports'}), 500
+                merged['status'] = status or merged.get('status') or 'pending'
+                if ts_value:
+                    merged['timestamp'] = ts_value
+                if (p or {}).get('device_id'):
+                    merged['device_id'] = (p or {}).get('device_id')
+                if (p or {}).get('severity'):
+                    merged['severity'] = (p or {}).get('severity')
+                merged['has_report'] = bool(merged.get('has_report')) or has_report
+
+                pending_by_id[report_id] = merged
+
+        except Exception as e:
+            logger.error(f"Error fetching pending reports from database: {e}", exc_info=True)
+
+    pending = list(pending_by_id.values())
+    pending.sort(
+        key=lambda item: str(item.get('timestamp') or ''),
+        reverse=True
+    )
+    return jsonify(pending[:30])
 
 
 @app.route('/api/report/<report_id>/generate-now', methods=['POST'])

@@ -9332,61 +9332,177 @@ def admin_devices():
     from flask import render_template_string
     html_template = """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>LUNA Device Provisioning</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="theme-color" content="#e09c2e">
+        <title>LUNA Admin - Device Provisioning</title>
+        <link rel="stylesheet" href="/static/css/style.css">
         <style>
-            body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
-            .card { border: 1px solid #ccc; padding: 15px; margin-bottom: 10px; border-radius: 8px; }
-            .btn { padding: 8px 15px; border-radius: 4px; border: none; cursor: pointer; color: white; margin-right: 10px; text-decoration: none; display: inline-block;}
-            .btn-approve { background-color: #28a745; }
-            .btn-reject { background-color: #dc3545; }
-            .btn-installer { background-color: #007bff; }
-            .btn-reset { background-color: #6f42c1; }
-            .notice { border: 1px solid #c3e6cb; background: #e9f7ef; color: #1e4620; padding: 10px 12px; border-radius: 6px; margin: 15px 0; }
+            .admin-page {
+                background:
+                    radial-gradient(circle at 12% 18%, rgba(224, 156, 46, 0.24), transparent 38%),
+                    radial-gradient(circle at 88% 82%, rgba(52, 152, 219, 0.2), transparent 34%),
+                    linear-gradient(160deg, #f5f7fb 0%, #e8edf5 55%, #dde6f2 100%);
+                min-height: 100vh;
+            }
+            .admin-shell {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 1.2rem 1rem 2rem;
+            }
+            .admin-hero .card-content p {
+                margin-bottom: 1rem;
+                color: #45556f;
+            }
+            .admin-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.7rem;
+            }
+            .admin-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+                gap: 1rem;
+                margin-top: 1rem;
+            }
+            .admin-meta {
+                display: grid;
+                gap: 0.4rem;
+                margin-bottom: 1rem;
+                color: #35465f;
+                font-size: 0.95rem;
+            }
+            .admin-meta strong {
+                color: #243447;
+            }
+            .admin-device-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.55rem;
+            }
+            .badge-pill {
+                border-radius: 999px;
+                padding: 0.28rem 0.68rem;
+                font-size: 0.82rem;
+                font-weight: 600;
+            }
+            .badge-pending {
+                background: rgba(243, 156, 18, 0.16);
+                color: #946200;
+            }
+            .badge-approved {
+                background: rgba(46, 204, 113, 0.16);
+                color: #1f7a3d;
+            }
+            .badge-provisioned {
+                background: rgba(52, 152, 219, 0.16);
+                color: #1f4f7a;
+            }
+            .badge-rejected {
+                background: rgba(231, 76, 60, 0.16);
+                color: #9e2f23;
+            }
+            .reset-notice {
+                margin-top: 1rem;
+                border: 1px solid #bfe5cc;
+                background: #eef9f1;
+                color: #1f7a3d;
+                border-radius: 10px;
+                padding: 0.75rem 0.9rem;
+            }
+            .empty-state {
+                text-align: center;
+                color: #5d6f88;
+                padding: 1.4rem 1rem;
+            }
+            .admin-footer-note {
+                margin-top: 1.2rem;
+                color: #55667f;
+                font-size: 0.9rem;
+            }
+            @media (max-width: 768px) {
+                .admin-shell {
+                    padding: 0.9rem 0.75rem 1.25rem;
+                }
+                .card-header {
+                    font-size: 1rem;
+                }
+            }
         </style>
     </head>
-    <body>
-        <h2>Edge Device Provisioning Queue</h2>
-        <p>Review and verify these pending hardware deployments before they can join the main cluster.</p>
-        <form method="POST" style="margin: 12px 0 16px 0;">
-            <button
-                type="submit"
-                name="action"
-                value="reset_all"
-                class="btn btn-reset"
-                onclick="return confirm('Reset ALL provisioning records and one-time bootstrap tokens? This affects cloud-side admin records.')"
-            >Reset All Provisioning Records</button>
-        </form>
-        {% if reset_all %}
-            <div class="notice">
-                Global reset completed. Cleared devices: <strong>{{ cleared_devices }}</strong>;
-                cleared bootstrap tokens: <strong>{{ cleared_tokens }}</strong>.
+    <body class="admin-page">
+        <main class="main-content admin-shell">
+            <section class="card admin-hero">
+                <div class="card-header">
+                    <span>LUNA Admin Portal - Device Provisioning Queue</span>
+                    <span class="badge badge-info">Cloud Records</span>
+                </div>
+                <div class="card-content">
+                    <p>Review and verify pending hardware deployments before devices can join the main cluster.</p>
+                    <form method="POST" class="admin-actions">
+                        <button
+                            type="submit"
+                            name="action"
+                            value="reset_all"
+                            class="btn btn-danger"
+                            onclick="return confirm('Reset ALL provisioning records and one-time bootstrap tokens? This affects cloud-side admin records.')"
+                        >Reset All Provisioning Records</button>
+                    </form>
+                    {% if reset_all %}
+                        <div class="reset-notice">
+                            Global reset completed. Cleared devices: <strong>{{ cleared_devices }}</strong>;
+                            cleared bootstrap tokens: <strong>{{ cleared_tokens }}</strong>.
+                        </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            {% if devices %}
+                <section class="admin-grid">
+                    {% for m_id, details in devices.items() %}
+                    {% set status = details.status or 'pending' %}
+                    <article class="card">
+                        <div class="card-header">
+                            <span>Machine ID: {{ m_id }}</span>
+                            <span class="badge-pill {% if status in ['pending', 'pending_approval'] %}badge-pending{% elif status == 'approved' %}badge-approved{% elif status == 'provisioned' %}badge-provisioned{% elif status == 'rejected' %}badge-rejected{% else %}badge-provisioned{% endif %}">
+                                {{ status }}
+                            </span>
+                        </div>
+                        <div class="card-content">
+                            <div class="admin-meta">
+                                <div><strong>Requested At:</strong> {{ details.requested_at }}</div>
+                                {% if details.approved_at %}<div><strong>Approved At:</strong> {{ details.approved_at }}</div>{% endif %}
+                                {% if details.provisioned_at %}<div><strong>Provisioned At:</strong> {{ details.provisioned_at }}</div>{% endif %}
+                            </div>
+                            <div class="admin-device-actions">
+                                {% if status in ['pending', 'pending_approval'] %}
+                                <form method="POST" style="display:flex; gap:0.55rem; flex-wrap:wrap;">
+                                    <input type="hidden" name="machine_id" value="{{ m_id }}">
+                                    <button type="submit" name="action" value="approve" class="btn btn-success">Approve Device</button>
+                                    <button type="submit" name="action" value="reject" class="btn btn-danger">Reject Device</button>
+                                </form>
+                                {% else %}
+                                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Issue One-Time Installer Download</a>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </article>
+                    {% endfor %}
+                </section>
+            {% else %}
+                <section class="card">
+                    <div class="card-content empty-state">
+                        No pending device requests right now.
+                    </div>
+                </section>
+            {% endif %}
+
+            <div class="admin-footer-note">
+                Tip: use this portal for approval workflow and one-time installer issuance.
             </div>
-        {% endif %}
-        <hr>
-        {% if devices %}
-            {% for m_id, details in devices.items() %}
-            <div class="card">
-                <h3>Machine ID: {{ m_id }}</h3>
-                <p>Status: <strong>{{ details.status }}</strong></p>
-                <p>Requested At: {{ details.requested_at }}</p>
-                {% if details.approved_at %}<p>Approved At: {{ details.approved_at }}</p>{% endif %}
-                {% if details.provisioned_at %}<p>Provisioned At: {{ details.provisioned_at }}</p>{% endif %}
-                {% if details.status in ['pending', 'pending_approval'] %}
-                <form method="POST" style="display:inline;">
-                    <input type="hidden" name="machine_id" value="{{ m_id }}">
-                    <button type="submit" name="action" value="approve" class="btn btn-approve">Approve Device</button>
-                    <button type="submit" name="action" value="reject" class="btn btn-reject">Reject</button>
-                </form>
-                {% else %}
-                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-installer">Issue One-Time Installer Download</a>
-                {% endif %}
-            </div>
-            {% endfor %}
-        {% else %}
-            <p><i>No pending device queries.</i></p>
-        {% endif %}
+        </main>
     </body>
     </html>
     """
@@ -9437,27 +9553,64 @@ def admin_devices_quick_approve():
 
     installer_request_link = f"/api/bootstrap/installer/request?machine_id={quote(machine_id)}"
 
-    html_response = f"""
+    from flask import render_template_string
+    html_template = """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>Edge Node Approved</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="theme-color" content="#e09c2e">
+        <title>LUNA Admin - Device Approved</title>
+        <link rel="stylesheet" href="/static/css/style.css">
         <style>
-            body {{ font-family: system-ui; max-width: 600px; margin: 40px auto; text-align: center; }}
-            .btn {{ padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; display: inline-block; }}
+            .admin-page {
+                background:
+                    radial-gradient(circle at 12% 18%, rgba(224, 156, 46, 0.24), transparent 38%),
+                    radial-gradient(circle at 88% 82%, rgba(52, 152, 219, 0.2), transparent 34%),
+                    linear-gradient(160deg, #f5f7fb 0%, #e8edf5 55%, #dde6f2 100%);
+                min-height: 100vh;
+            }
+            .admin-shell {
+                max-width: 900px;
+                margin: 0 auto;
+                padding: 1.2rem 1rem 2rem;
+            }
+            .approval-message {
+                color: #35465f;
+                margin-bottom: 1rem;
+                font-size: 1rem;
+            }
+            .approval-actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.7rem;
+            }
         </style>
     </head>
-    <body>
-        <h2>Device Approved Successfully</h2>
-        <p>Machine <strong>{html.escape(machine_id)}</strong> has been granted access.</p>
-        <br><br>
-        <a href='{installer_request_link}' class='btn'>Issue One-Time Installer Download</a>
-        <br><br>
-        <a href='/admin/devices' class='btn'>Return to Admin Dashboard</a>
+    <body class="admin-page">
+        <main class="main-content admin-shell">
+            <section class="card">
+                <div class="card-header">LUNA Admin Portal - Device Approved</div>
+                <div class="card-content">
+                    <p class="approval-message">
+                        Machine <strong>{{ machine_id }}</strong> has been granted access.
+                    </p>
+                    <div class="approval-actions">
+                        <a href="{{ installer_request_link }}" class="btn btn-primary">Issue One-Time Installer Download</a>
+                        <a href="/admin/devices" class="btn btn-secondary">Return to Admin Dashboard</a>
+                    </div>
+                </div>
+            </section>
+        </main>
     </body>
     </html>
     """
-    return html_response
+    return render_template_string(
+        html_template,
+        machine_id=machine_id,
+        installer_request_link=installer_request_link,
+    )
 
 
 # =========================================================================

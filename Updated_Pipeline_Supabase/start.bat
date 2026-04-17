@@ -130,19 +130,16 @@ if not exist "%VENV_PIP%" (
     exit /b 1
 )
 
-REM Check if requirements need to be installed
-"%VENV_PIP%" show flask >nul 2>&1
+REM Keep dependencies synced with latest source updates.
+echo Synchronizing Python dependencies...
+"%VENV_PIP%" install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 (
-    echo Installing dependencies...
-    "%VENV_PIP%" install -r requirements.txt
-    if errorlevel 1 (
-        echo Failed to install dependencies!
-        pause
-        exit /b 1
-    )
-    echo Dependencies installed.
-    echo.
+    echo Failed to synchronize dependencies!
+    pause
+    exit /b 1
 )
+echo Dependencies synchronized.
+echo.
 
 echo.
 echo ==========================================

@@ -178,9 +178,10 @@ No manual credential copy-paste is required in normal flow.
 User experience rule:
 
 - End users should keep using the same launcher BAT/desktop shortcut created by installer.
-- If LUNA is already installed, clicking that same BAT launches the existing app directly.
+- If LUNA is already installed, clicking that same BAT now performs a lightweight source refresh from the installer snapshot URL and then launches the app.
 - Users do not need to manually switch to running `start.bat` themselves.
-- Reinstall/refresh is optional and only for recovery/update scenarios.
+- Full reinstall is no longer required for normal updates; existing `venv`, `.env`, and local runtime data are preserved.
+- Reinstall/refresh remains optional for recovery scenarios.
 
 ### Q4: If I received the local installer link, does that mean this machine is already provisioned?
 

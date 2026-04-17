@@ -24,6 +24,7 @@ set "LUNA_SUPABASE_DB_URL=__LUNA_SUPABASE_DB_URL__"
 set "LUNA_SUPABASE_SERVICE_ROLE_KEY=__LUNA_SUPABASE_SERVICE_ROLE_KEY__"
 set "LUNA_FORCE_SOURCE_REFRESH=false"
 set "LUNA_AUTO_UPDATE_ON_LAUNCH=true"
+set "LUNA_PROMPT_UPDATE_ON_LAUNCH=true"
 set "LUNA_SELF_UPDATE_LAUNCHER=true"
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
@@ -40,6 +41,8 @@ set "INSTALL_DIR=C:\LUNA_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
 set "LOCAL_LAUNCHER_BAT=%INSTALL_DIR%\Start_LUNA_Local_Mode.bat"
+set "LUNA_STATE_DIR_PATH=C:\LUNA_System\LUNA_LocalState"
+if not exist "!LUNA_STATE_DIR_PATH!" mkdir "!LUNA_STATE_DIR_PATH!"
 
 copy /Y "%~f0" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
 if errorlevel 1 (
@@ -47,8 +50,6 @@ if errorlevel 1 (
 )
 
 if not "!LUNA_MACHINE_ID!"=="" (
-    set "LUNA_STATE_DIR_PATH=C:\LUNA_System\LUNA_LocalState"
-    if not exist "!LUNA_STATE_DIR_PATH!" mkdir "!LUNA_STATE_DIR_PATH!"
     >"!LUNA_STATE_DIR_PATH!\machine_id.txt" echo !LUNA_MACHINE_ID!
     if errorlevel 1 (
         echo Warning: Could not seed local machine ID into !LUNA_STATE_DIR_PATH!\machine_id.txt
@@ -58,10 +59,30 @@ if not "!LUNA_MACHINE_ID!"=="" (
 )
 
 set "LUNA_APP_DIR=!LUNA_SOURCE_ROOT!\Updated_Pipeline_Supabase"
+
+if not exist "!LUNA_STATE_DIR_PATH!\machine_id.txt" (
+    if exist "!LUNA_APP_DIR!\machine_id.txt" (
+        copy /Y "!LUNA_APP_DIR!\machine_id.txt" "!LUNA_STATE_DIR_PATH!\machine_id.txt" >nul 2>&1
+        if not errorlevel 1 (
+            echo Migrated machine ID from legacy app-directory state file.
+        )
+    ) else (
+        if exist "!LUNA_APP_DIR!\local_mode_provision_state.json" (
+            powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+              "$statePath='!LUNA_APP_DIR!\local_mode_provision_state.json'; $machinePath='!LUNA_STATE_DIR_PATH!\machine_id.txt'; try { $payload = Get-Content -Raw -Path $statePath -ErrorAction Stop | ConvertFrom-Json; $machineId = [string]$payload.machine_id; if(-not [string]::IsNullOrWhiteSpace($machineId)){ Set-Content -Path $machinePath -Value $machineId -Encoding ASCII } } catch { exit 1 }"
+            if not errorlevel 1 (
+                if exist "!LUNA_STATE_DIR_PATH!\machine_id.txt" (
+                    echo Recovered machine ID from legacy provisioning-state file.
+                )
+            )
+        )
+    )
+)
+
 if exist "!LUNA_APP_DIR!\.env" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
       "$envPath='!LUNA_APP_DIR!\.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
-      "$updates=[ordered]@{}; if(-not [string]::IsNullOrWhiteSpace($env:LUNA_CLOUD_URL)){ $updates['CLOUD_URL']=$env:LUNA_CLOUD_URL }; " ^
+      "$updates=[ordered]@{ 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState' }; if(-not [string]::IsNullOrWhiteSpace($env:LUNA_CLOUD_URL)){ $updates['CLOUD_URL']=$env:LUNA_CLOUD_URL }; " ^
       "if((-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_DB_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:LUNA_SUPABASE_SERVICE_ROLE_KEY))){ $updates['SUPABASE_URL']=$env:LUNA_SUPABASE_URL; $updates['SUPABASE_DB_URL']=$env:LUNA_SUPABASE_DB_URL; $updates['SUPABASE_SERVICE_ROLE_KEY']=$env:LUNA_SUPABASE_SERVICE_ROLE_KEY }; " ^
       "if($updates.Count -gt 0){ $keyPattern='^\s*([A-Za-z_][A-Za-z0-9_]*)\s*='; $seen=@{}; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $keyPattern){ $k=$Matches[1]; if($updates.ContainsKey($k)){ if(-not $seen.ContainsKey($k)){ $lines[$i]=($k + '=' + $updates[$k]); $seen[$k]=$true } else { $lines[$i]='' } } } }; foreach($k in $updates.Keys){ if(-not $seen.ContainsKey($k)){ $lines += ($k + '=' + $updates[$k]) } }; $lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8 }"
 
@@ -77,7 +98,22 @@ if exist "!LUNA_APP_DIR!\start.bat" (
     echo Existing local installation detected:
     echo   !LUNA_APP_DIR!
     echo.
-    if /I "!LUNA_AUTO_UPDATE_ON_LAUNCH!"=="true" (
+    set "LUNA_SHOULD_CHECK_UPDATES=false"
+    if /I "!LUNA_AUTO_UPDATE_ON_LAUNCH!"=="true" set "LUNA_SHOULD_CHECK_UPDATES=true"
+
+    if /I "!LUNA_PROMPT_UPDATE_ON_LAUNCH!"=="true" (
+        echo Choose launch mode:
+        echo   [1] Launch now ^(skip update check^)
+        echo   [2] Check for updates then launch ^(recommended^)
+        set "LUNA_LAUNCH_CHOICE="
+        set /p "LUNA_LAUNCH_CHOICE=Enter choice [1/2] ^(default 2^): "
+        if "!LUNA_LAUNCH_CHOICE!"=="" set "LUNA_LAUNCH_CHOICE=2"
+        if "!LUNA_LAUNCH_CHOICE!"=="1" set "LUNA_SHOULD_CHECK_UPDATES=false"
+        if "!LUNA_LAUNCH_CHOICE!"=="2" set "LUNA_SHOULD_CHECK_UPDATES=true"
+        echo.
+    )
+
+    if /I "!LUNA_SHOULD_CHECK_UPDATES!"=="true" (
         echo Checking for source updates before launch...
         call :refresh_existing_source_snapshot
         if errorlevel 1 (
@@ -95,6 +131,9 @@ if exist "!LUNA_APP_DIR!\start.bat" (
         ) else (
             echo Launcher script refreshed to latest installer logic.
         )
+        echo.
+    ) else (
+        echo Skipping source update check for this launch.
         echo.
     )
 

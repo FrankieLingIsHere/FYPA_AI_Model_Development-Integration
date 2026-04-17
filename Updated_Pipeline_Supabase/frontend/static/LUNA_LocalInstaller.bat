@@ -87,7 +87,7 @@ if exist "!LUNA_APP_DIR!\start.bat" (
         )
         echo.
 
-        call :refresh_local_launcher_from_template
+        call :safe_refresh_local_launcher
         if errorlevel 1 (
             echo Warning: Could not self-update launcher script from latest template.
         ) else (
@@ -336,6 +336,13 @@ exit /b 0
 if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 exit /b 1
+
+:safe_refresh_local_launcher
+findstr /I /R /C:"^:refresh_local_launcher_from_template$" "%~f0" >nul 2>&1
+if errorlevel 1 exit /b 1
+
+call :refresh_local_launcher_from_template
+exit /b %errorlevel%
 
 :refresh_local_launcher_from_template
 set "TEMPLATE_BAT=!LUNA_APP_DIR!\frontend\static\LUNA_LocalInstaller.bat"

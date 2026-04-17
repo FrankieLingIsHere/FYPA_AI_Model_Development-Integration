@@ -3835,6 +3835,22 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
 def _resolve_local_mode_state_dir() -> Path:
     configured = os.path.expandvars(str(os.getenv('LUNA_STATE_DIR') or '').strip())
     if not configured:
+        fallback_candidates: List[Path] = []
+        if os.name == 'nt':
+            fallback_candidates.append(Path(r'C:\LUNA_System\LUNA_LocalState'))
+            fallback_candidates.append(Path.home() / 'LUNA_LocalState')
+        else:
+            fallback_candidates.append(Path.home() / '.luna_local_state')
+
+        fallback_candidates.append(Path('.'))
+
+        for candidate in fallback_candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+            except Exception:
+                continue
+
         return Path('.')
 
     try:
@@ -8347,28 +8363,35 @@ def provision_request():
     devices = _load_pending_devices()
     existing = devices.get(machine_id) if isinstance(devices.get(machine_id), dict) else {}
     existing_status = str((existing or {}).get('status') or 'pending').strip().lower()
+    existing_requested_at = str((existing or {}).get('requested_at') or '').strip()
+    existing_approved_at = (existing or {}).get('approved_at')
+    existing_provisioned_at = (existing or {}).get('provisioned_at')
 
     # Re-requesting a secret for an already approved/provisioned device should not
     # downgrade it back to pending, otherwise local re-installs can never auto-finish.
     preserve_status = existing_status in ('approved', 'provisioned')
+    repeated_pending_request = existing_status in ('pending', 'pending_approval')
     effective_status = existing_status if preserve_status else 'pending'
 
-    if preserve_status:
+    if preserve_status or repeated_pending_request:
         approval_token = str((existing or {}).get('token') or '').strip() or secrets.token_urlsafe(32)
     else:
         approval_token = secrets.token_urlsafe(32)
 
+    requested_at_value = existing_requested_at if repeated_pending_request and existing_requested_at else datetime.now(timezone.utc).isoformat()
+
     devices[machine_id] = {
         'status': effective_status,
-        'requested_at': datetime.now(timezone.utc).isoformat(),
+        'requested_at': requested_at_value,
         'token': approval_token,
         'provision_secret_hash': _hash_provision_secret(provision_secret),
-        'approved_at': (existing or {}).get('approved_at') if preserve_status else None,
-        'provisioned_at': (existing or {}).get('provisioned_at') if effective_status == 'provisioned' else None,
+        'approved_at': existing_approved_at if preserve_status else None,
+        'provisioned_at': existing_provisioned_at if effective_status == 'provisioned' else None,
     }
     _save_pending_devices(devices)
 
-    if not preserve_status:
+    # Avoid duplicate admin notifications if the same machine re-requests while still pending.
+    if not preserve_status and not repeated_pending_request:
         notify_admin(machine_id, 'pending', token=approval_token)
 
     return jsonify({

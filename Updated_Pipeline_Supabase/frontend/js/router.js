@@ -3,14 +3,6 @@ const Router = {
     routes: {},
     currentComponent: null,
 
-    queueLiveSettingsIntent(intentKey) {
-        const normalized = intentKey === 'checkup' ? 'checkup' : 'settings';
-        window.__PPE_LIVE_SETTINGS_INTENT__ = {
-            intent: normalized,
-            requestedAt: Date.now()
-        };
-    },
-
     normalizePath(path) {
         const raw = String(path || '').trim();
         if (!raw) return 'home';
@@ -31,40 +23,32 @@ const Router = {
         const normalizedPath = this.normalizePath(path);
         const isSettingsIntent = normalizedPath === 'settings' || normalizedPath === 'settings-checkup';
 
-        const dispatchSettingsIntent = () => {
-            window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
-                detail: {
-                    focusLocalCheckup: normalizedPath === 'settings-checkup'
-                }
-            }));
-        };
-
-        const emitSettingsOpenIntent = () => {
-            dispatchSettingsIntent();
-            setTimeout(dispatchSettingsIntent, 120);
-            setTimeout(dispatchSettingsIntent, 320);
-        };
-
         if (isSettingsIntent) {
-            this.queueLiveSettingsIntent(normalizedPath === 'settings-checkup' ? 'checkup' : 'settings');
-
-            const liveComponent = this.routes.live;
-            if (!liveComponent) {
-                console.error('Live route is not registered; cannot open settings modal.');
-                return;
+            if (!this.currentComponent) {
+                if (this.routes.home) {
+                    APP_STATE.currentPage = 'home';
+                    this.render(this.routes.home);
+                } else {
+                    const fallbackPath = Object.keys(this.routes)[0];
+                    if (fallbackPath) {
+                        APP_STATE.currentPage = fallbackPath;
+                        this.render(this.routes[fallbackPath]);
+                    }
+                }
             }
 
-            if (APP_STATE.currentPage !== 'live' || this.currentComponent !== liveComponent) {
-                APP_STATE.currentPage = 'live';
-                this.render(liveComponent);
-            }
+            const detail = {
+                focusLocalCheckup: normalizedPath === 'settings-checkup',
+                source: 'router'
+            };
+
+            window.dispatchEvent(new CustomEvent('ppe-global-settings:open', { detail }));
 
             this.updateActiveNav('settings');
-            emitSettingsOpenIntent();
 
-            // Keep URL at live route; settings behaves as a sidebar-triggered modal.
-            if (updateHash && window.location.hash !== '#live') {
-                window.location.hash = 'live';
+            // Keep user on current page while opening a global settings popup.
+            if (updateHash && APP_STATE.currentPage && window.location.hash !== `#${APP_STATE.currentPage}`) {
+                window.location.hash = APP_STATE.currentPage;
             }
             return;
         }

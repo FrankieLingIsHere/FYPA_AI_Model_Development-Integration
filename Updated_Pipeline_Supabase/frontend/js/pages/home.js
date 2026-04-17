@@ -155,20 +155,6 @@ const HomePage = {
         if (runCheckupBtn) {
             this._runLocalCheckupHandler = () => {
                 Router.navigate('settings-checkup');
-
-                // Extra intent dispatch improves reliability when navigation/render timing is slow.
-                const emitIntent = () => {
-                    window.dispatchEvent(new CustomEvent('ppe-live:open-settings', {
-                        detail: {
-                            focusLocalCheckup: true,
-                            source: 'home-local-checkup'
-                        }
-                    }));
-                };
-
-                emitIntent();
-                setTimeout(emitIntent, 180);
-                setTimeout(emitIntent, 420);
             };
             runCheckupBtn.addEventListener('click', this._runLocalCheckupHandler);
         }

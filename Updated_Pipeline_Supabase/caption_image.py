@@ -17,6 +17,8 @@ import requests
 import json
 import time
 import hashlib
+import shutil
+import subprocess
 from pathlib import Path
 
 # --- PROVIDER CONFIGURATION ---
@@ -71,6 +73,11 @@ GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL',
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
 OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 0)
+OLLAMA_AUTO_RECOVER_ENABLED = os.getenv('OLLAMA_AUTO_RECOVER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
+OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS = max(5, _safe_int_env('OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS', 45))
+OLLAMA_AUTO_RECOVER_WAIT_SECONDS = max(1, _safe_int_env('OLLAMA_AUTO_RECOVER_WAIT_SECONDS', 8))
+OLLAMA_AUTO_RECOVER_PULL_TIMEOUT_SECONDS = max(60, _safe_int_env('OLLAMA_AUTO_RECOVER_PULL_TIMEOUT_SECONDS', 600))
+OLLAMA_AUTO_RECOVER_RETRY_HTTP_STATUSES = {500, 502, 503, 504}
 
 # Lightweight response cache + provider diagnostics to reduce repeated API calls.
 VISION_CACHE_ENABLED = os.getenv('VISION_CACHE_ENABLED', 'true').lower() == 'true'
@@ -82,6 +89,7 @@ _VISION_RESPONSE_CACHE = {}
 _LAST_PROVIDER_FAILURES = []
 _gemini_quota_backoff_until = 0.0
 _LAST_PROVIDER_USED = None
+_ollama_auto_recover_next_allowed_ts = 0.0
 # ---------------------------
 
 
@@ -159,11 +167,14 @@ def _build_user_facing_failure_message() -> str:
 def get_runtime_provider_diagnostics() -> dict:
     """Return runtime diagnostics for vision provider routing and cooldown state."""
     cooldown_remaining = max(0, int(_gemini_quota_backoff_until - time.time()))
+    ollama_recovery_cooldown_remaining = max(0, int(_ollama_auto_recover_next_allowed_ts - time.time()))
     return {
         'vision_provider_order': list(VISION_PROVIDER_ORDER),
         'last_provider_used': _LAST_PROVIDER_USED,
         'recent_failures': list(_LAST_PROVIDER_FAILURES[-6:]),
         'gemini_quota_cooldown_remaining_s': cooldown_remaining,
+        'ollama_auto_recover_enabled': OLLAMA_AUTO_RECOVER_ENABLED,
+        'ollama_auto_recover_cooldown_remaining_s': ollama_recovery_cooldown_remaining,
         'gemini_model': GEMINI_VISION_MODEL,
         'ollama_model': OLLAMA_MODEL_NAME,
         'vision_api_model': VISION_API_MODEL,
@@ -358,17 +369,241 @@ def _call_gemini_vision(prompt: str, image_base64: str, temperature: float = 0.6
         return ''
 
 
+def _detect_ollama_executable() -> str:
+    """Return best-effort Ollama executable path, including common non-PATH installs."""
+    from_path = shutil.which('ollama')
+    if from_path:
+        return from_path
+
+    candidates = []
+    if os.name == 'nt':
+        local_app_data = os.getenv('LOCALAPPDATA', '')
+        program_files = os.getenv('ProgramFiles', '')
+        program_files_x86 = os.getenv('ProgramFiles(x86)', '')
+        candidates.extend([
+            os.path.join(local_app_data, 'Programs', 'Ollama', 'ollama.exe'),
+            os.path.join(local_app_data, 'Programs', 'Ollama', 'Ollama app.exe'),
+            os.path.join(program_files, 'Ollama', 'ollama.exe'),
+            os.path.join(program_files, 'Ollama', 'Ollama app.exe'),
+            os.path.join(program_files_x86, 'Ollama', 'ollama.exe'),
+            os.path.join(program_files_x86, 'Ollama', 'Ollama app.exe'),
+        ])
+    elif sys.platform == 'darwin':
+        candidates.extend([
+            '/Applications/Ollama.app/Contents/MacOS/Ollama',
+            '/opt/homebrew/bin/ollama',
+            '/usr/local/bin/ollama',
+        ])
+    else:
+        candidates.extend([
+            '/usr/local/bin/ollama',
+            '/usr/bin/ollama',
+            '/snap/bin/ollama',
+        ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return ''
+
+
+def _start_ollama_service_if_needed(wait_seconds: int = 8) -> dict:
+    """Best-effort start for local Ollama service when it is not running."""
+    if check_ollama_running():
+        return {
+            'attempted': False,
+            'started': False,
+            'already_running': True,
+            'error': None,
+        }
+
+    ollama_cmd = _detect_ollama_executable()
+    if not ollama_cmd:
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': 'Ollama executable not found in PATH.',
+        }
+
+    try:
+        kwargs = {
+            'stdout': subprocess.DEVNULL,
+            'stderr': subprocess.DEVNULL,
+            'stdin': subprocess.DEVNULL,
+        }
+
+        if os.name == 'nt':
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        else:
+            kwargs['start_new_session'] = True
+
+        cmd_lower = os.path.basename(ollama_cmd).lower()
+        if cmd_lower == 'ollama app.exe':
+            subprocess.Popen([ollama_cmd], **kwargs)
+        else:
+            subprocess.Popen([ollama_cmd, 'serve'], **kwargs)
+
+        deadline = time.time() + max(1, int(wait_seconds))
+        while time.time() < deadline:
+            if check_ollama_running():
+                return {
+                    'attempted': True,
+                    'started': True,
+                    'already_running': False,
+                    'error': None,
+                }
+            time.sleep(1)
+
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': 'Ollama did not become reachable in time.',
+        }
+    except Exception as e:
+        return {
+            'attempted': True,
+            'started': False,
+            'already_running': False,
+            'error': str(e),
+        }
+
+
+def _pull_ollama_model_if_needed(model_name: str, timeout_seconds: int = 600) -> dict:
+    """Best-effort pull for required Ollama model when not yet available."""
+    target_model = str(model_name or '').strip() or OLLAMA_MODEL_NAME
+    if check_model_available(target_model):
+        return {
+            'attempted': False,
+            'pulled': False,
+            'already_available': True,
+            'error': None,
+        }
+
+    if not check_ollama_running():
+        return {
+            'attempted': False,
+            'pulled': False,
+            'already_available': False,
+            'error': 'Ollama is not running; cannot pull model yet.',
+        }
+
+    pull_url = f"{OLLAMA_BASE_URL}/api/pull"
+    try:
+        response = requests.post(
+            pull_url,
+            json={'model': target_model, 'stream': False},
+            timeout=max(60, int(timeout_seconds)),
+        )
+        if not response.ok:
+            return {
+                'attempted': True,
+                'pulled': False,
+                'already_available': False,
+                'error': f"Model pull failed (HTTP {response.status_code})",
+            }
+
+        return {
+            'attempted': True,
+            'pulled': bool(check_model_available(target_model)),
+            'already_available': False,
+            'error': None if check_model_available(target_model) else 'Model pull returned without availability confirmation.',
+        }
+    except Exception as e:
+        return {
+            'attempted': True,
+            'pulled': False,
+            'already_available': False,
+            'error': str(e),
+        }
+
+
+def attempt_ollama_auto_recover(reason: str = '', model_name: str = '', require_model: bool = True) -> dict:
+    """Attempt to recover Ollama runtime readiness (service + model) with cooldown."""
+    global _ollama_auto_recover_next_allowed_ts
+
+    target_model = str(model_name or '').strip() or OLLAMA_MODEL_NAME
+    now = time.time()
+    result = {
+        'attempted': False,
+        'ready': False,
+        'cooldown_skipped': False,
+        'reason': str(reason or '').strip(),
+        'target_model': target_model,
+        'start_service': {
+            'attempted': False,
+            'started': False,
+            'already_running': False,
+            'error': None,
+        },
+        'pull_model': {
+            'attempted': False,
+            'pulled': False,
+            'already_available': False,
+            'error': None,
+        },
+    }
+
+    running = check_ollama_running()
+    model_ready = check_model_available(target_model) if running else False
+    if running and (model_ready or not require_model):
+        result['ready'] = True
+        return result
+
+    if not OLLAMA_AUTO_RECOVER_ENABLED:
+        return result
+
+    if now < _ollama_auto_recover_next_allowed_ts:
+        result['cooldown_skipped'] = True
+        return result
+
+    _ollama_auto_recover_next_allowed_ts = now + float(OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS)
+    result['attempted'] = True
+
+    if not running:
+        result['start_service'] = _start_ollama_service_if_needed(wait_seconds=OLLAMA_AUTO_RECOVER_WAIT_SECONDS)
+
+    running = check_ollama_running()
+    if require_model and running and not check_model_available(target_model):
+        result['pull_model'] = _pull_ollama_model_if_needed(
+            target_model,
+            timeout_seconds=OLLAMA_AUTO_RECOVER_PULL_TIMEOUT_SECONDS,
+        )
+
+    running = check_ollama_running()
+    model_ready = check_model_available(target_model) if running else False
+    result['ready'] = bool(running and (model_ready or not require_model))
+    return result
+
+
 def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 250) -> str:
     """Call local Ollama vision model."""
+    target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma4'
+
     if not check_ollama_running():
-        _record_provider_failure('ollama', 'Ollama service is not running')
-        return ''
-    if not check_model_available(OLLAMA_MODEL_NAME):
-        _record_provider_failure('ollama', f"Model '{OLLAMA_MODEL_NAME}' is not available")
-        return ''
+        recovery = attempt_ollama_auto_recover(
+            reason='Ollama service is not running',
+            model_name=target_model,
+            require_model=True,
+        )
+        if not recovery.get('ready'):
+            _record_provider_failure('ollama', 'Ollama service is not running')
+            return ''
+
+    if not check_model_available(target_model):
+        recovery = attempt_ollama_auto_recover(
+            reason=f"Model '{target_model}' is not available",
+            model_name=target_model,
+            require_model=True,
+        )
+        if not recovery.get('ready'):
+            _record_provider_failure('ollama', f"Model '{target_model}' is not available")
+            return ''
 
     payload = {
-        'model': OLLAMA_MODEL_NAME,
+        'model': target_model,
         'prompt': prompt,
         'images': [image_base64],
         'stream': False,
@@ -380,14 +615,45 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
 
     try:
         response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
+
+        if not response.ok and response.status_code in OLLAMA_AUTO_RECOVER_RETRY_HTTP_STATUSES:
+            recovery = attempt_ollama_auto_recover(
+                reason=f"HTTP {response.status_code}",
+                model_name=target_model,
+                require_model=True,
+            )
+            if recovery.get('ready'):
+                response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
+
         if not response.ok:
             _record_provider_failure('ollama', f"HTTP {response.status_code}")
             return ''
+
         text = response.json().get('response', '').strip()
         if not text:
             _record_provider_failure('ollama', 'Empty response text')
         return text
     except Exception as e:
+        recovery = attempt_ollama_auto_recover(
+            reason=str(e),
+            model_name=target_model,
+            require_model=True,
+        )
+        if recovery.get('ready'):
+            try:
+                retry_response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
+                if retry_response.ok:
+                    text = retry_response.json().get('response', '').strip()
+                    if text:
+                        return text
+                    _record_provider_failure('ollama', 'Empty response text')
+                    return ''
+                _record_provider_failure('ollama', f"HTTP {retry_response.status_code}")
+                return ''
+            except Exception as retry_error:
+                _record_provider_failure('ollama', str(retry_error))
+                return ''
+
         _record_provider_failure('ollama', str(e))
         return ''
 
@@ -471,17 +737,28 @@ def check_ollama_running():
     try:
         response = requests.get(OLLAMA_TAGS_URL, timeout=5)
         return response.status_code == 200
-    except:
+    except Exception:
         return False
 
 def check_model_available(model_name):
     """Check if the specified model is available in Ollama."""
+    target = str(model_name or '').strip()
+    if not target:
+        return False
+
     try:
         response = requests.get(OLLAMA_TAGS_URL, timeout=5)
         if response.status_code == 200:
             models = response.json().get('models', [])
-            return any(model_name in model.get('name', '') for model in models)
-    except:
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                name = str(model.get('name') or model.get('model') or '').strip()
+                if not name:
+                    continue
+                if name == target or name.startswith(f"{target}:") or name.split(':', 1)[0] == target:
+                    return True
+    except Exception:
         pass
     return False
 

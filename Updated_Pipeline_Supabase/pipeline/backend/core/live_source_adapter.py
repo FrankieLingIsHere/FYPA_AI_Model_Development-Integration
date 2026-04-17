@@ -122,14 +122,46 @@ class LiveSourceAdapter:
         self._webcam_probe_cache_ts = time.monotonic()
         return self._build_edge_realsense_snapshot_locked()
 
-    def _open_webcam(self, camera_index: int):
-        """Open webcam with Windows-friendly backend first, then generic fallback."""
+    def _open_webcam(self, camera_index: int, probe_mode: bool = False):
+        """Open webcam with backend fallbacks while keeping probe noise low on Windows."""
         cap = None
-        if hasattr(cv2, 'CAP_DSHOW'):
+
+        if os.name == 'nt':
+            if hasattr(cv2, 'CAP_DSHOW'):
+                try:
+                    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+                except Exception:
+                    cap = None
+
+            if cap is not None and cap.isOpened():
+                return cap
+
             try:
-                cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+                if cap is not None:
+                    cap.release()
             except Exception:
-                cap = None
+                pass
+
+            cap = None
+            if hasattr(cv2, 'CAP_MSMF'):
+                try:
+                    cap = cv2.VideoCapture(camera_index, cv2.CAP_MSMF)
+                except Exception:
+                    cap = None
+
+            if cap is not None and cap.isOpened():
+                return cap
+
+            allow_generic_probe = os.getenv('WEBCAM_PROBE_ALLOW_GENERIC_FALLBACK_WINDOWS', 'false').lower() in (
+                '1', 'true', 'yes', 'on'
+            )
+            if probe_mode and not allow_generic_probe:
+                try:
+                    if cap is not None:
+                        cap.release()
+                except Exception:
+                    pass
+                return None
 
         if cap is None or not cap.isOpened():
             try:
@@ -170,12 +202,18 @@ class LiveSourceAdapter:
 
         max_probe = max(1, min(max_probe, 16))
 
+        stop_on_gap = os.getenv('WEBCAM_PROBE_STOP_ON_GAP', 'true').lower() in ('1', 'true', 'yes', 'on')
+        found_any = False
+
         for idx in range(max_probe):
             cap = None
+            opened = False
             try:
-                cap = self._open_webcam(idx)
-                if cap is not None and cap.isOpened():
+                cap = self._open_webcam(idx, probe_mode=True)
+                opened = cap is not None and cap.isOpened()
+                if opened:
                     devices.append({'index': idx, 'label': f'Camera {idx}'})
+                    found_any = True
             except Exception:
                 continue
             finally:
@@ -184,6 +222,9 @@ class LiveSourceAdapter:
                         cap.release()
                 except Exception:
                     pass
+
+            if stop_on_gap and found_any and not opened:
+                break
 
         self._webcam_probe_cache = list(devices)
         self._webcam_probe_cache_ts = now

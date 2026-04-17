@@ -1161,44 +1161,94 @@ RESPONSE FORMAT (JSON):
                 logger.info("Falling back to Ollama API...")
         
         # Fall back to Ollama API
+        recovery_helper = None
+        check_running = None
+        check_model = None
+        try:
+            from caption_image import attempt_ollama_auto_recover, check_ollama_running, check_model_available
+            recovery_helper = attempt_ollama_auto_recover
+            check_running = check_ollama_running
+            check_model = check_model_available
+        except Exception:
+            recovery_helper = None
+
+        if callable(check_running):
+            try:
+                is_running = bool(check_running())
+                model_ready = bool(check_model(self.model)) if is_running and callable(check_model) else is_running
+                if (not is_running or not model_ready) and callable(recovery_helper):
+                    recovery_helper(
+                        reason='NLP provider preflight',
+                        model_name=self.model,
+                        require_model=True,
+                    )
+            except Exception:
+                pass
+
+        payload = {
+            'model': self.model,
+            'prompt': prompt,
+            'context': [],
+            'stream': False,
+            'format': 'json',
+            'options': {
+                'temperature': self.temperature,
+                'num_predict': 1500,
+                'top_k': 40,
+                'top_p': 0.9
+            }
+        }
+
+        data = {}
         try:
             logger.info("Calling Ollama API for NLP analysis...")
-            
-            response = requests.post(
-                self.api_url,
-                json={
-                    'model': self.model,
-                    'prompt': prompt,
-                    'context': [],
-                    'stream': False,
-                    'format': 'json',
-                    'options': {
-                        'temperature': self.temperature,
-                        'num_predict': 1500,
-                        'top_k': 40,
-                        'top_p': 0.9
-                    }
-                },
-                timeout=self.ollama_timeout
-            )
-            
+
+            response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
+
+            if (
+                not response.ok
+                and response.status_code in (500, 502, 503, 504)
+                and callable(recovery_helper)
+            ):
+                recovery = recovery_helper(
+                    reason=f"HTTP {response.status_code}",
+                    model_name=self.model,
+                    require_model=True,
+                )
+                if recovery.get('ready'):
+                    response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
+
             if not response.ok:
                 logger.error(f"Ollama API error: {response.status_code}")
                 return None
-            
+
             data = response.json()
             logger.debug(f"Ollama response: {data}")
-            
+
             nlp_response = json.loads(data['response'])
             logger.info("[OK] NLP analysis completed")
-            
+
             return nlp_response
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse Ollama JSON response: {e}")
-            logger.debug(f"Raw response: {data.get('response', 'N/A')}")
+            logger.debug(f"Raw response: {data.get('response', 'N/A') if isinstance(data, dict) else 'N/A'}")
             return None
         except requests.exceptions.RequestException as e:
+            if callable(recovery_helper):
+                try:
+                    recovery = recovery_helper(
+                        reason=str(e),
+                        model_name=self.model,
+                        require_model=True,
+                    )
+                    if recovery.get('ready'):
+                        retry_response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
+                        if retry_response.ok:
+                            retry_data = retry_response.json()
+                            return json.loads(retry_data['response'])
+                except Exception:
+                    pass
             logger.error(f"Ollama API request failed: {e}")
             return None
         except Exception as e:

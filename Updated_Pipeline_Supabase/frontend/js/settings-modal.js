@@ -325,7 +325,7 @@ const GlobalSettingsModal = {
                                 <button id="globalRunLocalModeCheckupBtn" class="btn btn-secondary" type="button">
                                     <i class="fas fa-wifi"></i> Run Local Mode Checkup
                                 </button>
-                                <button id="globalRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: none;">
+                                <button id="globalRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: inline-flex;">
                                     <i class="fas fa-download"></i> Re-download Installer BAT
                                 </button>
                             </div>
@@ -423,13 +423,45 @@ const GlobalSettingsModal = {
         this.updateInstallerRedownloadButton();
     },
 
+    canIssueInstallerRedownload(statusRaw, machineIdRaw) {
+        const status = this.normalizeLocalProvisionStatus(statusRaw);
+        const machineId = String(machineIdRaw || '').trim();
+        if (!machineId) return false;
+        return status === 'approved' || status === 'provisioned' || status === 'credentials_present';
+    },
+
     updateInstallerRedownloadButton() {
         const btn = this.getEl('globalRedownloadInstallerBtn');
         if (!btn) return;
 
-        const canRedownload = this.localProvisionState.status === 'provisioned' && !!this.localProvisionState.machineId;
-        btn.style.display = canRedownload ? 'inline-flex' : 'none';
+        const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+        const machineId = String(this.localProvisionState.machineId || '').trim();
+        const canRedownload = this.canIssueInstallerRedownload(status, machineId);
+
+        btn.style.display = 'inline-flex';
         btn.disabled = !canRedownload;
+
+        if (!machineId) {
+            btn.title = 'Run Local Mode Checkup first to register this device and obtain machine ID.';
+            return;
+        }
+
+        if (canRedownload) {
+            btn.title = 'Re-issue a fresh one-time installer BAT for this approved machine.';
+            return;
+        }
+
+        if (status === 'pending_approval') {
+            btn.title = 'Installer re-issue becomes available after admin approval.';
+            return;
+        }
+
+        if (status === 'rejected') {
+            btn.title = 'Provision request was rejected. Rerun Local Mode Checkup after admin review.';
+            return;
+        }
+
+        btn.title = 'Installer re-issue is available after device approval.';
     },
 
     updateLocalModeCheckupStatus() {
@@ -450,6 +482,12 @@ const GlobalSettingsModal = {
 
         if (status === 'provisioned') {
             statusEl.textContent = 'Local mode is approved and provisioned. Cloud credentials are active on this backend.';
+            statusEl.style.color = 'var(--success-color)';
+            return;
+        }
+
+        if (status === 'approved') {
+            statusEl.textContent = 'Device is approved. You can re-issue a fresh installer BAT below.';
             statusEl.style.color = 'var(--success-color)';
             return;
         }
@@ -966,10 +1004,27 @@ const GlobalSettingsModal = {
             redownloadInstallerBtn.addEventListener('click', () => {
                 const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
                 const machineId = String(this.localProvisionState.machineId || '').trim();
-                if (status !== 'provisioned' || !machineId) {
-                    this.showNotification('Installer re-download is available after this device is fully provisioned.', 'warning');
+
+                if (!this.canIssueInstallerRedownload(status, machineId)) {
+                    if (!machineId) {
+                        this.showNotification('Run Local Mode Checkup first so this device can obtain machine ID.', 'warning');
+                        return;
+                    }
+
+                    if (status === 'pending_approval') {
+                        this.showNotification('Installer re-download is available after admin approval.', 'warning');
+                        return;
+                    }
+
+                    if (status === 'rejected') {
+                        this.showNotification('Provision request was rejected. Contact admin and rerun Local Mode Checkup.', 'error');
+                        return;
+                    }
+
+                    this.showNotification('Installer re-download is available after this device is approved.', 'warning');
                     return;
                 }
+
                 window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?machine_id=${encodeURIComponent(machineId)}`);
             });
         }

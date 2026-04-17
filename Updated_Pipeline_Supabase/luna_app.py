@@ -202,7 +202,7 @@ except ImportError as e:
     LLAVA_CONFIG = {}
     OLLAMA_CONFIG = {}
     GEMINI_CONFIG = {'enabled': False, 'model': 'gemini-2.5-flash'}
-    MODEL_API_CONFIG = {'enabled': False, 'nlp_provider_order': ['model_api', 'gemini', 'ollama', 'local'], 'embedding_provider_order': ['model_api', 'ollama']}
+    MODEL_API_CONFIG = {'enabled': False, 'nlp_provider_order': ['gemini'], 'embedding_provider_order': ['model_api']}
     RAG_CONFIG = {}
     REPORT_CONFIG = {}
     BRAND_COLORS = {}
@@ -278,6 +278,44 @@ LOCAL_OLLAMA_UNIFIED_MODEL = str(
     or (OLLAMA_CONFIG or {}).get('model')
     or 'gemma4'
 ).strip()
+STRICT_LOCAL_OLLAMA_MODEL = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma4') or 'gemma4').strip() or 'gemma4'
+
+STRICT_PROVIDER_MODE_SPLIT = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
+PROVIDER_PROFILE_PRESETS = {
+    'local': {
+        'model_api_enabled': False,
+        'gemini_enabled': False,
+        'nlp_provider_order': ['ollama'],
+        'embedding_provider_order': ['ollama'],
+        'vision_provider_order': ['ollama'],
+    },
+    'cloud': {
+        'model_api_enabled': False,
+        'gemini_enabled': True,
+        'nlp_provider_order': ['gemini'],
+        'embedding_provider_order': ['model_api'],
+        'vision_provider_order': ['gemini'],
+    },
+}
+
+if STRICT_PROVIDER_MODE_SPLIT:
+    _initial_profile = 'local' if str(os.getenv('LUNA_ROUTING_PROFILE', 'local')).strip().lower() == 'local' else 'cloud'
+    _initial_preset = PROVIDER_PROFILE_PRESETS.get(_initial_profile, PROVIDER_PROFILE_PRESETS['cloud'])
+    MODEL_API_CONFIG['enabled'] = bool(_initial_preset.get('model_api_enabled', False))
+    MODEL_API_CONFIG['nlp_provider_order'] = list(_initial_preset.get('nlp_provider_order', ['gemini']))
+    MODEL_API_CONFIG['embedding_provider_order'] = list(_initial_preset.get('embedding_provider_order', ['model_api']))
+    GEMINI_CONFIG['enabled'] = bool(_initial_preset.get('gemini_enabled', True))
+    os.environ['LUNA_ROUTING_PROFILE'] = _initial_profile
+    os.environ['MODEL_API_ENABLED'] = 'true' if MODEL_API_CONFIG['enabled'] else 'false'
+    os.environ['GEMINI_ENABLED'] = 'true' if GEMINI_CONFIG['enabled'] else 'false'
+    os.environ['NLP_PROVIDER_ORDER'] = ','.join(MODEL_API_CONFIG['nlp_provider_order'])
+    os.environ['EMBEDDING_PROVIDER_ORDER'] = ','.join(MODEL_API_CONFIG['embedding_provider_order'])
+    os.environ['VISION_PROVIDER_ORDER'] = ','.join(_initial_preset.get('vision_provider_order', ['gemini']))
+    if _initial_profile == 'local':
+        OLLAMA_CONFIG['model'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['OLLAMA_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['OLLAMA_VISION_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
 
 
 def _is_edge_ingest_authorized() -> bool:
@@ -2612,19 +2650,22 @@ def api_report_status(report_id):
                             dt_obj = dt_obj.replace(tzinfo=timezone.utc)
                         age_seconds = (datetime.now(timezone.utc) - dt_obj).total_seconds()
                         if age_seconds > 120:
-                            provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
-                            if not isinstance(provider_order, list):
-                                provider_order = ['model_api', 'gemini', 'ollama', 'local']
+                            if STRICT_PROVIDER_MODE_SPLIT:
+                                local_preferred = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE')) == 'local'
+                            else:
+                                provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+                                if not isinstance(provider_order, list):
+                                    provider_order = ['model_api', 'gemini', 'ollama', 'local']
 
-                            def _provider_rank(name: str) -> int:
-                                try:
-                                    return provider_order.index(name)
-                                except ValueError:
-                                    return 999
+                                def _provider_rank(name: str) -> int:
+                                    try:
+                                        return provider_order.index(name)
+                                    except ValueError:
+                                        return 999
 
-                            local_rank = min(_provider_rank('local'), _provider_rank('ollama'))
-                            cloud_rank = min(_provider_rank('model_api'), _provider_rank('gemini'))
-                            local_preferred = local_rank < cloud_rank
+                                local_rank = min(_provider_rank('local'), _provider_rank('ollama'))
+                                cloud_rank = min(_provider_rank('model_api'), _provider_rank('gemini'))
+                                local_preferred = local_rank < cloud_rank
 
                             local_diag = _get_local_mode_diagnostics()
                             local_ready = bool(local_diag.get('ollama_running') and local_diag.get('model_available'))
@@ -3051,6 +3092,84 @@ def _normalize_provider_order(raw_value, default_order):
     return filtered if filtered else list(default_order)
 
 
+def _normalize_provider_profile(value: str) -> str:
+    """Normalize provider profile to local/cloud."""
+    return 'local' if str(value or '').strip().lower() == 'local' else 'cloud'
+
+
+def _infer_provider_profile_from_order(order) -> str:
+    """Infer profile from provider order: local/ollama-first => local, otherwise cloud."""
+    normalized = _normalize_provider_order(order, [])
+    if normalized and normalized[0] in ('local', 'ollama'):
+        return 'local'
+    return 'cloud'
+
+
+def _get_provider_profile_preset(profile: str) -> Dict[str, Any]:
+    normalized_profile = _normalize_provider_profile(profile)
+    preset = PROVIDER_PROFILE_PRESETS.get(normalized_profile, PROVIDER_PROFILE_PRESETS['cloud'])
+    return {
+        'routing_profile': normalized_profile,
+        'model_api_enabled': bool(preset.get('model_api_enabled', False)),
+        'gemini_enabled': bool(preset.get('gemini_enabled', True)),
+        'nlp_provider_order': list(preset.get('nlp_provider_order', ['gemini'])),
+        'embedding_provider_order': list(preset.get('embedding_provider_order', ['model_api'])),
+        'vision_provider_order': list(preset.get('vision_provider_order', ['gemini'])),
+    }
+
+
+def _apply_provider_profile(profile: str) -> Dict[str, Any]:
+    """Apply strict provider profile to in-memory + env + active modules."""
+    global report_generator
+
+    applied = _get_provider_profile_preset(profile)
+    routing_profile = applied['routing_profile']
+    model_api_enabled = applied['model_api_enabled']
+    gemini_enabled = applied['gemini_enabled']
+    nlp_provider_order = applied['nlp_provider_order']
+    embedding_provider_order = applied['embedding_provider_order']
+    vision_provider_order = applied['vision_provider_order']
+
+    MODEL_API_CONFIG['enabled'] = model_api_enabled
+    MODEL_API_CONFIG['nlp_provider_order'] = list(nlp_provider_order)
+    MODEL_API_CONFIG['embedding_provider_order'] = list(embedding_provider_order)
+    GEMINI_CONFIG['enabled'] = gemini_enabled
+
+    if routing_profile == 'local':
+        OLLAMA_CONFIG['model'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['OLLAMA_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
+        os.environ['OLLAMA_VISION_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
+
+    os.environ['LUNA_ROUTING_PROFILE'] = routing_profile
+    os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
+    os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
+    os.environ['NLP_PROVIDER_ORDER'] = ','.join(nlp_provider_order)
+    os.environ['EMBEDDING_PROVIDER_ORDER'] = ','.join(embedding_provider_order)
+    os.environ['VISION_PROVIDER_ORDER'] = ','.join(vision_provider_order)
+
+    try:
+        from caption_image import update_runtime_provider_settings
+        update_runtime_provider_settings({
+            'routing_profile': routing_profile,
+            'vision_provider_order': vision_provider_order,
+            'ollama_vision_model': OLLAMA_CONFIG.get('model') or STRICT_LOCAL_OLLAMA_MODEL,
+            'gemini_vision_model': GEMINI_CONFIG.get('model', 'gemini-2.5-flash'),
+        })
+    except Exception as caption_err:
+        logger.warning(f"Could not apply strict vision provider profile at runtime: {caption_err}")
+
+    if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+        report_generator.model_api_enabled = model_api_enabled
+        report_generator.use_gemini = bool(
+            gemini_enabled and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
+        )
+        report_generator.nlp_provider_order = list(nlp_provider_order)
+        report_generator.embedding_provider_order = list(embedding_provider_order)
+
+    return applied
+
+
 def _is_quota_related_error(message: str) -> bool:
     text = str(message or '').lower()
     if not text:
@@ -3328,6 +3447,11 @@ def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_
 
 
 def _apply_nlp_provider_order(order: List[str]) -> List[str]:
+    if STRICT_PROVIDER_MODE_SPLIT:
+        inferred_profile = _infer_provider_profile_from_order(order)
+        applied = _apply_provider_profile(inferred_profile)
+        return list(applied.get('nlp_provider_order', []))
+
     normalized = _normalize_provider_order(order, MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']))
     MODEL_API_CONFIG['nlp_provider_order'] = normalized
     os.environ['NLP_PROVIDER_ORDER'] = ','.join(normalized)
@@ -4001,7 +4125,11 @@ def api_prepare_local_mode():
             },
             'provider_order': {
                 'applied': False,
-                'order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+                'order': MODEL_API_CONFIG.get(
+                    'nlp_provider_order',
+                    _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['ollama'])
+                    if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
+                )
             }
         }
 
@@ -4016,10 +4144,15 @@ def api_prepare_local_mode():
         after = _get_local_mode_diagnostics()
 
         if set_local_first and after.get('local_mode_possible'):
-            applied_order = _apply_nlp_provider_order(['local', 'ollama', 'model_api', 'gemini'])
+            if STRICT_PROVIDER_MODE_SPLIT:
+                applied_profile = _apply_provider_profile('local')
+                applied_order = list(applied_profile.get('nlp_provider_order', []))
+            else:
+                applied_order = _apply_nlp_provider_order(['local', 'ollama', 'model_api', 'gemini'])
             actions['provider_order'] = {
                 'applied': True,
                 'order': applied_order,
+                'routing_profile': 'local',
             }
 
         ready = bool(after.get('local_mode_possible'))
@@ -4145,12 +4278,21 @@ def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
 
 def _current_provider_settings():
     """Return current runtime provider routing settings."""
+    routing_profile = _normalize_provider_profile(
+        os.getenv('LUNA_ROUTING_PROFILE')
+        or _infer_provider_profile_from_order(MODEL_API_CONFIG.get('nlp_provider_order', []))
+    )
+    profile_preset = _get_provider_profile_preset(routing_profile)
+    nlp_default_order = list(profile_preset.get('nlp_provider_order', ['gemini'])) if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
+    embedding_default_order = list(profile_preset.get('embedding_provider_order', ['model_api'])) if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
+    vision_default_order = list(profile_preset.get('vision_provider_order', ['gemini'])) if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama']
+
     try:
         from caption_image import get_runtime_provider_settings
         vision_settings = get_runtime_provider_settings()
     except Exception:
         vision_settings = {
-            'vision_provider_order': ['model_api', 'gemini', 'ollama'],
+            'vision_provider_order': vision_default_order,
             'vision_api_url': os.getenv('VISION_API_URL', ''),
             'vision_api_model': os.getenv('VISION_API_MODEL', ''),
             'ollama_vision_model': os.getenv('OLLAMA_VISION_MODEL', LOCAL_OLLAMA_UNIFIED_MODEL),
@@ -4161,14 +4303,15 @@ def _current_provider_settings():
     ollama_vision_model = str(vision_settings.get('ollama_vision_model') or os.getenv('OLLAMA_VISION_MODEL') or ollama_nlp_model).strip()
 
     return {
+        'routing_profile': routing_profile,
         'model_api_enabled': bool(MODEL_API_CONFIG.get('enabled', False)),
         'gemini_enabled': bool(GEMINI_CONFIG.get('enabled', True)),
         'gemini_daily_budget_usd': float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0),
         'gemini_monthly_budget_usd': float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0),
         'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900),
-        'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
-        'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama']),
-        'vision_provider_order': vision_settings.get('vision_provider_order', ['model_api', 'gemini', 'ollama']),
+        'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', nlp_default_order),
+        'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', embedding_default_order),
+        'vision_provider_order': vision_settings.get('vision_provider_order', vision_default_order),
         'nlp_model': MODEL_API_CONFIG.get('nlp_model', ollama_nlp_model),
         'vision_model': vision_settings.get('vision_api_model', ''),
         'embedding_model': MODEL_API_CONFIG.get('embedding_model', RAG_CONFIG.get('embedding_model', 'nomic-embed-text')),
@@ -4181,8 +4324,13 @@ def _current_provider_settings():
 
 def _get_provider_runtime_snapshot() -> Dict[str, Any]:
     """Collect runtime provider diagnostics from NLP + vision modules."""
+    default_nlp_order = (
+        list(_get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini']))
+        if STRICT_PROVIDER_MODE_SPLIT
+        else ['model_api', 'gemini', 'ollama', 'local']
+    )
     nlp_runtime = {
-        'provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local']),
+        'provider_order': MODEL_API_CONFIG.get('nlp_provider_order', default_nlp_order),
         'last_provider': None,
         'last_model': None,
         'last_error': None,
@@ -4362,6 +4510,22 @@ def api_provider_routing_settings():
             ['model_api', 'gemini', 'ollama']
         )
 
+        routing_profile = str(data.get('routing_profile') or '').strip().lower()
+        if STRICT_PROVIDER_MODE_SPLIT:
+            if routing_profile not in ('local', 'cloud'):
+                routing_profile = _infer_provider_profile_from_order(nlp_provider_order)
+            preset = _get_provider_profile_preset(routing_profile)
+            routing_profile = preset['routing_profile']
+            model_api_enabled = preset['model_api_enabled']
+            gemini_enabled = preset['gemini_enabled']
+            nlp_provider_order = list(preset['nlp_provider_order'])
+            embedding_provider_order = list(preset['embedding_provider_order'])
+            vision_provider_order = list(preset['vision_provider_order'])
+        else:
+            routing_profile = _normalize_provider_profile(
+                routing_profile or _infer_provider_profile_from_order(nlp_provider_order)
+            )
+
         # Update in-memory config objects
         MODEL_API_CONFIG['enabled'] = model_api_enabled
         MODEL_API_CONFIG['nlp_provider_order'] = nlp_provider_order
@@ -4376,12 +4540,15 @@ def api_provider_routing_settings():
         if data.get('gemini_model'):
             GEMINI_CONFIG['model'] = str(data['gemini_model']).strip()
 
-        requested_local_model = str(
-            data.get('ollama_nlp_model')
-            or data.get('ollama_vision_model')
-            or os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL')
-            or LOCAL_OLLAMA_UNIFIED_MODEL
-        ).strip()
+        if STRICT_PROVIDER_MODE_SPLIT and routing_profile == 'local':
+            requested_local_model = STRICT_LOCAL_OLLAMA_MODEL
+        else:
+            requested_local_model = str(
+                data.get('ollama_nlp_model')
+                or data.get('ollama_vision_model')
+                or os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL')
+                or LOCAL_OLLAMA_UNIFIED_MODEL
+            ).strip()
         if requested_local_model:
             OLLAMA_CONFIG['model'] = requested_local_model
             os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = requested_local_model
@@ -4391,6 +4558,7 @@ def api_provider_routing_settings():
         # Persist to environment for module consumers
         os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
         os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
+        os.environ['LUNA_ROUTING_PROFILE'] = routing_profile
         os.environ['GEMINI_DAILY_BUDGET_USD'] = str(gemini_daily_budget_usd)
         os.environ['GEMINI_MONTHLY_BUDGET_USD'] = str(gemini_monthly_budget_usd)
         os.environ['GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT'] = str(gemini_max_output_tokens_per_report)
@@ -4412,6 +4580,7 @@ def api_provider_routing_settings():
         try:
             from caption_image import update_runtime_provider_settings
             update_runtime_provider_settings({
+                'routing_profile': routing_profile,
                 'vision_provider_order': vision_provider_order,
                 'vision_model': data.get('vision_model'),
                 'gemini_vision_model': data.get('gemini_vision_model'),
@@ -4423,8 +4592,16 @@ def api_provider_routing_settings():
         # Apply to active report generator immediately
         if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
             report_generator.model_api_enabled = MODEL_API_CONFIG.get('enabled', False)
-            report_generator.nlp_provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
-            report_generator.embedding_provider_order = MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama'])
+            report_generator.nlp_provider_order = MODEL_API_CONFIG.get(
+                'nlp_provider_order',
+                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
+                if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
+            )
+            report_generator.embedding_provider_order = MODEL_API_CONFIG.get(
+                'embedding_provider_order',
+                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('embedding_provider_order', ['model_api'])
+                if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
+            )
             report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
             report_generator.embedding_api_model = MODEL_API_CONFIG.get('embedding_model', report_generator.embedding_model)
             report_generator.use_gemini = GEMINI_CONFIG.get('enabled', True) and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
@@ -4490,7 +4667,11 @@ def api_report_recovery_options():
             'pending_like': len(pending_like),
             'quota_failed': len(quota_failed)
         },
-        'current_nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
+        'current_nlp_provider_order': MODEL_API_CONFIG.get(
+            'nlp_provider_order',
+            _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
+            if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
+        )
     })
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
@@ -4522,8 +4703,14 @@ def api_report_recovery_execute():
     if not ensure_queue_worker_running():
         return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
-    selected_order = ['local', 'ollama', 'model_api', 'gemini'] if mode == 'local' else ['model_api', 'ollama', 'local', 'gemini']
-    applied_order = _apply_nlp_provider_order(selected_order)
+    target_profile = 'local' if mode == 'local' else 'cloud'
+    if STRICT_PROVIDER_MODE_SPLIT:
+        applied_profile = _apply_provider_profile(target_profile)
+        applied_order = list(applied_profile.get('nlp_provider_order', []))
+    else:
+        selected_order = ['local', 'ollama', 'model_api', 'gemini'] if mode == 'local' else ['gemini', 'model_api', 'ollama', 'local']
+        applied_order = _apply_nlp_provider_order(selected_order)
+        applied_profile = {'routing_profile': _infer_provider_profile_from_order(applied_order)}
 
     candidates = _collect_recovery_candidates(limit=300)
     requested_report_ids = payload.get('report_ids')
@@ -4631,6 +4818,7 @@ def api_report_recovery_execute():
     return jsonify({
         'success': True,
         'mode': mode,
+        'applied_routing_profile': applied_profile.get('routing_profile', target_profile),
         'offline_local_cache_mode': db_manager is None,
         'local_mode_warning': local_mode_warning,
         'applied_nlp_provider_order': applied_order,

@@ -161,14 +161,30 @@ def _split_csv(value: str) -> list:
     return [item.strip().lower() for item in value.split(',') if item.strip()]
 
 
+def _default_provider_orders() -> dict:
+    profile = str(os.getenv('LUNA_ROUTING_PROFILE', 'cloud')).strip().lower()
+    if profile == 'local':
+        return {
+            'nlp_provider_order': 'ollama',
+            'embedding_provider_order': 'ollama',
+        }
+    return {
+        'nlp_provider_order': 'gemini',
+        'embedding_provider_order': 'model_api',
+    }
+
+
+_PROVIDER_ORDER_DEFAULTS = _default_provider_orders()
+
+
 MODEL_API_CONFIG = {
     # Set MODEL_API_ENABLED=true to enable direct provider APIs (OpenAI-compatible endpoints)
     'enabled': os.getenv('MODEL_API_ENABLED', 'false').lower() == 'true',
 
     # Provider order controls fallback chain for each task.
     # Supported entries: model_api, gemini, ollama, local
-    'nlp_provider_order': _split_csv(os.getenv('NLP_PROVIDER_ORDER', 'model_api,gemini,ollama,local')),
-    'embedding_provider_order': _split_csv(os.getenv('EMBEDDING_PROVIDER_ORDER', 'model_api,ollama')),
+    'nlp_provider_order': _split_csv(os.getenv('NLP_PROVIDER_ORDER', _PROVIDER_ORDER_DEFAULTS['nlp_provider_order'])),
+    'embedding_provider_order': _split_csv(os.getenv('EMBEDDING_PROVIDER_ORDER', _PROVIDER_ORDER_DEFAULTS['embedding_provider_order'])),
 
     # NLP endpoint (for Llama/Qwen/etc.)
     # Expected OpenAI-compatible /chat/completions API

@@ -24,12 +24,40 @@ OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip(
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_TAGS_URL = os.getenv('OLLAMA_TAGS_URL', f"{OLLAMA_BASE_URL}/api/tags")
 OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma4')))
+DEFAULT_ROUTING_PROFILE = str(os.getenv('LUNA_ROUTING_PROFILE', 'cloud')).strip().lower()
+DEFAULT_VISION_PROVIDER_ORDER = 'ollama' if DEFAULT_ROUTING_PROFILE == 'local' else 'gemini'
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    """Parse integer environment variables safely with fallback."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return int(default)
 
 VISION_PROVIDER_ORDER = [
     provider.strip().lower()
-    for provider in os.getenv('VISION_PROVIDER_ORDER', 'model_api,gemini,ollama').split(',')
+    for provider in os.getenv('VISION_PROVIDER_ORDER', DEFAULT_VISION_PROVIDER_ORDER).split(',')
     if provider.strip()
 ]
+
+STRICT_PROVIDER_MODE_SPLIT = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
+
+
+def _strict_vision_order_for_profile(profile: str):
+    """Return strict provider order for local/cloud profile."""
+    normalized = str(profile or '').strip().lower()
+    if normalized == 'local':
+        return ['ollama']
+    if normalized == 'cloud':
+        return ['gemini']
+    return []
+
+
+if STRICT_PROVIDER_MODE_SPLIT:
+    profile_order = _strict_vision_order_for_profile(os.getenv('LUNA_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE))
+    if profile_order:
+        VISION_PROVIDER_ORDER = profile_order
 
 # OpenAI-compatible model API (e.g., first-party/hosted Qwen, Moondream, Llama providers)
 VISION_API_URL = os.getenv('VISION_API_URL', '').strip()
@@ -41,6 +69,8 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
 GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')).strip()
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
+OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
+OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 0)
 
 # Lightweight response cache + provider diagnostics to reduce repeated API calls.
 VISION_CACHE_ENABLED = os.getenv('VISION_CACHE_ENABLED', 'true').lower() == 'true'
@@ -53,6 +83,13 @@ _LAST_PROVIDER_FAILURES = []
 _gemini_quota_backoff_until = 0.0
 _LAST_PROVIDER_USED = None
 # ---------------------------
+
+
+def _get_ollama_request_timeout():
+    """Use finite connect timeout but optional unlimited read timeout for slow local hardware."""
+    if OLLAMA_VISION_READ_TIMEOUT_SECONDS <= 0:
+        return (OLLAMA_CONNECT_TIMEOUT_SECONDS, None)
+    return (OLLAMA_CONNECT_TIMEOUT_SECONDS, max(1, OLLAMA_VISION_READ_TIMEOUT_SECONDS))
 
 
 def _record_provider_failure(provider: str, reason: str):
@@ -165,7 +202,15 @@ def update_runtime_provider_settings(settings: dict):
         for provider in providers:
             if provider in allowed and provider not in normalized:
                 normalized.append(provider)
-        if normalized:
+        if STRICT_PROVIDER_MODE_SPLIT:
+            requested_profile = str(settings.get('routing_profile') or os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+            strict_order = _strict_vision_order_for_profile(requested_profile)
+            if strict_order:
+                VISION_PROVIDER_ORDER = strict_order
+            elif normalized:
+                inferred_profile = 'local' if normalized[0] == 'ollama' else 'cloud'
+                VISION_PROVIDER_ORDER = _strict_vision_order_for_profile(inferred_profile)
+        elif normalized:
             VISION_PROVIDER_ORDER = normalized
 
     if settings.get('vision_model'):
@@ -334,7 +379,7 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
     }
 
     try:
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=TIMEOUT)
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
         if not response.ok:
             _record_provider_failure('ollama', f"HTTP {response.status_code}")
             return ''

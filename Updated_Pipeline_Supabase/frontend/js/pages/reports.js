@@ -167,9 +167,83 @@ const ReportsPage = {
     },
 
     async loadReports() {
-        this.violations = await API.getViolations();
+        const [violations, pendingReports] = await Promise.all([
+            API.getViolations(),
+            API.getPendingReports()
+        ]);
+
+        this.violations = this.mergePendingReports(violations, pendingReports);
         this.renderReports();
         this.applyPendingFocusRequest();
+    },
+
+    isPendingLikeStatus(status) {
+        const normalized = String(status || '').trim().toLowerCase();
+        return normalized === 'pending'
+            || normalized === 'queued'
+            || normalized === 'processing'
+            || normalized === 'generating';
+    },
+
+    mergePendingReports(violations, pendingReports) {
+        const base = Array.isArray(violations) ? violations : [];
+        const pending = Array.isArray(pendingReports) ? pendingReports : [];
+        const byId = new Map();
+
+        base.forEach((item) => {
+            const reportId = String((item && item.report_id) || '').trim();
+            if (!reportId) return;
+            byId.set(reportId, { ...item, report_id: reportId });
+        });
+
+        pending.forEach((item) => {
+            const reportId = String((item && item.report_id) || '').trim();
+            if (!reportId) return;
+
+            const pendingStatus = String((item && item.status) || '').trim().toLowerCase() || 'pending';
+            const existing = byId.get(reportId);
+
+            if (existing) {
+                const existingStatus = this.normalizeStatus(existing);
+                const existingHasReport = !!existing.has_report;
+                if (this.isPendingLikeStatus(pendingStatus) && !existingHasReport && existingStatus !== 'completed') {
+                    existing.status = pendingStatus;
+                }
+                if (!existing.timestamp && item.timestamp) {
+                    existing.timestamp = item.timestamp;
+                }
+                if (!existing.device_id && item.device_id) {
+                    existing.device_id = item.device_id;
+                }
+                if (!existing.severity && item.severity) {
+                    existing.severity = item.severity;
+                }
+                return;
+            }
+
+            byId.set(reportId, {
+                report_id: reportId,
+                timestamp: item.timestamp || new Date().toISOString(),
+                status: pendingStatus,
+                severity: item.severity || 'HIGH',
+                device_id: item.device_id || null,
+                violation_count: Number(item.violation_count || 0),
+                missing_ppe: Array.isArray(item.missing_ppe) ? item.missing_ppe : [],
+                violation_summary: item.violation_summary || 'Violation queued for report generation',
+                has_original: !!item.has_original,
+                has_annotated: !!item.has_annotated,
+                has_report: false
+            });
+        });
+
+        const merged = Array.from(byId.values());
+        merged.sort((a, b) => {
+            const aTime = Date.parse(a.timestamp || '') || 0;
+            const bTime = Date.parse(b.timestamp || '') || 0;
+            return bTime - aTime;
+        });
+
+        return merged;
     },
 
     scheduleReportPrefetch() {
@@ -272,9 +346,9 @@ const ReportsPage = {
         // Search filter
         if (this.filters.search) {
             filtered = filtered.filter(v => 
-                v.report_id.toLowerCase().includes(this.filters.search) ||
-                v.timestamp.toLowerCase().includes(this.filters.search) ||
-                (v.device_id && v.device_id.toLowerCase().includes(this.filters.search))
+                String(v.report_id || '').toLowerCase().includes(this.filters.search) ||
+                String(v.timestamp || '').toLowerCase().includes(this.filters.search) ||
+                String(v.device_id || '').toLowerCase().includes(this.filters.search)
             );
         }
 
@@ -1094,9 +1168,12 @@ const ReportsPage = {
     },
 
     renderReportCard(violation) {
-        const reportTime = (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function')
-            ? TimezoneManager.formatDateTime(violation.timestamp)
-            : new Date(violation.timestamp).toLocaleString();
+        const timestamp = violation && violation.timestamp ? violation.timestamp : null;
+        const reportTime = timestamp
+            ? ((typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function')
+                ? TimezoneManager.formatDateTime(timestamp)
+                : new Date(timestamp).toLocaleString())
+            : 'Unknown time';
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
         const isReady = this.isReportReady(violation);

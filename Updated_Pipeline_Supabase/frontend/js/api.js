@@ -683,13 +683,8 @@ const API = {
         if (normalized !== 'local' && normalized !== 'cloud') {
             return { success: false, error: 'Mode must be either local or cloud' };
         }
-
-        const nlpOrder = normalized === 'local'
-            ? ['local', 'ollama', 'model_api', 'gemini']
-            : ['model_api', 'gemini', 'ollama', 'local'];
-
         return this.updateProviderRoutingSettings({
-            nlp_provider_order: nlpOrder
+            routing_profile: normalized
         });
     },
 

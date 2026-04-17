@@ -19,7 +19,7 @@ PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE
 STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "0") != "0"
 REQUIRE_NO_NLP_FALLBACK = os.environ.get("LUNA_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
 REQUIRE_GENERATE_PROGRESSION = os.environ.get("LUNA_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
-ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini"}
+ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini", "ollama"}
 
 ALLOWED_REPORT_STATUSES = {
     "pending",
@@ -34,48 +34,27 @@ ALLOWED_REPORT_STATUSES = {
 
 PROVIDER_MODE_MATRIX = [
     {
-        "name": "api-first",
+        "name": "cloud-strict",
         "payload": {
-            "model_api_enabled": True,
-            "gemini_enabled": True,
-            "nlp_provider_order": "model_api,gemini,ollama,local",
-            "vision_provider_order": "model_api,gemini,ollama",
-            "embedding_provider_order": "model_api,ollama",
+            "routing_profile": "cloud",
         },
         "expect": {
-            "model_api_enabled": True,
+            "routing_profile": "cloud",
+            "model_api_enabled": False,
             "gemini_enabled": True,
-            "nlp_first": "model_api",
+            "nlp_first": "gemini",
         },
     },
     {
-        "name": "local-first",
+        "name": "local-strict",
         "payload": {
-            "model_api_enabled": False,
-            "gemini_enabled": False,
-            "nlp_provider_order": "ollama,local,model_api,gemini",
-            "vision_provider_order": "ollama,model_api,gemini",
-            "embedding_provider_order": "ollama,model_api",
+            "routing_profile": "local",
         },
         "expect": {
+            "routing_profile": "local",
             "model_api_enabled": False,
             "gemini_enabled": False,
             "nlp_first": "ollama",
-        },
-    },
-    {
-        "name": "hybrid-fallback",
-        "payload": {
-            "model_api_enabled": True,
-            "gemini_enabled": True,
-            "nlp_provider_order": "gemini,model_api,ollama,local",
-            "vision_provider_order": "gemini,model_api,ollama",
-            "embedding_provider_order": "model_api,ollama",
-        },
-        "expect": {
-            "model_api_enabled": True,
-            "gemini_enabled": True,
-            "nlp_first": "gemini",
         },
     },
 ]
@@ -207,6 +186,7 @@ def run_live_start_contract_probe() -> None:
 def build_restore_payload(current_settings: dict) -> dict:
     restore_payload = {}
     known_keys = (
+        "routing_profile",
         "model_api_enabled",
         "gemini_enabled",
         "nlp_provider_order",
@@ -263,6 +243,10 @@ def run_provider_mode_matrix_probe(report_ids):
                 settings_after = require_json_dict("/api/settings/provider-routing", f"provider-routing-{mode_name}")
 
             expected = mode["expect"]
+            if str(settings_after.get("routing_profile") or "").strip().lower() != expected["routing_profile"]:
+                raise RuntimeError(
+                    f"provider mode {mode_name} routing_profile mismatch: {settings_after.get('routing_profile')}"
+                )
             if bool(settings_after.get("model_api_enabled")) != bool(expected["model_api_enabled"]):
                 raise RuntimeError(
                     f"provider mode {mode_name} model_api_enabled mismatch: {settings_after.get('model_api_enabled')}"
@@ -276,6 +260,10 @@ def run_provider_mode_matrix_probe(report_ids):
             if not nlp_order or nlp_order[0] != expected["nlp_first"]:
                 raise RuntimeError(
                     f"provider mode {mode_name} nlp order mismatch: got {nlp_order}, expected first={expected['nlp_first']}"
+                )
+            if len(nlp_order) != 1:
+                raise RuntimeError(
+                    f"provider mode {mode_name} expected strict single-provider NLP order, got {nlp_order}"
                 )
 
             runtime_code, runtime_payload, runtime_text = request_json(

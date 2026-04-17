@@ -41,11 +41,14 @@ ALLOWED_ORIGINS=https://your-frontend.vercel.app
 EDGE_INGEST_TOKEN=your-shared-secret-token
 EDGE_REALSENSE_STALE_SECONDS=4
 
-# Optional: switchable model provider routing
-MODEL_API_ENABLED=true
-NLP_PROVIDER_ORDER=model_api,gemini,ollama,local
-VISION_PROVIDER_ORDER=model_api,gemini,ollama
-EMBEDDING_PROVIDER_ORDER=model_api,ollama
+# Optional: strict routing profile (cloud=Gemini only, local=Ollama Gemma4 only)
+STRICT_PROVIDER_MODE_SPLIT=true
+LUNA_ROUTING_PROFILE=cloud
+MODEL_API_ENABLED=false
+GEMINI_ENABLED=true
+NLP_PROVIDER_ORDER=gemini
+VISION_PROVIDER_ORDER=gemini
+EMBEDDING_PROVIDER_ORDER=model_api
 
 # Model-specific APIs (OpenAI-compatible)
 NLP_API_URL=https://your-llama-provider/v1
@@ -80,7 +83,7 @@ Notes:
 - `SERVE_FRONTEND=false` makes `/` return API status JSON instead of serving SPA files
 - `ALLOWED_ORIGINS` controls CORS for `/api/*`, `/report/*`, and `/image/*`
 - Multiple origins are supported with comma-separated values
-- Provider order is configurable per task; if `model_api` fails, the system falls back to Gemini, then Ollama/local depending on your order.
+- Routing is profile-based in strict mode: `cloud` profile uses Gemini for generation, `local` profile uses Ollama/Gemma4.
 
 ### Frontend (Vercel) Backend URL
 

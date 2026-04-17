@@ -78,6 +78,8 @@ class ReportGenerator:
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_nlp_completed_at = None
+        self.routing_profile = str(os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+        self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider = None
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
@@ -150,7 +152,16 @@ class ReportGenerator:
         self.embeddings_url = ollama_config.get('embeddings_url', 'http://localhost:11434/api/embeddings')
         self.model = ollama_config.get('model', 'llama3')
         self.temperature = ollama_config.get('temperature', 0.7)
-        self.ollama_timeout = ollama_config.get('timeout', 600)
+        self.cloud_api_timeout = max(30, int(os.getenv('CLOUD_API_TIMEOUT_SECONDS', '120') or 120))
+        self.ollama_connect_timeout = max(1, int(os.getenv('OLLAMA_CONNECT_TIMEOUT_SECONDS', '8') or 8))
+        try:
+            self.ollama_read_timeout = int(os.getenv('OLLAMA_REPORT_READ_TIMEOUT_SECONDS', '0') or 0)
+        except (TypeError, ValueError):
+            self.ollama_read_timeout = 0
+        self.ollama_timeout = (
+            self.ollama_connect_timeout,
+            None if self.ollama_read_timeout <= 0 else max(1, self.ollama_read_timeout)
+        )
 
         # =====================================================================
         # MODEL API ROUTING (primary when configured)
@@ -171,6 +182,21 @@ class ReportGenerator:
         self.embedding_api_url = model_api_config.get('embedding_api_url', '')
         self.embedding_api_key = model_api_config.get('embedding_api_key', '')
         self.embedding_api_model = model_api_config.get('embedding_model', 'nomic-ai/nomic-embed-text-v1.5')
+
+        if self.enforce_strict_provider_split:
+            profile = 'local' if self.routing_profile == 'local' else 'cloud'
+            if profile == 'local':
+                strict_local_model = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma4') or 'gemma4').strip() or 'gemma4'
+                self.model_api_enabled = False
+                self.use_gemini = False
+                self.model = strict_local_model
+                self.nlp_model = strict_local_model
+                self.nlp_provider_order = ['ollama']
+                self.embedding_provider_order = ['ollama']
+            else:
+                self.model_api_enabled = False
+                self.nlp_provider_order = ['gemini']
+                self.embedding_provider_order = ['model_api']
         
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
@@ -411,7 +437,7 @@ class ReportGenerator:
                     'max_tokens': 1600,
                     'response_format': {'type': 'json_object'}
                 },
-                timeout=self.ollama_timeout
+                timeout=self.cloud_api_timeout
             )
 
             if not response.ok:
@@ -452,7 +478,7 @@ class ReportGenerator:
                     'model': self.embedding_api_model,
                     'input': text
                 },
-                timeout=45
+                timeout=self.cloud_api_timeout
             )
 
             if not response.ok:

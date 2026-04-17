@@ -10,6 +10,9 @@ const RealtimeSync = {
     isConnected: false,
     mode: 'offline',
     reportStatusCache: {},
+    lastProgressReportId: null,
+    lastProgressStatus: null,
+    lastProgressStep: '',
     pendingSnapshotFetch: false,
     lastSnapshotAt: 0,
     supabaseFailureCount: 0,
@@ -332,5 +335,46 @@ const RealtimeSync = {
                 NotificationManager.reportGenerating(reportId);
             }
         });
+
+        // Fallback path: when DB-backed report rows are unavailable, use pipeline progress.
+        // This keeps UX visibility in local/offline runs while generation is still active.
+        const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
+        const progressReportId = String(progress.current || '').trim();
+        const progressStatus = String(progress.status || '').trim().toLowerCase();
+        const progressStep = String(progress.current_step || '').trim();
+
+        if (!progressReportId) {
+            this.lastProgressReportId = null;
+            this.lastProgressStatus = progressStatus || null;
+            this.lastProgressStep = progressStep;
+            return;
+        }
+
+        const changedReport = this.lastProgressReportId !== progressReportId;
+        const changedStatus = this.lastProgressStatus !== progressStatus;
+        const changedStep = this.lastProgressStep !== progressStep;
+        const noDbBackedRows = reports.length === 0;
+
+        if (noDbBackedRows) {
+            if ((progressStatus === 'waiting' || progressStatus === 'processing') && (changedReport || changedStatus)) {
+                NotificationManager.reportGenerating(progressReportId, {
+                    title: progressStatus === 'waiting' ? 'Report Queued' : 'Report Generating'
+                });
+            } else if (progressStatus === 'completed' && (changedReport || changedStatus)) {
+                NotificationManager.reportReady(progressReportId);
+            } else if ((progressStatus === 'error' || progressStatus === 'failed') && (changedReport || changedStatus || changedStep)) {
+                NotificationManager.error(
+                    `Report ${progressReportId} failed: ${progress.error_message || progressStep || 'Unknown error'}`,
+                    {
+                        title: 'Report Generation Issue',
+                        duration: 8000
+                    }
+                );
+            }
+        }
+
+        this.lastProgressReportId = progressReportId;
+        this.lastProgressStatus = progressStatus;
+        this.lastProgressStep = progressStep;
     }
 };

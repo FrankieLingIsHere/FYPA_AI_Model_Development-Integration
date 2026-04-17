@@ -16,6 +16,7 @@ const LivePage = {
     phoneLastViolationNoticeAt: 0,
     reportQueueSuppressionActive: false,
     reportQueueSuppressionReason: null,
+    lastRealtimeUpdateAt: 0,
 
     render() {
         return `
@@ -2540,6 +2541,15 @@ const LivePage = {
             hideDepthWidgets();
         }
 
+        function shouldUsePollingFallback() {
+            const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
+            if (!connected) {
+                return true;
+            }
+            const ageMs = Date.now() - Number(livePage.lastRealtimeUpdateAt || 0);
+            return ageMs > 12000;
+        }
+
         function startLiveRefreshLoops() {
             if (!APP_STATE.liveStreamActive) {
                 return;
@@ -2553,23 +2563,19 @@ const LivePage = {
                 livePage.providerRuntimeInterval = setInterval(updateProviderRuntimeStatus, 15000);
             }
 
-            const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
-            if (connected) {
-                if (livePage.queueRefreshInterval) {
-                    clearInterval(livePage.queueRefreshInterval);
-                    livePage.queueRefreshInterval = null;
-                }
-                if (livePage.reliabilityRefreshInterval) {
-                    clearInterval(livePage.reliabilityRefreshInterval);
-                    livePage.reliabilityRefreshInterval = null;
-                }
-            } else {
-                if (!livePage.queueRefreshInterval) {
-                    livePage.queueRefreshInterval = setInterval(updateQueueStatus, 5000);
-                }
-                if (!livePage.reliabilityRefreshInterval) {
-                    livePage.reliabilityRefreshInterval = setInterval(updateReliabilityStatus, 10000);
-                }
+            if (!livePage.queueRefreshInterval) {
+                livePage.queueRefreshInterval = setInterval(() => {
+                    if (shouldUsePollingFallback()) {
+                        updateQueueStatus();
+                    }
+                }, 5000);
+            }
+            if (!livePage.reliabilityRefreshInterval) {
+                livePage.reliabilityRefreshInterval = setInterval(() => {
+                    if (shouldUsePollingFallback()) {
+                        updateReliabilityStatus();
+                    }
+                }, 10000);
             }
 
             updateQueueStatus({ force: true });
@@ -3479,8 +3485,11 @@ const LivePage = {
             if (!APP_STATE.liveStreamActive) {
                 return;
             }
+            this.lastRealtimeUpdateAt = Date.now();
             updateQueueStatus();
-            updateReliabilityStatus();
+            if (shouldUsePollingFallback()) {
+                updateReliabilityStatus();
+            }
         };
         window.addEventListener('ppe-realtime:update', this.realtimeHandler);
 
@@ -3497,23 +3506,32 @@ const LivePage = {
                 return;
             }
 
+            if (!this.queueRefreshInterval) {
+                this.queueRefreshInterval = setInterval(() => {
+                    if (shouldUsePollingFallback()) {
+                        updateQueueStatus();
+                    }
+                }, 5000);
+            }
+            if (!this.reliabilityRefreshInterval) {
+                this.reliabilityRefreshInterval = setInterval(() => {
+                    if (shouldUsePollingFallback()) {
+                        updateReliabilityStatus();
+                    }
+                }, 10000);
+            }
+
             const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
-            if (connected) {
-                if (this.queueRefreshInterval) {
-                    clearInterval(this.queueRefreshInterval);
-                    this.queueRefreshInterval = null;
-                }
-                if (this.reliabilityRefreshInterval) {
-                    clearInterval(this.reliabilityRefreshInterval);
-                    this.reliabilityRefreshInterval = null;
-                }
-            } else {
-                if (!this.queueRefreshInterval) {
-                    this.queueRefreshInterval = setInterval(updateQueueStatus, 5000);
-                }
-                if (!this.reliabilityRefreshInterval) {
-                    this.reliabilityRefreshInterval = setInterval(updateReliabilityStatus, 10000);
-                }
+            if (!connected) {
+                updateQueueStatus({ force: true });
+                updateReliabilityStatus({ force: true });
+                return;
+            }
+
+            const realtimeAgeMs = Date.now() - Number(this.lastRealtimeUpdateAt || 0);
+            if (realtimeAgeMs > 12000) {
+                updateQueueStatus({ force: true });
+                updateReliabilityStatus({ force: true });
             }
         };
         window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);

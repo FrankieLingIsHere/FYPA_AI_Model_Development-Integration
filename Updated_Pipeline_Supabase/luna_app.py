@@ -726,6 +726,20 @@ violation_queue = None  # ViolationQueueManager instance
 queue_worker_thread = None  # Background worker for processing queue
 queue_worker_running = False
 queue_worker_state_lock = Lock()
+supabase_runtime_recovery_lock = Lock()
+last_supabase_runtime_recovery_epoch = 0.0
+SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
+    5,
+    int(os.getenv('SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS', '20') or 20)
+)
+SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS = max(
+    10,
+    int(os.getenv('SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS', '45') or 45)
+)
+SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
+    30,
+    int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '180') or 180)
+)
 
 
 def _is_queue_worker_alive() -> bool:
@@ -1201,6 +1215,20 @@ def format_violation_type(class_name: str) -> str:
 # VIOLATION PROCESSING
 # =========================================================================
 
+def _build_report_generator_config() -> Dict[str, Any]:
+    """Build report generator config using current runtime globals."""
+    return {
+        'OLLAMA_CONFIG': OLLAMA_CONFIG,
+        'GEMINI_CONFIG': GEMINI_CONFIG,
+        'MODEL_API_CONFIG': MODEL_API_CONFIG,
+        'RAG_CONFIG': RAG_CONFIG,
+        'REPORT_CONFIG': REPORT_CONFIG,
+        'BRAND_COLORS': BRAND_COLORS,
+        'REPORTS_DIR': REPORTS_DIR,
+        'VIOLATIONS_DIR': VIOLATIONS_DIR,
+        'SUPABASE_CONFIG': SUPABASE_CONFIG
+    }
+
 def initialize_pipeline_components():
     """Initialize violation detector, caption generator, report generator, and Supabase managers."""
     global violation_detector, caption_generator, report_generator, db_manager, storage_manager
@@ -1322,17 +1350,7 @@ def initialize_pipeline_components():
                 _set_startup_step('pipeline_components', 'pending', 'Initializing local report generator fallback')
                 logger.info("Initializing local report generator fallback...")
 
-            report_config = {
-                'OLLAMA_CONFIG': OLLAMA_CONFIG,
-                'GEMINI_CONFIG': GEMINI_CONFIG,
-                'MODEL_API_CONFIG': MODEL_API_CONFIG,
-                'RAG_CONFIG': RAG_CONFIG,
-                'REPORT_CONFIG': REPORT_CONFIG,
-                'BRAND_COLORS': BRAND_COLORS,
-                'REPORTS_DIR': REPORTS_DIR,
-                'VIOLATIONS_DIR': VIOLATIONS_DIR,
-                'SUPABASE_CONFIG': SUPABASE_CONFIG
-            }
+            report_config = _build_report_generator_config()
             if use_supabase_generator:
                 report_generator = _run_with_timeout(
                     lambda: create_supabase_report_generator(report_config),
@@ -1379,6 +1397,106 @@ def initialize_pipeline_components():
         import traceback
         traceback.print_exc()
         raise
+
+
+def _is_supabase_report_generator_active() -> bool:
+    """Return True when report generator is cloud-capable with db/storage managers."""
+    return bool(
+        report_generator is not None
+        and hasattr(report_generator, 'storage_manager')
+        and hasattr(report_generator, 'db_manager')
+    )
+
+
+def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = False) -> Dict[str, Any]:
+    """Best-effort runtime recovery when backend started offline and network later returns."""
+    global db_manager, storage_manager, report_generator, last_supabase_runtime_recovery_epoch
+
+    if not FULL_PIPELINE_AVAILABLE:
+        return {
+            'success': False,
+            'recovered': False,
+            'reason': 'pipeline_unavailable',
+            'parts': [],
+            'errors': []
+        }
+
+    now_epoch = time.time()
+    with supabase_runtime_recovery_lock:
+        elapsed = now_epoch - float(last_supabase_runtime_recovery_epoch or 0.0)
+        if not force and elapsed < SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS:
+            return {
+                'success': bool(db_manager is not None and storage_manager is not None),
+                'recovered': False,
+                'reason': 'cooldown',
+                'parts': [],
+                'errors': []
+            }
+        last_supabase_runtime_recovery_epoch = now_epoch
+
+    recovered_parts = []
+    errors = []
+
+    if db_manager is None:
+        try:
+            db_candidate = _run_with_timeout(
+                create_db_manager_from_env,
+                STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
+                'db-manager-recover'
+            )
+            if db_candidate is not None:
+                db_manager = db_candidate
+                recovered_parts.append('db_manager')
+        except Exception as db_err:
+            errors.append(f"db_manager: {db_err}")
+
+    if storage_manager is None:
+        try:
+            storage_candidate = _run_with_timeout(
+                create_storage_manager_from_env,
+                STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
+                'storage-manager-recover'
+            )
+            if storage_candidate is not None:
+                storage_manager = storage_candidate
+                recovered_parts.append('storage_manager')
+        except Exception as storage_err:
+            errors.append(f"storage_manager: {storage_err}")
+
+    if (
+        db_manager is not None
+        and storage_manager is not None
+        and report_generator is not None
+        and not _is_supabase_report_generator_active()
+    ):
+        try:
+            upgraded_generator = _run_with_timeout(
+                lambda: create_supabase_report_generator(_build_report_generator_config()),
+                STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
+                'report-generator-recover'
+            )
+            if upgraded_generator is not None:
+                report_generator = upgraded_generator
+                recovered_parts.append('report_generator_supabase')
+        except Exception as report_err:
+            errors.append(f"report_generator: {report_err}")
+
+    if recovered_parts:
+        logger.info(
+            f"Supabase runtime recovery ({reason}) recovered: {', '.join(recovered_parts)}"
+        )
+    if errors:
+        logger.debug(
+            f"Supabase runtime recovery ({reason}) warnings: {' | '.join(errors)}"
+        )
+
+    return {
+        'success': bool(db_manager is not None and storage_manager is not None),
+        'recovered': bool(recovered_parts),
+        'reason': reason,
+        'parts': recovered_parts,
+        'errors': errors
+    }
 
 
 def start_queue_worker() -> bool:
@@ -1429,11 +1547,37 @@ def queue_worker_loop():
     Processes violations from the queue one at a time.
     """
     global queue_worker_running
+    last_supabase_recovery_check_epoch = 0.0
+    last_supabase_auto_sync_epoch = 0.0
     
     logger.info("Queue worker loop started - waiting for violations...")
     
     while queue_worker_running:
         try:
+            now_epoch = time.time()
+            if now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS:
+                last_supabase_recovery_check_epoch = now_epoch
+                recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
+                if (
+                    recovery.get('success')
+                    and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
+                ):
+                    last_supabase_auto_sync_epoch = now_epoch
+                    try:
+                        sync_summary = _sync_local_cache_candidates(
+                            max_items=80,
+                            dry_run=False,
+                            reconcile_reason='auto_reconnect',
+                            require_worker=False
+                        )
+                        enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
+                        if enqueued_count > 0:
+                            logger.info(
+                                f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
+                            )
+                    except Exception as sync_err:
+                        logger.debug(f"Auto reconnect local-cache sync skipped: {sync_err}")
+
             if violation_queue is None:
                 time.sleep(1)
                 continue
@@ -4830,22 +4974,33 @@ def api_report_recovery_execute():
     })
 
 
-@app.route('/api/reports/sync-local-cache', methods=['POST'])
-def api_sync_local_cache_to_supabase():
+def _sync_local_cache_candidates(
+    max_items: int = 120,
+    dry_run: bool = False,
+    reconcile_reason: str = 'manual_api',
+    require_worker: bool = True
+) -> Dict[str, Any]:
     """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
-    payload = request.get_json(silent=True) or {}
-    max_items = int(payload.get('limit', 120) or 120)
-    max_items = max(1, min(max_items, 500))
-    dry_run = bool(payload.get('dry_run', False))
+    global db_manager, storage_manager
+
+    try:
+        max_items = max(1, min(int(max_items or 120), 500))
+    except Exception:
+        max_items = 120
+
+    reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
+
+    if (db_manager is None or storage_manager is None) and not dry_run:
+        _attempt_supabase_runtime_recovery(reason=f'sync_local_cache:{reason}', force=True)
 
     if db_manager is None:
-        return jsonify({'success': False, 'error': 'Database manager unavailable'}), 503
+        return {'success': False, 'error': 'Database manager unavailable'}
     if storage_manager is None:
-        return jsonify({'success': False, 'error': 'Storage manager unavailable'}), 503
+        return {'success': False, 'error': 'Storage manager unavailable'}
     if violation_queue is None:
-        return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
-    if not dry_run and not ensure_queue_worker_running():
-        return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
+        return {'success': False, 'error': 'Queue is not initialized'}
+    if not dry_run and require_worker and not ensure_queue_worker_running():
+        return {'success': False, 'error': 'Queue worker is not running'}
 
     local_dirs = []
     if VIOLATIONS_DIR.exists():
@@ -4886,10 +5041,10 @@ def api_sync_local_cache_to_supabase():
         local_has_report = report_html_path.exists()
 
         needs_sync = (
-            not event or
-            not has_cloud_original or
-            (annotated_path.exists() and not has_cloud_annotated) or
-            (local_has_report and not has_cloud_report)
+            not event
+            or not has_cloud_original
+            or (annotated_path.exists() and not has_cloud_annotated)
+            or (local_has_report and not has_cloud_report)
         )
 
         if not needs_sync:
@@ -4968,15 +5123,38 @@ def api_sync_local_cache_to_supabase():
                 continue
 
             if hasattr(db_manager, 'update_detection_status'):
-                db_manager.update_detection_status(report_id, 'pending', 'Queued for local-cache reconciliation to Supabase')
+                db_manager.update_detection_status(
+                    report_id,
+                    'pending',
+                    f'Queued for local-cache reconciliation to Supabase ({reason})'
+                )
+
+            if hasattr(db_manager, 'log_event'):
+                try:
+                    db_manager.log_event(
+                        event_type='local_cache_sync_queued',
+                        message=f'Queued local cache report for Supabase reconciliation ({reason})',
+                        report_id=report_id,
+                        metadata={
+                            'reason': reason,
+                            'source': 'sync_local_cache',
+                            'has_local_report': bool(local_has_report),
+                            'has_cloud_original': has_cloud_original,
+                            'has_cloud_annotated': has_cloud_annotated,
+                            'has_cloud_report': has_cloud_report
+                        }
+                    )
+                except Exception as log_err:
+                    logger.debug(f"Could not log local cache sync event for {report_id}: {log_err}")
 
             enqueued += 1
         except Exception as enqueue_err:
             errors.append(f"{report_id}: enqueue failed ({enqueue_err})")
             skipped += 1
 
-    return jsonify({
+    return {
         'success': True,
+        'reconcile_reason': reason,
         'dry_run': dry_run,
         'scanned': scanned,
         'candidates': candidates,
@@ -4984,7 +5162,38 @@ def api_sync_local_cache_to_supabase():
         'skipped': skipped,
         'errors': errors[:20],
         'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None)
-    })
+    }
+
+
+@app.route('/api/reports/sync-local-cache', methods=['POST'])
+def api_sync_local_cache_to_supabase():
+    """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
+    payload = request.get_json(silent=True) or {}
+    limit_raw = payload.get('limit', 120)
+    try:
+        max_items = max(1, min(int(limit_raw or 120), 500))
+    except Exception:
+        max_items = 120
+    dry_run = bool(payload.get('dry_run', False))
+
+    result = _sync_local_cache_candidates(
+        max_items=max_items,
+        dry_run=dry_run,
+        reconcile_reason='manual_api',
+        require_worker=True
+    )
+
+    if result.get('success'):
+        return jsonify(result)
+
+    error_message = str(result.get('error') or '').lower()
+    if (
+        'unavailable' in error_message
+        or 'not initialized' in error_message
+        or 'not running' in error_message
+    ):
+        return jsonify(result), 503
+    return jsonify(result), 500
 
 
 @app.route('/api/fix-stuck-reports', methods=['POST'])
@@ -6948,9 +7157,6 @@ def api_reliability_stats():
     Query params:
       - window: number of most recent detection events to analyze (default 100, max 1000)
     """
-    if not db_manager:
-        return jsonify({'error': 'Database not available'}), 503
-
     try:
         try:
             window = int(request.args.get('window', 100))
@@ -6958,20 +7164,59 @@ def api_reliability_stats():
             window = 100
         window = max(10, min(window, 1000))
 
-        with db_manager.conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    de.report_id,
-                    de.timestamp,
-                    de.status,
-                    de.error_message,
-                    v.report_html_key
-                FROM public.detection_events de
-                LEFT JOIN public.violations v ON de.report_id = v.report_id
-                ORDER BY de.timestamp DESC
-                LIMIT %s
-            """, (window,))
-            rows = cur.fetchall()
+        rows = []
+        using_db_source = bool(db_manager is not None and getattr(db_manager, 'conn', None) is not None)
+        if using_db_source:
+            with db_manager.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        de.report_id,
+                        de.timestamp,
+                        de.status,
+                        de.error_message,
+                        v.report_html_key
+                    FROM public.detection_events de
+                    LEFT JOIN public.violations v ON de.report_id = v.report_id
+                    ORDER BY de.timestamp DESC
+                    LIMIT %s
+                """, (window,))
+                rows = cur.fetchall()
+        else:
+            for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True) if VIOLATIONS_DIR.exists() else []:
+                if not violation_dir.is_dir():
+                    continue
+
+                report_id = violation_dir.name
+                report_html_path = violation_dir / 'report.html'
+                failure_path = violation_dir / 'generation_failure.txt'
+                skipped_path = violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt'
+
+                status = 'pending'
+                error_message = ''
+                if failure_path.exists():
+                    status = 'failed'
+                    try:
+                        error_message = failure_path.read_text(encoding='utf-8', errors='ignore')[:500]
+                    except Exception:
+                        error_message = 'local_generation_failure'
+                elif skipped_path.exists():
+                    status = 'skipped'
+                    error_message = 'Skipped by environment validation'
+                elif report_html_path.exists():
+                    status = 'completed'
+                elif (violation_dir / 'caption.txt').exists():
+                    status = 'generating'
+
+                rows.append({
+                    'report_id': report_id,
+                    'timestamp': None,
+                    'status': status,
+                    'error_message': error_message,
+                    'report_html_key': None,
+                })
+
+                if len(rows) >= window:
+                    break
 
         fallback_markers = (
             'report generator not available',
@@ -7047,7 +7292,10 @@ def api_reliability_stats():
         fallback_needed_rate = (totals['fallback_needed'] / considered) if considered else 0.0
 
         return jsonify({
+            'success': True,
             'window': window,
+            'data_source': 'supabase_db' if using_db_source else 'local_filesystem_fallback',
+            'db_available': using_db_source,
             'considered': considered,
             'real_success_count': totals['real_success'],
             'real_success_rate': real_success_rate,

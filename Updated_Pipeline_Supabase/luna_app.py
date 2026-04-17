@@ -4497,19 +4497,22 @@ def api_local_mode_auto_provisioning():
     admin_portal_url = f"{cloud_url}/admin/devices"
 
     credentials_present = _local_mode_has_supabase_credentials()
-    if credentials_present:
+    cloud_state: Dict[str, Any] = {
+        'checked': False,
+        'status': 'idle',
+        'status_code': None,
+    }
+    if credentials_present or provision_secret:
         cloud_state = _local_mode_fetch_authoritative_status(
             cloud_url=cloud_url,
             machine_id=machine_id,
             provision_secret=provision_secret,
             timeout_seconds=8,
         )
-        authoritative_status = str(cloud_state.get('status') or '').strip().lower()
-        if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
-            effective_status = authoritative_status
-        else:
-            effective_status = 'credentials_present'
 
+    authoritative_status = str(cloud_state.get('status') or '').strip().lower()
+    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+        effective_status = authoritative_status
         return jsonify({
             'success': True,
             'status': effective_status,
@@ -4517,10 +4520,16 @@ def api_local_mode_auto_provisioning():
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
-            'credentials_present': True,
+            'credentials_present': credentials_present,
             'cloud_status_checked': bool(cloud_state.get('checked')),
             'cloud_status_code': cloud_state.get('status_code'),
         })
+
+    if credentials_present:
+        logger.info(
+            f"Local auto-provision: credentials are present but no cloud provisioning record for "
+            f"machine_id={machine_id}; requesting approval workflow."
+        )
 
     def _request_new_secret() -> Tuple[bool, str, str]:
         try:

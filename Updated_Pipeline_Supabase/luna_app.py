@@ -4074,7 +4074,7 @@ def _local_mode_generate_deterministic_machine_id() -> str:
     return f"Edge-{suffix}"
 
 
-def _local_mode_get_or_create_machine_id() -> str:
+def _local_mode_get_existing_machine_id() -> str:
     configured = _local_mode_normalize_machine_id(os.getenv('LUNA_MACHINE_ID', ''))
     if configured:
         _local_mode_write_machine_id(configured)
@@ -4098,6 +4098,14 @@ def _local_mode_get_or_create_machine_id() -> str:
     if state_machine_id:
         _local_mode_write_machine_id(state_machine_id)
         return state_machine_id
+
+    return ''
+
+
+def _local_mode_get_or_create_machine_id() -> str:
+    existing_machine_id = _local_mode_get_existing_machine_id()
+    if existing_machine_id:
+        return existing_machine_id
 
     machine_id = _local_mode_generate_deterministic_machine_id()
     _local_mode_write_machine_id(machine_id)
@@ -4393,7 +4401,7 @@ def api_local_mode_provisioning_status():
         cloud_url = state_cloud_url
 
     state_machine_id = _local_mode_normalize_machine_id(state.get('machine_id'))
-    machine_id = state_machine_id or _local_mode_get_or_create_machine_id()
+    machine_id = state_machine_id or _local_mode_get_existing_machine_id()
 
     if machine_id and machine_id != state_machine_id:
         state['machine_id'] = machine_id

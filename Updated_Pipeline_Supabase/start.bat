@@ -158,9 +158,14 @@ if %errorlevel% neq 0 (
 )
 
 echo Ollama found. Starting server in background...
-start "Ollama Server" /min cmd /c "ollama serve"
-timeout /t 3
-echo Ollama server started
+call :start_ollama_and_wait_ready 30
+if errorlevel 1 (
+    echo Error: Ollama server did not become ready within 30 seconds.
+    echo Please open Ollama once, then rerun this script.
+    pause
+    exit /b 1
+)
+echo Ollama server is ready
 echo.
 
 echo ==========================================
@@ -281,8 +286,27 @@ set "UPGRADE_STATUS=0"
 
 echo Restarting Ollama service after upgrade...
 taskkill /IM ollama.exe /F >nul 2>&1
-start "Ollama Server" /min cmd /c "ollama serve"
-timeout /t 3 >nul
+call :start_ollama_and_wait_ready 30
+if errorlevel 1 (
+    echo Warning: Ollama service did not become ready after upgrade.
+    set "UPGRADE_STATUS=1"
+)
 
 :upgrade_ollama_runtime_done
 exit /b !UPGRADE_STATUS!
+
+:start_ollama_and_wait_ready
+set "OLLAMA_WAIT_SECONDS=%~1"
+if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
+
+start "Ollama Server" /min cmd /c "ollama serve"
+
+for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
+    ollama list >nul 2>&1
+    if !errorlevel! equ 0 (
+        exit /b 0
+    )
+    timeout /t 1 /nobreak >nul
+)
+
+exit /b 1

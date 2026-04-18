@@ -491,11 +491,18 @@ function normalizeBaseUrl(base) {
 }
 
 function buildBackendCandidates(preferLocal) {
+    const explicitApiOverride = normalizeBaseUrl(window.PPE_API_URL || '');
     const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || API_CONFIG.BASE_URL || '');
     const sameOrigin = '';
     const locals = ['http://127.0.0.1:5000', 'http://127.0.0.1:5001', 'http://localhost:5000', 'http://localhost:5001'];
+    const currentHost = String(window.location.hostname || '').toLowerCase();
+    const hostLooksLocal = currentHost === 'localhost'
+        || currentHost === '127.0.0.1'
+        || currentHost === '0.0.0.0'
+        || currentHost.endsWith('.local');
+    const shouldPreferLocalOrder = !!preferLocal || (hostLooksLocal && !explicitApiOverride);
 
-    const ordered = preferLocal
+    const ordered = shouldPreferLocalOrder
         ? [sameOrigin, ...locals, configured]
         : [configured, sameOrigin, ...locals];
 
@@ -566,6 +573,8 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
         backendResolutionInFlight = null;
     }
 }
+
+window.PPEResolveWorkingBackendBaseUrl = resolveWorkingBackendBaseUrl;
 
 function registerPwaSupport() {
     if (pwaBootstrapped) return;

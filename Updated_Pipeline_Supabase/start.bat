@@ -20,6 +20,7 @@ echo.
 
 set "VENV_PYTHON=%CD%\venv\Scripts\python.exe"
 set "VENV_PIP=%CD%\venv\Scripts\pip.exe"
+set "OLLAMA_CMD="
 
 REM Check if .env file exists
 if not exist .env (
@@ -147,17 +148,18 @@ echo Checking Ollama Installation...
 echo ==========================================
 echo.
 
-REM Check if Ollama is installed
-where ollama >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Error: Ollama not found in PATH!
-    echo Please install Ollama from: https://ollama.ai
+REM Resolve Ollama executable from PATH or known install locations.
+call :resolve_ollama_cmd
+if errorlevel 1 (
+    echo Error: Ollama executable not found.
+    echo Please install Ollama from: https://ollama.com/download
     echo.
     pause
     exit /b 1
 )
 
-echo Ollama found. Starting server in background...
+echo Ollama found at: %OLLAMA_CMD%
+echo Starting server in background...
 call :start_ollama_and_wait_ready 30
 if errorlevel 1 (
     echo Error: Ollama server did not become ready within 30 seconds.
@@ -174,7 +176,7 @@ echo ==========================================
 echo.
 
 REM Check if configured model is installed
-ollama list | findstr /I /C:"%OLLAMA_MODEL%" >nul 2>&1
+"%OLLAMA_CMD%" list | findstr /I /C:"%OLLAMA_MODEL%" >nul 2>&1
 if errorlevel 1 (
     echo Model '%OLLAMA_MODEL%' not found. Pulling from Ollama...
     echo This is a one-time download and may take a few minutes.
@@ -209,12 +211,38 @@ REM Start the application
 
 goto :eof
 
+:resolve_ollama_cmd
+set "OLLAMA_CMD="
+
+where ollama >nul 2>&1
+if not errorlevel 1 (
+    set "OLLAMA_CMD=ollama"
+    exit /b 0
+)
+
+if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
+    exit /b 0
+)
+
+if exist "%ProgramFiles%\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%ProgramFiles%\Ollama\ollama.exe"
+    exit /b 0
+)
+
+if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%ProgramFiles(x86)%\Ollama\ollama.exe"
+    exit /b 0
+)
+
+exit /b 1
+
 :pull_ollama_model_with_upgrade
 set "MODEL_TO_PULL=%~1"
 set "PULL_LOG=%TEMP%\luna_ollama_pull_%RANDOM%.log"
 set "PULL_STATUS=1"
 
-ollama pull "%MODEL_TO_PULL%" > "%PULL_LOG%" 2>&1
+"%OLLAMA_CMD%" pull "%MODEL_TO_PULL%" > "%PULL_LOG%" 2>&1
 set "PULL_STATUS=!errorlevel!"
 type "%PULL_LOG%"
 
@@ -240,8 +268,13 @@ if not "!UPGRADE_REASON!"=="" (
     call :upgrade_ollama_runtime
     if "!errorlevel!"=="0" (
         echo Retry pulling '%MODEL_TO_PULL%' after Ollama upgrade...
-        ollama pull "%MODEL_TO_PULL%"
-        set "PULL_STATUS=!errorlevel!"
+        call :resolve_ollama_cmd
+        if errorlevel 1 (
+            set "PULL_STATUS=1"
+        ) else (
+            "%OLLAMA_CMD%" pull "%MODEL_TO_PULL%"
+            set "PULL_STATUS=!errorlevel!"
+        )
     ) else (
         echo Ollama upgrade attempt failed.
     )
@@ -299,10 +332,13 @@ exit /b !UPGRADE_STATUS!
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
 
-start "Ollama Server" /min cmd /c "ollama serve"
+call :resolve_ollama_cmd
+if errorlevel 1 exit /b 1
+
+start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
 
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-    ollama list >nul 2>&1
+    "%OLLAMA_CMD%" list >nul 2>&1
     if !errorlevel! equ 0 (
         exit /b 0
     )

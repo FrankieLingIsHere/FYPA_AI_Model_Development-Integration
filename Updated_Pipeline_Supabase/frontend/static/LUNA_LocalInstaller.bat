@@ -26,6 +26,7 @@ set "LUNA_FORCE_SOURCE_REFRESH=false"
 set "LUNA_AUTO_UPDATE_ON_LAUNCH=true"
 set "LUNA_PROMPT_UPDATE_ON_LAUNCH=true"
 set "LUNA_SELF_UPDATE_LAUNCHER=true"
+set "OLLAMA_CMD="
 
 if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__" set "LUNA_CLOUD_URL="
 if /I "!LUNA_MACHINE_ID!"=="__LUNA_MACHINE_ID__" set "LUNA_MACHINE_ID="
@@ -188,7 +189,7 @@ if "!PYTHON_EXE!"=="" (
     )
 )
 
-where ollama >nul 2>&1
+call :resolve_ollama_cmd
 if errorlevel 1 (
     echo.
     echo Ollama is missing. Launching Ollama installer...
@@ -200,10 +201,16 @@ if errorlevel 1 (
         start /wait OllamaSetup.exe /S
         del OllamaSetup.exe
     )
-    echo Ollama installed successfully.
+    call :resolve_ollama_cmd
+    if errorlevel 1 (
+        echo Warning: Ollama command is still not reachable in current shell.
+        echo start.bat will retry resolution from known install paths.
+    ) else (
+        echo Ollama installed successfully at: !OLLAMA_CMD!
+    )
 ) else (
     echo.
-    echo Ollama is already installed.
+    echo Ollama is already installed at: !OLLAMA_CMD!
 )
 
 echo Ensuring Ollama service is reachable...
@@ -345,20 +352,46 @@ echo You can safely close this installer window now.
 pause
 goto :eof
 
+:resolve_ollama_cmd
+set "OLLAMA_CMD="
+
+where ollama >nul 2>&1
+if not errorlevel 1 (
+    set "OLLAMA_CMD=ollama"
+    exit /b 0
+)
+
+if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
+    exit /b 0
+)
+
+if exist "%ProgramFiles%\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%ProgramFiles%\Ollama\ollama.exe"
+    exit /b 0
+)
+
+if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\Ollama\ollama.exe" (
+    set "OLLAMA_CMD=%ProgramFiles(x86)%\Ollama\ollama.exe"
+    exit /b 0
+)
+
+exit /b 1
+
 :ensure_ollama_running
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
 
-where ollama >nul 2>&1
+call :resolve_ollama_cmd
 if errorlevel 1 exit /b 1
 
-ollama list >nul 2>&1
+"%OLLAMA_CMD%" list >nul 2>&1
 if !errorlevel! equ 0 exit /b 0
 
-start "" /b ollama serve >nul 2>&1
+start "" /b cmd /c "\"%OLLAMA_CMD%\" serve" >nul 2>&1
 
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-    ollama list >nul 2>&1
+    "%OLLAMA_CMD%" list >nul 2>&1
     if !errorlevel! equ 0 exit /b 0
     timeout /t 1 /nobreak >nul
 )

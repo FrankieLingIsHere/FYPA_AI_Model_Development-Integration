@@ -226,12 +226,6 @@ goto :eof
 :resolve_ollama_cmd
 set "OLLAMA_CMD="
 
-where ollama >nul 2>&1
-if not errorlevel 1 (
-    set "OLLAMA_CMD=ollama"
-    exit /b 0
-)
-
 if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
     set "OLLAMA_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama.exe"
     exit /b 0
@@ -246,6 +240,18 @@ if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\Ollama\ollama.exe" (
     set "OLLAMA_CMD=%ProgramFiles(x86)%\Ollama\ollama.exe"
     exit /b 0
 )
+
+for /f "delims=" %%P in ('where ollama 2^>nul') do (
+    set "OLLAMA_CANDIDATE=%%~fP"
+    echo !OLLAMA_CANDIDATE! | find /I "\WindowsApps\" >nul 2>&1
+    if errorlevel 1 (
+        set "OLLAMA_CMD=!OLLAMA_CANDIDATE!"
+        exit /b 0
+    )
+    if "!OLLAMA_CMD!"=="" set "OLLAMA_CMD=!OLLAMA_CANDIDATE!"
+)
+
+if not "!OLLAMA_CMD!"=="" exit /b 0
 
 exit /b 1
 
@@ -352,20 +358,48 @@ if not "!OLLAMA_READY_STATUS!"=="0" (
 :upgrade_ollama_runtime_done
 exit /b !UPGRADE_STATUS!
 
+:spawn_ollama_server
+call :resolve_ollama_cmd
+if errorlevel 1 exit /b 1
+
+start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+start "" /min "%OLLAMA_CMD%" serve >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+exit /b 1
+
+:is_ollama_ready
+call :resolve_ollama_cmd
+if errorlevel 1 exit /b 1
+
+"%OLLAMA_CMD%" list >nul 2>&1
+if !errorlevel! equ 0 exit /b 0
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ok=$false; try { $resp=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2; if($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500){ $ok=$true } } catch { }; if($ok){ exit 0 } else { exit 1 }" >nul 2>&1
+if !errorlevel! equ 0 exit /b 0
+
+exit /b 1
+
 :safe_start_ollama_and_wait_ready
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
+set /a "OLLAMA_RETRY_AT=(OLLAMA_WAIT_SECONDS+1)/2"
 
 findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
 if errorlevel 1 (
     echo Warning: startup helper label missing; using inline Ollama readiness fallback.
-    call :resolve_ollama_cmd
+    call :spawn_ollama_server
     if errorlevel 1 exit /b 1
-    start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
     for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-        "%OLLAMA_CMD%" list >nul 2>&1
+        call :is_ollama_ready
         if !errorlevel! equ 0 (
             exit /b 0
+        )
+        if %%I equ !OLLAMA_RETRY_AT! (
+            call :spawn_ollama_server >nul 2>&1
         )
         timeout /t 1 /nobreak >nul
     )
@@ -375,13 +409,15 @@ if errorlevel 1 (
 call :start_ollama_and_wait_ready %OLLAMA_WAIT_SECONDS%
 if !errorlevel! equ 0 exit /b 0
 
-call :resolve_ollama_cmd
+call :spawn_ollama_server
 if errorlevel 1 exit /b 1
-start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-    "%OLLAMA_CMD%" list >nul 2>&1
+    call :is_ollama_ready
     if !errorlevel! equ 0 (
         exit /b 0
+    )
+    if %%I equ !OLLAMA_RETRY_AT! (
+        call :spawn_ollama_server >nul 2>&1
     )
     timeout /t 1 /nobreak >nul
 )
@@ -390,16 +426,18 @@ exit /b 1
 :start_ollama_and_wait_ready
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
+set /a "OLLAMA_RETRY_AT=(OLLAMA_WAIT_SECONDS+1)/2"
 
-call :resolve_ollama_cmd
+call :spawn_ollama_server
 if errorlevel 1 exit /b 1
 
-start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
-
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-    "%OLLAMA_CMD%" list >nul 2>&1
+    call :is_ollama_ready
     if !errorlevel! equ 0 (
         exit /b 0
+    )
+    if %%I equ !OLLAMA_RETRY_AT! (
+        call :spawn_ollama_server >nul 2>&1
     )
     timeout /t 1 /nobreak >nul
 )

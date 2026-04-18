@@ -417,6 +417,8 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('call :safe_start_ollama_and_wait_ready 30', start_bat)
         self.assertRegex(start_bat, r'(?im)^:safe_start_ollama_and_wait_ready\s*$')
         self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
+        self.assertRegex(start_bat, r'(?im)^:spawn_ollama_server\s*$')
+        self.assertRegex(start_bat, r'(?im)^:is_ollama_ready\s*$')
 
         if 'call :start_ollama_and_wait_ready' in start_bat:
             self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')

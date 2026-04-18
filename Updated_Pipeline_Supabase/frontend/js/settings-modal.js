@@ -459,10 +459,15 @@ const GlobalSettingsModal = {
             ? Math.max(0, Math.floor(rawAgeSeconds))
             : (Number.isFinite(fallbackAgeSeconds) ? Math.max(0, Math.floor(fallbackAgeSeconds)) : null);
 
+        const provisionStatus = this.normalizeLocalProvisionStatus(
+            source.provision_status ?? source.provisionStatus ?? fallback.provisionStatus ?? 'idle'
+        );
+
         return {
             available,
             machineId,
             status,
+            provisionStatus,
             isRecent,
             freshWithinSeconds,
             lastSeenAt,
@@ -598,14 +603,23 @@ const GlobalSettingsModal = {
 
     syncLocalProvisionStateFromPayload(payload) {
         const source = payload && typeof payload === 'object' ? payload : {};
+        const normalizedHeartbeat = this.normalizeCloudHeartbeatPayload(
+            source.cloudHeartbeat || source.cloud_local_heartbeat,
+            this.localProvisionState.cloudHeartbeat
+        );
+        let normalizedStatus = this.normalizeLocalProvisionStatus(source.status || this.localProvisionState.status);
+        const heartbeatProvisionStatus = this.normalizeLocalProvisionStatus(normalizedHeartbeat.provisionStatus || 'idle');
+        if (this.isLikelyRemoteBackend()) {
+            if ((normalizedStatus === 'idle' || normalizedStatus === 'credentials_present') && heartbeatProvisionStatus !== 'idle') {
+                normalizedStatus = heartbeatProvisionStatus;
+            }
+        }
+
         this.localProvisionState = {
-            status: this.normalizeLocalProvisionStatus(source.status || this.localProvisionState.status),
-            machineId: String(source.machineId || source.machine_id || this.localProvisionState.machineId || '').trim(),
+            status: normalizedStatus,
+            machineId: String(source.machineId || source.machine_id || normalizedHeartbeat.machineId || this.localProvisionState.machineId || '').trim(),
             adminPortalUrl: String(source.adminPortalUrl || source.admin_portal_url || this.localProvisionState.adminPortalUrl || '').trim(),
-            cloudHeartbeat: this.normalizeCloudHeartbeatPayload(
-                source.cloudHeartbeat || source.cloud_local_heartbeat,
-                this.localProvisionState.cloudHeartbeat
-            )
+            cloudHeartbeat: normalizedHeartbeat
         };
 
         this.updateLocalModeCheckupStatus();
@@ -915,13 +929,16 @@ const GlobalSettingsModal = {
             const state = await window.PPEProvisioningStatus.refresh({
                 source: 'global-settings-open',
                 force: true,
-                notify: false
+                notify: false,
+                machineId: this.localProvisionState.machineId || ''
             });
             this.syncLocalProvisionStateFromPayload(state);
             return;
         }
 
-        const state = await API.getLocalModeProvisioningStatus();
+        const state = await API.getLocalModeProvisioningStatus({
+            machineId: this.localProvisionState.machineId || ''
+        });
         this.syncLocalProvisionStateFromPayload(state);
     },
 
@@ -957,7 +974,7 @@ const GlobalSettingsModal = {
                 if (isLikelyRemoteBackend) {
                     const remoteHint = heartbeatRecent
                         ? `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`
-                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start local launcher and rerun checkup.`;
+                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start LUNA_LOCALINSTALLER, wait for first sync/provisioning request, then rerun checkup.`;
                     this.setProviderStatus(remoteHint, 'warning');
                     this.showNotification(remoteHint, 'warning');
                 } else {
@@ -985,7 +1002,19 @@ const GlobalSettingsModal = {
             }
 
             const provisionResult = isLikelyRemoteBackend
-                ? { success: false, status: 'skipped_remote_backend', skipped: true, cloud_local_heartbeat: cloudHeartbeat }
+                ? {
+                    success: !!this.localProvisionState.machineId,
+                    status: this.normalizeLocalProvisionStatus(
+                        cloudHeartbeat.provision_status
+                        || (this.localProvisionState.cloudHeartbeat && this.localProvisionState.cloudHeartbeat.provisionStatus)
+                        || this.localProvisionState.status
+                        || 'idle'
+                    ),
+                    skipped: true,
+                    machine_id: heartbeatMachineId || this.localProvisionState.machineId,
+                    admin_portal_url: this.localProvisionState.adminPortalUrl,
+                    cloud_local_heartbeat: cloudHeartbeat
+                }
                 : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
@@ -1002,7 +1031,9 @@ const GlobalSettingsModal = {
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provision request submitted. Waiting for admin approval.', 'warning');
                 this.showNotification('Provision request submitted. Waiting for admin approval.', 'warning');
-                this.ensureLocalProvisionPolling();
+                if (!isLikelyRemoteBackend) {
+                    this.ensureLocalProvisionPolling();
+                }
             } else if (status === 'rejected') {
                 this.setProviderStatus('Provision request was rejected by administrator.', 'error');
                 this.showNotification('Provision request was rejected by administrator.', 'error');
@@ -1033,6 +1064,7 @@ const GlobalSettingsModal = {
     },
 
     ensureLocalProvisionPolling() {
+        if (this.isLikelyRemoteBackend()) return;
         if (this.localProvisionPollInterval) return;
 
         this.localProvisionPollInterval = setInterval(async () => {

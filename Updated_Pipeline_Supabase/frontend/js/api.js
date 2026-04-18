@@ -707,9 +707,20 @@ const API = {
         }
     },
 
-    async getLocalModeProvisioningStatus() {
+    async getLocalModeProvisioningStatus(options = {}) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status`, {
+            const machineId = String(
+                (options && (options.machineId || options.machine_id)) || ''
+            ).trim();
+            const query = new URLSearchParams();
+            if (machineId) {
+                query.set('machine_id', machineId);
+            }
+
+            const querySuffix = query.toString();
+            const endpoint = `${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status${querySuffix ? `?${querySuffix}` : ''}`;
+
+            const response = await fetch(endpoint, {
                 cache: 'no-store'
             });
             const data = await response.json().catch(() => ({}));

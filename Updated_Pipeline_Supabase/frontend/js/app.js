@@ -11,6 +11,7 @@ const LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
 const LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
 const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v1';
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
+const LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 let localModePolicyState = {
     checkupCompleted: false,
     autoSetupAllowed: false
@@ -49,13 +50,51 @@ function purgeLegacyLocalModeStatusCache() {
     try {
         localStorage.removeItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY);
         localStorage.removeItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY);
-        localStorage.removeItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
     } catch (error) {
         console.warn('Unable to clear legacy local-mode cache keys:', error);
     }
 }
 
 purgeLegacyLocalModeStatusCache();
+
+function isLikelyRemoteBackend() {
+    try {
+        if (!API_CONFIG || !API_CONFIG.BASE_URL) return false;
+        const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
+        const host = String(resolved.hostname || '').toLowerCase();
+        const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+        return !isLocalHost;
+    } catch (error) {
+        return false;
+    }
+}
+
+function loadPersistedProvisioningState() {
+    try {
+        const raw = localStorage.getItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+
+        const measuredAt = Number(parsed.measuredAt || 0);
+        if (!Number.isFinite(measuredAt)) return null;
+        if ((Date.now() - measuredAt) > LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS) return null;
+
+        return parsed;
+    } catch (error) {
+        return null;
+    }
+}
+
+function persistProvisioningState(state) {
+    try {
+        if (!state || typeof state !== 'object') return;
+        localStorage.setItem(LOCAL_MODE_PROVISIONING_STATUS_KEY, JSON.stringify(state));
+    } catch (error) {
+        // Ignore localStorage write failures (private mode/quota restrictions).
+    }
+}
 
 function getLocalModePolicy() {
     return {
@@ -143,6 +182,11 @@ function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
         source.last_seen_at ?? source.lastSeenAt ?? fallbackState.lastSeenAt ?? ''
     ).trim();
 
+    const provisionStatus = normalizeProvisioningStatus(
+        source.provision_status ?? source.provisionStatus ?? fallbackState.provisionStatus ?? 'idle',
+        false
+    );
+
     const parsedAgeSeconds = Number(source.age_seconds ?? source.ageSeconds);
     const fallbackAgeSeconds = Number(fallbackState.ageSeconds);
     const ageSeconds = Number.isFinite(parsedAgeSeconds)
@@ -157,6 +201,7 @@ function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
         available,
         machineId,
         status,
+        provisionStatus,
         isRecent,
         freshWithinSeconds,
         lastSeenAt,
@@ -177,6 +222,7 @@ function cloudHeartbeatSignature(heartbeat = {}) {
         String(!!hb.available),
         String(hb.machineId || ''),
         String(hb.status || ''),
+        String(hb.provisionStatus || ''),
         String(!!hb.isRecent),
         String(hb.freshWithinSeconds || 0),
         String(hb.lastSeenAt || ''),
@@ -196,12 +242,12 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         fallback.credentialsPresent
     );
 
-    const status = normalizeProvisioningStatus(
+    let status = normalizeProvisioningStatus(
         input.status ?? input.device_status ?? fallback.status,
         credentialsPresent
     );
 
-    const machineId = String(
+    let machineId = String(
         input.machine_id ?? input.machineId ?? fallback.machineId ?? ''
     ).trim();
 
@@ -213,6 +259,21 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         input.cloud_local_heartbeat ?? input.cloudHeartbeat ?? fallback.cloudHeartbeat,
         fallback.cloudHeartbeat || {}
     );
+
+    const heartbeatProvisionStatus = normalizeProvisioningStatus(
+        cloudHeartbeat.provisionStatus,
+        credentialsPresent
+    );
+
+    if (isLikelyRemoteBackend()) {
+        if ((status === 'idle' || status === 'credentials_present') && heartbeatProvisionStatus !== 'idle') {
+            status = heartbeatProvisionStatus;
+        }
+
+        if (!machineId && cloudHeartbeat.machineId) {
+            machineId = String(cloudHeartbeat.machineId || '').trim();
+        }
+    }
 
     const error = String(input.error ?? fallback.error ?? '').trim();
     const source = String(input.source ?? fallback.source ?? 'poll').trim() || 'poll';
@@ -267,6 +328,7 @@ function publishProvisioningState(nextState, options = {}) {
     const changed = hasProvisioningStateChanged(previousState, normalized);
 
     provisioningStatusState = normalized;
+    persistProvisioningState(normalized);
 
     if (changed || options.forceDispatch) {
         window.dispatchEvent(new CustomEvent('ppe-provisioning:status', {
@@ -291,9 +353,15 @@ async function refreshProvisioningStatus(options = {}) {
 
     try {
         const source = String(options.source || 'poll').trim() || 'poll';
+        const machineIdHint = String(
+            options.machineId
+            || provisioningStatusState.machineId
+            || (provisioningStatusState.cloudHeartbeat && provisioningStatusState.cloudHeartbeat.machineId)
+            || ''
+        ).trim();
         const result = options.useAutoEndpoint
             ? await API.autoProvisionLocalModeCredentials(options.payload || {})
-            : await API.getLocalModeProvisioningStatus();
+            : await API.getLocalModeProvisioningStatus({ machineId: machineIdHint });
 
         if (!result || result.success === false) {
             return { ...provisioningStatusState };
@@ -315,6 +383,11 @@ async function refreshProvisioningStatus(options = {}) {
 function initializeProvisioningStatusTracker() {
     if (provisioningTrackerBootstrapped) return;
     provisioningTrackerBootstrapped = true;
+
+    const cachedState = loadPersistedProvisioningState();
+    if (cachedState) {
+        provisioningStatusState = coerceProvisioningStatusState(cachedState, provisioningStatusState);
+    }
 
     window.PPEProvisioningStatus = {
         get: () => ({ ...provisioningStatusState }),

@@ -4342,6 +4342,8 @@ def _ensure_startup_local_auto_provision_worker() -> None:
 
     if not STARTUP_AUTO_PROVISION_LOCAL_MODE:
         return
+    if _is_hosted_runtime_environment():
+        return
     if not ALLOW_OFFLINE_LOCAL_MODE:
         return
     if _local_mode_has_supabase_credentials():
@@ -4372,6 +4374,17 @@ def _normalize_cloud_provision_status(raw_status: Any) -> str:
     if normalized in ('not_found', 'missing', 'unknown'):
         return 'idle'
     return normalized or 'idle'
+
+
+def _normalize_heartbeat_provision_status(raw_status: Any) -> str:
+    normalized = str(raw_status or '').strip().lower()
+    if normalized in ('pending', 'pending_approval'):
+        return 'pending_approval'
+    if normalized in ('approved', 'provisioned', 'rejected', 'credentials_present'):
+        return normalized
+    if normalized in ('not_found', 'missing', 'unknown'):
+        return 'idle'
+    return normalized if normalized in ('idle',) else 'idle'
 
 
 def _local_mode_fetch_authoritative_status(
@@ -4480,11 +4493,18 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
         return {'ready': False, 'reason': 'provision_secret_missing'}
 
     diagnostics = _get_local_mode_diagnostics()
+    cached_status = _normalize_heartbeat_provision_status(state.get('status'))
+    credentials_present = _local_mode_has_supabase_credentials()
+    if cached_status == 'idle' and credentials_present:
+        cached_status = 'credentials_present'
+
     return {
         'ready': True,
         'cloud_url': cloud_url,
         'machine_id': machine_id,
         'provision_secret': provision_secret,
+        'provision_status': cached_status,
+        'credentials_present': credentials_present,
         'diagnostics': diagnostics if isinstance(diagnostics, dict) else {},
     }
 
@@ -4502,6 +4522,21 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
     cloud_url = str(submission.get('cloud_url') or '').strip()
     machine_id = str(submission.get('machine_id') or '').strip()
     provision_secret = str(submission.get('provision_secret') or '').strip()
+    provision_status = _normalize_heartbeat_provision_status(submission.get('provision_status'))
+    credentials_present = bool(submission.get('credentials_present'))
+    if provision_status == 'idle' and credentials_present:
+        provision_status = 'credentials_present'
+
+    cloud_state = _local_mode_fetch_authoritative_status(
+        cloud_url=cloud_url,
+        machine_id=machine_id,
+        provision_secret=provision_secret,
+        timeout_seconds=max(3, min(int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS), 8)),
+    )
+    authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
+    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+        provision_status = authoritative_status
+
     diagnostics = submission.get('diagnostics') if isinstance(submission.get('diagnostics'), dict) else {}
 
     heartbeat_payload = {
@@ -4509,6 +4544,7 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         'provision_secret': provision_secret,
         'sent_at': datetime.now(timezone.utc).isoformat(),
         'source': 'local-backend-worker',
+        'provision_status': provision_status,
         'diagnostics': {
             'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
             'ollama_installed': bool(diagnostics.get('ollama_installed')),
@@ -4653,6 +4689,7 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
             'available': False,
             'machine_id': normalized_hint,
             'status': 'missing',
+            'provision_status': 'idle',
             'is_recent': False,
             'fresh_within_seconds': LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
             'last_seen_at': '',
@@ -4682,10 +4719,13 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
     else:
         status = 'stale'
 
+    provision_status = _normalize_heartbeat_provision_status(selected_record.get('provision_status'))
+
     return {
         'available': True,
         'machine_id': selected_machine_id,
         'status': status,
+        'provision_status': provision_status,
         'is_recent': is_recent,
         'fresh_within_seconds': LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
         'last_seen_at': last_seen_at,
@@ -4702,6 +4742,7 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
 def api_local_mode_provisioning_status():
     state = _local_mode_load_provision_state()
+    requested_machine_id = _local_mode_normalize_machine_id(request.args.get('machine_id') or '')
     cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
     state_cloud_url = _local_mode_normalize_cloud_url(str(state.get('cloud_url') or '').strip())
     if (
@@ -4712,7 +4753,7 @@ def api_local_mode_provisioning_status():
         cloud_url = state_cloud_url
 
     state_machine_id = _local_mode_normalize_machine_id(state.get('machine_id'))
-    machine_id = state_machine_id or _local_mode_get_existing_machine_id()
+    machine_id = requested_machine_id or state_machine_id or _local_mode_get_existing_machine_id()
 
     if machine_id and machine_id != state_machine_id:
         state['machine_id'] = machine_id
@@ -4733,6 +4774,12 @@ def api_local_mode_provisioning_status():
             _local_mode_write_machine_id(machine_id)
 
     credentials_present = _local_mode_has_supabase_credentials()
+    heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
+    heartbeat_machine_id = _local_mode_normalize_machine_id(heartbeat_summary.get('machine_id'))
+
+    if not machine_id and heartbeat_machine_id:
+        machine_id = heartbeat_machine_id
+
     cloud_state = _local_mode_fetch_authoritative_status(
         cloud_url=cloud_url,
         machine_id=machine_id,
@@ -4748,6 +4795,15 @@ def api_local_mode_provisioning_status():
     else:
         normalized_status = 'idle'
 
+    heartbeat_provision_status = _normalize_heartbeat_provision_status(
+        heartbeat_summary.get('provision_status')
+    )
+    if heartbeat_provision_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+        if normalized_status in ('idle', 'credentials_present'):
+            normalized_status = heartbeat_provision_status
+    elif heartbeat_provision_status == 'credentials_present' and normalized_status == 'idle':
+        normalized_status = 'credentials_present'
+
     if cloud_state.get('checked') and normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
         cached_status = 'pending' if normalized_status == 'pending_approval' else normalized_status
         current_cached_status = str(state.get('status') or '').strip().lower()
@@ -4759,9 +4815,15 @@ def api_local_mode_provisioning_status():
             except Exception as persist_status_err:
                 logger.debug(f"Unable to sync local cached status from cloud authority: {persist_status_err}")
 
-    status_source = 'cloud' if normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected') else (
-        'credentials' if normalized_status == 'credentials_present' else 'idle'
-    )
+    if (
+        normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected')
+        and bool(cloud_state.get('checked'))
+    ):
+        status_source = 'cloud'
+    elif normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected', 'credentials_present'):
+        status_source = 'heartbeat' if heartbeat_provision_status == normalized_status else 'credentials'
+    else:
+        status_source = 'idle'
 
     response = jsonify({
         'success': True,
@@ -4770,7 +4832,7 @@ def api_local_mode_provisioning_status():
         'cloud_url': cloud_url,
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
         'credentials_present': credentials_present,
-        'cloud_local_heartbeat': _get_cloud_local_mode_heartbeat_snapshot(machine_id),
+        'cloud_local_heartbeat': heartbeat_summary,
         'cloud_status_checked': bool(cloud_state.get('checked')),
         'cloud_status_code': cloud_state.get('status_code'),
         'status_source': status_source,
@@ -5142,10 +5204,17 @@ def api_local_mode_heartbeat():
         return jsonify({'success': False, 'error': 'Invalid provision_secret'}), 401
 
     diagnostics = payload.get('diagnostics') if isinstance(payload.get('diagnostics'), dict) else {}
+    heartbeat_provision_status = _normalize_heartbeat_provision_status(
+        payload.get('provision_status')
+        or diagnostics.get('provision_status')
+        or device.get('status')
+    )
+
     merged_record = {
         'machine_id': resolved_machine_id,
         'last_seen_at': datetime.now(timezone.utc).isoformat(),
         'source': str(payload.get('source') or '').strip() or 'local-backend-worker',
+        'provision_status': heartbeat_provision_status,
         'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
         'ollama_installed': bool(diagnostics.get('ollama_installed')),
         'ollama_running': bool(diagnostics.get('ollama_running')),
@@ -8535,6 +8604,7 @@ def _normalize_local_mode_heartbeat_record(machine_id: str, raw_record: Any) -> 
         'machine_id': normalized_machine_id,
         'last_seen_at': last_seen_at,
         'source': str(record.get('source') or '').strip() or 'unknown',
+        'provision_status': _normalize_heartbeat_provision_status(record.get('provision_status')),
         'local_mode_possible': bool(record.get('local_mode_possible')),
         'ollama_installed': bool(record.get('ollama_installed')),
         'ollama_running': bool(record.get('ollama_running')),

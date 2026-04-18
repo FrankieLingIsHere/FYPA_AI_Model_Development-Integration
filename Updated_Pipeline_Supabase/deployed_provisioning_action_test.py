@@ -478,9 +478,12 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(persisted.get('status'), 'pending')
         self.assertEqual(str(persisted.get('provision_secret') or ''), 'local-secret-001')
 
-        self.assertEqual(mock_post.call_count, 1)
+        # Provisioning request + heartbeat snapshot upload.
+        self.assertEqual(mock_post.call_count, 2)
         request_url = str(mock_post.call_args_list[0].args[0])
         self.assertIn('/api/provision/request', request_url)
+        heartbeat_url = str(mock_post.call_args_list[1].args[0])
+        self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
 
     @patch('luna_app._local_mode_apply_supabase_credentials')
     @patch('luna_app.requests.get')
@@ -531,11 +534,14 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(payload.get('reinitialized'))
         self.assertEqual(payload.get('admin_portal_url'), 'https://cloud.example.test/admin/devices')
 
-        self.assertEqual(mock_post.call_count, 2)
+        # Provision request + bootstrap exchange + heartbeat snapshot upload.
+        self.assertEqual(mock_post.call_count, 3)
         first_url = str(mock_post.call_args_list[0].args[0])
         second_url = str(mock_post.call_args_list[1].args[0])
+        third_url = str(mock_post.call_args_list[2].args[0])
         self.assertIn('/api/provision/request', first_url)
         self.assertIn('/api/provision/bootstrap-exchange', second_url)
+        self.assertIn('/api/local-mode/heartbeat', third_url)
 
         second_payload = mock_post.call_args_list[1].kwargs.get('json') or {}
         self.assertEqual(second_payload.get('bootstrap_token'), 'bootstrap-xyz')

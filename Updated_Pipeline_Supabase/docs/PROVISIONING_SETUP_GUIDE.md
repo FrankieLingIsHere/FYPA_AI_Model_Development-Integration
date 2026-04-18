@@ -62,6 +62,13 @@ The backend now enforces this sequence:
   - `provision_secret`
   - `bootstrap_token`
 9. Local backend writes received Supabase credentials into local `.env` and applies them to runtime.
+10. Local backend publishes periodic readiness heartbeat to cloud using `POST /api/local-mode/heartbeat` with:
+  - `machine_id`
+  - `provision_secret`
+  - local diagnostics (`local_mode_possible`, Ollama/model readiness)
+
+Fresh heartbeat status is exposed to deployed UI via `GET /api/reports/recovery/options` in `cloud_local_heartbeat`.
+This allows deployed-app Local Mode Checkup to validate edge readiness without directly probing browser localhost.
 
 Legacy/manual equivalent sequence remains available:
 
@@ -107,6 +114,8 @@ The provisioning action tests should cover:
 - Valid bootstrap exchange succeeds once.
 - Replay bootstrap exchange rejected.
 - Installer endpoint requires valid token and rejects replay.
+- Heartbeat endpoint rejects missing/invalid `provision_secret`.
+- Recovery options include `cloud_local_heartbeat` with freshness/ready status for deployed checkup.
 
 If these checks pass, the secure provisioning flow is operating correctly.
 

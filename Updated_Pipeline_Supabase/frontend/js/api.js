@@ -600,9 +600,20 @@ const API = {
         }
     },
 
-    async getReportRecoveryOptions() {
+    async getReportRecoveryOptions(options = {}) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/recovery/options`, {
+            const machineId = String(
+                (options && (options.machineId || options.machine_id)) || ''
+            ).trim();
+            const query = new URLSearchParams();
+            if (machineId) {
+                query.set('machine_id', machineId);
+            }
+
+            const querySuffix = query.toString();
+            const endpoint = `${API_CONFIG.BASE_URL}/api/reports/recovery/options${querySuffix ? `?${querySuffix}` : ''}`;
+
+            const response = await fetch(endpoint, {
                 cache: 'no-store'
             });
             if (!response.ok) throw new Error('Failed to fetch recovery options');

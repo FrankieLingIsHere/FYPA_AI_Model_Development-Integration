@@ -95,6 +95,8 @@ startup_state = {
 }
 startup_auto_provision_thread_lock = Lock()
 startup_auto_provision_thread = None
+local_mode_heartbeat_thread_lock = Lock()
+local_mode_heartbeat_thread = None
 
 # In-memory cache for rendered report HTML source payloads to reduce repeated
 # storage fetch latency when the same report is opened multiple times.
@@ -274,6 +276,47 @@ try:
 except (TypeError, ValueError):
     STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = 120
 STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = max(0, min(STARTUP_AUTO_PROVISION_MAX_ATTEMPTS, 100000))
+LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED = os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED', 'true').lower() == 'true'
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS', '25')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = 25
+LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = max(
+    5,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS, 300),
+)
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS', '8')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = 8
+LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = max(
+    3,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS, 30),
+)
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS', '180')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = 180
+LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = max(
+    30,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS, 3600),
+)
+try:
+    LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = int(
+        os.getenv('LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS', '172800')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = 172800
+LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = max(
+    LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
+    min(LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS, 7 * 24 * 3600),
+)
 ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 LOCAL_OLLAMA_UNIFIED_MODEL = str(
@@ -903,6 +946,18 @@ def _startup_env_diagnostics() -> Dict[str, Any]:
     }
 
 
+def _is_hosted_runtime_environment() -> bool:
+    hosted_markers = (
+        'RAILWAY_SERVICE_ID',
+        'RAILWAY_PROJECT_ID',
+        'RAILWAY_ENVIRONMENT',
+        'VERCEL',
+        'RENDER',
+        'RENDER_SERVICE_ID',
+    )
+    return any(str(os.getenv(marker) or '').strip() for marker in hosted_markers)
+
+
 def _set_startup_step(step_key: str, step_status: str, detail: str = None):
     """Update a startup check step status in a thread-safe manner."""
     with startup_state_lock:
@@ -1154,6 +1209,7 @@ def _run_startup_sequence():
 
         _set_startup_progress(99, 'Finalizing startup')
         _ensure_startup_local_auto_provision_worker()
+        _ensure_local_mode_cloud_heartbeat_worker()
         _set_startup_ready()
         logger.info('✅ Startup sequence completed. System is ready.')
 
@@ -4388,6 +4444,261 @@ def _local_mode_fetch_authoritative_status(
     return result
 
 
+def _is_localhost_like_hostname(hostname: str) -> bool:
+    host = str(hostname or '').strip().lower()
+    if not host:
+        return False
+    return host in {'localhost', '127.0.0.1', '0.0.0.0'} or host.endswith('.local')
+
+
+def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
+    state = _local_mode_load_provision_state()
+    cloud_url = _local_mode_normalize_cloud_url(
+        os.getenv('CLOUD_URL')
+        or state.get('cloud_url')
+        or ''
+    )
+
+    if not cloud_url:
+        return {'ready': False, 'reason': 'cloud_url_missing'}
+    if _local_mode_cloud_url_is_placeholder(cloud_url):
+        return {'ready': False, 'reason': 'cloud_url_placeholder'}
+
+    try:
+        cloud_host = (urlparse(cloud_url).hostname or '').strip().lower()
+    except Exception:
+        cloud_host = ''
+    if _is_localhost_like_hostname(cloud_host):
+        return {'ready': False, 'reason': 'cloud_url_localhost'}
+
+    machine_id = _local_mode_normalize_machine_id(state.get('machine_id')) or _local_mode_get_existing_machine_id()
+    if not machine_id:
+        return {'ready': False, 'reason': 'machine_id_missing'}
+
+    provision_secret = str(state.get('provision_secret') or '').strip()
+    if not provision_secret:
+        return {'ready': False, 'reason': 'provision_secret_missing'}
+
+    diagnostics = _get_local_mode_diagnostics()
+    return {
+        'ready': True,
+        'cloud_url': cloud_url,
+        'machine_id': machine_id,
+        'provision_secret': provision_secret,
+        'diagnostics': diagnostics if isinstance(diagnostics, dict) else {},
+    }
+
+
+def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
+    if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
+        return {'sent': False, 'reason': 'heartbeat_disabled'}
+    if _is_hosted_runtime_environment():
+        return {'sent': False, 'reason': 'hosted_runtime'}
+
+    submission = _local_mode_collect_cloud_heartbeat_submission()
+    if not submission.get('ready'):
+        return {'sent': False, 'reason': str(submission.get('reason') or 'submission_not_ready')}
+
+    cloud_url = str(submission.get('cloud_url') or '').strip()
+    machine_id = str(submission.get('machine_id') or '').strip()
+    provision_secret = str(submission.get('provision_secret') or '').strip()
+    diagnostics = submission.get('diagnostics') if isinstance(submission.get('diagnostics'), dict) else {}
+
+    heartbeat_payload = {
+        'machine_id': machine_id,
+        'provision_secret': provision_secret,
+        'sent_at': datetime.now(timezone.utc).isoformat(),
+        'source': 'local-backend-worker',
+        'diagnostics': {
+            'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
+            'ollama_installed': bool(diagnostics.get('ollama_installed')),
+            'ollama_running': bool(diagnostics.get('ollama_running')),
+            'model_available': bool(diagnostics.get('model_available')),
+            'ollama_model': str(diagnostics.get('ollama_model') or '').strip(),
+            'error': str(diagnostics.get('error') or '').strip(),
+        },
+    }
+
+    try:
+        response = requests.post(
+            f"{cloud_url}/api/local-mode/heartbeat",
+            json=heartbeat_payload,
+            timeout=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+        )
+        body = response.json() if response.content else {}
+    except Exception as heartbeat_err:
+        return {
+            'sent': False,
+            'reason': 'request_failed',
+            'error': str(heartbeat_err),
+        }
+
+    if not response.ok:
+        return {
+            'sent': False,
+            'reason': 'request_rejected',
+            'status_code': int(response.status_code),
+            'error': str((body or {}).get('error') or f'HTTP {response.status_code}').strip(),
+        }
+
+    return {
+        'sent': True,
+        'status_code': int(response.status_code),
+        'machine_id': machine_id,
+    }
+
+
+def _local_mode_cloud_heartbeat_worker() -> None:
+    logger.info(
+        'Local-mode cloud heartbeat worker started '
+        f'(interval={LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS}s)'
+    )
+    failure_count = 0
+
+    while True:
+        result = _send_local_mode_cloud_heartbeat_once()
+        sent = bool(result.get('sent'))
+
+        if sent:
+            if failure_count > 0:
+                logger.info('Local-mode cloud heartbeat recovered after temporary failures.')
+            failure_count = 0
+        else:
+            failure_count += 1
+            reason = str(result.get('reason') or '').strip().lower()
+            error_text = str(result.get('error') or '').strip()
+
+            # Keep informational startup-state reasons quiet to avoid log noise.
+            noisy_reason = reason not in {
+                'heartbeat_disabled',
+                'hosted_runtime',
+                'cloud_url_missing',
+                'cloud_url_placeholder',
+                'cloud_url_localhost',
+                'machine_id_missing',
+                'provision_secret_missing',
+            }
+
+            if noisy_reason and (failure_count == 1 or failure_count % 8 == 0):
+                logger.warning(
+                    'Local-mode cloud heartbeat failed '
+                    f"(reason={reason or 'unknown'}, error={error_text or 'none'})"
+                )
+
+        time.sleep(LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS)
+
+
+def _ensure_local_mode_cloud_heartbeat_worker() -> None:
+    global local_mode_heartbeat_thread
+
+    if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
+        return
+    if _is_hosted_runtime_environment():
+        return
+
+    with local_mode_heartbeat_thread_lock:
+        if local_mode_heartbeat_thread and local_mode_heartbeat_thread.is_alive():
+            return
+
+        local_mode_heartbeat_thread = Thread(
+            target=_local_mode_cloud_heartbeat_worker,
+            daemon=True,
+            name='local-mode-cloud-heartbeat',
+        )
+        local_mode_heartbeat_thread.start()
+
+
+def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[str, Any]:
+    records = _load_local_mode_heartbeats()
+    normalized_hint = _local_mode_normalize_machine_id(machine_id_hint)
+
+    selected_machine_id = ''
+    selected_record: Optional[Dict[str, Any]] = None
+
+    if normalized_hint:
+        if isinstance(records.get(normalized_hint), dict):
+            selected_machine_id = normalized_hint
+            selected_record = records.get(normalized_hint)
+        else:
+            hint_lower = normalized_hint.lower()
+            for machine_id, record in records.items():
+                if not isinstance(record, dict):
+                    continue
+                existing_machine_id = str(machine_id or '').strip()
+                if existing_machine_id.lower() == hint_lower:
+                    selected_machine_id = existing_machine_id
+                    selected_record = record
+                    break
+
+    if selected_record is None:
+        newest_epoch = -1.0
+        newest_machine_id = ''
+        newest_record: Optional[Dict[str, Any]] = None
+        for machine_id, record in records.items():
+            if not isinstance(record, dict):
+                continue
+            last_seen_epoch = _parse_iso_epoch(record.get('last_seen_at'))
+            if last_seen_epoch is None:
+                continue
+            if last_seen_epoch > newest_epoch:
+                newest_epoch = last_seen_epoch
+                newest_machine_id = str(machine_id or '').strip()
+                newest_record = record
+
+        selected_machine_id = newest_machine_id
+        selected_record = newest_record
+
+    if not selected_record:
+        return {
+            'available': False,
+            'machine_id': normalized_hint,
+            'status': 'missing',
+            'is_recent': False,
+            'fresh_within_seconds': LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
+            'last_seen_at': '',
+            'age_seconds': None,
+            'local_mode_possible': False,
+            'ollama_installed': False,
+            'ollama_running': False,
+            'model_available': False,
+            'source': '',
+            'error': '',
+        }
+
+    last_seen_at = str(selected_record.get('last_seen_at') or '').strip()
+    last_seen_epoch = _parse_iso_epoch(last_seen_at)
+    age_seconds: Optional[int] = None
+    is_recent = False
+    if last_seen_epoch is not None:
+        age_seconds = max(0, int(time.time() - last_seen_epoch))
+        is_recent = age_seconds <= int(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS)
+
+    local_mode_possible = bool(selected_record.get('local_mode_possible'))
+
+    if is_recent and local_mode_possible:
+        status = 'recent_ready'
+    elif is_recent:
+        status = 'recent_not_ready'
+    else:
+        status = 'stale'
+
+    return {
+        'available': True,
+        'machine_id': selected_machine_id,
+        'status': status,
+        'is_recent': is_recent,
+        'fresh_within_seconds': LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
+        'last_seen_at': last_seen_at,
+        'age_seconds': age_seconds,
+        'local_mode_possible': local_mode_possible,
+        'ollama_installed': bool(selected_record.get('ollama_installed')),
+        'ollama_running': bool(selected_record.get('ollama_running')),
+        'model_available': bool(selected_record.get('model_available')),
+        'source': str(selected_record.get('source') or '').strip(),
+        'error': str(selected_record.get('error') or '').strip(),
+    }
+
+
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
 def api_local_mode_provisioning_status():
     state = _local_mode_load_provision_state()
@@ -4459,6 +4770,7 @@ def api_local_mode_provisioning_status():
         'cloud_url': cloud_url,
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
         'credentials_present': credentials_present,
+        'cloud_local_heartbeat': _get_cloud_local_mode_heartbeat_snapshot(machine_id),
         'cloud_status_checked': bool(cloud_state.get('checked')),
         'cloud_status_code': cloud_state.get('status_code'),
         'status_source': status_source,
@@ -4493,6 +4805,8 @@ def api_local_mode_auto_provisioning():
             'error': 'CLOUD_URL is not configured. Auto-provisioning cannot contact the cloud dashboard.',
             'hint': 'Set CLOUD_URL in local .env to your deployed cloud dashboard URL.',
         }), 400
+
+    _ensure_local_mode_cloud_heartbeat_worker()
 
     if not _local_mode_cloud_url_is_placeholder(cloud_url):
         try:
@@ -4537,6 +4851,7 @@ def api_local_mode_auto_provisioning():
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
         effective_status = authoritative_status
+        _send_local_mode_cloud_heartbeat_once()
         return jsonify({
             'success': True,
             'status': effective_status,
@@ -4640,6 +4955,7 @@ def api_local_mode_auto_provisioning():
         }
         _local_mode_save_provision_state(state)
 
+        _send_local_mode_cloud_heartbeat_once()
         return jsonify({
             'success': True,
             'status': 'pending_approval',
@@ -4698,6 +5014,7 @@ def api_local_mode_auto_provisioning():
     _local_mode_save_provision_state(state)
 
     if current_status == 'pending':
+        _send_local_mode_cloud_heartbeat_once()
         return jsonify({
             'success': True,
             'status': 'pending_approval',
@@ -4788,6 +5105,8 @@ def api_local_mode_auto_provisioning():
     })
     _local_mode_save_provision_state(state)
 
+    _send_local_mode_cloud_heartbeat_once()
+
     return jsonify({
         'success': True,
         'status': 'provisioned',
@@ -4798,6 +5117,50 @@ def api_local_mode_auto_provisioning():
         'cloud_url': cloud_url,
         'reinitialized': bool(apply_result.get('reinitialized')),
         'reinit_error': apply_result.get('reinit_error'),
+    })
+
+
+@app.route('/api/local-mode/heartbeat', methods=['POST'])
+def api_local_mode_heartbeat():
+    """Receive local edge heartbeat snapshots so cloud-hosted checkups can verify edge readiness."""
+    payload = request.get_json(silent=True) or {}
+
+    requested_machine_id = _local_mode_normalize_machine_id(payload.get('machine_id'))
+    if not requested_machine_id:
+        return jsonify({'success': False, 'error': 'Missing or invalid machine_id'}), 400
+
+    provision_secret = str(payload.get('provision_secret') or '').strip()
+    if not provision_secret:
+        return jsonify({'success': False, 'error': 'Missing provision_secret'}), 401
+
+    devices = _load_pending_devices()
+    resolved_machine_id, device = _resolve_pending_device(requested_machine_id, devices=devices)
+    if not device:
+        return jsonify({'success': False, 'error': 'Unknown machine_id'}), 404
+
+    if not _is_valid_provision_secret(device, provision_secret):
+        return jsonify({'success': False, 'error': 'Invalid provision_secret'}), 401
+
+    diagnostics = payload.get('diagnostics') if isinstance(payload.get('diagnostics'), dict) else {}
+    merged_record = {
+        'machine_id': resolved_machine_id,
+        'last_seen_at': datetime.now(timezone.utc).isoformat(),
+        'source': str(payload.get('source') or '').strip() or 'local-backend-worker',
+        'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
+        'ollama_installed': bool(diagnostics.get('ollama_installed')),
+        'ollama_running': bool(diagnostics.get('ollama_running')),
+        'model_available': bool(diagnostics.get('model_available')),
+        'ollama_model': str(diagnostics.get('ollama_model') or '').strip(),
+        'error': str(diagnostics.get('error') or '').strip(),
+    }
+
+    _upsert_local_mode_heartbeat(resolved_machine_id, merged_record)
+
+    return jsonify({
+        'success': True,
+        'status': 'stored',
+        'machine_id': resolved_machine_id,
+        'heartbeat': _get_cloud_local_mode_heartbeat_snapshot(resolved_machine_id),
     })
 
 
@@ -5351,7 +5714,9 @@ def api_provider_runtime_status():
 @app.route('/api/reports/recovery/options', methods=['GET'])
 def api_report_recovery_options():
     """Provide quota-recovery options before failover is executed."""
+    requested_machine_id = _local_mode_normalize_machine_id(request.args.get('machine_id') or '')
     diagnostics = _get_local_mode_diagnostics()
+    heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(requested_machine_id)
     candidates = _collect_recovery_candidates(limit=300)
     quota_failed = [c for c in candidates if c.get('status') == 'failed']
     pending_like = [c for c in candidates if c.get('status') in ('pending', 'queued', 'processing', 'generating')]
@@ -5359,6 +5724,7 @@ def api_report_recovery_options():
     response = jsonify({
         'success': True,
         'local': diagnostics,
+        'cloud_local_heartbeat': heartbeat_summary,
         'counts': {
             'total_candidates': len(candidates),
             'pending_like': len(pending_like),
@@ -8031,8 +8397,10 @@ def cleanup():
 
 PENDING_DEVICES_FILE = APP_DIR / 'pending_devices.json'
 BOOTSTRAP_TOKEN_STATE_FILE = APP_DIR / 'bootstrap_tokens.json'
+LOCAL_MODE_HEARTBEAT_FILE = APP_DIR / 'local_mode_heartbeats.json'
 PENDING_DEVICES_LOCK = Lock()
 BOOTSTRAP_TOKEN_STATE_LOCK = Lock()
+LOCAL_MODE_HEARTBEAT_LOCK = Lock()
 
 
 def _resolve_provisioning_state_backend() -> bool:
@@ -8155,6 +8523,47 @@ def _parse_iso_epoch(value: Any) -> Optional[float]:
         return None
 
 
+def _normalize_local_mode_heartbeat_record(machine_id: str, raw_record: Any) -> Dict[str, Any]:
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    record = raw_record if isinstance(raw_record, dict) else {}
+
+    last_seen_at = str(record.get('last_seen_at') or '').strip()
+    if not last_seen_at:
+        last_seen_at = datetime.now(timezone.utc).isoformat()
+
+    return {
+        'machine_id': normalized_machine_id,
+        'last_seen_at': last_seen_at,
+        'source': str(record.get('source') or '').strip() or 'unknown',
+        'local_mode_possible': bool(record.get('local_mode_possible')),
+        'ollama_installed': bool(record.get('ollama_installed')),
+        'ollama_running': bool(record.get('ollama_running')),
+        'model_available': bool(record.get('model_available')),
+        'ollama_model': str(record.get('ollama_model') or '').strip(),
+        'error': str(record.get('error') or '').strip(),
+    }
+
+
+def _prune_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    now_epoch = time.time()
+    cutoff_epoch = now_epoch - int(LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS)
+    kept: Dict[str, Dict[str, Any]] = {}
+
+    for machine_id, record in (data or {}).items():
+        normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+        if not normalized_machine_id:
+            continue
+        normalized_record = _normalize_local_mode_heartbeat_record(normalized_machine_id, record)
+        seen_epoch = _parse_iso_epoch(normalized_record.get('last_seen_at'))
+        if seen_epoch is None:
+            continue
+        if seen_epoch < cutoff_epoch:
+            continue
+        kept[normalized_machine_id] = normalized_record
+
+    return kept
+
+
 def _is_missing_relation_error(exc: Exception) -> bool:
     pg_code = str(getattr(exc, 'pgcode', '') or '').strip()
     if pg_code == '42P01':
@@ -8206,6 +8615,82 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
                 tmp_path.unlink()
             except Exception:
                 pass
+
+
+def _load_local_mode_heartbeats_from_file() -> Dict[str, Dict[str, Any]]:
+    candidate_paths = [LOCAL_MODE_HEARTBEAT_FILE]
+    if LOCAL_MODE_HEARTBEAT_FILE.exists():
+        candidate_paths.append(_json_backup_path(LOCAL_MODE_HEARTBEAT_FILE))
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict):
+                logger.warning(f"Ignoring non-dict local heartbeat payload in {path.name}")
+                continue
+
+            normalized: Dict[str, Dict[str, Any]] = {}
+            for machine_id, record in payload.items():
+                normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+                if not normalized_machine_id:
+                    continue
+                normalized[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
+                    normalized_machine_id,
+                    record,
+                )
+            return _prune_local_mode_heartbeats(normalized)
+        except Exception as e:
+            logger.warning(f"Failed to load local heartbeat records from {path.name}: {e}")
+
+    return {}
+
+
+def _save_local_mode_heartbeats_to_file(data: Dict[str, Dict[str, Any]]) -> None:
+    _atomic_write_json(LOCAL_MODE_HEARTBEAT_FILE, data)
+
+
+def _load_local_mode_heartbeats() -> Dict[str, Dict[str, Any]]:
+    with LOCAL_MODE_HEARTBEAT_LOCK:
+        records = _load_local_mode_heartbeats_from_file()
+        pruned = _prune_local_mode_heartbeats(records)
+        if pruned != records:
+            _save_local_mode_heartbeats_to_file(pruned)
+        return pruned
+
+
+def _save_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> None:
+    with LOCAL_MODE_HEARTBEAT_LOCK:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for machine_id, record in (data or {}).items():
+            normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+            if not normalized_machine_id:
+                continue
+            normalized[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
+                normalized_machine_id,
+                record,
+            )
+
+        pruned = _prune_local_mode_heartbeats(normalized)
+        _save_local_mode_heartbeats_to_file(pruned)
+
+
+def _upsert_local_mode_heartbeat(machine_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    if not normalized_machine_id:
+        return {}
+
+    with LOCAL_MODE_HEARTBEAT_LOCK:
+        records = _load_local_mode_heartbeats_from_file()
+        records[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
+            normalized_machine_id,
+            record,
+        )
+        pruned = _prune_local_mode_heartbeats(records)
+        _save_local_mode_heartbeats_to_file(pruned)
+        return dict(pruned.get(normalized_machine_id) or {})
 
 
 def _load_pending_devices_from_file() -> Dict[str, Dict[str, Any]]:

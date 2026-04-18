@@ -742,23 +742,52 @@ const GlobalSettingsModal = {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
             this.setProviderStatus('Running local mode checkup...', 'info');
 
-            const options = await API.getReportRecoveryOptions();
+            const isLikelyRemoteBackend = (() => {
+                try {
+                    if (!API_CONFIG.BASE_URL) return false;
+                    const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
+                    const host = String(resolved.hostname || '').toLowerCase();
+                    const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+                    return !isLocalHost;
+                } catch (error) {
+                    return false;
+                }
+            })();
+
+            const options = await API.getReportRecoveryOptions({
+                machineId: (this.localProvisionState && this.localProvisionState.machineId) || ''
+            });
             const local = (options && options.local) || {};
-            let ready = !!local.local_mode_possible;
+            const cloudHeartbeat = (options && options.cloud_local_heartbeat) || {};
+            const heartbeatMachineId = String(cloudHeartbeat.machine_id || '').trim();
+            const heartbeatRecent = !!cloudHeartbeat.is_recent;
+            const heartbeatFreshWindow = Number(cloudHeartbeat.fresh_within_seconds || 0) || 0;
+            const useHeartbeatDiagnostics = isLikelyRemoteBackend && heartbeatRecent;
+            let ready = useHeartbeatDiagnostics
+                ? !!cloudHeartbeat.local_mode_possible
+                : !!local.local_mode_possible;
 
             if (!ready) {
-                const prep = await API.prepareLocalMode({
-                    autoPull: true,
-                    setLocalFirst: false,
-                    waitSeconds: 8,
-                    pullTimeoutSeconds: 600
-                });
+                if (isLikelyRemoteBackend) {
+                    const remoteHint = heartbeatRecent
+                        ? `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`
+                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start local launcher and rerun checkup.`;
+                    this.setProviderStatus(remoteHint, 'warning');
+                    this.showNotification(remoteHint, 'warning');
+                } else {
+                    const prep = await API.prepareLocalMode({
+                        autoPull: true,
+                        setLocalFirst: false,
+                        waitSeconds: 8,
+                        pullTimeoutSeconds: 600
+                    });
 
-                ready = !!(prep && prep.success && prep.local && prep.local.local_mode_possible);
-                if (!ready) {
-                    const prepError = String((prep && prep.error) || 'Local mode is still not ready after setup attempt.');
-                    this.setProviderStatus(prepError, 'warning');
-                    this.showNotification(prepError, 'warning');
+                    ready = !!(prep && prep.success && prep.local && prep.local.local_mode_possible);
+                    if (!ready) {
+                        const prepError = String((prep && prep.error) || 'Local mode is still not ready after setup attempt.');
+                        this.setProviderStatus(prepError, 'warning');
+                        this.showNotification(prepError, 'warning');
+                    }
                 }
             }
 
@@ -769,7 +798,9 @@ const GlobalSettingsModal = {
                 });
             }
 
-            const provisionResult = await API.autoProvisionLocalModeCredentials();
+            const provisionResult = isLikelyRemoteBackend
+                ? { success: false, status: 'skipped_remote_backend', skipped: true }
+                : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
             const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
@@ -790,8 +821,18 @@ const GlobalSettingsModal = {
                 this.setProviderStatus('Provision request was rejected by administrator.', 'error');
                 this.showNotification('Provision request was rejected by administrator.', 'error');
             } else if (ready) {
-                this.setProviderStatus('Local mode checkup completed successfully.', 'success');
-                this.showNotification('Local mode checkup completed.', 'success');
+                this.setProviderStatus(
+                    useHeartbeatDiagnostics
+                        ? `Local mode checkup passed via edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''}.`
+                        : 'Local mode checkup completed successfully.',
+                    'success'
+                );
+                this.showNotification(
+                    useHeartbeatDiagnostics
+                        ? 'Local mode checkup validated from edge heartbeat.'
+                        : 'Local mode checkup completed.',
+                    'success'
+                );
             }
 
             await this.refreshProvisioningState();

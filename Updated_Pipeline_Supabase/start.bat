@@ -161,16 +161,11 @@ if errorlevel 1 (
 echo Ollama found at: %OLLAMA_CMD%
 echo Starting server in background...
 set "OLLAMA_READY_STATUS=1"
-findstr /R /I /C:"^:safe_start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
-if not errorlevel 1 (
-    call :safe_start_ollama_and_wait_ready 30
+call :safe_start_ollama_and_wait_ready 30 >nul 2>&1
+set "OLLAMA_READY_STATUS=!errorlevel!"
+if not "!OLLAMA_READY_STATUS!"=="0" (
+    call :start_ollama_and_wait_ready 30 >nul 2>&1
     set "OLLAMA_READY_STATUS=!errorlevel!"
-) else (
-    findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
-    if not errorlevel 1 (
-        call :start_ollama_and_wait_ready 30
-        set "OLLAMA_READY_STATUS=!errorlevel!"
-    )
 )
 
 if not "!OLLAMA_READY_STATUS!"=="0" (
@@ -338,16 +333,11 @@ set "UPGRADE_STATUS=0"
 echo Restarting Ollama service after upgrade...
 taskkill /IM ollama.exe /F >nul 2>&1
 set "OLLAMA_READY_STATUS=1"
-findstr /R /I /C:"^:safe_start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
-if not errorlevel 1 (
-    call :safe_start_ollama_and_wait_ready 30
+call :safe_start_ollama_and_wait_ready 30 >nul 2>&1
+set "OLLAMA_READY_STATUS=!errorlevel!"
+if not "!OLLAMA_READY_STATUS!"=="0" (
+    call :start_ollama_and_wait_ready 30 >nul 2>&1
     set "OLLAMA_READY_STATUS=!errorlevel!"
-) else (
-    findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
-    if not errorlevel 1 (
-        call :start_ollama_and_wait_ready 30
-        set "OLLAMA_READY_STATUS=!errorlevel!"
-    )
 )
 
 if not "!OLLAMA_READY_STATUS!"=="0" (
@@ -388,25 +378,7 @@ set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
 set /a "OLLAMA_RETRY_AT=(OLLAMA_WAIT_SECONDS+1)/2"
 
-findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
-if errorlevel 1 (
-    echo Warning: startup helper label missing; using inline Ollama readiness fallback.
-    call :spawn_ollama_server
-    if errorlevel 1 exit /b 1
-    for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
-        call :is_ollama_ready
-        if !errorlevel! equ 0 (
-            exit /b 0
-        )
-        if %%I equ !OLLAMA_RETRY_AT! (
-            call :spawn_ollama_server >nul 2>&1
-        )
-        timeout /t 1 /nobreak >nul
-    )
-    exit /b 1
-)
-
-call :start_ollama_and_wait_ready %OLLAMA_WAIT_SECONDS%
+call :start_ollama_and_wait_ready %OLLAMA_WAIT_SECONDS% >nul 2>&1
 if !errorlevel! equ 0 exit /b 0
 
 call :spawn_ollama_server

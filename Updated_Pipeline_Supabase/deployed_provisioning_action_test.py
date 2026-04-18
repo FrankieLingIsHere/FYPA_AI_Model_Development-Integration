@@ -22,6 +22,7 @@ from luna_app import (
     app,
     _load_pending_devices,
     _save_pending_devices,
+    _send_local_mode_cloud_heartbeat_once,
     PENDING_DEVICES_FILE,
     BOOTSTRAP_TOKEN_STATE_FILE,
     LOCAL_MODE_PROVISION_STATE_FILE,
@@ -618,6 +619,58 @@ class ProvisioningActionTest(unittest.TestCase):
         request_url = str(mock_post.call_args_list[0].args[0])
         self.assertIn('/api/provision/request', request_url)
         heartbeat_url = str(mock_post.call_args_list[1].args[0])
+        self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
+
+    @patch('luna_app.requests.post')
+    @patch('luna_app._local_mode_fetch_authoritative_status')
+    @patch('luna_app._run_local_mode_auto_provision_once')
+    @patch('luna_app._local_mode_collect_cloud_heartbeat_submission')
+    @patch('luna_app._local_mode_has_supabase_credentials')
+    @patch('luna_app._local_mode_load_provision_state')
+    def test_cloud_heartbeat_recovers_missing_provision_secret(
+        self,
+        mock_load_state,
+        mock_has_credentials,
+        mock_collect_submission,
+        mock_auto_provision_once,
+        mock_fetch_status,
+        mock_post,
+    ):
+        os.environ['CLOUD_URL'] = 'https://cloud.example.test'
+
+        mock_load_state.return_value = {
+            'machine_id': 'TEST-EDGE-RECOVERY-001',
+            'cloud_url': 'https://cloud.example.test',
+        }
+        mock_has_credentials.return_value = True
+        mock_collect_submission.side_effect = [
+            {
+                'ready': False,
+                'reason': 'provision_secret_missing',
+            },
+            {
+                'ready': True,
+                'cloud_url': 'https://cloud.example.test',
+                'machine_id': 'TEST-EDGE-RECOVERY-001',
+                'provision_secret': 'recovered-secret-001',
+                'provision_status': 'credentials_present',
+                'credentials_present': True,
+                'diagnostics': {},
+            },
+        ]
+        mock_auto_provision_once.return_value = ({'success': True, 'status': 'pending_approval'}, 200)
+        mock_fetch_status.return_value = {
+            'checked': False,
+            'status': 'idle',
+        }
+        mock_post.return_value = self._mock_http_response(200, {'success': True, 'status': 'stored'})
+
+        heartbeat_result = _send_local_mode_cloud_heartbeat_once()
+        self.assertTrue(heartbeat_result.get('sent'))
+
+        mock_auto_provision_once.assert_called_once_with('https://cloud.example.test')
+        self.assertEqual(mock_collect_submission.call_count, 2)
+        heartbeat_url = str(mock_post.call_args.args[0])
         self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
 
     @patch('luna_app._local_mode_apply_supabase_credentials')

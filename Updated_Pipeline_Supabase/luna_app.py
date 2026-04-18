@@ -4536,7 +4536,42 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
 
     submission = _local_mode_collect_cloud_heartbeat_submission()
     if not submission.get('ready'):
-        return {'sent': False, 'reason': str(submission.get('reason') or 'submission_not_ready')}
+        initial_reason = str(submission.get('reason') or 'submission_not_ready')
+
+        # Local state can be lost (for example after reinstall) while credentials still exist.
+        # Try one auto-provision pass to recover provision_secret before marking heartbeat unavailable.
+        if initial_reason == 'provision_secret_missing':
+            recovery_state = _local_mode_load_provision_state()
+            recovery_cloud_url = _local_mode_normalize_cloud_url(
+                os.getenv('CLOUD_URL')
+                or recovery_state.get('cloud_url')
+                or ''
+            )
+            recovery_machine_id = _local_mode_normalize_machine_id(
+                recovery_state.get('machine_id')
+            ) or _local_mode_get_existing_machine_id()
+
+            can_attempt_recovery = (
+                _local_mode_has_supabase_credentials()
+                and bool(recovery_cloud_url)
+                and not _local_mode_cloud_url_is_placeholder(recovery_cloud_url)
+                and bool(recovery_machine_id)
+            )
+
+            if can_attempt_recovery:
+                try:
+                    _run_local_mode_auto_provision_once(recovery_cloud_url)
+                except Exception as recovery_err:
+                    return {
+                        'sent': False,
+                        'reason': initial_reason,
+                        'error': f'provision_secret_recovery_failed: {recovery_err}',
+                    }
+
+                submission = _local_mode_collect_cloud_heartbeat_submission()
+
+        if not submission.get('ready'):
+            return {'sent': False, 'reason': str(submission.get('reason') or initial_reason)}
 
     cloud_url = str(submission.get('cloud_url') or '').strip()
     machine_id = str(submission.get('machine_id') or '').strip()

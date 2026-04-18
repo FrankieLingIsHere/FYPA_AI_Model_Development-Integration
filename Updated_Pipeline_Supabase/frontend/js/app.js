@@ -501,10 +501,13 @@ function buildBackendCandidates(preferLocal) {
         || currentHost === '0.0.0.0'
         || currentHost.endsWith('.local');
     const shouldPreferLocalOrder = !!preferLocal || (hostLooksLocal && !explicitApiOverride);
+    const explicitLocalPreference = !!preferLocal;
 
-    const ordered = shouldPreferLocalOrder
-        ? [sameOrigin, ...locals, configured]
-        : [configured, sameOrigin, ...locals];
+    const ordered = explicitLocalPreference
+        ? [...locals, sameOrigin, configured]
+        : (shouldPreferLocalOrder
+            ? [sameOrigin, ...locals, configured]
+            : [configured, sameOrigin, ...locals]);
 
     const dedup = [];
     ordered.forEach((item) => {

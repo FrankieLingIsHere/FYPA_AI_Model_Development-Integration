@@ -29,6 +29,14 @@ Run from repository root:
 python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
 python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
 
+When patching installer/startup batch flows (
+`frontend/static/LUNA_LocalInstaller.bat`, `start.bat`, or `/api/bootstrap/installer` rendering),
+`deployed_provisioning_action_test.py` is mandatory because it now also asserts:
+
+- rendered installer assignment placeholders are replaced without mutating internal token maps,
+- self-update label targets remain present,
+- startup batch label contracts remain intact.
+
 Enforcement rule:
 
 - If any action test exits non-zero, keep patching and re-run until both are green.

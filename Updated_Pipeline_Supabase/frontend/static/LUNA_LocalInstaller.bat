@@ -496,7 +496,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$current = Get-Content -Raw -Path '%~f0' -ErrorAction Stop; " ^
   "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
   "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
-  "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
+    "$lineMap = [ordered]@{}; foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ [string]$m.Groups[1].Value } else { '' }; $sourceLine = 'set \"' + $varName + '=' + $token + '\"'; $targetLine = 'set \"' + $varName + '=' + $value + '\"'; $lineMap[$sourceLine] = $targetLine }; foreach($sourceLine in $lineMap.Keys){ $template = $template.Replace($sourceLine, $lineMap[$sourceLine]) }; " ^
     "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
 if errorlevel 1 (
@@ -538,7 +538,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$current = Get-Content -Raw -Path '%~f0' -ErrorAction Stop; " ^
   "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
   "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
-  "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
+    "$lineMap = [ordered]@{}; foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ [string]$m.Groups[1].Value } else { '' }; $sourceLine = 'set \"' + $varName + '=' + $token + '\"'; $targetLine = 'set \"' + $varName + '=' + $value + '\"'; $lineMap[$sourceLine] = $targetLine }; foreach($sourceLine in $lineMap.Keys){ $template = $template.Replace($sourceLine, $lineMap[$sourceLine]) }; " ^
     "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
 if errorlevel 1 (

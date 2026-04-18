@@ -3,6 +3,7 @@ import sys
 import unittest
 import base64
 import json
+import re
 from unittest.mock import patch, Mock
 
 # Ensure we can import luna_app
@@ -347,13 +348,28 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(installer_download.status_code, 200)
         self.assertIn(b'ZERO-TOUCH LOCAL INSTALLER', installer_download.data)
         rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
-        self.assertNotIn('__LUNA_REPO_ZIP_URL__', rendered_installer)
-        self.assertNotIn('__LUNA_SOURCE_ROOT__', rendered_installer)
-        self.assertNotIn('__LUNA_CLOUD_URL__', rendered_installer)
-        self.assertNotIn('__LUNA_INSTALLER_VERSION__', rendered_installer)
-        self.assertNotIn('__LUNA_SUPABASE_URL__', rendered_installer)
-        self.assertNotIn('__LUNA_SUPABASE_DB_URL__', rendered_installer)
-        self.assertNotIn('__LUNA_SUPABASE_SERVICE_ROLE_KEY__', rendered_installer)
+        # Assignment placeholders must be replaced in rendered downloads.
+        self.assertNotIn('set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"', rendered_installer)
+        self.assertNotIn('set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"', rendered_installer)
+        self.assertNotIn('set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"', rendered_installer)
+        self.assertNotIn('set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"', rendered_installer)
+        self.assertNotIn('set "LUNA_MACHINE_ID=__LUNA_MACHINE_ID__"', rendered_installer)
+        self.assertNotIn('set "LUNA_SUPABASE_URL=__LUNA_SUPABASE_URL__"', rendered_installer)
+        self.assertNotIn('set "LUNA_SUPABASE_DB_URL=__LUNA_SUPABASE_DB_URL__"', rendered_installer)
+        self.assertNotIn('set "LUNA_SUPABASE_SERVICE_ROLE_KEY=__LUNA_SUPABASE_SERVICE_ROLE_KEY__"', rendered_installer)
+
+        # Internal guard checks and self-update token maps must preserve placeholders
+        # so launcher self-refresh can re-render from template safely.
+        self.assertIn('if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__"', rendered_installer)
+        self.assertIn("'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'", rendered_installer)
+        self.assertGreaterEqual(
+            rendered_installer.count("'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'"),
+            2,
+        )
+
+        # Ensure critical launcher labels are present in rendered payload.
+        self.assertRegex(rendered_installer, r'(?im)^:safe_refresh_local_launcher\s*$')
+        self.assertRegex(rendered_installer, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
         self.assertIn('set "LUNA_CLOUD_URL=', rendered_installer)
@@ -370,6 +386,32 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_replay = self.client.get(f'/api/bootstrap/installer?token={installer_token}')
         self.assertEqual(installer_replay.status_code, 403)
         installer_replay.close()
+
+    def test_batch_templates_have_required_label_targets(self):
+        script_dir = os.path.abspath(os.path.dirname(__file__))
+        start_bat_path = os.path.join(script_dir, 'start.bat')
+        installer_bat_path = os.path.join(script_dir, 'frontend', 'static', 'LUNA_LocalInstaller.bat')
+
+        with open(start_bat_path, 'r', encoding='utf-8') as f:
+            start_bat = f.read()
+
+        with open(installer_bat_path, 'r', encoding='utf-8') as f:
+            installer_bat = f.read()
+
+        self.assertIn('call :safe_start_ollama_and_wait_ready 30', start_bat)
+        self.assertRegex(start_bat, r'(?im)^:safe_start_ollama_and_wait_ready\s*$')
+        self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
+
+        if 'call :start_ollama_and_wait_ready' in start_bat:
+            self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
+
+        self.assertIn('call :safe_refresh_local_launcher', installer_bat)
+        self.assertRegex(installer_bat, r'(?im)^:safe_refresh_local_launcher\s*$')
+        self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
+
+        token_map_key = "'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'"
+        self.assertGreaterEqual(installer_bat.count(token_map_key), 2)
+        self.assertGreaterEqual(installer_bat.count('$lineMap = [ordered]@{}'), 2)
 
     def test_machine_only_installer_request_rejects_pending_device(self):
         machine_id = 'TEST-EDGE-INSTALLER-PENDING-001'

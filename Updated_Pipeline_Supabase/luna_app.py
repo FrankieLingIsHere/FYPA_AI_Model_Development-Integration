@@ -9912,8 +9912,13 @@ def _render_installer_batch_script(
         request_host_url=request_host_url,
         installer_machine_id=installer_machine_id,
     )
+    # Only replace placeholder assignment lines so guard checks and self-update
+    # token maps keep placeholder literals intact in downloaded installers.
     for token, replacement in context.items():
-        content = content.replace(token, replacement)
+        var_name = token.strip('_')
+        source_line = f'set "{var_name}={token}"'
+        target_line = f'set "{var_name}={replacement}"'
+        content = content.replace(source_line, target_line)
     return content, context.get('__LUNA_INSTALLER_VERSION__', 'unknown')
 
 

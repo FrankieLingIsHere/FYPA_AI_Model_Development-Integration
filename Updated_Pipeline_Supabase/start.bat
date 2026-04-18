@@ -160,7 +160,7 @@ if errorlevel 1 (
 
 echo Ollama found at: %OLLAMA_CMD%
 echo Starting server in background...
-call :start_ollama_and_wait_ready 30
+call :safe_start_ollama_and_wait_ready 30
 if errorlevel 1 (
     echo Error: Ollama server did not become ready within 30 seconds.
     echo Please open Ollama once, then rerun this script.
@@ -319,7 +319,7 @@ set "UPGRADE_STATUS=0"
 
 echo Restarting Ollama service after upgrade...
 taskkill /IM ollama.exe /F >nul 2>&1
-call :start_ollama_and_wait_ready 30
+call :safe_start_ollama_and_wait_ready 30
 if errorlevel 1 (
     echo Warning: Ollama service did not become ready after upgrade.
     set "UPGRADE_STATUS=1"
@@ -327,6 +327,41 @@ if errorlevel 1 (
 
 :upgrade_ollama_runtime_done
 exit /b !UPGRADE_STATUS!
+
+:safe_start_ollama_and_wait_ready
+set "OLLAMA_WAIT_SECONDS=%~1"
+if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
+
+findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
+if errorlevel 1 (
+    echo Warning: startup helper label missing; using inline Ollama readiness fallback.
+    call :resolve_ollama_cmd
+    if errorlevel 1 exit /b 1
+    start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
+    for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
+        "%OLLAMA_CMD%" list >nul 2>&1
+        if !errorlevel! equ 0 (
+            exit /b 0
+        )
+        timeout /t 1 /nobreak >nul
+    )
+    exit /b 1
+)
+
+call :start_ollama_and_wait_ready %OLLAMA_WAIT_SECONDS%
+if !errorlevel! equ 0 exit /b 0
+
+call :resolve_ollama_cmd
+if errorlevel 1 exit /b 1
+start "Ollama Server" /min cmd /c "\"%OLLAMA_CMD%\" serve"
+for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
+    "%OLLAMA_CMD%" list >nul 2>&1
+    if !errorlevel! equ 0 (
+        exit /b 0
+    )
+    timeout /t 1 /nobreak >nul
+)
+exit /b 1
 
 :start_ollama_and_wait_ready
 set "OLLAMA_WAIT_SECONDS=%~1"

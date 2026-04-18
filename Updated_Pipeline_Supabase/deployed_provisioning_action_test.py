@@ -385,6 +385,7 @@ class ProvisioningActionTest(unittest.TestCase):
         # Ensure critical launcher labels are present in rendered payload.
         self.assertRegex(rendered_installer, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:refresh_local_launcher_from_template\s*$')
+        self.assertRegex(rendered_installer, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
         self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
         self.assertIn('set "LUNA_CLOUD_URL=', rendered_installer)
@@ -421,8 +422,10 @@ class ProvisioningActionTest(unittest.TestCase):
             self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
 
         self.assertIn('call :safe_refresh_local_launcher', installer_bat)
+        self.assertIn('call :repair_startup_batch_label_mismatch', installer_bat)
         self.assertRegex(installer_bat, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
+        self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
 
         token_map_key = "'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'"
         self.assertGreaterEqual(installer_bat.count(token_map_key), 2)

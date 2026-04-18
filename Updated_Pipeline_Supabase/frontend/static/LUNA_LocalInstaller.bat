@@ -138,6 +138,12 @@ if exist "!LUNA_APP_DIR!\start.bat" (
         echo.
     )
 
+    call :repair_startup_batch_label_mismatch
+    if errorlevel 1 (
+        echo Warning: Could not auto-repair startup batch label mismatch before launch.
+        if not "!LUNA_START_BAT_REPAIR_ERROR!"=="" echo   Reason: !LUNA_START_BAT_REPAIR_ERROR!
+    )
+
     echo Launching existing LUNA local backend...
     cd /d "!LUNA_APP_DIR!"
     start cmd /k "start.bat"
@@ -327,6 +333,12 @@ echo dependencies in that new black window.
 echo ========================================================
 echo.
 
+call :repair_startup_batch_label_mismatch
+if errorlevel 1 (
+    echo Warning: Could not auto-repair startup batch label mismatch before first launch.
+    if not "!LUNA_START_BAT_REPAIR_ERROR!"=="" echo   Reason: !LUNA_START_BAT_REPAIR_ERROR!
+)
+
 start cmd /k "start.bat"
 
 echo [6/6] Creating Desktop Shortcut for Future Use...
@@ -397,6 +409,39 @@ for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
 )
 
 exit /b 1
+
+:repair_startup_batch_label_mismatch
+set "LUNA_START_BAT_REPAIR_ERROR="
+set "START_BAT_PATH=!LUNA_APP_DIR!\start.bat"
+
+if not exist "!START_BAT_PATH!" (
+    set "LUNA_START_BAT_REPAIR_ERROR=start_bat_missing"
+    exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$path='!START_BAT_PATH!'; $content=Get-Content -Raw -Path $path -ErrorAction Stop; " ^
+  "$hasSafeLabel=[regex]::IsMatch($content,'(?im)^\s*:safe_start_ollama_and_wait_ready\s*$'); " ^
+  "$hasStartLabel=[regex]::IsMatch($content,'(?im)^\s*:start_ollama_and_wait_ready\s*$'); " ^
+  "$callsSafe=[regex]::IsMatch($content,'(?im)^\s*call\s+:safe_start_ollama_and_wait_ready\b'); " ^
+  "$callsStart=[regex]::IsMatch($content,'(?im)^\s*call\s+:start_ollama_and_wait_ready\b'); " ^
+  "$updated=$false; " ^
+  "if($callsSafe -and -not $hasSafeLabel -and $hasStartLabel){ $content=[regex]::Replace($content,'(?im)^(\s*call\s+):safe_start_ollama_and_wait_ready\b','$1:start_ollama_and_wait_ready'); $updated=$true }; " ^
+  "if($callsStart -and -not $hasStartLabel -and $hasSafeLabel){ $content=[regex]::Replace($content,'(?im)^(\s*call\s+):start_ollama_and_wait_ready\b','$1:safe_start_ollama_and_wait_ready'); $updated=$true }; " ^
+  "if($updated){ Set-Content -Path $path -Value $content -Encoding ASCII; exit 0 }; " ^
+  "if(($callsSafe -and -not $hasSafeLabel) -or ($callsStart -and -not $hasStartLabel)){ exit 2 }; exit 0"
+
+set "REPAIR_STATUS=!errorlevel!"
+if not "!REPAIR_STATUS!"=="0" (
+    if "!REPAIR_STATUS!"=="2" (
+        set "LUNA_START_BAT_REPAIR_ERROR=missing_target_label"
+    ) else (
+        set "LUNA_START_BAT_REPAIR_ERROR=repair_failed"
+    )
+    exit /b 1
+)
+
+exit /b 0
 
 :refresh_existing_source_snapshot
 set "UPDATE_ZIP=%TEMP%\luna_source_update.zip"

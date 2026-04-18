@@ -160,8 +160,20 @@ if errorlevel 1 (
 
 echo Ollama found at: %OLLAMA_CMD%
 echo Starting server in background...
-call :safe_start_ollama_and_wait_ready 30
-if errorlevel 1 (
+set "OLLAMA_READY_STATUS=1"
+findstr /R /I /C:"^:safe_start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
+if not errorlevel 1 (
+    call :safe_start_ollama_and_wait_ready 30
+    set "OLLAMA_READY_STATUS=!errorlevel!"
+) else (
+    findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
+    if not errorlevel 1 (
+        call :start_ollama_and_wait_ready 30
+        set "OLLAMA_READY_STATUS=!errorlevel!"
+    )
+)
+
+if not "!OLLAMA_READY_STATUS!"=="0" (
     echo Error: Ollama server did not become ready within 30 seconds.
     echo Please open Ollama once, then rerun this script.
     pause
@@ -319,8 +331,20 @@ set "UPGRADE_STATUS=0"
 
 echo Restarting Ollama service after upgrade...
 taskkill /IM ollama.exe /F >nul 2>&1
-call :safe_start_ollama_and_wait_ready 30
-if errorlevel 1 (
+set "OLLAMA_READY_STATUS=1"
+findstr /R /I /C:"^:safe_start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
+if not errorlevel 1 (
+    call :safe_start_ollama_and_wait_ready 30
+    set "OLLAMA_READY_STATUS=!errorlevel!"
+) else (
+    findstr /R /I /C:"^:start_ollama_and_wait_ready$" "%~f0" >nul 2>&1
+    if not errorlevel 1 (
+        call :start_ollama_and_wait_ready 30
+        set "OLLAMA_READY_STATUS=!errorlevel!"
+    )
+)
+
+if not "!OLLAMA_READY_STATUS!"=="0" (
     echo Warning: Ollama service did not become ready after upgrade.
     set "UPGRADE_STATUS=1"
 )

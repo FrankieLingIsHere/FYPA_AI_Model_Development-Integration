@@ -78,7 +78,6 @@ def main() -> int:
         "function initializeNetworkIndicator()",
         "window.dispatchEvent(new CustomEvent('ppe-network:status'",
         "function initializeAdaptivePipelineModeManager()",
-        "API.syncLocalCacheToSupabase({ limit: 180 });",
     ]
     app_detection_marker_alternatives = [
         [
@@ -95,6 +94,20 @@ def main() -> int:
             "const narrowTouchViewport = touchCapable && window.matchMedia('(max-width: 860px)').matches;",
             "body.classList.remove('is-tablet-device');",
             "body.classList.toggle('is-tablet-landscape', tabletDevice && !portrait);",
+        ],
+    ]
+    app_reconnect_sync_marker_alternatives = [
+        [
+            "API.syncLocalCacheToSupabase({ limit: 180 });",
+        ],
+        [
+            "API.syncLocalCacheToSupabase({",
+            "limit: 180",
+            "reason: 'reconnect_auto'",
+        ],
+        [
+            "API.syncLocalCacheToSupabase({",
+            "reason: 'reconnect_auto'",
         ],
     ]
     required_index_markers = [
@@ -155,6 +168,10 @@ def main() -> int:
     if not any(all(marker in app_text for marker in option) for option in app_detection_marker_alternatives):
         missing.append(
             "app.js missing phone/tablet detection markers (neither legacy nor updated implementation found)"
+        )
+    if not any(has_marker_group(app_text, option) for option in app_reconnect_sync_marker_alternatives):
+        missing.append(
+            "app.js missing reconnect-sync markers (expected API.syncLocalCacheToSupabase call with reconnect_auto reason)"
         )
     missing_index_markers = []
     for marker in required_index_markers:

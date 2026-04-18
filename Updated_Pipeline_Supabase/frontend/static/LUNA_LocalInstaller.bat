@@ -204,8 +204,14 @@ if errorlevel 1 (
 ) else (
     echo.
     echo Ollama is already installed.
-    echo Waking up Ollama background service if it is asleep...
-    start /b ollama serve >nul 2>&1
+)
+
+echo Ensuring Ollama service is reachable...
+call :ensure_ollama_running 30
+if errorlevel 1 (
+    echo Warning: Ollama did not become reachable yet. Continuing setup; start.bat will retry with readiness checks.
+) else (
+    echo Ollama service is reachable.
 )
 
 echo.
@@ -339,6 +345,26 @@ echo You can safely close this installer window now.
 pause
 goto :eof
 
+:ensure_ollama_running
+set "OLLAMA_WAIT_SECONDS=%~1"
+if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
+
+where ollama >nul 2>&1
+if errorlevel 1 exit /b 1
+
+ollama list >nul 2>&1
+if !errorlevel! equ 0 exit /b 0
+
+start "" /b ollama serve >nul 2>&1
+
+for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
+    ollama list >nul 2>&1
+    if !errorlevel! equ 0 exit /b 0
+    timeout /t 1 /nobreak >nul
+)
+
+exit /b 1
+
 :refresh_existing_source_snapshot
 set "UPDATE_ZIP=%TEMP%\luna_source_update.zip"
 set "UPDATE_STAGE=%TEMP%\luna_source_update_%RANDOM%_%RANDOM%"
@@ -438,7 +464,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
   "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
   "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
-  "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding UTF8"
+    "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
 if errorlevel 1 (
     if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
@@ -480,7 +506,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$template = Get-Content -Raw -Path '!TEMPLATE_BAT!' -ErrorAction Stop; " ^
   "$tokenMap = [ordered]@{ '__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'; '__LUNA_SOURCE_ROOT__'='LUNA_SOURCE_ROOT'; '__LUNA_CLOUD_URL__'='LUNA_CLOUD_URL'; '__LUNA_INSTALLER_VERSION__'='LUNA_INSTALLER_VERSION'; '__LUNA_MACHINE_ID__'='LUNA_MACHINE_ID'; '__LUNA_SUPABASE_URL__'='LUNA_SUPABASE_URL'; '__LUNA_SUPABASE_DB_URL__'='LUNA_SUPABASE_DB_URL'; '__LUNA_SUPABASE_SERVICE_ROLE_KEY__'='LUNA_SUPABASE_SERVICE_ROLE_KEY' }; " ^
   "foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ $m.Groups[1].Value } else { '' }; $template = $template.Replace($token, [string]$value) }; " ^
-  "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding UTF8"
+    "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
 if errorlevel 1 (
     if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1

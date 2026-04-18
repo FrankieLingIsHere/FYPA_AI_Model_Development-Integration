@@ -1228,11 +1228,24 @@ const GlobalSettingsModal = {
                     this.setProviderStatus(remoteHint, 'warning');
                     this.showNotification(remoteHint, 'warning');
                 } else {
+                    const configuredWaitSeconds = Number(
+                        (window && (window.LUNA_LOCAL_CHECKUP_WAIT_SECONDS ?? window.__LUNA_LOCAL_CHECKUP_WAIT_SECONDS)) ?? 8
+                    );
+                    const configuredPullTimeoutSeconds = Number(
+                        (window && (window.LUNA_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS ?? window.__LUNA_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS)) ?? 120
+                    );
+                    const waitSeconds = Number.isFinite(configuredWaitSeconds)
+                        ? Math.max(3, Math.min(30, Math.round(configuredWaitSeconds)))
+                        : 8;
+                    const pullTimeoutSeconds = Number.isFinite(configuredPullTimeoutSeconds)
+                        ? Math.max(60, Math.min(900, Math.round(configuredPullTimeoutSeconds)))
+                        : 120;
+
                     const prep = await API.prepareLocalMode({
                         autoPull: true,
                         setLocalFirst: false,
-                        waitSeconds: 8,
-                        pullTimeoutSeconds: 600
+                        waitSeconds,
+                        pullTimeoutSeconds
                     });
 
                     ready = !!(prep && prep.success && prep.local && prep.local.local_mode_possible);

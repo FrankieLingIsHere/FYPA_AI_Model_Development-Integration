@@ -12,7 +12,9 @@ echo.
 echo Please ensure you are running this as Administrator if
 echo Python or Ollama need to be installed.
 echo.
+if /I "%LUNA_SKIP_INTRO_PAUSE%"=="true" goto :skip_intro_pause
 pause
+:skip_intro_pause
 
 set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"
 set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"
@@ -41,13 +43,48 @@ if not "!LUNA_CLOUD_URL!"=="" echo Installer cloud backend URL: !LUNA_CLOUD_URL!
 set "INSTALL_DIR=C:\LUNA_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
-set "LOCAL_LAUNCHER_BAT=%INSTALL_DIR%\Start_LUNA_Local_Mode.bat"
+set "PRIMARY_LAUNCHER_BAT=%INSTALL_DIR%\LUNA_LocalInstaller.bat"
+set "LEGACY_LAUNCHER_BAT=%INSTALL_DIR%\Start_LUNA_Local_Mode.bat"
+set "LOCAL_LAUNCHER_BAT=!PRIMARY_LAUNCHER_BAT!"
+set "CURRENT_LAUNCHER_BAT=%~f0"
 set "LUNA_STATE_DIR_PATH=C:\LUNA_System\LUNA_LocalState"
+set "HAS_MANAGED_LAUNCHER=false"
 if not exist "!LUNA_STATE_DIR_PATH!" mkdir "!LUNA_STATE_DIR_PATH!"
 
-copy /Y "%~f0" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
-if errorlevel 1 (
-    echo Warning: Could not update local launcher copy at !LOCAL_LAUNCHER_BAT!
+if exist "!LOCAL_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
+if exist "!LEGACY_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
+
+if not exist "!LOCAL_LAUNCHER_BAT!" if exist "!LEGACY_LAUNCHER_BAT!" (
+    copy /Y "!LEGACY_LAUNCHER_BAT!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+    if not errorlevel 1 (
+        echo Migrated legacy launcher name to !LOCAL_LAUNCHER_BAT!
+    )
+)
+
+if not exist "!LOCAL_LAUNCHER_BAT!" (
+    copy /Y "!CURRENT_LAUNCHER_BAT!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+    if errorlevel 1 (
+        echo Warning: Could not initialize local launcher copy at !LOCAL_LAUNCHER_BAT!
+    ) else (
+        echo Initialized local launcher copy at !LOCAL_LAUNCHER_BAT!
+    )
+) else (
+    if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
+        echo Existing local launcher preserved to avoid stale external launcher overwrite.
+        echo Recommended launcher path: !LOCAL_LAUNCHER_BAT!
+    )
+)
+
+call :sync_launcher_aliases >nul 2>&1
+
+if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
+    if /I "!HAS_MANAGED_LAUNCHER!"=="true" (
+        echo Detected external launcher execution. Handing off to managed local launcher:
+        echo   !LOCAL_LAUNCHER_BAT!
+        set "LUNA_SKIP_INTRO_PAUSE=true"
+        call "!LOCAL_LAUNCHER_BAT!"
+        exit /b !errorlevel!
+    )
 )
 
 if not "!LUNA_MACHINE_ID!"=="" (
@@ -136,6 +173,12 @@ if exist "!LUNA_APP_DIR!\start.bat" (
     ) else (
         echo Skipping source update check for this launch.
         echo.
+
+        call :safe_refresh_local_launcher >nul 2>&1
+        if not errorlevel 1 (
+            echo Launcher script refreshed from installed template.
+            echo.
+        )
     )
 
     call :repair_startup_batch_label_mismatch
@@ -149,8 +192,12 @@ if exist "!LUNA_APP_DIR!\start.bat" (
     start cmd /k "start.bat"
     echo.
     echo Existing installation launched.
-    echo You can keep using the same launcher BAT:
+    echo Preferred launcher BAT path:
     echo   !LOCAL_LAUNCHER_BAT!
+    if /I not "!LEGACY_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
+        echo Legacy launcher alias:
+        echo   !LEGACY_LAUNCHER_BAT!
+    )
     pause
     exit /b 0
 )
@@ -589,7 +636,7 @@ if errorlevel 1 (
 )
 
 if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
-    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
+    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LEGACY_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
 ) else (
     copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
     if errorlevel 1 (
@@ -597,6 +644,7 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
         set "LUNA_LAUNCHER_UPDATE_ERROR=fallback_launcher_copy_failed"
         exit /b 1
     )
+    call :sync_launcher_aliases >nul 2>&1
     del "!UPDATED_LAUNCHER!" >nul 2>&1
 )
 
@@ -631,7 +679,7 @@ if errorlevel 1 (
 )
 
 if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
-    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
+    start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LEGACY_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
 ) else (
     copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
     if errorlevel 1 (
@@ -639,8 +687,18 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
         set "LUNA_LAUNCHER_UPDATE_ERROR=launcher_copy_failed"
         exit /b 1
     )
+    call :sync_launcher_aliases >nul 2>&1
     del "!UPDATED_LAUNCHER!" >nul 2>&1
 )
 
 set "LUNA_LAUNCHER_UPDATE_ERROR="
+exit /b 0
+
+:sync_launcher_aliases
+if not defined LOCAL_LAUNCHER_BAT exit /b 0
+if not defined LEGACY_LAUNCHER_BAT exit /b 0
+if /I "!LOCAL_LAUNCHER_BAT!"=="!LEGACY_LAUNCHER_BAT!" exit /b 0
+if not exist "!LOCAL_LAUNCHER_BAT!" exit /b 0
+
+copy /Y "!LOCAL_LAUNCHER_BAT!" "!LEGACY_LAUNCHER_BAT!" >nul 2>&1
 exit /b 0

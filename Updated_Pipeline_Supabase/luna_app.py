@@ -802,10 +802,21 @@ def ensure_queue_worker_running() -> bool:
     if violation_queue is None:
         return False
 
-    if _is_queue_worker_alive():
+    with queue_worker_state_lock:
+        worker_thread = queue_worker_thread
+        worker_running_flag = bool(queue_worker_running)
+        worker_thread_alive = bool(worker_thread is not None and worker_thread.is_alive())
+
+    if worker_running_flag and worker_thread_alive:
         return True
 
-    logger.warning("Queue worker is not healthy; attempting restart")
+    if worker_thread is None:
+        logger.info("Queue worker not started yet; starting worker thread")
+    elif not worker_thread_alive:
+        logger.warning("Queue worker thread stopped unexpectedly; attempting restart")
+    else:
+        logger.warning("Queue worker state flag is inconsistent; attempting restart")
+
     return bool(start_queue_worker())
 
 # =========================================================================

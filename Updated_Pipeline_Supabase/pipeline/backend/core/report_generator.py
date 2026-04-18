@@ -80,6 +80,7 @@ class ReportGenerator:
         self.last_nlp_completed_at = None
         self.routing_profile = str(os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
+        self.strict_local_profile = self.enforce_strict_provider_split and self.routing_profile == 'local'
         self.sticky_nlp_provider = None
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
@@ -108,7 +109,10 @@ class ReportGenerator:
         # GEMINI (Primary AI provider)
         # =====================================================================
         gemini_config = config.get('GEMINI_CONFIG', {})
-        self.use_gemini = gemini_config.get('enabled', True) and GEMINI_AVAILABLE
+        gemini_requested = bool(gemini_config.get('enabled', True))
+        if self.strict_local_profile and gemini_requested:
+            logger.info("Strict local provider profile active; skipping Gemini initialization")
+        self.use_gemini = bool(gemini_requested and GEMINI_AVAILABLE and not self.strict_local_profile)
         self.gemini_client = None
         
         if self.use_gemini:
@@ -184,7 +188,7 @@ class ReportGenerator:
         self.embedding_api_model = model_api_config.get('embedding_model', 'nomic-ai/nomic-embed-text-v1.5')
 
         if self.enforce_strict_provider_split:
-            profile = 'local' if self.routing_profile == 'local' else 'cloud'
+            profile = 'local' if self.strict_local_profile else 'cloud'
             if profile == 'local':
                 strict_local_model = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma4') or 'gemma4').strip() or 'gemma4'
                 self.model_api_enabled = False

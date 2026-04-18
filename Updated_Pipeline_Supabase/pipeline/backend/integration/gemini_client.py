@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Union, List
 
 logger = logging.getLogger(__name__)
+GEMINI_REQUIRED_BY_DEFAULT = str(os.getenv('GEMINI_REQUIRED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
 
 # Try to import the Google GenAI SDK
 GEMINI_AVAILABLE = False
@@ -36,8 +37,9 @@ try:
     logger.info("✓ Google GenAI SDK loaded successfully")
 except ImportError as e:
     GEMINI_ERROR = f"google-genai not installed: {e}"
-    logger.error(f"❌ Google GenAI import failed: {e}")
-    logger.error("   Install with: pip install google-genai")
+    _import_log = logger.error if GEMINI_REQUIRED_BY_DEFAULT else logger.warning
+    _import_log(f"Google GenAI import failed: {e}")
+    _import_log("Install with: pip install google-genai")
 
 
 class GeminiClient:
@@ -118,6 +120,7 @@ class GeminiClient:
         self.timeout = gemini_config.get('timeout', 120)
         self.max_retries = gemini_config.get('max_retries', 3)
         self.paid_plan = bool(gemini_config.get('paid_plan', False))
+        self.required = bool(gemini_config.get('required', GEMINI_REQUIRED_BY_DEFAULT))
         self.last_error = None
         self.last_parse_strategy = None
         self.raw_capture_enabled = str(os.getenv('GEMINI_RAW_CAPTURE_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -142,14 +145,19 @@ class GeminiClient:
         # Initialize the client
         self.client = None
         self._initialized = False
+
+        unavailable_log = logger.error if self.required else logger.warning
         
         if not GEMINI_AVAILABLE:
-            logger.error(f"Gemini SDK not available: {GEMINI_ERROR}")
+            unavailable_log(f"Gemini SDK not available: {GEMINI_ERROR}")
             self.last_error = GEMINI_ERROR
             return
             
         if not self.api_key:
-            logger.error("GEMINI_API_KEY not set. Add it to .env file.")
+            if self.required:
+                logger.error("GEMINI_API_KEY not set. Add it to .env file.")
+            else:
+                logger.info("GEMINI_API_KEY not set; Gemini disabled and fallback providers will be used")
             self.last_error = "GEMINI_API_KEY not set"
             return
         

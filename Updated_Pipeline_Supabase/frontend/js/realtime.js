@@ -155,7 +155,6 @@ const RealtimeSync = {
                         this.reconnectDelayMs = 2000;
                         this.setConnectionState(true, 'connected');
                         this.updateTransportHint('Supabase WS');
-                        this.fetchRealtimeSnapshot();
                         return;
                     }
 
@@ -203,9 +202,7 @@ const RealtimeSync = {
         try {
             const response = await fetch(API.getRealtimeSnapshotUrl(), {
                 method: 'GET',
-                headers: {
-                    'Cache-Control': 'no-cache'
-                }
+                cache: 'no-store'
             });
             if (!response.ok) {
                 throw new Error('Realtime snapshot request failed');
@@ -215,7 +212,7 @@ const RealtimeSync = {
             this.emitPageUpdate(payload);
             this.emitStatusNotifications(payload);
         } catch (error) {
-            console.error('Failed to fetch realtime snapshot:', error);
+            console.warn('Failed to fetch realtime snapshot:', error);
         } finally {
             this.pendingSnapshotFetch = false;
         }

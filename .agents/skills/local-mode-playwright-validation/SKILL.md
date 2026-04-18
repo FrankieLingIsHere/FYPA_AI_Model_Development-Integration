@@ -20,6 +20,20 @@ Use this skill when the user asks to simulate offline behavior, validate reconne
 
    python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario all
 
+## Patch Gate: Action Tests Must Pass
+
+When patching frontend/runtime behavior, do not finalize the patch until all repository action tests pass with exit code 0.
+
+Run from repository root:
+
+python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
+
+Enforcement rule:
+
+- If any action test exits non-zero, keep patching and re-run until both are green.
+- If output contains non-blocking INFO lines but exit code is 0, treat as pass and report the INFO lines explicitly.
+
 ## Required Reporting
 
 After each run, report the exact evidence fields from the runner JSON:

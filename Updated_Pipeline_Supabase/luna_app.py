@@ -10304,6 +10304,17 @@ def provision_bootstrap_exchange():
 
 @app.route('/api/bootstrap/installer/request', methods=['GET'])
 def request_bootstrap_installer():
+    def _apply_no_cache_headers(response_obj: Response) -> Response:
+        response_obj.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response_obj.headers['Pragma'] = 'no-cache'
+        response_obj.headers['Expires'] = '0'
+        return response_obj
+
+    def _json_error(message: str, status_code: int) -> Response:
+        response = jsonify({'error': message})
+        response.status_code = int(status_code)
+        return _apply_no_cache_headers(response)
+
     machine_id = (request.args.get('machine_id') or '').strip()
     provision_secret = (
         request.args.get('provision_secret')
@@ -10313,12 +10324,14 @@ def request_bootstrap_installer():
 
     if machine_id:
         if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
-            return jsonify({'error': 'Invalid machine_id format'}), 400
+            return _json_error('Invalid machine_id format', 400)
 
         devices = _load_pending_devices()
         resolved_machine_id, device = _resolve_pending_device(machine_id, devices=devices)
 
-        if not device and provision_secret:
+        # If a provision_secret is present, always resolve through it first so stale or
+        # drifted machine_id query params do not force us onto a pending record.
+        if provision_secret:
             resolved_from_secret = _find_machine_id_by_provision_secret(provision_secret, devices=devices)
             if resolved_from_secret:
                 resolved_machine_id, device = _resolve_pending_device(resolved_from_secret, devices=devices)
@@ -10332,14 +10345,14 @@ def request_bootstrap_installer():
                 resolved_machine_id, device = _resolve_pending_device(resolved_from_local_state, devices=devices)
 
         if not device:
-            return jsonify({'error': 'Unknown machine_id'}), 404
+            return _json_error('Unknown machine_id', 404)
+
+        if provision_secret and not _is_valid_provision_secret(device, provision_secret):
+            return _json_error('Invalid provision_secret', 401)
 
         current_status = str(device.get('status') or 'pending').strip().lower()
         if current_status not in ('approved', 'provisioned'):
-            return jsonify({'error': 'Device is not approved for installer access'}), 403
-
-        if provision_secret and not _is_valid_provision_secret(device, provision_secret):
-            return jsonify({'error': 'Invalid provision_secret'}), 401
+            return _json_error('Device is not approved for installer access', 403)
 
         if not provision_secret:
             logger.info(
@@ -10347,24 +10360,26 @@ def request_bootstrap_installer():
                 "without provision_secret (recovery convenience path)."
             )
 
-        return _issue_installer_redirect(resolved_machine_id)
+        return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id))
 
     if provision_secret:
-        return jsonify({'error': 'machine_id is required when provision_secret is provided'}), 400
+        return _json_error('machine_id is required when provision_secret is provided', 400)
 
     if not ADMIN_PASSWORD:
-        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot issue installer token.', 403
+        response = Response('ADMIN_PASSWORD is not set in the cloud .env! Cannot issue installer token.', 403)
+        return _apply_no_cache_headers(response)
 
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD:
-        return Response(
+        response = Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials to issue an installer token',
             401,
             {'WWW-Authenticate': 'Basic realm="Login Required"'}
         )
+        return _apply_no_cache_headers(response)
 
-    return _issue_installer_redirect(machine_id or 'admin-installer')
+    return _apply_no_cache_headers(_issue_installer_redirect(machine_id or 'admin-installer'))
 
 
 @app.route('/api/bootstrap/installer', methods=['GET'])

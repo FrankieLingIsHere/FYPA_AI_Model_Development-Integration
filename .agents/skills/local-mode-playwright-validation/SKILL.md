@@ -37,6 +37,14 @@ When patching installer/startup batch flows (
 - self-update label targets remain present,
 - startup batch label contracts remain intact.
 
+When patching installer re-download eligibility/recovery UX (for example `credentials_present` states
+in `frontend/js/settings-modal.js` or `/api/bootstrap/installer/request`),
+`deployed_provisioning_action_test.py` must still pass because it also guards:
+
+- no-cache headers on installer request responses (prevents stale cached 403/redirect behavior),
+- provision-secret based recovery when query `machine_id` collides with a pending record,
+- pending records remaining unchanged while approved-machine installer issuance succeeds.
+
 Enforcement rule:
 
 - If any action test exits non-zero, keep patching and re-run until both are green.

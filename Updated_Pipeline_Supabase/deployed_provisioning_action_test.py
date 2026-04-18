@@ -86,6 +86,14 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         self.assertEqual(magic_response.status_code, 200)
 
+    def _assert_no_cache_headers(self, response):
+        self.assertEqual(
+            response.headers.get('Cache-Control'),
+            'no-store, no-cache, must-revalidate, max-age=0',
+        )
+        self.assertEqual(response.headers.get('Pragma'), 'no-cache')
+        self.assertEqual(response.headers.get('Expires'), '0')
+
     def test_status_requires_provision_secret(self):
         machine_id = 'TEST-EDGE-SECRET-001'
         provision_secret = self._request_device(machine_id)
@@ -130,6 +138,8 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(pending_installer.status_code, 403)
+        self._assert_no_cache_headers(pending_installer)
+        pending_installer.close()
 
         # Step 4: Admin approves from dashboard.
         self._approve_device(machine_id)
@@ -151,8 +161,10 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(installer_redirect)
         location = str(installer_redirect.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
+        installer_redirect.close()
 
     def test_re_request_for_approved_device_preserves_approval_status(self):
         machine_id = 'TEST-EDGE-REISSUE-001'
@@ -307,12 +319,14 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertIn(request_machine_only.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(request_machine_only)
         machine_only_location = str(request_machine_only.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', machine_only_location)
         request_machine_only.close()
 
         request_unauth = self.client.get('/api/bootstrap/installer/request')
         self.assertEqual(request_unauth.status_code, 401)
+        self._assert_no_cache_headers(request_unauth)
         request_unauth.close()
 
         request_auth = self.client.get(
@@ -321,6 +335,7 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertIn(request_auth.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(request_auth)
         location = str(request_auth.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
         request_auth.close()
@@ -422,6 +437,7 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(pending_resp.status_code, 403)
+        self._assert_no_cache_headers(pending_resp)
         pending_resp.close()
 
     def test_local_mode_status_recovers_canonical_machine_id_from_saved_secret(self):
@@ -492,9 +508,31 @@ class ProvisioningActionTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(installer_redirect)
         location = str(installer_redirect.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
+
+    def test_installer_request_secret_overrides_pending_machine_id_collision(self):
+        approved_machine_id = 'WEB-INSTALLER-APPROVED-SECRET-001'
+        pending_machine_id = 'WEB-INSTALLER-PENDING-SECRET-001'
+
+        approved_secret = self._request_device(approved_machine_id)
+        _ = self._request_device(pending_machine_id)
+        self._approve_device(approved_machine_id)
+
+        installer_redirect = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={pending_machine_id}&provision_secret={approved_secret}',
+            follow_redirects=False,
+        )
+        self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(installer_redirect)
+        location = str(installer_redirect.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+        installer_redirect.close()
+
+        devices = _load_pending_devices()
+        self.assertEqual(str((devices.get(pending_machine_id) or {}).get('status') or ''), 'pending')
 
     def test_admin_reset_all_clears_cloud_provisioning_records(self):
         self._request_device('TEST-EDGE-RESET-001')

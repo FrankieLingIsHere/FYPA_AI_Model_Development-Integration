@@ -855,7 +855,7 @@ const GlobalSettingsModal = {
         const status = this.normalizeLocalProvisionStatus(statusRaw);
         const machineId = String(machineIdRaw || '').trim();
         if (!machineId) return false;
-        return status === 'approved' || status === 'provisioned';
+        return status === 'approved' || status === 'provisioned' || status === 'credentials_present';
     },
 
     updateInstallerRedownloadButton() {
@@ -875,6 +875,10 @@ const GlobalSettingsModal = {
         }
 
         if (canRedownload) {
+            if (status === 'credentials_present') {
+                btn.title = 'Issue a fresh installer BAT to recover cloud sync linkage while credentials are already present.';
+                return;
+            }
             btn.title = 'Re-issue a fresh one-time installer BAT for this approved machine.';
             return;
         }
@@ -923,7 +927,7 @@ const GlobalSettingsModal = {
         }
 
         if (status === 'credentials_present') {
-            statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present, but this device is still pending cloud approval for failover sync.';
+            statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
             statusEl.style.color = 'var(--warning-color)';
             return;
         }
@@ -1575,7 +1579,18 @@ const GlobalSettingsModal = {
                     return;
                 }
 
-                window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?machine_id=${encodeURIComponent(machineId)}`);
+                const remoteState = this.loadRemoteProvisionState();
+                const provisionSecret = String((remoteState && remoteState.provisionSecret) || '').trim();
+
+                const requestParams = new URLSearchParams();
+                requestParams.set('machine_id', machineId);
+                if (provisionSecret) {
+                    requestParams.set('provision_secret', provisionSecret);
+                }
+                // Add a cache buster so stale redirects/403s are not reused by browsers/proxies.
+                requestParams.set('_ts', String(Date.now()));
+
+                window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${requestParams.toString()}`);
             });
         }
 

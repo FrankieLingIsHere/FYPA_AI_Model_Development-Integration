@@ -23,6 +23,22 @@ let provisioningStatusState = {
     machineId: '',
     adminPortalUrl: '',
     credentialsPresent: false,
+    cloudHeartbeat: {
+        available: false,
+        machineId: '',
+        status: 'missing',
+        isRecent: false,
+        freshWithinSeconds: 0,
+        lastSeenAt: '',
+        ageSeconds: null,
+        localModePossible: false,
+        ollamaInstalled: false,
+        ollamaRunning: false,
+        modelAvailable: false,
+        source: '',
+        error: '',
+        receivedAtMs: Date.now()
+    },
     error: '',
     source: 'startup-default',
     measuredAt: Date.now()
@@ -104,6 +120,75 @@ function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     return normalized || 'idle';
 }
 
+function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
+    const source = (input && typeof input === 'object') ? input : {};
+    const fallbackState = (fallback && typeof fallback === 'object') ? fallback : {};
+    const hasSourcePayload = Object.keys(source).length > 0;
+
+    const available = !!(source.available ?? fallbackState.available);
+    const machineId = String(
+        source.machine_id ?? source.machineId ?? fallbackState.machineId ?? ''
+    ).trim();
+    const status = String(source.status ?? fallbackState.status ?? 'missing').trim().toLowerCase() || 'missing';
+    const isRecent = !!(source.is_recent ?? source.isRecent ?? fallbackState.isRecent);
+
+    const parsedFreshWindow = Number(
+        source.fresh_within_seconds ?? source.freshWithinSeconds ?? fallbackState.freshWithinSeconds
+    );
+    const freshWithinSeconds = Number.isFinite(parsedFreshWindow)
+        ? Math.max(0, Math.floor(parsedFreshWindow))
+        : 0;
+
+    const lastSeenAt = String(
+        source.last_seen_at ?? source.lastSeenAt ?? fallbackState.lastSeenAt ?? ''
+    ).trim();
+
+    const parsedAgeSeconds = Number(source.age_seconds ?? source.ageSeconds);
+    const fallbackAgeSeconds = Number(fallbackState.ageSeconds);
+    const ageSeconds = Number.isFinite(parsedAgeSeconds)
+        ? Math.max(0, Math.floor(parsedAgeSeconds))
+        : (Number.isFinite(fallbackAgeSeconds) ? Math.max(0, Math.floor(fallbackAgeSeconds)) : null);
+
+    const receivedAtMs = hasSourcePayload
+        ? Date.now()
+        : Number(fallbackState.receivedAtMs || Date.now());
+
+    return {
+        available,
+        machineId,
+        status,
+        isRecent,
+        freshWithinSeconds,
+        lastSeenAt,
+        ageSeconds,
+        localModePossible: !!(source.local_mode_possible ?? source.localModePossible ?? fallbackState.localModePossible),
+        ollamaInstalled: !!(source.ollama_installed ?? source.ollamaInstalled ?? fallbackState.ollamaInstalled),
+        ollamaRunning: !!(source.ollama_running ?? source.ollamaRunning ?? fallbackState.ollamaRunning),
+        modelAvailable: !!(source.model_available ?? source.modelAvailable ?? fallbackState.modelAvailable),
+        source: String(source.source ?? fallbackState.source ?? '').trim(),
+        error: String(source.error ?? fallbackState.error ?? '').trim(),
+        receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : Date.now()
+    };
+}
+
+function cloudHeartbeatSignature(heartbeat = {}) {
+    const hb = heartbeat && typeof heartbeat === 'object' ? heartbeat : {};
+    return [
+        String(!!hb.available),
+        String(hb.machineId || ''),
+        String(hb.status || ''),
+        String(!!hb.isRecent),
+        String(hb.freshWithinSeconds || 0),
+        String(hb.lastSeenAt || ''),
+        String(!!hb.localModePossible),
+        String(!!hb.ollamaInstalled),
+        String(!!hb.ollamaRunning),
+        String(!!hb.modelAvailable),
+        String(hb.source || ''),
+        String(hb.error || '')
+    ].join('|');
+}
+
 function coerceProvisioningStatusState(input = {}, fallback = {}) {
     const credentialsPresent = !!(
         input.credentials_present ??
@@ -124,6 +209,11 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         input.admin_portal_url ?? input.adminPortalUrl ?? fallback.adminPortalUrl ?? ''
     ).trim();
 
+    const cloudHeartbeat = normalizeCloudHeartbeatState(
+        input.cloud_local_heartbeat ?? input.cloudHeartbeat ?? fallback.cloudHeartbeat,
+        fallback.cloudHeartbeat || {}
+    );
+
     const error = String(input.error ?? fallback.error ?? '').trim();
     const source = String(input.source ?? fallback.source ?? 'poll').trim() || 'poll';
     const measuredAt = Number(input.measuredAt ?? Date.now()) || Date.now();
@@ -133,6 +223,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         machineId,
         adminPortalUrl,
         credentialsPresent,
+        cloudHeartbeat,
         error,
         source,
         measuredAt
@@ -145,6 +236,7 @@ function hasProvisioningStateChanged(previousState, nextState) {
         || previousState.machineId !== nextState.machineId
         || previousState.adminPortalUrl !== nextState.adminPortalUrl
         || previousState.credentialsPresent !== nextState.credentialsPresent
+        || cloudHeartbeatSignature(previousState.cloudHeartbeat) !== cloudHeartbeatSignature(nextState.cloudHeartbeat)
         || previousState.error !== nextState.error;
 }
 

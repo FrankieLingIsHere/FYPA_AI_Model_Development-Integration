@@ -5,10 +5,12 @@ const GlobalSettingsModal = {
     closeHandler: null,
     keydownHandler: null,
     localProvisionPollInterval: null,
+    heartbeatCountdownInterval: null,
     localProvisionState: {
         status: 'idle',
         machineId: '',
-        adminPortalUrl: ''
+        adminPortalUrl: '',
+        cloudHeartbeat: null
     },
 
     RECOMMENDED_SETTINGS: {
@@ -153,6 +155,16 @@ const GlobalSettingsModal = {
                 margin-top: 0.6rem;
                 font-size: 0.88rem;
                 color: var(--text-secondary, #6b7280);
+            }
+
+            .global-heartbeat-badge {
+                display: none;
+                margin-top: 0.45rem;
+                font-size: 0.78rem;
+                padding: 0.3rem 0.6rem;
+                border-radius: 999px;
+                border: 1px solid transparent;
+                width: fit-content;
             }
 
             .global-provider-input {
@@ -332,6 +344,7 @@ const GlobalSettingsModal = {
                             <div id="globalLocalModeCheckupStatus" class="global-settings-status" style="margin-top: 0.65rem;">
                                 Local mode checkup not completed yet. Offline auto-setup remains disabled.
                             </div>
+                            <div id="globalLocalModeHeartbeatBadge" class="global-heartbeat-badge"></div>
                         </div>
                     </section>
                 </div>
@@ -411,16 +424,193 @@ const GlobalSettingsModal = {
         return normalized || 'idle';
     },
 
+    isLikelyRemoteBackend() {
+        try {
+            if (!API_CONFIG.BASE_URL) return false;
+            const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
+            const host = String(resolved.hostname || '').toLowerCase();
+            const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+            return !isLocalHost;
+        } catch (error) {
+            return false;
+        }
+    },
+
+    normalizeCloudHeartbeatPayload(rawHeartbeat, fallbackHeartbeat = null) {
+        const source = rawHeartbeat && typeof rawHeartbeat === 'object' ? rawHeartbeat : {};
+        const fallback = fallbackHeartbeat && typeof fallbackHeartbeat === 'object' ? fallbackHeartbeat : {};
+        const hasSource = Object.keys(source).length > 0;
+
+        const available = !!(source.available ?? fallback.available);
+        const machineId = String(source.machine_id ?? source.machineId ?? fallback.machineId ?? '').trim();
+        const status = String(source.status ?? fallback.status ?? 'missing').trim().toLowerCase() || 'missing';
+        const isRecent = !!(source.is_recent ?? source.isRecent ?? fallback.isRecent);
+
+        const rawFreshWindow = Number(source.fresh_within_seconds ?? source.freshWithinSeconds ?? fallback.freshWithinSeconds);
+        const freshWithinSeconds = Number.isFinite(rawFreshWindow)
+            ? Math.max(0, Math.floor(rawFreshWindow))
+            : 0;
+
+        const lastSeenAt = String(source.last_seen_at ?? source.lastSeenAt ?? fallback.lastSeenAt ?? '').trim();
+
+        const rawAgeSeconds = Number(source.age_seconds ?? source.ageSeconds);
+        const fallbackAgeSeconds = Number(fallback.ageSeconds);
+        const ageSeconds = Number.isFinite(rawAgeSeconds)
+            ? Math.max(0, Math.floor(rawAgeSeconds))
+            : (Number.isFinite(fallbackAgeSeconds) ? Math.max(0, Math.floor(fallbackAgeSeconds)) : null);
+
+        return {
+            available,
+            machineId,
+            status,
+            isRecent,
+            freshWithinSeconds,
+            lastSeenAt,
+            ageSeconds,
+            localModePossible: !!(source.local_mode_possible ?? source.localModePossible ?? fallback.localModePossible),
+            ollamaInstalled: !!(source.ollama_installed ?? source.ollamaInstalled ?? fallback.ollamaInstalled),
+            ollamaRunning: !!(source.ollama_running ?? source.ollamaRunning ?? fallback.ollamaRunning),
+            modelAvailable: !!(source.model_available ?? source.modelAvailable ?? fallback.modelAvailable),
+            source: String(source.source ?? fallback.source ?? '').trim(),
+            error: String(source.error ?? fallback.error ?? '').trim(),
+            receivedAtMs: hasSource ? Date.now() : Number(fallback.receivedAtMs || Date.now())
+        };
+    },
+
+    getCloudHeartbeatAgeSeconds(heartbeat) {
+        if (!heartbeat || typeof heartbeat !== 'object') {
+            return null;
+        }
+
+        const parsedLastSeen = Date.parse(String(heartbeat.lastSeenAt || '').trim());
+        if (Number.isFinite(parsedLastSeen)) {
+            return Math.max(0, Math.floor((Date.now() - parsedLastSeen) / 1000));
+        }
+
+        const baseAge = Number(heartbeat.ageSeconds);
+        if (!Number.isFinite(baseAge)) {
+            return null;
+        }
+
+        const receivedAtMs = Number(heartbeat.receivedAtMs || Date.now());
+        const elapsedSeconds = Number.isFinite(receivedAtMs)
+            ? Math.max(0, Math.floor((Date.now() - receivedAtMs) / 1000))
+            : 0;
+
+        return Math.max(0, Math.floor(baseAge) + elapsedSeconds);
+    },
+
+    formatDurationSeconds(rawSeconds) {
+        const total = Math.max(0, Math.floor(Number(rawSeconds) || 0));
+        if (total < 60) return `${total}s`;
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        if (mins < 60) return `${mins}m ${secs}s`;
+        const hours = Math.floor(mins / 60);
+        const remMins = mins % 60;
+        return `${hours}h ${remMins}m`;
+    },
+
+    updateHeartbeatBadge() {
+        const badgeEl = this.getEl('globalLocalModeHeartbeatBadge');
+        if (!badgeEl) return;
+
+        if (!this.isLikelyRemoteBackend()) {
+            badgeEl.style.display = 'none';
+            return;
+        }
+
+        const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
+        const toneMap = {
+            info: {
+                color: 'var(--text-secondary)',
+                background: 'rgba(148, 163, 184, 0.14)',
+                border: 'rgba(148, 163, 184, 0.45)'
+            },
+            success: {
+                color: 'var(--success-color)',
+                background: 'rgba(34, 197, 94, 0.15)',
+                border: 'rgba(34, 197, 94, 0.45)'
+            },
+            warning: {
+                color: 'var(--warning-color)',
+                background: 'rgba(245, 158, 11, 0.15)',
+                border: 'rgba(245, 158, 11, 0.45)'
+            },
+            error: {
+                color: 'var(--error-color)',
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: 'rgba(239, 68, 68, 0.45)'
+            }
+        };
+
+        const paintBadge = (tone, text) => {
+            const resolvedTone = toneMap[tone] || toneMap.info;
+            badgeEl.textContent = text;
+            badgeEl.style.display = 'inline-flex';
+            badgeEl.style.alignItems = 'center';
+            badgeEl.style.color = resolvedTone.color;
+            badgeEl.style.background = resolvedTone.background;
+            badgeEl.style.borderColor = resolvedTone.border;
+        };
+
+        if (!heartbeat.available) {
+            paintBadge('info', 'Cloud heartbeat: waiting for edge update');
+            return;
+        }
+
+        const ageSeconds = this.getCloudHeartbeatAgeSeconds(heartbeat);
+        const freshWindow = Math.max(0, Number(heartbeat.freshWithinSeconds || 0));
+        const ageText = ageSeconds == null ? 'unknown' : this.formatDurationSeconds(ageSeconds);
+
+        if (heartbeat.isRecent) {
+            const expiresInSeconds = ageSeconds == null
+                ? freshWindow
+                : Math.max(0, freshWindow - ageSeconds);
+            const expiresText = this.formatDurationSeconds(expiresInSeconds);
+            const readinessLabel = heartbeat.localModePossible ? 'ready' : 'not ready';
+            paintBadge(
+                heartbeat.localModePossible ? 'success' : 'warning',
+                `Cloud heartbeat: fresh (${readinessLabel}) • age ${ageText} • expires in ${expiresText}`
+            );
+            return;
+        }
+
+        const staleBySeconds = ageSeconds == null
+            ? null
+            : Math.max(0, ageSeconds - freshWindow);
+        const staleSuffix = staleBySeconds == null ? '' : ` • stale by ${this.formatDurationSeconds(staleBySeconds)}`;
+        paintBadge('error', `Cloud heartbeat: stale • last seen ${ageText} ago${staleSuffix}`);
+    },
+
+    ensureHeartbeatCountdown() {
+        if (this.heartbeatCountdownInterval) return;
+        this.heartbeatCountdownInterval = setInterval(() => {
+            this.updateHeartbeatBadge();
+        }, 1000);
+    },
+
+    stopHeartbeatCountdown() {
+        if (!this.heartbeatCountdownInterval) return;
+        clearInterval(this.heartbeatCountdownInterval);
+        this.heartbeatCountdownInterval = null;
+    },
+
     syncLocalProvisionStateFromPayload(payload) {
         const source = payload && typeof payload === 'object' ? payload : {};
         this.localProvisionState = {
             status: this.normalizeLocalProvisionStatus(source.status || this.localProvisionState.status),
             machineId: String(source.machineId || source.machine_id || this.localProvisionState.machineId || '').trim(),
-            adminPortalUrl: String(source.adminPortalUrl || source.admin_portal_url || this.localProvisionState.adminPortalUrl || '').trim()
+            adminPortalUrl: String(source.adminPortalUrl || source.admin_portal_url || this.localProvisionState.adminPortalUrl || '').trim(),
+            cloudHeartbeat: this.normalizeCloudHeartbeatPayload(
+                source.cloudHeartbeat || source.cloud_local_heartbeat,
+                this.localProvisionState.cloudHeartbeat
+            )
         };
 
         this.updateLocalModeCheckupStatus();
         this.updateInstallerRedownloadButton();
+        this.updateHeartbeatBadge();
     },
 
     canIssueInstallerRedownload(statusRaw, machineIdRaw) {
@@ -467,6 +657,8 @@ const GlobalSettingsModal = {
     updateLocalModeCheckupStatus() {
         const statusEl = this.getEl('globalLocalModeCheckupStatus');
         if (!statusEl) return;
+
+        this.updateHeartbeatBadge();
 
         const status = String(this.localProvisionState.status || '').toLowerCase();
         const machineId = String(this.localProvisionState.machineId || '').trim();
@@ -742,17 +934,7 @@ const GlobalSettingsModal = {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
             this.setProviderStatus('Running local mode checkup...', 'info');
 
-            const isLikelyRemoteBackend = (() => {
-                try {
-                    if (!API_CONFIG.BASE_URL) return false;
-                    const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
-                    const host = String(resolved.hostname || '').toLowerCase();
-                    const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
-                    return !isLocalHost;
-                } catch (error) {
-                    return false;
-                }
-            })();
+            const isLikelyRemoteBackend = this.isLikelyRemoteBackend();
 
             const options = await API.getReportRecoveryOptions({
                 machineId: (this.localProvisionState && this.localProvisionState.machineId) || ''
@@ -762,6 +944,10 @@ const GlobalSettingsModal = {
             const heartbeatMachineId = String(cloudHeartbeat.machine_id || '').trim();
             const heartbeatRecent = !!cloudHeartbeat.is_recent;
             const heartbeatFreshWindow = Number(cloudHeartbeat.fresh_within_seconds || 0) || 0;
+            this.syncLocalProvisionStateFromPayload({
+                machine_id: heartbeatMachineId || this.localProvisionState.machineId,
+                cloud_local_heartbeat: cloudHeartbeat
+            });
             const useHeartbeatDiagnostics = isLikelyRemoteBackend && heartbeatRecent;
             let ready = useHeartbeatDiagnostics
                 ? !!cloudHeartbeat.local_mode_possible
@@ -799,7 +985,7 @@ const GlobalSettingsModal = {
             }
 
             const provisionResult = isLikelyRemoteBackend
-                ? { success: false, status: 'skipped_remote_backend', skipped: true }
+                ? { success: false, status: 'skipped_remote_backend', skipped: true, cloud_local_heartbeat: cloudHeartbeat }
                 : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
@@ -926,6 +1112,7 @@ const GlobalSettingsModal = {
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
         this.lockBodyScroll();
+        this.ensureHeartbeatCountdown();
 
         if (typeof Router !== 'undefined' && Router.updateActiveNav) {
             Router.updateActiveNav('settings');
@@ -942,6 +1129,7 @@ const GlobalSettingsModal = {
             this.loadProviderRoutingSettings(),
             this.refreshProvisioningState()
         ]);
+        this.updateHeartbeatBadge();
 
         if (options && options.focusLocalCheckup) {
             setTimeout(() => this.focusLocalCheckupControls(), 40);
@@ -956,6 +1144,7 @@ const GlobalSettingsModal = {
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
         this.unlockBodyScroll();
+        this.stopHeartbeatCountdown();
 
         if (typeof Router !== 'undefined' && Router.updateActiveNav) {
             Router.updateActiveNav(APP_STATE.currentPage || 'home');

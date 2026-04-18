@@ -400,13 +400,51 @@ if errorlevel 1 exit /b 1
 "%OLLAMA_CMD%" list >nul 2>&1
 if !errorlevel! equ 0 exit /b 0
 
-start "" /b cmd /c "\"%OLLAMA_CMD%\" serve" >nul 2>&1
+call :spawn_ollama_runtime >nul 2>&1
 
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
     "%OLLAMA_CMD%" list >nul 2>&1
     if !errorlevel! equ 0 exit /b 0
+    if %%I equ 15 call :spawn_ollama_runtime >nul 2>&1
     timeout /t 1 /nobreak >nul
 )
+
+exit /b 1
+
+:spawn_ollama_runtime
+call :resolve_ollama_cmd
+if errorlevel 1 exit /b 1
+
+start "" /b "%OLLAMA_CMD%" serve >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+start "" /b cmd /c "\"%OLLAMA_CMD%\" serve" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+call :launch_ollama_desktop >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+exit /b 1
+
+:launch_ollama_desktop
+set "OLLAMA_APP_CMD="
+
+if not "%OLLAMA_CMD%"=="" (
+    for %%F in ("%OLLAMA_CMD%") do set "OLLAMA_APP_DIR=%%~dpF"
+    if exist "!OLLAMA_APP_DIR!ollama app.exe" set "OLLAMA_APP_CMD=!OLLAMA_APP_DIR!ollama app.exe"
+)
+
+if "!OLLAMA_APP_CMD!"=="" if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
+if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles%\Ollama\ollama app.exe"
+if defined ProgramFiles(x86) if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles(x86)%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles(x86)%\Ollama\ollama app.exe"
+
+if "!OLLAMA_APP_CMD!"=="" exit /b 1
+
+start "Ollama App" /min "!OLLAMA_APP_CMD!" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+start "" /min cmd /c "\"!OLLAMA_APP_CMD!\"" >nul 2>&1
+if not errorlevel 1 exit /b 0
 
 exit /b 1
 

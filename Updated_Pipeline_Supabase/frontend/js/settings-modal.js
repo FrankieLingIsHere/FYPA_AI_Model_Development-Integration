@@ -425,6 +425,22 @@ const GlobalSettingsModal = {
         return normalized || 'idle';
     },
 
+    isCloudEndpointUnreachable(errorText) {
+        const normalized = String(errorText || '').toLowerCase();
+        if (!normalized) return false;
+
+        const markers = [
+            'getaddrinfo failed',
+            'nameresolutionerror',
+            'failed to resolve',
+            'name resolution',
+            'cloud.example.test',
+            'nxdomain',
+            'no address associated with hostname'
+        ];
+        return markers.some((marker) => normalized.includes(marker));
+    },
+
     isLikelyRemoteBackend() {
         try {
             if (!API_CONFIG.BASE_URL) return false;
@@ -509,8 +525,10 @@ const GlobalSettingsModal = {
         const adminPortalUrl = `${API_CONFIG.BASE_URL}/admin/devices`;
 
         const stored = this.loadRemoteProvisionState();
+        const storedStatus = this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle');
         let machineId = this.ensureRemoteProvisionMachineId(machineIdHint || stored.machineId || this.localProvisionState.machineId);
         let provisionSecret = String((stored && stored.provisionSecret) || '').trim();
+        const hasStoredProvisionSecret = !!provisionSecret;
 
         if (allowRequest && (!provisionSecret || options.forceRequest === true)) {
             const requestResult = await API.requestCloudProvisioningApproval({ machineId });
@@ -551,8 +569,27 @@ const GlobalSettingsModal = {
 
         if ((statusResult && statusResult.success === false) && allowRequest) {
             const statusError = String((statusResult && statusResult.error) || '').toLowerCase();
-            const shouldRetryRequest = statusError.includes('invalid provision_secret') || statusError.includes('not_found');
-            if (shouldRetryRequest) {
+            const invalidSecret = statusError.includes('invalid provision_secret');
+            const notFound = statusError.includes('not_found');
+
+            // not_found can be transient when cloud instances are not sharing immediate in-memory state.
+            if (notFound && hasStoredProvisionSecret) {
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+                    const retryStatusResult = await API.getCloudProvisioningStatus({
+                        machineId,
+                        provisionSecret
+                    });
+                    statusResult = retryStatusResult || statusResult;
+                    if (retryStatusResult && retryStatusResult.success) {
+                        break;
+                    }
+                }
+            }
+
+            const refreshedError = String((statusResult && statusResult.error) || '').toLowerCase();
+            const shouldRetryRequest = invalidSecret || (!hasStoredProvisionSecret && refreshedError.includes('not_found'));
+            if ((statusResult && statusResult.success === false) && shouldRetryRequest) {
                 const retryRequest = await API.requestCloudProvisioningApproval({ machineId });
                 if (retryRequest && retryRequest.success) {
                     machineId = String(retryRequest.machine_id || machineId).trim() || machineId;
@@ -572,9 +609,19 @@ const GlobalSettingsModal = {
         }
 
         if (!statusResult || statusResult.success === false) {
+            if (storedStatus === 'approved' || storedStatus === 'provisioned') {
+                return {
+                    success: true,
+                    status: storedStatus,
+                    machine_id: machineId,
+                    admin_portal_url: adminPortalUrl,
+                    cloud_local_heartbeat: options.cloud_local_heartbeat || null
+                };
+            }
+
             return {
                 success: false,
-                status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
+                status: storedStatus,
                 machine_id: machineId,
                 admin_portal_url: adminPortalUrl,
                 error: String((statusResult && statusResult.error) || 'Unable to fetch cloud provisioning status.')
@@ -772,9 +819,21 @@ const GlobalSettingsModal = {
             source.cloudHeartbeat || source.cloud_local_heartbeat,
             this.localProvisionState.cloudHeartbeat
         );
-        let normalizedStatus = this.normalizeLocalProvisionStatus(source.status || this.localProvisionState.status);
+        const previousStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
+        let normalizedStatus = this.normalizeLocalProvisionStatus(source.status || previousStatus);
         const heartbeatProvisionStatus = this.normalizeLocalProvisionStatus(normalizedHeartbeat.provisionStatus || 'idle');
         if (this.isLikelyRemoteBackend()) {
+            const previousIsApprovedLike = previousStatus === 'approved' || previousStatus === 'provisioned';
+            const incomingIsWeakerStatus = (
+                normalizedStatus === 'idle'
+                || normalizedStatus === 'pending_approval'
+                || normalizedStatus === 'credentials_present'
+                || normalizedStatus === 'error'
+            );
+            if (previousIsApprovedLike && incomingIsWeakerStatus) {
+                normalizedStatus = previousStatus;
+            }
+
             if ((normalizedStatus === 'idle' || normalizedStatus === 'credentials_present') && heartbeatProvisionStatus !== 'idle') {
                 normalizedStatus = heartbeatProvisionStatus;
             }
@@ -864,7 +923,7 @@ const GlobalSettingsModal = {
         }
 
         if (status === 'credentials_present') {
-            statusEl.textContent = 'Cloud credentials exist on this backend, but this device is not marked provisioned yet.';
+            statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present, but this device is still pending cloud approval for failover sync.';
             statusEl.style.color = 'var(--warning-color)';
             return;
         }
@@ -1216,8 +1275,14 @@ const GlobalSettingsModal = {
                 this.showNotification('Provision request was rejected by administrator.', 'error');
             } else if (provisionResult && provisionResult.success === false && provisionResult.error) {
                 const provisionError = String(provisionResult.error).trim();
-                this.setProviderStatus(`${provisionError} Local mode can still run offline, but cloud sync requires approval.`, 'warning');
-                this.showNotification(provisionError, 'warning');
+                if (this.isCloudEndpointUnreachable(provisionError)) {
+                    const unreachableMessage = 'Cloud approval endpoint is unreachable right now. Local mode remains available; cloud sync will resume after CLOUD_URL/DNS is fixed.';
+                    this.setProviderStatus(unreachableMessage, 'warning');
+                    this.showNotification('Cloud approval endpoint is unreachable. Local mode remains available.', 'warning');
+                } else {
+                    this.setProviderStatus(`${provisionError} Local mode can still run offline, but cloud sync requires approval.`, 'warning');
+                    this.showNotification(provisionError, 'warning');
+                }
             } else if (ready) {
                 this.setProviderStatus(
                     useHeartbeatDiagnostics
@@ -1233,7 +1298,39 @@ const GlobalSettingsModal = {
                 );
             }
 
-            await this.refreshProvisioningState();
+            const shouldSkipRemoteRefresh = isLikelyRemoteBackend
+                && (
+                    status === 'pending_approval'
+                    || status === 'approved'
+                    || status === 'provisioned'
+                    || status === 'rejected'
+                );
+            if (!shouldSkipRemoteRefresh) {
+                await this.refreshProvisioningState();
+            }
+
+            let finalStatus = this.normalizeLocalProvisionStatus(
+                (this.localProvisionState && this.localProvisionState.status) || status || 'idle'
+            );
+
+            const provisionResultStatus = this.normalizeLocalProvisionStatus(status || 'idle');
+            const finalIsWeaker = (
+                finalStatus === 'idle'
+                || finalStatus === 'pending_approval'
+                || finalStatus === 'credentials_present'
+                || finalStatus === 'error'
+            );
+            if ((provisionResultStatus === 'approved' || provisionResultStatus === 'provisioned') && finalIsWeaker) {
+                finalStatus = provisionResultStatus;
+                this.localProvisionState.status = provisionResultStatus;
+                this.updateLocalModeCheckupStatus();
+            }
+
+            if (finalStatus === 'provisioned') {
+                this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
+            } else if (finalStatus === 'approved') {
+                this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
+            }
         } catch (error) {
             console.error('GlobalSettingsModal: local checkup failed', error);
             this.setProviderStatus(error.message || 'Local mode checkup failed', 'error');

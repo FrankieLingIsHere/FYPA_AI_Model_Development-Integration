@@ -866,10 +866,17 @@ function initializeAdaptivePipelineModeManager() {
     const manager = {
         currentMode: 'unknown',
         switchInFlight: false,
+        backlogSyncInFlight: false,
+        backlogSyncStartedAt: 0,
         lastSwitchAttemptAt: 0,
         minSwitchIntervalMs: 15 * 1000,
         lastBacklogSyncAt: 0,
         minBacklogSyncIntervalMs: 20 * 1000,
+        lastDirectReconnectSyncAt: 0,
+        minDirectReconnectSyncIntervalMs: 20 * 1000,
+        maxBacklogSyncInFlightMs: 90 * 1000,
+        pendingBacklogSyncReason: '',
+        deferredBacklogSyncTimer: null,
         lastEvaluatedNetworkState: null,
         localUnavailableNotified: false,
         evaluationTimer: null,
@@ -898,16 +905,75 @@ function initializeAdaptivePipelineModeManager() {
             return (Date.now() - this.lastBacklogSyncAt) >= this.minBacklogSyncIntervalMs;
         },
 
-        async syncBacklogToSupabase(reason, options = {}) {
+        canAttemptDirectReconnectSync(force = false) {
+            if (force) return true;
+            return (Date.now() - this.lastDirectReconnectSyncAt) >= this.minDirectReconnectSyncIntervalMs;
+        },
+
+        async directReconnectSync(reason, options = {}) {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             if (navigator.onLine === false) {
+                return null;
+            }
+            if (!this.canAttemptDirectReconnectSync(force)) {
+                return null;
+            }
+
+            this.lastDirectReconnectSyncAt = Date.now();
+
+            try {
+                const syncRes = await API.syncLocalCacheToSupabase({
+                    limit: 180,
+                    reason: 'reconnect_auto'
+                });
+                if (!syncRes || syncRes.success === false) {
+                    return syncRes || { success: false };
+                }
+
+                const enqueued = Number(syncRes.enqueued || 0);
+                if (notifyOnEnqueue && enqueued > 0) {
+                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info');
+                }
+                return syncRes;
+            } catch (error) {
+                console.warn('Direct reconnect sync failed:', error);
+                return { success: false, error: error.message };
+            }
+        },
+
+        async syncBacklogToSupabase(reason, options = {}) {
+            const force = !!options.force;
+            const notifyOnEnqueue = !!options.notifyOnEnqueue;
+            const deferIfInFlight = options.deferIfInFlight !== false;
+            if (navigator.onLine === false) {
+                return null;
+            }
+            if (this.backlogSyncInFlight) {
+                const inFlightAgeMs = this.backlogSyncStartedAt > 0
+                    ? (Date.now() - this.backlogSyncStartedAt)
+                    : 0;
+                if (inFlightAgeMs > this.maxBacklogSyncInFlightMs) {
+                    console.warn('Adaptive backlog sync lock looked stale; clearing in-flight guard.', {
+                        inFlightAgeMs,
+                        reason
+                    });
+                    this.backlogSyncInFlight = false;
+                    this.backlogSyncStartedAt = 0;
+                }
+            }
+            if (this.backlogSyncInFlight) {
+                if (deferIfInFlight) {
+                    this.pendingBacklogSyncReason = String(reason || 'reconnect_auto');
+                }
                 return null;
             }
             if (!this.canAttemptBacklogSync(force)) {
                 return null;
             }
 
+            this.backlogSyncInFlight = true;
+            this.backlogSyncStartedAt = Date.now();
             this.lastBacklogSyncAt = Date.now();
 
             try {
@@ -928,11 +994,40 @@ function initializeAdaptivePipelineModeManager() {
             } catch (error) {
                 console.warn('Adaptive backlog sync failed:', error);
                 return { success: false, error: error.message };
+            } finally {
+                this.backlogSyncInFlight = false;
+                this.backlogSyncStartedAt = 0;
+                if (
+                    this.pendingBacklogSyncReason
+                    && navigator.onLine !== false
+                    && !this.deferredBacklogSyncTimer
+                ) {
+                    const deferredReason = this.pendingBacklogSyncReason;
+                    this.pendingBacklogSyncReason = '';
+                    this.deferredBacklogSyncTimer = window.setTimeout(() => {
+                        this.deferredBacklogSyncTimer = null;
+                        this.syncBacklogToSupabase(`${deferredReason} (deferred retry)`, {
+                            force: true,
+                            notifyOnEnqueue: false,
+                            deferIfInFlight: true
+                        });
+                    }, 1200);
+                }
             }
         },
 
         async evaluate(networkState, options = {}) {
             const force = !!options.force;
+
+            const shouldPreferCloudNow = !this.shouldUseLocal(networkState) && navigator.onLine !== false;
+            if (shouldPreferCloudNow) {
+                await this.syncBacklogToSupabase(`network state ${networkState}`, {
+                    force,
+                    notifyOnEnqueue: force,
+                    deferIfInFlight: true
+                });
+            }
+
             if (this.switchInFlight) return;
             if (!this.canAttemptSwitch(force)) return;
 
@@ -958,13 +1053,11 @@ function initializeAdaptivePipelineModeManager() {
             }
 
             if (this.currentMode === 'cloud') {
-                await this.syncBacklogToSupabase(`network state ${networkState}`, {
-                    force,
-                    notifyOnEnqueue: force
-                });
                 return;
             }
-            await this.switchToCloudAndSync(`network state ${networkState}`);
+            await this.switchToCloudAndSync(`network state ${networkState}`, {
+                skipBacklogSync: true
+            });
         },
 
         async switchToLocal(reason) {
@@ -1022,9 +1115,10 @@ function initializeAdaptivePipelineModeManager() {
             }
         },
 
-        async switchToCloudAndSync(reason) {
+        async switchToCloudAndSync(reason, options = {}) {
             this.switchInFlight = true;
             this.lastSwitchAttemptAt = Date.now();
+            const skipBacklogSync = !!(options && options.skipBacklogSync);
 
             try {
                 const switchRes = await API.switchPipelineMode('cloud');
@@ -1032,13 +1126,20 @@ function initializeAdaptivePipelineModeManager() {
                     throw new Error(switchRes.error || 'Failed to switch provider routing to cloud mode');
                 }
 
-                await this.syncBacklogToSupabase(reason, { force: true, notifyOnEnqueue: false });
+                if (!skipBacklogSync) {
+                    await this.syncBacklogToSupabase(reason, { force: true, notifyOnEnqueue: false });
+                }
 
                 await API.executeReportRecovery('failover');
                 this.currentMode = 'cloud';
                 this.notify(`Pipeline switched to CLOUD mode and sync queued (${reason}).`, 'info');
             } catch (error) {
                 console.warn('Adaptive switch to cloud failed:', error);
+                // Keep reconciliation resilient even when cloud mode switch fails.
+                await this.syncBacklogToSupabase(`${reason} (cloud switch fallback)`, {
+                    force: true,
+                    notifyOnEnqueue: false
+                });
             } finally {
                 this.switchInFlight = false;
             }
@@ -1056,10 +1157,20 @@ function initializeAdaptivePipelineModeManager() {
     window.addEventListener('ppe-network:status', (event) => {
         const networkState = event && event.detail ? event.detail.state : 'network-good';
         manager.evaluate(networkState, { force: true });
+        if (!manager.shouldUseLocal(networkState) && navigator.onLine !== false) {
+            manager.directReconnectSync(`network event ${networkState}`, {
+                force: true,
+                notifyOnEnqueue: false
+            });
+        }
     });
 
     window.addEventListener('online', () => {
         manager.evaluate('network-good', { force: true });
+        manager.directReconnectSync('online event', {
+            force: true,
+            notifyOnEnqueue: false
+        });
     });
 
     window.addEventListener('offline', () => {

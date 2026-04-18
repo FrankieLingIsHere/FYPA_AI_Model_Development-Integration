@@ -2,12 +2,41 @@
 // BASE_URL auto-detects: same-origin when served by Flask,
 // or set window.PPE_API_URL before this script loads for custom backend URL.
 // For Vercel deployment, set PPE_API_URL to your backend server's public URL.
+const normalizeApiBaseUrl = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw || raw === window.location.origin) {
+        return '';
+    }
+    return raw.replace(/\/+$/, '');
+};
+
+let runtimeApiBaseOverride = null;
+
 const API_CONFIG = {
     get BASE_URL() {
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-            return 'http://localhost:5000';
+        if (runtimeApiBaseOverride !== null) {
+            return runtimeApiBaseOverride;
         }
-        return window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '';
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return this.LOCAL_BACKEND_URL;
+        }
+        return normalizeApiBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '');
+    },
+    set BASE_URL(value) {
+        if (value === null || value === undefined) {
+            runtimeApiBaseOverride = null;
+            return;
+        }
+
+        const normalized = normalizeApiBaseUrl(value);
+        runtimeApiBaseOverride = normalized;
+
+        if (normalized) {
+            window.PPE_API_URL = normalized;
+            if (window.__PPE_CONFIG__ && typeof window.__PPE_CONFIG__ === 'object') {
+                window.__PPE_CONFIG__.API_BASE_URL = normalized;
+            }
+        }
     },
     LOCAL_BACKEND_URL: 'http://localhost:5000',
     ENDPOINTS: {

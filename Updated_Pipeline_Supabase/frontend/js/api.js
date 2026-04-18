@@ -770,15 +770,29 @@ const API = {
                 };
             }
 
-            const query = new URLSearchParams();
-            query.set('machine_id', machineId);
-
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/provision/status?${query.toString()}`, {
-                cache: 'no-store',
-                headers: {
-                    'X-Provision-Secret': provisionSecret
+            const buildStatusUrl = (includeSecretInQuery = false) => {
+                const query = new URLSearchParams();
+                query.set('machine_id', machineId);
+                if (includeSecretInQuery) {
+                    query.set('provision_secret', provisionSecret);
                 }
-            });
+                return `${API_CONFIG.BASE_URL}/api/provision/status?${query.toString()}`;
+            };
+
+            let response;
+            try {
+                response = await fetch(buildStatusUrl(false), {
+                    cache: 'no-store',
+                    headers: {
+                        'X-Provision-Secret': provisionSecret
+                    }
+                });
+            } catch (headerRequestError) {
+                // Fallback for environments where custom header preflight is blocked.
+                response = await fetch(buildStatusUrl(true), {
+                    cache: 'no-store'
+                });
+            }
 
             const data = await response.json().catch(() => ({}));
             const status = String((data && data.status) || '').trim().toLowerCase();

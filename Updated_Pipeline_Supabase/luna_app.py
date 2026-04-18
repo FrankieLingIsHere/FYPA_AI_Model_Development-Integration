@@ -412,7 +412,9 @@ def _apply_cors_headers(response):
         response.headers['Access-Control-Allow-Origin'] = allow_origin
 
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With'
+    response.headers['Access-Control-Allow-Headers'] = (
+        'Content-Type,Authorization,X-Requested-With,X-Provision-Secret,X-Edge-Token'
+    )
     response.headers['Vary'] = 'Origin'
     return response
 
@@ -4057,6 +4059,23 @@ def _local_mode_cloud_url_is_placeholder(value: str) -> bool:
     return any(marker in normalized for marker in placeholder_markers)
 
 
+def _local_mode_is_name_resolution_error(raw_error: str) -> bool:
+    normalized = str(raw_error or '').strip().lower()
+    if not normalized:
+        return False
+
+    markers = (
+        'getaddrinfo failed',
+        'nameresolutionerror',
+        'failed to resolve',
+        'name resolution',
+        'no address associated with hostname',
+        'nodename nor servname provided',
+        'temporary failure in name resolution',
+    )
+    return any(marker in normalized for marker in markers)
+
+
 def _local_mode_is_placeholder_secret(value: str) -> bool:
     normalized = str(value or '').strip().lower()
     if not normalized:
@@ -4941,7 +4960,10 @@ def api_local_mode_auto_provisioning():
             )
             body = response.json() if response.content else {}
         except Exception as e:
-            return False, '', f'Failed to request provisioning approval: {e}'
+            err_text = str(e)
+            if _local_mode_is_name_resolution_error(err_text):
+                return False, '', f'cloud_endpoint_unreachable: {err_text}'
+            return False, '', f'Failed to request provisioning approval: {err_text}'
 
         if not response.ok:
             err = str((body or {}).get('error') or f'Provision request failed ({response.status_code})')
@@ -4956,10 +4978,32 @@ def api_local_mode_auto_provisioning():
     if not provision_secret or str(state.get('cloud_url') or '') != cloud_url:
         requested, provision_secret, request_error = _request_new_secret()
         if not requested:
+            request_error_text = str(request_error or '').strip()
+            if request_error_text.lower().startswith('cloud_endpoint_unreachable:'):
+                warning_message = (
+                    'Cloud approval endpoint is unreachable right now. '
+                    'Local mode remains available, and cloud sync will resume after CLOUD_URL/DNS is fixed.'
+                )
+                fallback_status = 'credentials_present' if credentials_present else 'idle'
+                logger.warning(
+                    'Local auto-provision reached cloud endpoint unreachable state '
+                    f'(machine_id={machine_id}, cloud_url={cloud_url}).'
+                )
+                return jsonify({
+                    'success': True,
+                    'status': fallback_status,
+                    'warning': warning_message,
+                    'machine_id': machine_id,
+                    'admin_portal_url': admin_portal_url,
+                    'cloud_url': cloud_url,
+                    'credentials_present': credentials_present,
+                    'cloud_reachable': False,
+                })
+
             return jsonify({
                 'success': False,
                 'status': 'request_failed',
-                'error': request_error,
+                'error': request_error_text,
                 'machine_id': machine_id,
                 'admin_portal_url': admin_portal_url,
                 'cloud_url': cloud_url,
@@ -4986,10 +5030,32 @@ def api_local_mode_auto_provisioning():
         )
         status_body = status_response.json() if status_response.content else {}
     except Exception as e:
+        poll_error_text = str(e)
+        if _local_mode_is_name_resolution_error(poll_error_text):
+            warning_message = (
+                'Cloud status endpoint is unreachable right now. '
+                'Local mode remains available, and cloud sync will resume after CLOUD_URL/DNS is fixed.'
+            )
+            fallback_status = 'credentials_present' if credentials_present else 'pending_approval'
+            logger.warning(
+                'Local auto-provision cloud status poll unreachable '
+                f'(machine_id={machine_id}, cloud_url={cloud_url}).'
+            )
+            return jsonify({
+                'success': True,
+                'status': fallback_status,
+                'warning': warning_message,
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+                'credentials_present': credentials_present,
+                'cloud_reachable': False,
+            })
+
         return jsonify({
             'success': False,
             'status': 'poll_failed',
-            'error': f'Failed to poll provisioning status: {e}',
+            'error': f'Failed to poll provisioning status: {poll_error_text}',
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
@@ -8490,6 +8556,25 @@ def _resolve_provisioning_state_backend() -> bool:
 
 
 PROVISIONING_STATE_USE_SUPABASE = _resolve_provisioning_state_backend()
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, '1' if default else '0')).strip().lower()
+    return raw in {'1', 'true', 'yes', 'on'}
+
+
+PROVISIONING_STATE_ALLOW_FILE_FALLBACK = _env_truthy(
+    'PROVISIONING_STATE_ALLOW_FILE_FALLBACK',
+    default=False,
+)
+PROVISIONING_STATE_REQUIRE_SHARED_DB = (
+    PROVISIONING_STATE_USE_SUPABASE
+    and _is_hosted_runtime_environment()
+    and not PROVISIONING_STATE_ALLOW_FILE_FALLBACK
+)
+PROVISIONING_STATE_SCHEMA_LOCK = Lock()
+PROVISIONING_STATE_SCHEMA_READY = False
+
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
 INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
@@ -8659,6 +8744,80 @@ def _get_provisioning_db_connection() -> Optional[Any]:
         return None
 
 
+def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
+    if not PROVISIONING_STATE_USE_SUPABASE:
+        return False
+
+    global PROVISIONING_STATE_SCHEMA_READY
+
+    if PROVISIONING_STATE_SCHEMA_READY:
+        return True
+
+    with PROVISIONING_STATE_SCHEMA_LOCK:
+        if PROVISIONING_STATE_SCHEMA_READY:
+            return True
+
+        active_conn = conn or _get_provisioning_db_connection()
+        if active_conn is None:
+            return False
+
+        try:
+            with active_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.provisioning_devices (
+                        machine_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'provisioned', 'rejected')),
+                        requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        token TEXT NOT NULL DEFAULT '',
+                        provision_secret_hash TEXT NOT NULL DEFAULT '',
+                        approved_at TIMESTAMPTZ NULL,
+                        provisioned_at TIMESTAMPTZ NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_provisioning_devices_status
+                    ON public.provisioning_devices (status)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_provisioning_devices_requested_at
+                    ON public.provisioning_devices (requested_at DESC)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.provisioning_bootstrap_jti (
+                        jti TEXT PRIMARY KEY,
+                        used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_provisioning_bootstrap_jti_used_at
+                    ON public.provisioning_bootstrap_jti (used_at DESC)
+                    """
+                )
+            active_conn.commit()
+            PROVISIONING_STATE_SCHEMA_READY = True
+            logger.info('Provisioning state schema verified in Supabase')
+            return True
+        except Exception as schema_err:
+            try:
+                active_conn.rollback()
+            except Exception:
+                pass
+            logger.warning(f"Failed to initialize provisioning state schema in Supabase: {schema_err}")
+            return False
+
+
 def _json_backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.bak")
 
@@ -8810,7 +8969,9 @@ def _delete_pending_device_file(machine_id: str) -> bool:
     return True
 
 
-def _load_pending_devices_from_db() -> Optional[Dict[str, Dict[str, Any]]]:
+def _load_pending_devices_from_db(
+    _retry_on_missing_relation: bool = True,
+) -> Optional[Dict[str, Dict[str, Any]]]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -8831,6 +8992,8 @@ def _load_pending_devices_from_db() -> Optional[Dict[str, Dict[str, Any]]]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _load_pending_devices_from_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to load pending devices from Supabase; using file fallback: {e}")
@@ -8856,7 +9019,10 @@ def _load_pending_devices_from_db() -> Optional[Dict[str, Dict[str, Any]]]:
     return records
 
 
-def _save_pending_devices_to_db(data: Dict[str, Dict[str, Any]]) -> Optional[bool]:
+def _save_pending_devices_to_db(
+    data: Dict[str, Dict[str, Any]],
+    _retry_on_missing_relation: bool = True,
+) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -8900,13 +9066,15 @@ def _save_pending_devices_to_db(data: Dict[str, Dict[str, Any]]) -> Optional[boo
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _save_pending_devices_to_db(data, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to save pending devices to Supabase; using file fallback: {e}")
         return None
 
 
-def _clear_pending_devices_db() -> Optional[int]:
+def _clear_pending_devices_db(_retry_on_missing_relation: bool = True) -> Optional[int]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -8923,13 +9091,18 @@ def _clear_pending_devices_db() -> Optional[int]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _clear_pending_devices_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to clear pending devices in Supabase; using file fallback: {e}")
         return None
 
 
-def _delete_pending_device_db(machine_id: str) -> Optional[bool]:
+def _delete_pending_device_db(
+    machine_id: str,
+    _retry_on_missing_relation: bool = True,
+) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -8950,6 +9123,8 @@ def _delete_pending_device_db(machine_id: str) -> Optional[bool]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _delete_pending_device_db(machine_id, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to delete pending device in Supabase; using file fallback: {e}")
@@ -8984,7 +9159,9 @@ def _save_bootstrap_token_state_to_file(state: Dict[str, Dict[str, str]]) -> Non
     _atomic_write_json(BOOTSTRAP_TOKEN_STATE_FILE, state)
 
 
-def _load_bootstrap_token_state_from_db() -> Optional[Dict[str, Dict[str, str]]]:
+def _load_bootstrap_token_state_from_db(
+    _retry_on_missing_relation: bool = True,
+) -> Optional[Dict[str, Dict[str, str]]]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9000,6 +9177,8 @@ def _load_bootstrap_token_state_from_db() -> Optional[Dict[str, Dict[str, str]]]
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _load_bootstrap_token_state_from_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to load bootstrap token state from Supabase; using file fallback: {e}")
@@ -9018,7 +9197,10 @@ def _load_bootstrap_token_state_from_db() -> Optional[Dict[str, Dict[str, str]]]
     return {'used_jti': used}
 
 
-def _save_bootstrap_token_state_to_db(state: Dict[str, Dict[str, str]]) -> Optional[bool]:
+def _save_bootstrap_token_state_to_db(
+    state: Dict[str, Dict[str, str]],
+    _retry_on_missing_relation: bool = True,
+) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9052,13 +9234,15 @@ def _save_bootstrap_token_state_to_db(state: Dict[str, Dict[str, str]]) -> Optio
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _save_bootstrap_token_state_to_db(state, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to save bootstrap token state to Supabase; using file fallback: {e}")
         return None
 
 
-def _prune_bootstrap_jti_state_db() -> Optional[bool]:
+def _prune_bootstrap_jti_state_db(_retry_on_missing_relation: bool = True) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9080,13 +9264,18 @@ def _prune_bootstrap_jti_state_db() -> Optional[bool]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _prune_bootstrap_jti_state_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to prune bootstrap JTI in Supabase; using file fallback: {e}")
         return None
 
 
-def _consume_bootstrap_jti_db(jti: str) -> Optional[bool]:
+def _consume_bootstrap_jti_db(
+    jti: str,
+    _retry_on_missing_relation: bool = True,
+) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9116,13 +9305,18 @@ def _consume_bootstrap_jti_db(jti: str) -> Optional[bool]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _consume_bootstrap_jti_db(jti, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to consume bootstrap JTI in Supabase; using file fallback: {e}")
         return None
 
 
-def _is_bootstrap_jti_used_db(jti: str) -> Optional[bool]:
+def _is_bootstrap_jti_used_db(
+    jti: str,
+    _retry_on_missing_relation: bool = True,
+) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9147,13 +9341,15 @@ def _is_bootstrap_jti_used_db(jti: str) -> Optional[bool]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _is_bootstrap_jti_used_db(jti, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to check bootstrap JTI in Supabase; using file fallback: {e}")
         return None
 
 
-def _clear_bootstrap_token_state_db() -> Optional[int]:
+def _clear_bootstrap_token_state_db(_retry_on_missing_relation: bool = True) -> Optional[int]:
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
@@ -9170,6 +9366,8 @@ def _clear_bootstrap_token_state_db() -> Optional[int]:
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _clear_bootstrap_token_state_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to clear bootstrap token state in Supabase; using file fallback: {e}")
@@ -9180,6 +9378,9 @@ def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
     with PENDING_DEVICES_LOCK:
         db_records = _load_pending_devices_from_db()
         if db_records is not None:
+            if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                return db_records
+
             if db_records:
                 return db_records
             file_records = _load_pending_devices_from_file()
@@ -9188,10 +9389,16 @@ def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
                 return file_records
             return {}
 
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared provisioning state backend unavailable; refusing local pending_devices fallback in hosted runtime'
+            )
+            return {}
+
         return _load_pending_devices_from_file()
 
 
-def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> None:
+def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> bool:
     with PENDING_DEVICES_LOCK:
         normalized_data = {
             str(machine_id): _normalize_pending_device_record(record)
@@ -9199,13 +9406,32 @@ def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> None:
             if str(machine_id or '').strip()
         }
 
-        _save_pending_devices_to_db(normalized_data)
+        saved_db = _save_pending_devices_to_db(normalized_data)
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            if saved_db is True:
+                return True
+            logger.error(
+                'Shared provisioning state write failed; refusing local pending_devices fallback in hosted runtime'
+            )
+            return False
+
         _save_pending_devices_to_file(normalized_data)
+        return True
 
 
 def _clear_pending_devices() -> int:
     with PENDING_DEVICES_LOCK:
         cleared_db = _clear_pending_devices_db()
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            if cleared_db is None:
+                logger.error(
+                    'Shared provisioning state clear failed; refusing local pending_devices fallback in hosted runtime'
+                )
+                return 0
+            return int(cleared_db)
+
         cleared_file = _clear_pending_devices_file()
         return cleared_db if cleared_db is not None else cleared_file
 
@@ -9213,6 +9439,15 @@ def _clear_pending_devices() -> int:
 def _delete_pending_device(machine_id: str) -> bool:
     with PENDING_DEVICES_LOCK:
         deleted_db = _delete_pending_device_db(machine_id)
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            if deleted_db is None:
+                logger.error(
+                    'Shared provisioning state delete failed; refusing local pending_devices fallback in hosted runtime'
+                )
+                return False
+            return bool(deleted_db)
+
         deleted_file = _delete_pending_device_file(machine_id)
         return bool(deleted_file or (deleted_db is True))
 
@@ -9221,6 +9456,9 @@ def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
     with BOOTSTRAP_TOKEN_STATE_LOCK:
         db_state = _load_bootstrap_token_state_from_db()
         if db_state is not None:
+            if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                return db_state
+
             used = db_state.get('used_jti') if isinstance(db_state, dict) else {}
             if used:
                 return db_state
@@ -9228,6 +9466,12 @@ def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
             if file_state.get('used_jti'):
                 _save_bootstrap_token_state_to_db(file_state)
                 return file_state
+            return {'used_jti': {}}
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared bootstrap token backend unavailable; refusing local bootstrap token fallback in hosted runtime'
+            )
             return {'used_jti': {}}
 
         return _load_bootstrap_token_state_from_file()
@@ -9239,12 +9483,28 @@ def _save_bootstrap_token_state(state: Dict[str, Dict[str, str]]) -> None:
         used = normalized.get('used_jti') if isinstance(normalized.get('used_jti'), dict) else {}
         normalized_payload = {'used_jti': {str(k): str(v) for k, v in used.items() if str(k).strip()}}
 
-        _save_bootstrap_token_state_to_db(normalized_payload)
+        saved_db = _save_bootstrap_token_state_to_db(normalized_payload)
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            if saved_db is not True:
+                logger.error(
+                    'Shared bootstrap token write failed; refusing local bootstrap token fallback in hosted runtime'
+                )
+            return
+
         _save_bootstrap_token_state_to_file(normalized_payload)
 
 
 def _clear_bootstrap_token_state() -> int:
     with BOOTSTRAP_TOKEN_STATE_LOCK:
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            cleared_db = _clear_bootstrap_token_state_db()
+            if cleared_db is None:
+                logger.error(
+                    'Shared bootstrap token clear failed; refusing local bootstrap token fallback in hosted runtime'
+                )
+                return 0
+            return int(cleared_db)
+
         current_state = _load_bootstrap_token_state_from_file()
         current_used = current_state.get('used_jti') if isinstance(current_state.get('used_jti'), dict) else {}
         cleared_file = len(current_used)
@@ -9281,6 +9541,12 @@ def _is_bootstrap_jti_used(jti: str) -> bool:
         if db_used is not None:
             return db_used
 
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared bootstrap token lookup failed; treating token as already used in hosted runtime'
+            )
+            return True
+
         state = _load_bootstrap_token_state_from_file()
         state = _prune_bootstrap_jti_state(state)
         _save_bootstrap_token_state_to_file(state)
@@ -9296,6 +9562,12 @@ def _consume_bootstrap_jti(jti: str) -> bool:
         db_consumed = _consume_bootstrap_jti_db(normalized_jti)
         if db_consumed is not None:
             return db_consumed
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared bootstrap token consume failed; rejecting token consumption in hosted runtime'
+            )
+            return False
 
         state = _load_bootstrap_token_state_from_file()
         state = _prune_bootstrap_jti_state(state)
@@ -9891,7 +10163,8 @@ def provision_request():
         'approved_at': existing_approved_at if preserve_status else None,
         'provisioned_at': existing_provisioned_at if effective_status == 'provisioned' else None,
     }
-    _save_pending_devices(devices)
+    if not _save_pending_devices(devices):
+        return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
 
     if notify_pending_request:
         notify_admin(machine_id, 'pending', token=approval_token)
@@ -10011,7 +10284,8 @@ def provision_bootstrap_exchange():
     device['status'] = 'provisioned'
     device['provisioned_at'] = datetime.now(timezone.utc).isoformat()
     devices[machine_id] = device
-    _save_pending_devices(devices)
+    if not _save_pending_devices(devices):
+        return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
 
     return jsonify({
         'status': 'provisioned',
@@ -10174,7 +10448,8 @@ def admin_devices():
             if action == 'approve':
                 devices[machine_id]['status'] = 'approved'
                 devices[machine_id]['approved_at'] = datetime.now(timezone.utc).isoformat()
-                _save_pending_devices(devices)
+                if not _save_pending_devices(devices):
+                    return 'Provisioning shared-state backend unavailable', 503
                 notify_admin(machine_id, 'approved')
             elif action == 'reject':
                 deleted = _delete_pending_device(machine_id)
@@ -10182,7 +10457,8 @@ def admin_devices():
                     devices.pop(machine_id, None)
                 else:
                     del devices[machine_id]
-                    _save_pending_devices(devices)
+                    if not _save_pending_devices(devices):
+                        return 'Provisioning shared-state backend unavailable', 503
 
         return redirect('/admin/devices')
 
@@ -10415,7 +10691,8 @@ def admin_devices_quick_approve():
         device['status'] = 'approved'
         device['approved_at'] = datetime.now(timezone.utc).isoformat()
         devices[machine_id] = device
-        _save_pending_devices(devices)
+        if not _save_pending_devices(devices):
+            return 'Provisioning shared-state backend unavailable', 503
         notify_admin(machine_id, 'approved')
 
     installer_request_link = f"/api/bootstrap/installer/request?machine_id={quote(machine_id)}"

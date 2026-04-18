@@ -857,11 +857,16 @@ const API = {
 
     async syncLocalCacheToSupabase(options = {}) {
         try {
+            const limit = Number(options.limit || 120);
+            const reason = String(options.reason || '').trim() || 'manual_api';
+            const dryRun = !!options.dryRun;
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/reports/sync-local-cache`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    limit: Number(options.limit || 120)
+                    limit,
+                    reason,
+                    dry_run: dryRun
                 })
             });
 

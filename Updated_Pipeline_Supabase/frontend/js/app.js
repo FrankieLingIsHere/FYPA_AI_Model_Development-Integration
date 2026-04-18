@@ -868,6 +868,8 @@ function initializeAdaptivePipelineModeManager() {
         switchInFlight: false,
         lastSwitchAttemptAt: 0,
         minSwitchIntervalMs: 15 * 1000,
+        lastBacklogSyncAt: 0,
+        minBacklogSyncIntervalMs: 20 * 1000,
         lastEvaluatedNetworkState: null,
         localUnavailableNotified: false,
         evaluationTimer: null,
@@ -889,6 +891,44 @@ function initializeAdaptivePipelineModeManager() {
         canAttemptSwitch(force = false) {
             if (force) return true;
             return (Date.now() - this.lastSwitchAttemptAt) >= this.minSwitchIntervalMs;
+        },
+
+        canAttemptBacklogSync(force = false) {
+            if (force) return true;
+            return (Date.now() - this.lastBacklogSyncAt) >= this.minBacklogSyncIntervalMs;
+        },
+
+        async syncBacklogToSupabase(reason, options = {}) {
+            const force = !!options.force;
+            const notifyOnEnqueue = !!options.notifyOnEnqueue;
+            if (navigator.onLine === false) {
+                return null;
+            }
+            if (!this.canAttemptBacklogSync(force)) {
+                return null;
+            }
+
+            this.lastBacklogSyncAt = Date.now();
+
+            try {
+                const syncRes = await API.syncLocalCacheToSupabase({
+                    limit: 180,
+                    reason: 'reconnect_auto'
+                });
+                if (!syncRes || syncRes.success === false) {
+                    console.warn('Local-cache reconciliation returned warning:', (syncRes && syncRes.error) || syncRes);
+                    return syncRes || { success: false };
+                }
+
+                const enqueued = Number(syncRes.enqueued || 0);
+                if (notifyOnEnqueue && enqueued > 0) {
+                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info');
+                }
+                return syncRes;
+            } catch (error) {
+                console.warn('Adaptive backlog sync failed:', error);
+                return { success: false, error: error.message };
+            }
         },
 
         async evaluate(networkState, options = {}) {
@@ -917,7 +957,13 @@ function initializeAdaptivePipelineModeManager() {
                 return;
             }
 
-            if (this.currentMode === 'cloud') return;
+            if (this.currentMode === 'cloud') {
+                await this.syncBacklogToSupabase(`network state ${networkState}`, {
+                    force,
+                    notifyOnEnqueue: force
+                });
+                return;
+            }
             await this.switchToCloudAndSync(`network state ${networkState}`);
         },
 
@@ -986,10 +1032,7 @@ function initializeAdaptivePipelineModeManager() {
                     throw new Error(switchRes.error || 'Failed to switch provider routing to cloud mode');
                 }
 
-                const syncRes = await API.syncLocalCacheToSupabase({ limit: 180 });
-                if (syncRes && syncRes.success === false) {
-                    console.warn('Local-cache reconciliation returned warning:', syncRes.error || syncRes);
-                }
+                await this.syncBacklogToSupabase(reason, { force: true, notifyOnEnqueue: false });
 
                 await API.executeReportRecovery('failover');
                 this.currentMode = 'cloud';

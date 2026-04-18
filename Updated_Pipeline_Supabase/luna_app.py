@@ -6166,11 +6166,12 @@ def api_sync_local_cache_to_supabase():
     except Exception:
         max_items = 120
     dry_run = bool(payload.get('dry_run', False))
+    sync_reason = str(payload.get('reason') or 'manual_api').strip() or 'manual_api'
 
     result = _sync_local_cache_candidates(
         max_items=max_items,
         dry_run=dry_run,
-        reconcile_reason='manual_api',
+        reconcile_reason=sync_reason,
         require_worker=True
     )
 

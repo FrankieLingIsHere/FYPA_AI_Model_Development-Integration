@@ -103,6 +103,56 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(valid_secret.status_code, 200)
         self.assertEqual(valid_secret.json.get('status'), 'pending')
 
+    def test_deployed_first_install_bootstrap_sequence(self):
+        """Regression: deployed UI can bootstrap approval flow before any local backend exists."""
+        machine_id = 'WEB-FIRST-INSTALL-001'
+
+        # Step 1: Deployed client submits initial provisioning request.
+        request_response = self.client.post('/api/provision/request', json={'machine_id': machine_id})
+        self.assertEqual(request_response.status_code, 200)
+        request_payload = request_response.json or {}
+        provision_secret = str(request_payload.get('provision_secret') or '').strip()
+        self.assertTrue(provision_secret)
+        self.assertEqual(request_payload.get('device_status'), 'pending')
+
+        # Step 2: Deployed client polls status using header-based secret (not query string).
+        pending_status = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}',
+            headers={'X-Provision-Secret': provision_secret},
+        )
+        self.assertEqual(pending_status.status_code, 200)
+        self.assertEqual((pending_status.json or {}).get('status'), 'pending')
+
+        # Step 3: Installer access must still be denied before admin approval.
+        pending_installer = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+            follow_redirects=False,
+        )
+        self.assertEqual(pending_installer.status_code, 403)
+
+        # Step 4: Admin approves from dashboard.
+        self._approve_device(machine_id)
+
+        # Step 5: Same deployed client polls again and receives approved + bootstrap/installer tokens.
+        approved_status = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}',
+            headers={'X-Provision-Secret': provision_secret},
+        )
+        self.assertEqual(approved_status.status_code, 200)
+        approved_payload = approved_status.json or {}
+        self.assertEqual(approved_payload.get('status'), 'approved')
+        self.assertTrue(str(approved_payload.get('bootstrap_token') or '').strip())
+        self.assertTrue(str(approved_payload.get('installer_token') or '').strip())
+
+        # Step 6: Installer issuance can now be done by machine_id only.
+        installer_redirect = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+            follow_redirects=False,
+        )
+        self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        location = str(installer_redirect.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+
     def test_re_request_for_approved_device_preserves_approval_status(self):
         machine_id = 'TEST-EDGE-REISSUE-001'
         first_secret = self._request_device(machine_id)

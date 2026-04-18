@@ -47,10 +47,12 @@ If credentials are not embedded (for example, cloud credentials not configured y
 The backend now enforces this sequence:
 
 1. User requests Local Mode from UI (`Run Local Mode Checkup`).
-2. Local backend auto-triggers edge provisioning with `POST /api/provision/request` using persistent local `machine_id`.
-3. Backend stores pending request and returns a one-time `provision_secret` to that edge client.
+2. Provision request bootstrap can start from either path:
+  - Local backend path: local runtime calls `POST /api/provision/request` using persistent local `machine_id`.
+  - Deployed-UI first-install path (no local backend yet): frontend checkup calls `POST /api/provision/request` directly and keeps returned `provision_secret` in browser-local state until installer is downloaded.
+3. Backend stores pending request and returns a one-time `provision_secret` to the requesting client.
 4. Admin approves device from admin routes (`/admin/devices` or quick-approve link).
-5. Local backend polls `GET /api/provision/status` with both:
+5. Requesting client polls `GET /api/provision/status` with both:
   - `machine_id`
   - `provision_secret`
 6. After approval, status endpoint returns short-lived one-time tokens:

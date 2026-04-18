@@ -707,6 +707,113 @@ const API = {
         }
     },
 
+    async requestCloudProvisioningApproval(options = {}) {
+        try {
+            const machineId = String(
+                (options && (options.machineId || options.machine_id)) || ''
+            ).trim();
+            if (!machineId) {
+                return {
+                    success: false,
+                    error: 'machine_id is required to request provisioning approval'
+                };
+            }
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/provision/request`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ machine_id: machineId })
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    machine_id: String(data.machine_id || machineId).trim(),
+                    error: data.error || data.message || `Provision request failed (${response.status})`
+                };
+            }
+
+            return {
+                success: true,
+                ...data,
+                machine_id: String(data.machine_id || machineId).trim()
+            };
+        } catch (error) {
+            console.error('Error requesting cloud provisioning approval:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    async getCloudProvisioningStatus(options = {}) {
+        try {
+            const machineId = String(
+                (options && (options.machineId || options.machine_id)) || ''
+            ).trim();
+            const provisionSecret = String(
+                (options && (options.provisionSecret || options.provision_secret)) || ''
+            ).trim();
+
+            if (!machineId) {
+                return {
+                    success: false,
+                    error: 'machine_id is required to fetch cloud provisioning status'
+                };
+            }
+
+            if (!provisionSecret) {
+                return {
+                    success: false,
+                    machine_id: machineId,
+                    error: 'provision_secret is required to fetch cloud provisioning status'
+                };
+            }
+
+            const query = new URLSearchParams();
+            query.set('machine_id', machineId);
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}/api/provision/status?${query.toString()}`, {
+                cache: 'no-store',
+                headers: {
+                    'X-Provision-Secret': provisionSecret
+                }
+            });
+
+            const data = await response.json().catch(() => ({}));
+            const status = String((data && data.status) || '').trim().toLowerCase();
+
+            if (response.status === 403 && status === 'rejected') {
+                return {
+                    success: true,
+                    ...data,
+                    status: 'rejected',
+                    machine_id: String(data.machine_id || machineId).trim()
+                };
+            }
+
+            if (!response.ok) {
+                return {
+                    success: false,
+                    ...data,
+                    status,
+                    machine_id: String(data.machine_id || machineId).trim(),
+                    error: data.error || data.message || `Provision status failed (${response.status})`
+                };
+            }
+
+            return {
+                success: true,
+                ...data,
+                status,
+                machine_id: String(data.machine_id || machineId).trim()
+            };
+        } catch (error) {
+            console.error('Error fetching cloud provisioning status:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
     async getLocalModeProvisioningStatus(options = {}) {
         try {
             const machineId = String(

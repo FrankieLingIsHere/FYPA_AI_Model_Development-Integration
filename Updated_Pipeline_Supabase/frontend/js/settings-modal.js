@@ -6,6 +6,7 @@ const GlobalSettingsModal = {
     keydownHandler: null,
     localProvisionPollInterval: null,
     heartbeatCountdownInterval: null,
+    REMOTE_PROVISION_STATE_KEY: 'ppe.remoteProvisioningState.v1',
     localProvisionState: {
         status: 'idle',
         machineId: '',
@@ -434,6 +435,170 @@ const GlobalSettingsModal = {
         } catch (error) {
             return false;
         }
+    },
+
+    loadRemoteProvisionState() {
+        try {
+            const raw = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return {};
+            return parsed;
+        } catch (error) {
+            return {};
+        }
+    },
+
+    saveRemoteProvisionState(nextState = {}) {
+        try {
+            const current = this.loadRemoteProvisionState();
+            const merged = {
+                ...current,
+                ...nextState,
+                machineId: String((nextState.machineId ?? current.machineId) || '').trim(),
+                provisionSecret: String((nextState.provisionSecret ?? current.provisionSecret) || '').trim(),
+                status: this.normalizeLocalProvisionStatus(nextState.status ?? current.status ?? 'idle'),
+                updatedAt: new Date().toISOString()
+            };
+            if (!merged.machineId) return merged;
+            sessionStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            return merged;
+        } catch (error) {
+            return this.loadRemoteProvisionState();
+        }
+    },
+
+    ensureRemoteProvisionMachineId(machineIdHint = '') {
+        const hint = String(machineIdHint || '').trim();
+        if (/^[A-Za-z0-9._:-]{3,120}$/.test(hint)) {
+            return hint;
+        }
+
+        const stored = this.loadRemoteProvisionState();
+        const storedMachineId = String((stored && stored.machineId) || '').trim();
+        if (/^[A-Za-z0-9._:-]{3,120}$/.test(storedMachineId)) {
+            return storedMachineId;
+        }
+
+        let suffix = '';
+        try {
+            if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+                const bytes = new Uint8Array(6);
+                window.crypto.getRandomValues(bytes);
+                suffix = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+            }
+        } catch (error) {
+            suffix = '';
+        }
+
+        if (!suffix) {
+            suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+        }
+
+        const generated = `Web-${suffix}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 120);
+        if (generated.length >= 3) {
+            return generated;
+        }
+
+        return `Web-${Date.now().toString(36)}`;
+    },
+
+    async refreshRemoteProvisioningStatus(options = {}) {
+        const allowRequest = options.allowRequest !== false;
+        const machineIdHint = String(options.machineIdHint || options.machine_id || '').trim();
+        const adminPortalUrl = `${API_CONFIG.BASE_URL}/admin/devices`;
+
+        const stored = this.loadRemoteProvisionState();
+        let machineId = this.ensureRemoteProvisionMachineId(machineIdHint || stored.machineId || this.localProvisionState.machineId);
+        let provisionSecret = String((stored && stored.provisionSecret) || '').trim();
+
+        if (allowRequest && (!provisionSecret || options.forceRequest === true)) {
+            const requestResult = await API.requestCloudProvisioningApproval({ machineId });
+            if (!requestResult || requestResult.success === false) {
+                return {
+                    success: false,
+                    status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
+                    machine_id: machineId,
+                    admin_portal_url: adminPortalUrl,
+                    error: String((requestResult && requestResult.error) || 'Unable to submit cloud provisioning request.')
+                };
+            }
+
+            machineId = String(requestResult.machine_id || machineId).trim() || machineId;
+            provisionSecret = String(requestResult.provision_secret || provisionSecret).trim();
+            this.saveRemoteProvisionState({
+                machineId,
+                provisionSecret,
+                status: 'pending_approval',
+                adminPortalUrl
+            });
+        }
+
+        if (!provisionSecret) {
+            return {
+                success: false,
+                status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
+                machine_id: machineId,
+                admin_portal_url: adminPortalUrl,
+                error: 'Provision request secret is missing. Run Local Mode Checkup again to submit request.'
+            };
+        }
+
+        let statusResult = await API.getCloudProvisioningStatus({
+            machineId,
+            provisionSecret
+        });
+
+        if ((statusResult && statusResult.success === false) && allowRequest) {
+            const statusError = String((statusResult && statusResult.error) || '').toLowerCase();
+            const shouldRetryRequest = statusError.includes('invalid provision_secret') || statusError.includes('not_found');
+            if (shouldRetryRequest) {
+                const retryRequest = await API.requestCloudProvisioningApproval({ machineId });
+                if (retryRequest && retryRequest.success) {
+                    machineId = String(retryRequest.machine_id || machineId).trim() || machineId;
+                    provisionSecret = String(retryRequest.provision_secret || provisionSecret).trim();
+                    this.saveRemoteProvisionState({
+                        machineId,
+                        provisionSecret,
+                        status: 'pending_approval',
+                        adminPortalUrl
+                    });
+                    statusResult = await API.getCloudProvisioningStatus({
+                        machineId,
+                        provisionSecret
+                    });
+                }
+            }
+        }
+
+        if (!statusResult || statusResult.success === false) {
+            return {
+                success: false,
+                status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
+                machine_id: machineId,
+                admin_portal_url: adminPortalUrl,
+                error: String((statusResult && statusResult.error) || 'Unable to fetch cloud provisioning status.')
+            };
+        }
+
+        const normalizedStatus = this.normalizeLocalProvisionStatus(
+            (statusResult && statusResult.status) || 'idle'
+        );
+
+        this.saveRemoteProvisionState({
+            machineId,
+            provisionSecret,
+            status: normalizedStatus,
+            adminPortalUrl
+        });
+
+        return {
+            success: true,
+            status: normalizedStatus,
+            machine_id: machineId,
+            admin_portal_url: adminPortalUrl,
+            cloud_local_heartbeat: options.cloud_local_heartbeat || null
+        };
     },
 
     normalizeCloudHeartbeatPayload(rawHeartbeat, fallbackHeartbeat = null) {
@@ -933,6 +1098,17 @@ const GlobalSettingsModal = {
                 machineId: this.localProvisionState.machineId || ''
             });
             this.syncLocalProvisionStateFromPayload(state);
+
+            const normalized = this.normalizeLocalProvisionStatus((state && state.status) || 'idle');
+            if (this.isLikelyRemoteBackend() && (normalized === 'idle' || normalized === 'error')) {
+                const remoteState = await this.refreshRemoteProvisioningStatus({
+                    allowRequest: false,
+                    machineIdHint: this.localProvisionState.machineId
+                });
+                if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'rejected')) {
+                    this.syncLocalProvisionStateFromPayload(remoteState);
+                }
+            }
             return;
         }
 
@@ -940,6 +1116,17 @@ const GlobalSettingsModal = {
             machineId: this.localProvisionState.machineId || ''
         });
         this.syncLocalProvisionStateFromPayload(state);
+
+        const normalized = this.normalizeLocalProvisionStatus((state && state.status) || 'idle');
+        if (this.isLikelyRemoteBackend() && (normalized === 'idle' || normalized === 'error')) {
+            const remoteState = await this.refreshRemoteProvisioningStatus({
+                allowRequest: false,
+                machineIdHint: this.localProvisionState.machineId
+            });
+            if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'rejected')) {
+                this.syncLocalProvisionStateFromPayload(remoteState);
+            }
+        }
     },
 
     async runLocalModeCheckup() {
@@ -1002,19 +1189,11 @@ const GlobalSettingsModal = {
             }
 
             const provisionResult = isLikelyRemoteBackend
-                ? {
-                    success: !!this.localProvisionState.machineId,
-                    status: this.normalizeLocalProvisionStatus(
-                        cloudHeartbeat.provision_status
-                        || (this.localProvisionState.cloudHeartbeat && this.localProvisionState.cloudHeartbeat.provisionStatus)
-                        || this.localProvisionState.status
-                        || 'idle'
-                    ),
-                    skipped: true,
-                    machine_id: heartbeatMachineId || this.localProvisionState.machineId,
-                    admin_portal_url: this.localProvisionState.adminPortalUrl,
+                ? await this.refreshRemoteProvisioningStatus({
+                    allowRequest: true,
+                    machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
                     cloud_local_heartbeat: cloudHeartbeat
-                }
+                })
                 : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
@@ -1031,12 +1210,14 @@ const GlobalSettingsModal = {
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provision request submitted. Waiting for admin approval.', 'warning');
                 this.showNotification('Provision request submitted. Waiting for admin approval.', 'warning');
-                if (!isLikelyRemoteBackend) {
-                    this.ensureLocalProvisionPolling();
-                }
+                this.ensureLocalProvisionPolling();
             } else if (status === 'rejected') {
                 this.setProviderStatus('Provision request was rejected by administrator.', 'error');
                 this.showNotification('Provision request was rejected by administrator.', 'error');
+            } else if (provisionResult && provisionResult.success === false && provisionResult.error) {
+                const provisionError = String(provisionResult.error).trim();
+                this.setProviderStatus(`${provisionError} Local mode can still run offline, but cloud sync requires approval.`, 'warning');
+                this.showNotification(provisionError, 'warning');
             } else if (ready) {
                 this.setProviderStatus(
                     useHeartbeatDiagnostics
@@ -1064,7 +1245,6 @@ const GlobalSettingsModal = {
     },
 
     ensureLocalProvisionPolling() {
-        if (this.isLikelyRemoteBackend()) return;
         if (this.localProvisionPollInterval) return;
 
         this.localProvisionPollInterval = setInterval(async () => {
@@ -1076,7 +1256,12 @@ const GlobalSettingsModal = {
             }
 
             try {
-                const pollResult = await API.autoProvisionLocalModeCredentials();
+                const pollResult = this.isLikelyRemoteBackend()
+                    ? await this.refreshRemoteProvisioningStatus({
+                        allowRequest: false,
+                        machineIdHint: this.localProvisionState.machineId
+                    })
+                    : await API.autoProvisionLocalModeCredentials();
                 this.syncLocalProvisionStateFromPayload(pollResult || {});
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
                 if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {

@@ -6,6 +6,8 @@ const ReportsPage = {
     realtimeConnectionHandler: null,
     timezoneChangeHandler: null,
     realtimeRefreshTimer: null,
+    pendingFocusRequest: null,
+    pendingFocusRetryTimer: null,
     filters: {
         search: '',
         severity: 'all',
@@ -125,6 +127,11 @@ const ReportsPage = {
         this.stopAutoRefresh();
         this.stopModalPolling();
         this.stopModalCooldown();
+        this.pendingFocusRequest = null;
+        if (this.pendingFocusRetryTimer) {
+            clearTimeout(this.pendingFocusRetryTimer);
+            this.pendingFocusRetryTimer = null;
+        }
         if (this.providerRuntimeInterval) {
             clearInterval(this.providerRuntimeInterval);
             this.providerRuntimeInterval = null;
@@ -178,15 +185,125 @@ const ReportsPage = {
         }
     },
 
-    async loadReports() {
+    async loadReports(options = {}) {
+        const noCache = !!options.noCache;
+        const targetedReportId = String(options.targetedReportId || '').trim();
+
         const [violations, pendingReports] = await Promise.all([
-            API.getViolations(),
-            API.getPendingReports()
+            API.getViolations({ noCache }),
+            API.getPendingReports({ noCache })
         ]);
 
         this.violations = this.mergePendingReports(violations, pendingReports);
+        if (targetedReportId) {
+            await this.hydrateFocusedReport(targetedReportId, { noCache: true });
+        }
         this.renderReports();
         this.applyPendingFocusRequest();
+    },
+
+    hasReportInList(reportId) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return false;
+        return this.violations.some((v) => String((v && v.report_id) || '').trim() === rid);
+    },
+
+    isLikelyRuntimeReportId(reportId) {
+        return /^[0-9]{8}_[0-9]{6}$/.test(String(reportId || '').trim());
+    },
+
+    async hydrateFocusedReport(reportId, options = {}) {
+        const rid = String(reportId || '').trim();
+        if (!rid || this.hasReportInList(rid)) return;
+        if (!this.isLikelyRuntimeReportId(rid)) return;
+
+        try {
+            const statusData = await API.getReportStatus(rid, {
+                noCache: !!options.noCache,
+                timeoutMs: 12000
+            });
+            if (!statusData || typeof statusData !== 'object') {
+                return;
+            }
+
+            const normalizedStatus = this.normalizeStatusValue(
+                statusData.status,
+                !!statusData.has_report
+            );
+            if (normalizedStatus === 'unknown' && !statusData.has_report) {
+                return;
+            }
+
+            const sourceScope = this.normalizeSourceScope(statusData.source_scope) || 'local';
+            const hydrated = {
+                report_id: rid,
+                timestamp: statusData.updated_at || statusData.timestamp || new Date().toISOString(),
+                status: normalizedStatus,
+                severity: statusData.severity || 'HIGH',
+                device_id: statusData.device_id || 'local_cache',
+                violation_count: Number(statusData.violation_count || 0),
+                missing_ppe: Array.isArray(statusData.missing_ppe) ? statusData.missing_ppe : [],
+                violation_summary: statusData.violation_summary || 'Violation queued for report generation',
+                has_original: !!statusData.has_original,
+                has_annotated: !!statusData.has_annotated,
+                has_report: !!statusData.has_report,
+                source_scope: sourceScope,
+                source_label: String(statusData.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
+            };
+
+            const existingIndex = this.violations.findIndex((v) => String(v.report_id) === rid);
+            if (existingIndex >= 0) {
+                this.violations[existingIndex] = {
+                    ...this.violations[existingIndex],
+                    ...hydrated,
+                    has_original: !!this.violations[existingIndex].has_original || hydrated.has_original,
+                    has_annotated: !!this.violations[existingIndex].has_annotated || hydrated.has_annotated,
+                    has_report: !!this.violations[existingIndex].has_report || hydrated.has_report
+                };
+            } else {
+                this.violations.unshift(hydrated);
+            }
+
+            this.violations.sort((a, b) => {
+                const aTime = Date.parse(a.timestamp || '') || 0;
+                const bTime = Date.parse(b.timestamp || '') || 0;
+                return bTime - aTime;
+            });
+        } catch (error) {
+            console.debug('Focused report hydration failed:', error);
+        }
+    },
+
+    schedulePendingFocusHydration(delayMs = 550) {
+        if (this.pendingFocusRetryTimer) return;
+        this.pendingFocusRetryTimer = setTimeout(async () => {
+            this.pendingFocusRetryTimer = null;
+            await this.executePendingFocusHydration();
+        }, Math.max(100, Number(delayMs) || 550));
+    },
+
+    async executePendingFocusHydration() {
+        const req = this.pendingFocusRequest;
+        if (!req || !req.reportId) return;
+        if (!this.isLikelyRuntimeReportId(req.reportId)) {
+            this.pendingFocusRequest = null;
+            return;
+        }
+
+        const attempts = Number(req.attempts || 0);
+        if (attempts >= 4) {
+            const rid = String(req.reportId || '').trim();
+            this.pendingFocusRequest = null;
+            this.notify(`Report ${rid} is still syncing. Refresh shortly if it does not appear.`, 'warning');
+            return;
+        }
+
+        req.attempts = attempts + 1;
+        await this.loadReports({ noCache: true, targetedReportId: req.reportId });
+
+        if (this.pendingFocusRequest && this.pendingFocusRequest.reportId === req.reportId) {
+            this.schedulePendingFocusHydration(900 + (req.attempts * 350));
+        }
     },
 
     isPendingLikeStatus(status) {
@@ -331,7 +448,7 @@ const ReportsPage = {
     async refreshReports() {
         const list = document.getElementById('reports-list');
         list.innerHTML = '<div class="spinner"></div>';
-        await this.loadReports();
+        await this.loadReports({ noCache: true });
         await this.updateProviderRuntimeBadge();
     },
 
@@ -607,7 +724,8 @@ const ReportsPage = {
         if (currentRoute !== 'reports') {
             this.pendingFocusRequest = {
                 reportId: String(reportId),
-                openModal: !!openModal
+                openModal: !!openModal,
+                attempts: 0
             };
             Router.navigate('reports');
             return;
@@ -616,8 +734,10 @@ const ReportsPage = {
         if (!attemptFocus()) {
             this.pendingFocusRequest = {
                 reportId: String(reportId),
-                openModal: !!openModal
+                openModal: !!openModal,
+                attempts: 0
             };
+            this.schedulePendingFocusHydration(400);
         }
     },
 
@@ -626,7 +746,10 @@ const ReportsPage = {
         if (!req || !req.reportId) return;
 
         const card = document.getElementById(`report-${req.reportId}`);
-        if (!card) return;
+        if (!card) {
+            this.schedulePendingFocusHydration();
+            return;
+        }
 
         this.pendingFocusRequest = null;
         this.focusReport(req.reportId, { openModal: !!req.openModal });

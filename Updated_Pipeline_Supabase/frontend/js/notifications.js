@@ -8,6 +8,7 @@ const NotificationManager = {
     notifications: [],
     maxVisible: 3,  // Maximum notifications shown at once
     groupedCount: 0,  // Count of hidden notifications
+    recentByKey: new Map(),
 
     init() {
         if (this.container) return;
@@ -77,10 +78,40 @@ const NotificationManager = {
         });
     },
 
+    pruneRecentKeys(nowTs = Date.now()) {
+        if (!(this.recentByKey instanceof Map)) return;
+        this.recentByKey.forEach((entry, key) => {
+            const ts = Number((entry && entry.ts) || 0);
+            const ttlMs = Number((entry && entry.ttlMs) || 0);
+            if (!Number.isFinite(ts) || !Number.isFinite(ttlMs) || ttlMs <= 0 || (nowTs - ts) > ttlMs) {
+                this.recentByKey.delete(key);
+            }
+        });
+    },
+
     show(message, type = 'info', duration = 5000, options = {}) {
         this.init();
 
-        const id = Date.now() + Math.random();
+        const nowTs = Date.now();
+        this.pruneRecentKeys(nowTs);
+
+        const dedupeEnabled = options.dedupe !== false;
+        const dedupeKey = dedupeEnabled
+            ? String(options.dedupeKey || `${type}|${options.title || ''}|${message}`).trim()
+            : '';
+        const requestedDedupeTtlMs = Number(options.dedupeTtlMs);
+        const dedupeTtlMs = Number.isFinite(requestedDedupeTtlMs)
+            ? Math.max(250, Math.min(Math.floor(requestedDedupeTtlMs), 120000))
+            : 5000;
+
+        if (dedupeKey) {
+            const existing = this.recentByKey.get(dedupeKey);
+            if (existing && Number.isFinite(Number(existing.ts)) && (nowTs - Number(existing.ts)) <= dedupeTtlMs) {
+                return existing.id;
+            }
+        }
+
+        const id = nowTs + Math.random();
 
         const notification = document.createElement('div');
         notification.id = `notif-${id}`;
@@ -195,6 +226,13 @@ const NotificationManager = {
 
         this.container.insertBefore(notification, this.summaryBadge);
         this.notifications.push({ id, element: notification, type, timestamp: Date.now() });
+        if (dedupeKey) {
+            this.recentByKey.set(dedupeKey, {
+                id,
+                ts: nowTs,
+                ttlMs: dedupeTtlMs
+            });
+        }
 
         this.updateSummaryBadge();
 
@@ -256,6 +294,8 @@ const NotificationManager = {
                 text: 'View Reports',
                 onClick: `Router.navigate('reports')`
             },
+            dedupeKey: reportId ? `violation:${reportId}` : undefined,
+            dedupeTtlMs: 12000,
             ...options
         });
     },
@@ -283,6 +323,8 @@ const NotificationManager = {
             {
                 title: '📝 Processing',
                 action: defaultAction,
+                dedupeKey: reportId ? `report-generating:${reportId}` : 'report-generating:unknown',
+                dedupeTtlMs: reportId ? 45000 : 8000,
                 ...options
             }
         );
@@ -299,6 +341,8 @@ const NotificationManager = {
                     text: 'Open',
                     onClick: `window.open('${API_CONFIG.BASE_URL}/report/${reportId}', '_blank')`
                 },
+                dedupeKey: reportId ? `report-ready:${reportId}` : 'report-ready:unknown',
+                dedupeTtlMs: 60000,
                 ...options
             }
         );

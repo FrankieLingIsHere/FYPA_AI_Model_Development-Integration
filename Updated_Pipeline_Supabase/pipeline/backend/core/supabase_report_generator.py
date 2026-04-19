@@ -307,6 +307,12 @@ class SupabaseReportGenerator(ReportGenerator):
                 metadata['caption_provider'] = caption_provider
             if caption_model:
                 metadata['caption_model'] = caption_model
+            caption_quality_fallback_applied = bool(report_data.get('caption_quality_fallback_applied'))
+            caption_quality_reason = str(report_data.get('caption_quality_reason') or '').strip()
+            if caption_quality_fallback_applied:
+                metadata['caption_quality_fallback_applied'] = True
+            if caption_quality_reason:
+                metadata['caption_quality_reason'] = caption_quality_reason
 
             if isinstance(nlp_analysis, dict):
                 report_provider = nlp_analysis.get('provider')

@@ -239,6 +239,29 @@ const API = {
         }
     },
 
+    async fetchJsonNoCache(url, {
+        cacheScope,
+        timeoutMs = 12000
+    } = {}) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(url, {
+                signal: controller.signal,
+                cache: 'no-store'
+            });
+            if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+            const data = await response.json();
+            if (cacheScope) {
+                this.writeJsonCache(cacheScope, data);
+            }
+            return data;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    },
+
     prefetchViolationImages(violations = []) {
         if (!Array.isArray(violations) || violations.length === 0) return;
         if (navigator.onLine === false) return;
@@ -294,21 +317,33 @@ const API = {
 
     // Fetch all violations with status info
     async getViolations(options = {}) {
+        const requestedLimit = Number(options.limit);
+        const safeLimit = Number.isFinite(requestedLimit)
+            ? Math.max(1, Math.min(Math.floor(requestedLimit), 5000))
+            : 1000;
+        const requestedTimeout = Number(options.timeoutMs);
+        const timeoutMs = Number.isFinite(requestedTimeout)
+            ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
+            : 10000;
+        const noCache = !!options.noCache;
+        const cacheScope = `violations:limit:${safeLimit}`;
+
         try {
-            const requestedLimit = Number(options.limit);
-            const safeLimit = Number.isFinite(requestedLimit)
-                ? Math.max(1, Math.min(Math.floor(requestedLimit), 5000))
-                : 1000;
             const url = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
-            const data = await this.fetchJsonWithCache(url, {
-                cacheScope: `violations:limit:${safeLimit}`,
-                timeoutMs: 10000
-            });
+            const data = noCache
+                ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
+                : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
             const list = Array.isArray(data) ? data : [];
             this.prefetchViolationImages(list);
             return list;
         } catch (error) {
             console.error('Error fetching violations:', error);
+            if (noCache) {
+                const cached = this.readJsonCache(cacheScope);
+                if (cached && Array.isArray(cached.data)) {
+                    return cached.data;
+                }
+            }
             return [];
         }
     },
@@ -327,29 +362,54 @@ const API = {
     },
 
     // Get report status
-    async getReportStatus(reportId) {
+    async getReportStatus(reportId, options = {}) {
+        const requestedTimeout = Number(options.timeoutMs);
+        const timeoutMs = Number.isFinite(requestedTimeout)
+            ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
+            : 7000;
+        const noCache = !!options.noCache;
+        const cacheScope = `report-status:${reportId}`;
+
         try {
             const url = `${API_CONFIG.BASE_URL}/api/report/${reportId}/status`;
-            return await this.fetchJsonWithCache(url, {
-                cacheScope: `report-status:${reportId}`,
-                timeoutMs: 7000
-            });
+            return noCache
+                ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
+                : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
         } catch (error) {
             console.error('Error fetching report status:', error);
+            if (noCache) {
+                const cached = this.readJsonCache(cacheScope);
+                if (cached && cached.data && typeof cached.data === 'object') {
+                    return cached.data;
+                }
+            }
             return { status: 'unknown', message: 'Unable to check status' };
         }
     },
 
     // Get pending reports
-    async getPendingReports() {
+    async getPendingReports(options = {}) {
+        const requestedTimeout = Number(options.timeoutMs);
+        const timeoutMs = Number.isFinite(requestedTimeout)
+            ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
+            : 9000;
+        const noCache = !!options.noCache;
+        const cacheScope = 'reports:pending';
+
         try {
             const url = `${API_CONFIG.BASE_URL}/api/reports/pending`;
-            const data = await this.fetchJsonWithCache(url, {
-                cacheScope: 'reports:pending'
-            });
+            const data = noCache
+                ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
+                : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
             return Array.isArray(data) ? data : [];
         } catch (error) {
             console.error('Error fetching pending reports:', error);
+            if (noCache) {
+                const cached = this.readJsonCache(cacheScope);
+                if (cached && Array.isArray(cached.data)) {
+                    return cached.data;
+                }
+            }
             return [];
         }
     },

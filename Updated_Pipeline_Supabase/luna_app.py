@@ -635,6 +635,118 @@ def _resolve_violation_types_and_count(
     return violation_types, resolved_count
 
 
+def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
+    """Return whether caption should be replaced with a deterministic detection-based summary."""
+    normalized = str(caption or '').strip()
+    if not normalized:
+        return True, 'empty_caption'
+
+    lowered = normalized.lower()
+    known_markers = (
+        'caption generation failed',
+        'caption generation returned empty',
+        'image captioning not available',
+        'failed to generate caption after multiple attempts',
+        'error generating caption',
+        'could not process image for captioning',
+        'alert_local_mode_unavailable',
+        'local mode is unavailable on this device',
+    )
+    for marker in known_markers:
+        if marker in lowered:
+            return True, marker
+
+    words = re.findall(r"[a-z0-9']+", lowered)
+    if len(normalized) < 60 or len(words) < 10:
+        return True, 'too_short'
+
+    generic_markers = (
+        'person is visible',
+        'people are visible',
+        'indoor setting',
+        'outdoor setting',
+        'unable to determine',
+        'cannot determine',
+    )
+    if any(marker in lowered for marker in generic_markers):
+        return True, 'generic_caption'
+
+    unique_ratio = (len(set(words)) / len(words)) if words else 0.0
+    if len(words) >= 12 and unique_ratio < 0.45:
+        return True, 'low_information_density'
+
+    return False, ''
+
+
+def _build_detection_grounded_caption(
+    detections: List[Dict[str, Any]],
+    violation_types: Optional[List[str]] = None
+) -> str:
+    """Build a factual fallback caption from detections when VLM text quality is poor."""
+    detection_rows = detections if isinstance(detections, list) else []
+    person_count = 0
+    for det in detection_rows:
+        label = _normalize_label((det or {}).get('class_name') or (det or {}).get('class') or '')
+        if label in {'person', 'worker', 'man', 'woman'}:
+            person_count += 1
+
+    raw_violation_types: List[str] = []
+    if isinstance(violation_types, list):
+        raw_violation_types.extend([str(v).strip() for v in violation_types if str(v or '').strip()])
+    if not raw_violation_types:
+        raw_violation_types.extend(_extract_violation_types_from_detections(detection_rows))
+
+    formatted_types: List[str] = []
+    seen: set = set()
+    for raw_type in raw_violation_types:
+        formatted = format_violation_type(str(raw_type))
+        key = formatted.lower()
+        if not formatted or key in seen:
+            continue
+        seen.add(key)
+        formatted_types.append(formatted)
+
+    if person_count > 0:
+        worker_phrase = f"{person_count} worker" + ('s' if person_count != 1 else '')
+    else:
+        worker_phrase = 'one or more individuals'
+
+    if formatted_types:
+        return (
+            f"Auto-generated safety summary: {worker_phrase} observed with PPE non-compliance indicators "
+            f"({', '.join(formatted_types)}). The frame has been queued for supervisor review and "
+            "corrective action follow-up."
+        )
+
+    total_detections = len(detection_rows)
+    if total_detections > 0:
+        return (
+            f"Auto-generated safety summary: {worker_phrase} observed in the monitored area with "
+            f"{total_detections} detected object(s). PPE details were inconclusive in this frame, "
+            "so manual verification is recommended."
+        )
+
+    return (
+        "Auto-generated safety summary: PPE compliance alert captured, but visual details were limited. "
+        "Manual review is recommended."
+    )
+
+
+def _enforce_caption_quality_floor(
+    caption: Any,
+    detections: List[Dict[str, Any]],
+    violation_types: Optional[List[str]] = None
+) -> Tuple[str, bool, str]:
+    """Apply quality floor so reports never persist blank/error-like captions."""
+    normalized = str(caption or '').strip()
+    needs_fallback, reason = _caption_requires_quality_fallback(normalized)
+    if not needs_fallback:
+        return normalized, False, ''
+
+    fallback_caption = _build_detection_grounded_caption(detections, violation_types=violation_types)
+    return fallback_caption, True, reason
+
+
 def _safe_bbox(det: Dict[str, Any]) -> List[float]:
     """Extract bbox as [x1, y1, x2, y2] floats; return [] if invalid."""
     bbox = det.get('bbox') if isinstance(det, dict) else None
@@ -2240,6 +2352,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     # Generate caption (with semaphore to prevent concurrent Ollama calls)
     caption = ""
     env_context = ""
+    caption_path = violation_dir / 'caption.txt'
+    caption_quality_fallback_applied = False
+    caption_quality_reason = ''
     if caption_generator:
         try:
             logger.info("🎨 Generating image caption with LLaVA (acquiring Ollama lock)...")
@@ -2256,7 +2371,6 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             with ollama_semaphore:  # Only one Ollama call at a time
                 caption = caption_generator.generate_caption(str(original_path))
             if caption:
-                caption_path = violation_dir / 'caption.txt'
                 with open(caption_path, 'w', encoding='utf-8') as f:
                     f.write(caption)
                 logger.info(f"✓ Caption saved: {caption_path}")
@@ -2291,9 +2405,23 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             caption = "Caption generation failed"
     else:
         caption = "Image captioning not available"
-        caption_path = violation_dir / 'caption.txt'
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(caption)
+
+    caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
+        caption,
+        detections,
+        violation_types=violation_types,
+    )
+    try:
+        with open(caption_path, 'w', encoding='utf-8') as f:
+            f.write(caption)
+        if caption_quality_fallback_applied:
+            logger.warning(
+                f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
+            )
+    except Exception as caption_write_error:
+        logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
     
     # Generate report
     report_created = False
@@ -2349,6 +2477,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'device_id': queue_device_id,
                 'caption_provider': caption_provider,
                 'caption_model': caption_model,
+                'caption_quality_fallback_applied': caption_quality_fallback_applied,
+                'caption_quality_reason': caption_quality_reason,
                 'original_image_path': str(original_path),
                 'annotated_image_path': str(annotated_path),
                 'location': 'Live Stream Monitor',
@@ -2617,6 +2747,9 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         # Generate caption if available
         caption = ""
+        caption_path = violation_dir / 'caption.txt'
+        caption_quality_fallback_applied = False
+        caption_quality_reason = ''
         logger.info(f"Caption generator status: {caption_generator is not None}")
         
         if caption_generator:
@@ -2624,7 +2757,6 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 logger.info("🎨 Generating image caption with LLaVA...")
                 caption = caption_generator.generate_caption(str(original_path))
                 if caption:
-                    caption_path = violation_dir / 'caption.txt'
                     with open(caption_path, 'w', encoding='utf-8') as f:
                         f.write(caption)
                     logger.info(f"✓ Caption saved: {caption_path}")
@@ -2653,10 +2785,24 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             # Save placeholder caption even if generator not available
             logger.warning("Caption generator not available - saving placeholder")
             caption = "Image captioning not available - LLaVA model not loaded. Install dependencies: pip install transformers accelerate bitsandbytes"
-            caption_path = violation_dir / 'caption.txt'
             with open(caption_path, 'w', encoding='utf-8') as f:
                 f.write(caption)
             logger.info(f"✓ Placeholder caption saved: {caption_path}")
+
+        caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
+            caption,
+            detections,
+            violation_types=violation_types,
+        )
+        try:
+            with open(caption_path, 'w', encoding='utf-8') as f:
+                f.write(caption)
+            if caption_quality_fallback_applied:
+                logger.warning(
+                    f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
+                )
+        except Exception as caption_write_error:
+            logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
         
         # Generate report if available
         report_created = False
@@ -2700,6 +2846,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'device_id': runtime_device_id,
                     'caption_provider': caption_provider,
                     'caption_model': caption_model,
+                    'caption_quality_fallback_applied': caption_quality_fallback_applied,
+                    'caption_quality_reason': caption_quality_reason,
                     'original_image_path': str(original_path),
                     'annotated_image_path': str(annotated_path),
                     'location': 'Live Stream Monitor',
@@ -6383,6 +6531,17 @@ def api_provider_routing_settings():
 
         # Apply to active report generator immediately
         if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+            report_generator.routing_profile = routing_profile
+            if hasattr(report_generator, 'enforce_strict_provider_split'):
+                report_generator.strict_local_profile = bool(
+                    getattr(report_generator, 'enforce_strict_provider_split', False)
+                    and routing_profile == 'local'
+                )
+
+            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            if hasattr(report_generator, 'allow_nlp_fallback'):
+                report_generator.allow_nlp_fallback = False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
+
             report_generator.model_api_enabled = MODEL_API_CONFIG.get('enabled', False)
             report_generator.nlp_provider_order = MODEL_API_CONFIG.get(
                 'nlp_provider_order',
@@ -6394,9 +6553,34 @@ def api_provider_routing_settings():
                 _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('embedding_provider_order', ['model_api'])
                 if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
             )
+
+            gemini_runtime_available = bool(
+                getattr(report_generator, 'gemini_client', None) is not None
+                and getattr(report_generator.gemini_client, 'is_available', False)
+            )
+            if routing_profile == 'cloud' and GEMINI_CONFIG.get('enabled', True) and not gemini_runtime_available:
+                try:
+                    from pipeline.backend.integration.gemini_client import GeminiClient
+                    refreshed_config = dict(getattr(report_generator, 'config', {}) or {})
+                    refreshed_config['GEMINI_CONFIG'] = dict(GEMINI_CONFIG)
+                    refreshed_client = GeminiClient(refreshed_config)
+                    if getattr(refreshed_client, 'is_available', False):
+                        report_generator.gemini_client = refreshed_client
+                        gemini_runtime_available = True
+                    else:
+                        report_generator.gemini_client = None
+                except Exception as gemini_init_err:
+                    report_generator.gemini_client = None
+                    logger.warning(f"Could not initialize Gemini client after routing switch to cloud: {gemini_init_err}")
+
             report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
             report_generator.embedding_api_model = MODEL_API_CONFIG.get('embedding_model', report_generator.embedding_model)
-            report_generator.use_gemini = GEMINI_CONFIG.get('enabled', True) and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
+            report_generator.use_gemini = (
+                routing_profile == 'cloud'
+                and GEMINI_CONFIG.get('enabled', True)
+                and gemini_runtime_available
+                and not getattr(report_generator, 'strict_local_profile', False)
+            )
             report_generator.model = OLLAMA_CONFIG.get('model', report_generator.model)
             report_generator.gemini_daily_budget_usd = gemini_daily_budget_usd
             report_generator.gemini_monthly_budget_usd = gemini_monthly_budget_usd

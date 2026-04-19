@@ -882,18 +882,18 @@ function initializeAdaptivePipelineModeManager() {
         localUnavailableNotified: false,
         evaluationTimer: null,
 
-        notify(message, type = 'info') {
+        notify(message, type = 'info', options = {}) {
             if (typeof NotificationManager !== 'undefined') {
-                if (type === 'success') return NotificationManager.success(message);
-                if (type === 'warning') return NotificationManager.warning(message);
-                if (type === 'error') return NotificationManager.error(message);
-                return NotificationManager.info(message);
+                if (type === 'success') return NotificationManager.success(message, options);
+                if (type === 'warning') return NotificationManager.warning(message, options);
+                if (type === 'error') return NotificationManager.error(message, options);
+                return NotificationManager.info(message, options);
             }
             console.log(`[AdaptivePipeline:${type}] ${message}`);
         },
 
         shouldUseLocal(state) {
-            return state === 'network-offline' || state === 'network-weak' || state === 'network-fair';
+            return state === 'network-offline';
         },
 
         canAttemptSwitch(force = false) {
@@ -934,7 +934,10 @@ function initializeAdaptivePipelineModeManager() {
 
                 const enqueued = Number(syncRes.enqueued || 0);
                 if (notifyOnEnqueue && enqueued > 0) {
-                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info');
+                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info', {
+                        dedupeKey: 'adaptive-reconnect-enqueued',
+                        dedupeTtlMs: 20000
+                    });
                 }
                 return syncRes;
             } catch (error) {
@@ -989,7 +992,10 @@ function initializeAdaptivePipelineModeManager() {
 
                 const enqueued = Number(syncRes.enqueued || 0);
                 if (notifyOnEnqueue && enqueued > 0) {
-                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info');
+                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info', {
+                        dedupeKey: 'adaptive-reconnect-enqueued',
+                        dedupeTtlMs: 20000
+                    });
                 }
                 return syncRes;
             } catch (error) {
@@ -1019,6 +1025,7 @@ function initializeAdaptivePipelineModeManager() {
 
         async evaluate(networkState, options = {}) {
             const force = !!options.force;
+            const weakSignalOnline = (networkState === 'network-weak' || networkState === 'network-fair') && navigator.onLine !== false;
 
             const shouldPreferCloudNow = !this.shouldUseLocal(networkState) && navigator.onLine !== false;
             if (shouldPreferCloudNow) {
@@ -1037,6 +1044,14 @@ function initializeAdaptivePipelineModeManager() {
             }
 
             this.lastEvaluatedNetworkState = networkState;
+
+            if (weakSignalOnline) {
+                this.notify('Weak/Fair network detected. Adaptive mode will keep current pipeline; use Settings > Provider Mode for manual LOCAL/CLOUD switch.', 'info', {
+                    dedupeKey: 'adaptive-weak-signal-manual-local',
+                    dedupeTtlMs: 45000
+                });
+                return;
+            }
 
             await resolveWorkingBackendBaseUrl({
                 preferLocal: this.shouldUseLocal(networkState),
@@ -1064,6 +1079,10 @@ function initializeAdaptivePipelineModeManager() {
         async switchToLocal(reason) {
             this.switchInFlight = true;
             this.lastSwitchAttemptAt = Date.now();
+            this.notify(`Switching pipeline to LOCAL mode (${reason})...`, 'info', {
+                dedupeKey: 'adaptive-switch-local-start',
+                dedupeTtlMs: 15000
+            });
 
             try {
                 const options = await API.getReportRecoveryOptions();
@@ -1085,11 +1104,20 @@ function initializeAdaptivePipelineModeManager() {
                 if (!localReady) {
                     if (!this.localUnavailableNotified) {
                         if (isOffline && !policy.checkupCompleted) {
-                            this.notify('Offline detected. Open Settings (gear icon) and run Local Mode Checkup once to enable offline auto-setup.', 'warning');
+                            this.notify('Offline detected. Open Settings (gear icon) and run Local Mode Checkup once to enable offline auto-setup.', 'warning', {
+                                dedupeKey: 'adaptive-local-checkup-required',
+                                dedupeTtlMs: 30000
+                            });
                         } else if (isOffline && policy.checkupCompleted && !policy.autoSetupAllowed) {
-                            this.notify('Offline detected. Local auto-setup is disabled by your preference.', 'warning');
+                            this.notify('Offline detected. Local auto-setup is disabled by your preference.', 'warning', {
+                                dedupeKey: 'adaptive-local-autosetup-disabled',
+                                dedupeTtlMs: 30000
+                            });
                         } else {
-                            this.notify('Local pipeline is not ready on this host yet; keeping existing routing.', 'warning');
+                            this.notify('Local pipeline is not ready on this host yet; keeping existing routing.', 'warning', {
+                                dedupeKey: 'adaptive-local-not-ready',
+                                dedupeTtlMs: 30000
+                            });
                         }
                     }
                     this.localUnavailableNotified = true;
@@ -1104,10 +1132,16 @@ function initializeAdaptivePipelineModeManager() {
                 await API.executeReportRecovery('local');
                 this.currentMode = 'local';
                 this.localUnavailableNotified = false;
-                this.notify(`Pipeline switched to LOCAL mode (${reason}).`, 'success');
+                this.notify(`Pipeline switched to LOCAL mode (${reason}).`, 'success', {
+                    dedupeKey: 'adaptive-switch-local-success',
+                    dedupeTtlMs: 30000
+                });
             } catch (error) {
                 if (!this.localUnavailableNotified) {
-                    this.notify('Local mode auto-switch failed. It will retry automatically when conditions change.', 'warning');
+                    this.notify('Local mode auto-switch failed. It will retry automatically when conditions change.', 'warning', {
+                        dedupeKey: 'adaptive-switch-local-failed',
+                        dedupeTtlMs: 25000
+                    });
                     this.localUnavailableNotified = true;
                 }
                 console.warn('Adaptive switch to local failed:', error);
@@ -1120,6 +1154,10 @@ function initializeAdaptivePipelineModeManager() {
             this.switchInFlight = true;
             this.lastSwitchAttemptAt = Date.now();
             const skipBacklogSync = !!(options && options.skipBacklogSync);
+            this.notify(`Switching pipeline to CLOUD mode (${reason})...`, 'info', {
+                dedupeKey: 'adaptive-switch-cloud-start',
+                dedupeTtlMs: 15000
+            });
 
             try {
                 const switchRes = await API.switchPipelineMode('cloud');
@@ -1133,7 +1171,10 @@ function initializeAdaptivePipelineModeManager() {
 
                 await API.executeReportRecovery('failover');
                 this.currentMode = 'cloud';
-                this.notify(`Pipeline switched to CLOUD mode and sync queued (${reason}).`, 'info');
+                this.notify(`Pipeline switched to CLOUD mode and sync queued (${reason}).`, 'info', {
+                    dedupeKey: 'adaptive-switch-cloud-success',
+                    dedupeTtlMs: 30000
+                });
             } catch (error) {
                 console.warn('Adaptive switch to cloud failed:', error);
                 // Keep reconciliation resilient even when cloud mode switch fails.

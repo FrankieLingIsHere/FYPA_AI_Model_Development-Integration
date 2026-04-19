@@ -87,6 +87,16 @@ def main() -> int:
                 f"nlp_provider_order={fields['nlp_provider_order']} missing={EXPECTED_NLP_PROVIDER}"
             )
 
+        if EXPECTED_ROUTING_PROFILE == "cloud":
+            conflicting = [
+                provider for provider in fields["nlp_provider_order"]
+                if provider in {"ollama", "local"}
+            ]
+            if conflicting:
+                issues.append(
+                    f"cloud profile contains local providers: {conflicting} in nlp_provider_order={fields['nlp_provider_order']}"
+                )
+
         if STRICT_RUNTIME:
             if fields["last_provider"] not in {None, "", EXPECTED_NLP_PROVIDER, "fallback"}:
                 issues.append(f"last_provider={fields['last_provider']} unexpected")

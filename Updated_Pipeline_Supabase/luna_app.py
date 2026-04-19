@@ -352,7 +352,20 @@ PROVIDER_PROFILE_PRESETS = {
 }
 
 if STRICT_PROVIDER_MODE_SPLIT:
-    _initial_profile = 'local' if str(os.getenv('LUNA_ROUTING_PROFILE', 'local')).strip().lower() == 'local' else 'cloud'
+    _initial_profile_raw = str(os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+    if _initial_profile_raw in ('local', 'cloud'):
+        _initial_profile = _initial_profile_raw
+    else:
+        _hosted_markers = (
+            'RAILWAY_SERVICE_ID',
+            'RAILWAY_PROJECT_ID',
+            'RAILWAY_ENVIRONMENT',
+            'VERCEL',
+            'RENDER',
+            'RENDER_SERVICE_ID',
+        )
+        _is_hosted_runtime = any(str(os.getenv(marker) or '').strip() for marker in _hosted_markers)
+        _initial_profile = 'cloud' if _is_hosted_runtime else 'local'
     _initial_preset = PROVIDER_PROFILE_PRESETS.get(_initial_profile, PROVIDER_PROFILE_PRESETS['cloud'])
     MODEL_API_CONFIG['enabled'] = bool(_initial_preset.get('model_api_enabled', False))
     MODEL_API_CONFIG['nlp_provider_order'] = list(_initial_preset.get('nlp_provider_order', ['gemini']))
@@ -4357,12 +4370,27 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
         logger.warning(f"Could not apply strict vision provider profile at runtime: {caption_err}")
 
     if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+        report_generator.routing_profile = routing_profile
+        if hasattr(report_generator, 'strict_local_profile'):
+            report_generator.strict_local_profile = bool(
+                getattr(report_generator, 'enforce_strict_provider_split', False)
+                and routing_profile == 'local'
+            )
+        if hasattr(report_generator, 'allow_nlp_fallback'):
+            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            report_generator.allow_nlp_fallback = (
+                False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
+            )
         report_generator.model_api_enabled = model_api_enabled
         report_generator.use_gemini = bool(
             gemini_enabled and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
         )
         report_generator.nlp_provider_order = list(nlp_provider_order)
         report_generator.embedding_provider_order = list(embedding_provider_order)
+        if hasattr(report_generator, 'sticky_nlp_provider'):
+            report_generator.sticky_nlp_provider = None
+        if hasattr(report_generator, 'sticky_nlp_provider_until_epoch'):
+            report_generator.sticky_nlp_provider_until_epoch = 0.0
 
     return applied
 

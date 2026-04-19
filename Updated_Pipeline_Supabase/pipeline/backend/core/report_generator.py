@@ -57,6 +57,43 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_effective_nlp_provider_order(
+    configured_order: Any,
+    *,
+    routing_profile: str = '',
+    enforce_strict_provider_split: bool = False,
+) -> List[str]:
+    """Normalize and scope NLP provider order to the active routing profile."""
+    if isinstance(configured_order, list):
+        raw_items = configured_order
+    elif isinstance(configured_order, str):
+        raw_items = [segment.strip() for segment in configured_order.split(',')]
+    else:
+        raw_items = []
+
+    normalized: List[str] = []
+    for item in raw_items:
+        provider = str(item or '').strip().lower()
+        if not provider:
+            continue
+        if provider not in ('model_api', 'gemini', 'ollama', 'local'):
+            continue
+        if provider in normalized:
+            continue
+        normalized.append(provider)
+
+    if not enforce_strict_provider_split:
+        return normalized
+
+    active_profile = 'local' if str(routing_profile or '').strip().lower() == 'local' else 'cloud'
+    allowed = {'ollama', 'local'} if active_profile == 'local' else {'model_api', 'gemini'}
+    scoped = [provider for provider in normalized if provider in allowed]
+
+    if scoped:
+        return scoped
+    return ['ollama'] if active_profile == 'local' else ['gemini']
+
+
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
@@ -1513,17 +1550,22 @@ RESPONSE FORMAT (JSON):
         self.last_nlp_fallback_reason = None
         self.last_gemini_budget_block_reason = None
 
-        effective_provider_order = list(self.nlp_provider_order or [])
+        effective_provider_order = _resolve_effective_nlp_provider_order(
+            self.nlp_provider_order,
+            routing_profile=self.routing_profile,
+            enforce_strict_provider_split=self.enforce_strict_provider_split,
+        )
+        sticky_provider = str(self.sticky_nlp_provider or '').strip().lower()
         sticky_active = (
             self.sticky_nlp_provider_enabled
-            and self.sticky_nlp_provider
+            and sticky_provider
             and self.sticky_nlp_provider_until_epoch > time.time()
-            and self.sticky_nlp_provider in effective_provider_order
+            and sticky_provider in effective_provider_order
         )
         if sticky_active:
             effective_provider_order = [
-                self.sticky_nlp_provider,
-                *[p for p in effective_provider_order if p != self.sticky_nlp_provider]
+                sticky_provider,
+                *[p for p in effective_provider_order if p != sticky_provider]
             ]
 
         for provider in effective_provider_order:

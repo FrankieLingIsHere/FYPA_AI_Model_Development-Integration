@@ -93,6 +93,14 @@ def main() -> int:
                 5,
             )
 
+        if EXPECTED_ROUTING_PROFILE == "cloud":
+            conflicting = [p for p in nlp_provider_order if p in {"ollama", "local"}]
+            if conflicting:
+                return fail(
+                    f"cloud profile contains local providers: {conflicting} in nlp_provider_order={nlp_provider_order}",
+                    14,
+                )
+
         if "last_provider" not in nlp_runtime:
             return fail("runtime.nlp.last_provider key missing", 6)
         if "last_error" not in nlp_runtime:

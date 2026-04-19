@@ -8,3 +8,15 @@
 .env.*.local
 .vercel
 .env*.local
+
+# Generated validation artifacts and temporary outputs
+Updated_Pipeline_Supabase/reports/Results/
+Updated_Pipeline_Supabase/**/tmp/
+Updated_Pipeline_Supabase/**/temp/
+Updated_Pipeline_Supabase/bootstrap_tokens.json.bak
+Updated_Pipeline_Supabase/pending_devices.json.bak
+Updated_Pipeline_Supabase/bootstrap_tokens.json.tmp.*
+Updated_Pipeline_Supabase/pending_devices.json.tmp.*
+
+# Local worklogs (do not commit personal run logs)
+Updated_Pipeline_Supabase/docs/WORKLOG_*.md

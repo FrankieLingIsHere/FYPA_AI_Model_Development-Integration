@@ -242,7 +242,7 @@ const ReportsPage = {
                 timestamp: statusData.updated_at || statusData.timestamp || new Date().toISOString(),
                 status: normalizedStatus,
                 severity: statusData.severity || 'HIGH',
-                device_id: statusData.device_id || 'local_cache',
+                device_id: statusData.device_id || null,
                 violation_count: Number(statusData.violation_count || 0),
                 missing_ppe: Array.isArray(statusData.missing_ppe) ? statusData.missing_ppe : [],
                 violation_summary: statusData.violation_summary || 'Violation queued for report generation',
@@ -372,8 +372,8 @@ const ReportsPage = {
                     mergedScope = 'synced_local';
                 } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
                     mergedScope = 'shared';
-                } else if (pendingScope === 'local' && existingScope === 'cloud') {
-                    mergedScope = 'local';
+                } else if (pendingScope === 'cloud') {
+                    mergedScope = 'cloud';
                 } else if (!existingScope && pendingScope) {
                     mergedScope = pendingScope;
                 }
@@ -580,6 +580,25 @@ const ReportsPage = {
         if (raw === 'skipped' || raw === 'cancelled' || raw === 'canceled') {
             return 'skipped';
         }
+
+        // Keep UI card state aligned with actual report availability.
+        if (
+            hasReport && (
+                raw === 'generating'
+                || raw === 'processing'
+                || raw === 'in_progress'
+                || raw === 'in-progress'
+                || raw === 'running'
+                || raw === 'pending'
+                || raw === 'queued'
+                || raw === 'queue'
+                || raw === 'waiting'
+                || raw === 'enqueued'
+            )
+        ) {
+            return 'completed';
+        }
+
         if (
             raw === 'generating'
             || raw === 'processing'
@@ -1343,6 +1362,7 @@ const ReportsPage = {
         if (status === 'completed' && data.has_report) {
             this.setModalStage('completed');
             this.setModalStatusText('Report completed. Opening now...');
+            await this.loadReports({ noCache: true, targetedReportId: reportId });
             if (autoOpen) {
                 this.openReport(reportId);
                 this.closeModal();

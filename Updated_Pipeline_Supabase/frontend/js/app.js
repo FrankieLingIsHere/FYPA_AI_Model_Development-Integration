@@ -1202,7 +1202,9 @@ function bindTimezoneSelectorVisibilityGuard() {
         }
     };
 
-    sidebar.addEventListener('mouseleave', closeSelector);
+    // Do not force-close on sidebar mouseleave. Native select popups can render
+    // outside the sidebar box and would otherwise close immediately.
+    selector.addEventListener('change', closeSelector);
 
     document.addEventListener('click', (event) => {
         if (!sidebar.contains(event.target)) {

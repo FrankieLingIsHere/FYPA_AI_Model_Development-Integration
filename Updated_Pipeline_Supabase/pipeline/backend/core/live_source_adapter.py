@@ -27,6 +27,26 @@ class LiveSourceAdapter:
         self._webcam_probe_cache = []
         self._webcam_probe_cache_ts = 0.0
         try:
+            probe_cache_seconds = float(os.getenv('WEBCAM_PROBE_CACHE_SECONDS', '15'))
+        except Exception:
+            probe_cache_seconds = 15.0
+        self.webcam_probe_cache_seconds = max(2.0, probe_cache_seconds)
+        try:
+            read_retry_attempts = int(os.getenv('WEBCAM_READ_RETRY_ATTEMPTS', '5'))
+        except Exception:
+            read_retry_attempts = 5
+        self.webcam_read_retry_attempts = max(1, min(read_retry_attempts, 20))
+        try:
+            warmup_attempts = int(os.getenv('WEBCAM_START_WARMUP_ATTEMPTS', '4'))
+        except Exception:
+            warmup_attempts = 4
+        self.webcam_start_warmup_attempts = max(1, min(warmup_attempts, 20))
+        try:
+            warmup_sleep = float(os.getenv('WEBCAM_START_WARMUP_SLEEP_SECONDS', '0.06'))
+        except Exception:
+            warmup_sleep = 0.06
+        self.webcam_start_warmup_sleep_seconds = max(0.0, min(warmup_sleep, 0.5))
+        try:
             stale_value = float(os.getenv('EDGE_REALSENSE_STALE_SECONDS', '4'))
         except Exception:
             stale_value = 4.0
@@ -46,6 +66,42 @@ class LiveSourceAdapter:
             'sdk_available': True,
             'reason': 'No edge relay frames received yet'
         }
+
+    def _read_webcam_frame_with_retries(
+        self,
+        cap,
+        *,
+        attempts: Optional[int] = None,
+        delay_seconds: float = 0.0,
+    ) -> Tuple[bool, Optional[Any]]:
+        if cap is None or not cap.isOpened():
+            return False, None
+
+        max_attempts = self.webcam_read_retry_attempts if attempts is None else int(attempts)
+        max_attempts = max(1, min(max_attempts, 30))
+        wait_s = max(0.0, float(delay_seconds or 0.0))
+
+        for attempt in range(max_attempts):
+            try:
+                ok, frame = cap.read()
+            except Exception:
+                ok, frame = False, None
+
+            if ok and frame is not None:
+                return True, frame
+
+            if wait_s > 0 and attempt < (max_attempts - 1):
+                time.sleep(wait_s)
+
+        return False, None
+
+    def _is_webcam_capture_ready(self, cap, *, attempts: Optional[int] = None) -> bool:
+        ok, _ = self._read_webcam_frame_with_retries(
+            cap,
+            attempts=attempts if attempts is not None else self.webcam_start_warmup_attempts,
+            delay_seconds=self.webcam_start_warmup_sleep_seconds,
+        )
+        return bool(ok)
 
     @staticmethod
     def _default_depth_telemetry() -> Dict[str, Any]:
@@ -127,30 +183,31 @@ class LiveSourceAdapter:
         cap = None
 
         if os.name == 'nt':
+            allow_probe_msmf = os.getenv('WEBCAM_PROBE_USE_MSMF_WINDOWS', 'false').lower() in (
+                '1', 'true', 'yes', 'on'
+            )
+
+            backend_candidates = []
             if hasattr(cv2, 'CAP_DSHOW'):
+                backend_candidates.append(cv2.CAP_DSHOW)
+            if hasattr(cv2, 'CAP_MSMF') and (not probe_mode or allow_probe_msmf):
+                backend_candidates.append(cv2.CAP_MSMF)
+
+            for backend in backend_candidates:
                 try:
-                    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+                    cap = cv2.VideoCapture(camera_index, backend)
                 except Exception:
                     cap = None
 
-            if cap is not None and cap.isOpened():
-                return cap
+                if cap is not None and cap.isOpened():
+                    return cap
 
-            try:
-                if cap is not None:
-                    cap.release()
-            except Exception:
-                pass
-
-            cap = None
-            if hasattr(cv2, 'CAP_MSMF'):
                 try:
-                    cap = cv2.VideoCapture(camera_index, cv2.CAP_MSMF)
+                    if cap is not None:
+                        cap.release()
                 except Exception:
-                    cap = None
-
-            if cap is not None and cap.isOpened():
-                return cap
+                    pass
+                cap = None
 
             allow_generic_probe = os.getenv('WEBCAM_PROBE_ALLOW_GENERIC_FALLBACK_WINDOWS', 'false').lower() in (
                 '1', 'true', 'yes', 'on'
@@ -177,7 +234,11 @@ class LiveSourceAdapter:
         """Probe likely webcam indexes and return openable device slots."""
         # Avoid probing every request; status endpoints can be polled frequently.
         now = time.monotonic()
-        if not force_refresh and self._webcam_probe_cache and (now - self._webcam_probe_cache_ts) < 5.0:
+        if not force_refresh and self._webcam_probe_cache and (now - self._webcam_probe_cache_ts) < self.webcam_probe_cache_seconds:
+            return list(self._webcam_probe_cache)
+
+        # Prevent rapid forced refresh loops from hammering camera backends.
+        if force_refresh and self._webcam_probe_cache and (now - self._webcam_probe_cache_ts) < 1.0:
             return list(self._webcam_probe_cache)
 
         # While webcam stream is active, probing other indexes can interfere with capture.
@@ -210,7 +271,7 @@ class LiveSourceAdapter:
             opened = False
             try:
                 cap = self._open_webcam(idx, probe_mode=True)
-                opened = cap is not None and cap.isOpened()
+                opened = cap is not None and cap.isOpened() and self._is_webcam_capture_ready(cap, attempts=1)
                 if opened:
                     devices.append({'index': idx, 'label': f'Camera {idx}'})
                     found_any = True
@@ -385,6 +446,14 @@ class LiveSourceAdapter:
 
         self.active_camera = self._open_webcam(desired_camera_index)
         opened_index = desired_camera_index
+        if self.active_camera is not None and self.active_camera.isOpened():
+            if not self._is_webcam_capture_ready(self.active_camera):
+                try:
+                    self.active_camera.release()
+                except Exception:
+                    pass
+                self.active_camera = None
+
         if self.active_camera is None or not self.active_camera.isOpened():
             try:
                 if self.active_camera is not None:
@@ -400,7 +469,7 @@ class LiveSourceAdapter:
                     continue
 
                 candidate = self._open_webcam(idx)
-                if candidate is not None and candidate.isOpened():
+                if candidate is not None and candidate.isOpened() and self._is_webcam_capture_ready(candidate):
                     self.active_camera = candidate
                     opened_index = idx
                     break
@@ -421,7 +490,10 @@ class LiveSourceAdapter:
                 'source': 'webcam',
                 'camera_index': desired_camera_index,
                 'fallback_to_webcam': False,
-                'message': f'Failed to open webcam (requested index {desired_camera_index}; available indexes: {available_label})'
+                'message': (
+                    f'Failed to open webcam or read frames '
+                    f'(requested index {desired_camera_index}; available indexes: {available_label})'
+                )
             }
 
         # Keep webcam buffer small to avoid stale-frame lag in annotated stream.
@@ -466,10 +538,30 @@ class LiveSourceAdapter:
         if self.active_camera is None or not self.active_camera.isOpened():
             return False, None, 'Webcam is not opened'
 
-        ok, frame = self.active_camera.read()
-        if not ok:
-            return False, None, 'Failed to read webcam frame'
-        return True, frame, None
+        ok, frame = self._read_webcam_frame_with_retries(self.active_camera, delay_seconds=0.02)
+        if ok:
+            return True, frame, None
+
+        # A single self-heal attempt handles transient Windows capture stalls.
+        try:
+            self.active_camera.release()
+        except Exception:
+            pass
+
+        reopened = self._open_webcam(self.active_camera_index)
+        if reopened is not None and reopened.isOpened():
+            self.active_camera = reopened
+            ok, frame = self._read_webcam_frame_with_retries(
+                self.active_camera,
+                attempts=max(2, min(self.webcam_read_retry_attempts, 6)),
+                delay_seconds=self.webcam_start_warmup_sleep_seconds,
+            )
+            if ok:
+                return True, frame, None
+        else:
+            self.active_camera = reopened
+
+        return False, None, 'Failed to read webcam frame'
 
     def get_depth_telemetry_locked(self) -> Dict[str, Any]:
         """Get depth telemetry for active RealSense source (lock must be held)."""
@@ -491,7 +583,7 @@ class LiveSourceAdapter:
 
         return None
 
-    def build_state_payload(self) -> Dict[str, Any]:
+    def build_state_payload(self, force_webcam_refresh: bool = False) -> Dict[str, Any]:
         """Build live state payload consumed by frontend controls."""
         with self.lock:
             is_active = self.is_active_locked()
@@ -506,7 +598,7 @@ class LiveSourceAdapter:
             default_source = 'edge_realsense'
         else:
             default_source = 'webcam'
-        webcam_devices = self.list_webcam_devices(force_refresh=not is_active)
+        webcam_devices = self.list_webcam_devices(force_refresh=bool(force_webcam_refresh and not is_active))
         return {
             'active': is_active,
             'source': source if is_active else default_source,

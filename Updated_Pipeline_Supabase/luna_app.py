@@ -521,9 +521,9 @@ def _read_active_frame_locked():
     return live_source_adapter.read_frame_locked()
 
 
-def _build_live_state_payload() -> Dict[str, Any]:
+def _build_live_state_payload(force_webcam_refresh: bool = False) -> Dict[str, Any]:
     """Build live state payload consumed by frontend controls."""
-    return live_source_adapter.build_state_payload()
+    return live_source_adapter.build_state_payload(force_webcam_refresh=bool(force_webcam_refresh))
 
 
 def _normalize_label(value: str) -> str:
@@ -8263,7 +8263,8 @@ def live_status():
 @app.route('/api/live/devices')
 def live_devices():
     """Return available live capture sources and default source selection."""
-    return jsonify(_build_live_state_payload())
+    refresh_requested = str(request.args.get('refresh', '') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    return jsonify(_build_live_state_payload(force_webcam_refresh=refresh_requested))
 
 
 @app.route('/api/live/depth/status')

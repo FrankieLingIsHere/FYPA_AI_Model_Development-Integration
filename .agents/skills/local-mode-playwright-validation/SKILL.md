@@ -308,3 +308,49 @@ and ensure runtime provider status reports empty `last_fallback_reason`.
 - `SUPABASE_DB_RECONNECT_BACKOFF_SECONDS` (default 12)
 
 Use these only for diagnostics/tuning; keep defaults unless environment constraints require adjustment.
+
+## Runtime Triage Addendum: Local Live Camera Feed Delayed/Blank on Mode Switch
+
+Use this when users report that switching to local mode causes Live page webcam feed to appear very late, intermittently, or never.
+
+Common log signatures:
+
+- `VIDEOIO(DSHOW): backend is generally available but can't be used to capture by index`
+- `VIDEOIO(MSMF): backend is generally available but can't be used to capture by index`
+- `/api/live/devices` and `/api/live/status` calls are slow before stream starts.
+
+### Primary causes
+
+1. Repeated forced webcam probing on status/device endpoints:
+   - can repeatedly open/close camera backends,
+   - increases startup latency and may temporarily lock camera access.
+
+2. Transient first-frame read failures after successful open:
+   - backend reports webcam started,
+   - stream generator exits early on first failed frame read.
+
+### Required patch behaviors
+
+1. Keep webcam device probing cached for routine status checks.
+2. Allow explicit forced reprobe only when user clicks refresh controls.
+3. Add bounded webcam read retries + one reopen self-heal before declaring stream failure.
+4. Keep browser-camera fallback path available when backend webcam is unavailable.
+
+### Validation sequence
+
+1. Local sanity check:
+   - `GET /api/live/devices` should return quickly without repeated backend warnings on every poll.
+   - `GET /api/live/devices?refresh=1` should still force a fresh device probe.
+
+2. Start/stop contract:
+
+   python Updated_Pipeline_Supabase/deployed_live_start_contract_test.py
+
+3. Required action tests (must remain green after runtime/frontend changes):
+
+   python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+   python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
+
+Interpretation guidance:
+
+- If local start/stream is stable after patch but deployed still shows stale behavior, treat as deployment lag/runtime drift and re-check after redeploy.

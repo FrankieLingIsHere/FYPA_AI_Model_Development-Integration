@@ -234,7 +234,9 @@ const ReportsPage = {
                 return;
             }
 
-            const sourceScope = this.normalizeSourceScope(statusData.source_scope) || 'local';
+            const sourceScope = this.normalizeSourceScope(statusData.source_scope)
+                || this.inferSourceScope(statusData)
+                || 'cloud';
             const hydrated = {
                 report_id: rid,
                 timestamp: statusData.updated_at || statusData.timestamp || new Date().toISOString(),

@@ -3956,6 +3956,10 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         elif skipped_path is not None:
             status = 'skipped'
         elif has_annotated or caption_path.exists():
+            # Ignore orphaned partial artifacts (no original frame) to avoid stale
+            # "local generating" rows hijacking cloud-backed report state.
+            if not has_original:
+                continue
             status = 'generating'
         elif has_original:
             status = 'pending'
@@ -7279,7 +7283,8 @@ def api_pending_reports():
 
                 has_report = bool((p or {}).get('report_html_key'))
                 status = _normalize_pending_status((p or {}).get('status'), has_report=has_report)
-                if status not in ('pending', 'generating', 'queued', 'processing') and (status or has_report):
+                if status not in ('pending', 'generating'):
+                    pending_by_id.pop(report_id, None)
                     continue
 
                 source_scope = _normalize_pending_source_scope(
@@ -7328,6 +7333,8 @@ def api_pending_reports():
                     merged_scope = 'synced_local'
                 elif source_scope == 'shared':
                     merged_scope = 'shared'
+                elif source_scope == 'cloud':
+                    merged_scope = 'cloud'
                 elif source_scope == 'local' and merged_scope == 'cloud':
                     merged_scope = 'local'
                 merged['source_scope'] = merged_scope

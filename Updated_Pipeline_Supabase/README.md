@@ -41,7 +41,7 @@ ALLOWED_ORIGINS=https://your-frontend.vercel.app
 EDGE_INGEST_TOKEN=your-shared-secret-token
 EDGE_REALSENSE_STALE_SECONDS=4
 
-# Optional: strict routing profile (cloud=Gemini only, local=Ollama Gemma4 only)
+# Optional: strict routing profile (cloud=Gemini only, local=Ollama Gemma3 4B only)
 STRICT_PROVIDER_MODE_SPLIT=true
 LUNA_ROUTING_PROFILE=cloud
 MODEL_API_ENABLED=false
@@ -83,7 +83,7 @@ Notes:
 - `SERVE_FRONTEND=false` makes `/` return API status JSON instead of serving SPA files
 - `ALLOWED_ORIGINS` controls CORS for `/api/*`, `/report/*`, and `/image/*`
 - Multiple origins are supported with comma-separated values
-- Routing is profile-based in strict mode: `cloud` profile uses Gemini for generation, `local` profile uses Ollama/Gemma4.
+- Routing is profile-based in strict mode: `cloud` profile uses Gemini for generation, `local` profile uses Ollama/Gemma3 4B.
 
 ### Frontend (Vercel) Backend URL
 

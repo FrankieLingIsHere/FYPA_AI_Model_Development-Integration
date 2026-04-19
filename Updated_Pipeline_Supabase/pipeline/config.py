@@ -122,7 +122,7 @@ OLLAMA_CONFIG = {
     'base_url': os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
     'api_url': os.getenv('OLLAMA_API_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/generate"),
     'embeddings_url': os.getenv('OLLAMA_EMBEDDINGS_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/embeddings"),
-    'model': os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma4')),
+    'model': os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma3:4b')),
     'timeout': int(os.getenv('OLLAMA_TIMEOUT', '1200')),  # 20 minutes (Practically unlimited, but prevents indefinite deadlocks)
     'use_local_model': os.getenv('USE_LOCAL_MODEL', 'false').lower() == 'true',
     'temperature': float(os.getenv('OLLAMA_TEMPERATURE', '0.7')),

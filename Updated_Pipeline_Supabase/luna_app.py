@@ -324,9 +324,9 @@ LOCAL_OLLAMA_UNIFIED_MODEL = str(
     or os.getenv('OLLAMA_MODEL')
     or os.getenv('OLLAMA_VISION_MODEL')
     or (OLLAMA_CONFIG or {}).get('model')
-    or 'gemma4'
+    or 'gemma3:4b'
 ).strip()
-STRICT_LOCAL_OLLAMA_MODEL = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma4') or 'gemma4').strip() or 'gemma4'
+STRICT_LOCAL_OLLAMA_MODEL = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma3:4b') or 'gemma3:4b').strip() or 'gemma3:4b'
 
 STRICT_PROVIDER_MODE_SPLIT = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
 PROVIDER_PROFILE_PRESETS = {

@@ -8,7 +8,7 @@ Usage:
 
 Requirements:
     - Ollama installed and running
-    - Unified local model: ollama pull gemma4
+    - Unified local model: ollama pull gemma3:4b
 """
 import sys
 import os
@@ -25,7 +25,7 @@ from pathlib import Path
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_TAGS_URL = os.getenv('OLLAMA_TAGS_URL', f"{OLLAMA_BASE_URL}/api/tags")
-OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma4')))
+OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma3:4b')))
 DEFAULT_ROUTING_PROFILE = str(os.getenv('LUNA_ROUTING_PROFILE', 'cloud')).strip().lower()
 DEFAULT_VISION_PROVIDER_ORDER = 'ollama' if DEFAULT_ROUTING_PROFILE == 'local' else 'gemini'
 
@@ -580,7 +580,7 @@ def attempt_ollama_auto_recover(reason: str = '', model_name: str = '', require_
 
 def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 250) -> str:
     """Call local Ollama vision model."""
-    target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma4'
+    target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma3:4b'
 
     if not check_ollama_running():
         recovery = attempt_ollama_auto_recover(

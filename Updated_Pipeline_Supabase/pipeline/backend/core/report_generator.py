@@ -211,7 +211,7 @@ class ReportGenerator:
         if self.enforce_strict_provider_split:
             profile = 'local' if self.strict_local_profile else 'cloud'
             if profile == 'local':
-                strict_local_model = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma4') or 'gemma4').strip() or 'gemma4'
+                strict_local_model = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma3:4b') or 'gemma3:4b').strip() or 'gemma3:4b'
                 self.model_api_enabled = False
                 self.use_gemini = False
                 self.model = strict_local_model
@@ -222,6 +222,9 @@ class ReportGenerator:
                 self.model_api_enabled = False
                 self.nlp_provider_order = ['gemini']
                 self.embedding_provider_order = ['model_api']
+
+        self.ollama_low_memory_fallback_models = self._build_ollama_model_chain(self.model)
+        self.last_ollama_model_used = self.model
         
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
@@ -1154,6 +1157,37 @@ RESPONSE FORMAT (JSON):
             + "environment_type, visual_evidence, persons, summary, dosh_regulations_cited.\n"
             + "No markdown fences. No extra text."
         )
+
+    def _build_ollama_model_chain(self, primary_model: str) -> List[str]:
+        """Build a deterministic fallback list where the active model is always attempted first."""
+        configured = str(
+            os.getenv('OLLAMA_LOW_MEMORY_FALLBACK_MODELS', 'gemma3:4b,gemma3:1b,gemma2:2b')
+            or ''
+        )
+        ordered: List[str] = []
+
+        primary = str(primary_model or '').strip()
+        if primary:
+            ordered.append(primary)
+
+        for raw_model in configured.split(','):
+            model_name = str(raw_model or '').strip()
+            if model_name and model_name not in ordered:
+                ordered.append(model_name)
+
+        return ordered or ['gemma3:4b']
+
+    def _is_ollama_memory_pressure_error(self, error_text: Optional[str]) -> bool:
+        text = str(error_text or '').strip().lower()
+        if not text:
+            return False
+        return (
+            'requires more system memory' in text
+            or 'insufficient memory' in text
+            or 'not enough memory' in text
+            or 'out of memory' in text
+            or ('requires' in text and 'memory' in text)
+        )
     
     def _call_ollama_api(self, prompt: str, allow_local_fallback: bool = True) -> Optional[Dict[str, Any]]:
         """
@@ -1165,6 +1199,8 @@ RESPONSE FORMAT (JSON):
         Returns:
             Parsed JSON response or None if failed
         """
+        self.last_ollama_model_used = self.model
+
         # Try local Llama first if available
         if allow_local_fallback and self.local_llama is not None:
             try:
@@ -1219,9 +1255,9 @@ RESPONSE FORMAT (JSON):
                 return
             time.sleep(min(5.0, backoff_seconds * max(1, attempt_no)))
 
-        def _request_ollama_json(request_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        def _request_ollama_json(request_prompt: str, model_name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             payload = {
-                'model': self.model,
+                'model': model_name,
                 'prompt': request_prompt,
                 'context': [],
                 'stream': False,
@@ -1241,7 +1277,8 @@ RESPONSE FORMAT (JSON):
 
                 try:
                     logger.info(
-                        "Calling Ollama API for NLP analysis (attempt %s/%s)...",
+                        "Calling Ollama API for NLP analysis using model '%s' (attempt %s/%s)...",
+                        model_name,
                         attempt_no,
                         max_attempts,
                     )
@@ -1262,7 +1299,7 @@ RESPONSE FORMAT (JSON):
                             try:
                                 recovery_helper(
                                     reason=f"HTTP {response.status_code}",
-                                    model_name=self.model,
+                                    model_name=model_name,
                                     require_model=True,
                                 )
                             except Exception:
@@ -1304,7 +1341,7 @@ RESPONSE FORMAT (JSON):
                         try:
                             recovery_helper(
                                 reason=str(e),
-                                model_name=self.model,
+                                model_name=model_name,
                                 require_model=True,
                             )
                         except Exception:
@@ -1318,11 +1355,40 @@ RESPONSE FORMAT (JSON):
 
             return None, last_error or 'Ollama NLP request failed'
 
-        nlp_response, error_detail = _request_ollama_json(prompt)
+        nlp_response = None
+        error_detail = None
+        selected_model = None
+        model_chain = self._build_ollama_model_chain(self.model)
+
+        for model_idx, model_name in enumerate(model_chain):
+            if model_idx > 0:
+                logger.warning(
+                    "Retrying Ollama NLP with lower-memory model '%s' after error: %s",
+                    model_name,
+                    error_detail or 'unknown failure',
+                )
+
+            nlp_response, error_detail = _request_ollama_json(prompt, model_name)
+            if nlp_response:
+                selected_model = model_name
+                break
+
+            if not self._is_ollama_memory_pressure_error(error_detail):
+                break
+
+            if model_idx + 1 < len(model_chain):
+                logger.warning(
+                    "Ollama model '%s' appears memory-constrained; falling back to '%s'",
+                    model_name,
+                    model_chain[model_idx + 1],
+                )
+
         if not nlp_response:
             self.last_nlp_error = error_detail
             logger.error(error_detail or "Ollama NLP analysis failed")
             return None
+
+        self.last_ollama_model_used = selected_model or self.model
 
         missing_fields = self._missing_required_nlp_fields(nlp_response)
         if missing_fields and schema_regen_attempts > 0:
@@ -1332,7 +1398,7 @@ RESPONSE FORMAT (JSON):
             )
             regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
             for regen_idx in range(schema_regen_attempts):
-                candidate, regen_error = _request_ollama_json(regen_prompt)
+                candidate, regen_error = _request_ollama_json(regen_prompt, self.last_ollama_model_used)
                 if candidate:
                     candidate_missing = self._missing_required_nlp_fields(candidate)
                     if not candidate_missing:
@@ -1355,7 +1421,7 @@ RESPONSE FORMAT (JSON):
             )
 
         self.last_nlp_error = None
-        logger.info("[OK] Ollama NLP analysis completed")
+        logger.info("[OK] Ollama NLP analysis completed with model '%s'", self.last_ollama_model_used)
         return nlp_response
     
     # =========================================================================
@@ -1484,13 +1550,13 @@ RESPONSE FORMAT (JSON):
             elif provider_name == 'ollama':
                 logger.info("Trying Ollama NLP API...")
                 nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=False)
-                self.last_nlp_model = self.model
+                self.last_nlp_model = self.last_ollama_model_used or self.model
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Ollama NLP provider failed'
             elif provider_name == 'local':
                 logger.info("Trying local Llama fallback...")
                 nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=True)
-                self.last_nlp_model = self.model if self.local_llama is None else 'local-llama'
+                self.last_nlp_model = self.last_ollama_model_used if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
 

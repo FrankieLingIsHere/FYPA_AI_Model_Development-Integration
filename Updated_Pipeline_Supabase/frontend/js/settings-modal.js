@@ -24,8 +24,8 @@ const GlobalSettingsModal = {
             nlp_provider_order: 'ollama',
             vision_provider_order: 'ollama',
             embedding_provider_order: 'ollama',
-            nlp_model: 'gemma4',
-            vision_model: 'gemma4',
+            nlp_model: 'gemma3:4b',
+            vision_model: 'gemma3:4b',
             embedding_model: 'nomic-embed-text',
             gemini_model: 'gemini-2.5-flash'
         }
@@ -38,8 +38,8 @@ const GlobalSettingsModal = {
         nlp_provider_order: 'ollama',
         vision_provider_order: 'ollama',
         embedding_provider_order: 'ollama',
-        nlp_model: 'gemma4',
-        vision_model: 'gemma4',
+        nlp_model: 'gemma3:4b',
+        vision_model: 'gemma3:4b',
         embedding_model: 'nomic-embed-text',
         gemini_model: 'gemini-2.5-flash'
     },
@@ -299,14 +299,16 @@ const GlobalSettingsModal = {
                                 <div>
                                     <label style="font-weight: 600;">NLP Model</label>
                                     <select id="globalNlpModelSelect" class="global-provider-input">
-                                        <option value="gemma4">Gemma 4 (local)</option>
+                                        <option value="gemma3:4b">Gemma 3 4B (local, lower memory)</option>
+                                        <option value="gemma4">Gemma 4 (local, higher memory)</option>
                                         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                     </select>
                                 </div>
                                 <div>
                                     <label style="font-weight: 600;">Vision Model</label>
                                     <select id="globalVisionModelSelect" class="global-provider-input">
-                                        <option value="gemma4">Gemma 4 (local)</option>
+                                        <option value="gemma3:4b">Gemma 3 4B (local, lower memory)</option>
+                                        <option value="gemma4">Gemma 4 (local, higher memory)</option>
                                         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                     </select>
                                 </div>

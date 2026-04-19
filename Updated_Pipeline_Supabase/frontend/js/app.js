@@ -1195,9 +1195,24 @@ function bindTimezoneSelectorVisibilityGuard() {
     if (selector.dataset.visibilityGuardBound === 'true') return;
 
     selector.dataset.visibilityGuardBound = 'true';
+    let selectorOpenStateTimer = null;
 
-    const setSelectorOpenState = (isOpen) => {
+    const setSelectorOpenState = (isOpen, options = {}) => {
+        const autoClearMs = Number(options.autoClearMs || 0);
         sidebar.classList.toggle('timezone-selector-open', !!isOpen);
+
+        if (selectorOpenStateTimer) {
+            window.clearTimeout(selectorOpenStateTimer);
+            selectorOpenStateTimer = null;
+        }
+
+        if (!!isOpen && autoClearMs > 0) {
+            selectorOpenStateTimer = window.setTimeout(() => {
+                if (document.activeElement !== selector && !sidebar.matches(':hover')) {
+                    setSelectorOpenState(false);
+                }
+            }, autoClearMs);
+        }
     };
 
     const closeSelector = () => {
@@ -1209,16 +1224,11 @@ function bindTimezoneSelectorVisibilityGuard() {
 
     // Do not force-close on sidebar mouseleave. Native select popups can render
     // outside the sidebar box and would otherwise close immediately.
-    selector.addEventListener('focus', () => setSelectorOpenState(true));
-    selector.addEventListener('mousedown', () => setSelectorOpenState(true));
-    selector.addEventListener('touchstart', () => setSelectorOpenState(true), { passive: true });
-    selector.addEventListener('blur', () => {
-        window.setTimeout(() => {
-            if (document.activeElement !== selector) {
-                setSelectorOpenState(false);
-            }
-        }, 0);
-    });
+    // Some browsers emit blur as the native dropdown opens. Keep the sidebar
+    // pinned briefly and close only on explicit close triggers.
+    selector.addEventListener('focus', () => setSelectorOpenState(true, { autoClearMs: 7000 }));
+    selector.addEventListener('mousedown', () => setSelectorOpenState(true, { autoClearMs: 7000 }));
+    selector.addEventListener('touchstart', () => setSelectorOpenState(true, { autoClearMs: 7000 }), { passive: true });
     selector.addEventListener('change', closeSelector);
 
     document.addEventListener('click', (event) => {
@@ -1248,7 +1258,8 @@ function setupResponsiveMobileUX() {
     const overlay = document.getElementById('mobileOrientationOverlay');
     const retryBtn = document.getElementById('orientationRetryBtn');
     const timezoneSelector = document.getElementById('timezone-selector');
-    const navLinks = Array.from(document.querySelectorAll('.nav-link, .sidebar-link'));
+    // Only bind navigation close behavior to actual navigable links.
+    const navLinks = Array.from(document.querySelectorAll('.nav-link, a.sidebar-link'));
 
     if (!body) return;
 

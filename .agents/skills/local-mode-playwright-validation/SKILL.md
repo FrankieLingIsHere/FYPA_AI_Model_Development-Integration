@@ -323,6 +323,8 @@ Non-negotiable rules:
 5. If sidebar/nav collapses, open dropdowns/selectors must close/blur so floating lists do not remain visible off-state.
 6. For native selects inside hover-collapsed sidebars, do not rely on `:hover` alone to keep controls visible while interacting.
    Use an explicit "selector-open" state (focus/pointer activated) so the sidebar does not collapse before the user can pick an option.
+7. Do not bind global nav-close click handlers to non-navigable sidebar containers that host controls (for example timezone select wrappers).
+   Restrict handlers to actual navigation links (`a.sidebar-link` / `.nav-link`) to avoid accidental blur/close loops.
 
 Verification checklist:
 

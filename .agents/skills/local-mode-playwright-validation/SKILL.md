@@ -80,6 +80,24 @@ Enforcement rule:
 - If any action test exits non-zero, keep patching and re-run until both are green.
 - If output contains non-blocking INFO lines but exit code is 0, treat as pass and report the INFO lines explicitly.
 
+## Feature Patch Git Sync Rule
+
+When a feature patch changes repository files, do not stop at code + tests only.
+
+Required post-patch git flow (non-interactive):
+
+1. Stage intended files and create a commit with a clear message.
+2. Pull from origin with fast-forward only:
+   - `git pull --ff-only`
+   - or explicit branch form: `git pull --ff-only origin <branch>`
+3. Report final branch state from `git status -sb` (ahead/behind/clean).
+
+Interpretation:
+
+- If pull says `Already up to date`, still report current ahead/behind state.
+- If branch is ahead after pull, call out that push is still required for remote/deploy pickup.
+- Do not use merge commits or interactive git flows for this step.
+
 ## Required Reporting
 
 After each run, report the exact evidence fields from the runner JSON:
@@ -188,6 +206,28 @@ Use this quick triage whenever local backend logs mention queue-worker health (f
    - Re-check startup state endpoint and queue status.
    - Verify no fatal exceptions are emitted from `queue_worker_loop` in local backend logs.
    - Re-run required action tests before finalizing any runtime patch.
+
+## Runtime Triage Addendum: Queue Busy While Idle
+
+Use this when users report "queue busy" during reprocess even though no report appears to be generating.
+
+1. Confirm actual queue state first:
+   - `GET /api/queue/status`
+   - check `current_size`, `worker_running`, and `available`
+
+2. Confirm generate-now rejection type:
+   - `POST /api/report/<report_id>/generate-now`
+   - inspect response fields `rejected_reason`, `queue_size`, `queue_capacity`, and `worker_running`
+
+3. Interpretation rules:
+   - `rejected_reason=queue_full` with `queue_size >= queue_capacity` means true queue saturation.
+   - `rejected_reason=rate_limited` with `queue_size=0` means device rate limiting, not queue saturation.
+   - `worker_running=false` should be surfaced as worker-health error, not generic queue-busy cooldown.
+
+4. Patch guidance for manual reprocess/recovery actions:
+   - Avoid reusing deterministic per-report fallback `device_id` values for retries.
+   - Use per-attempt unique fallback device ids for manual enqueue retries to avoid sticky rate-limit loops.
+   - Keep required action tests green after patching.
 
 ## Runtime Triage Addendum: Optional Gemini Startup Noise
 

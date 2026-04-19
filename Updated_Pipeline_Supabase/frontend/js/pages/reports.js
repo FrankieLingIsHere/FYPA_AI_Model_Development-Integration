@@ -1326,13 +1326,29 @@ const ReportsPage = {
                 this.updateModalRetryText();
 
                 const errorText = String(result?.error || 'Failed to prioritize report generation');
-                const queueBusy = /queue|busy|rate|limit|full|capacity|409|429|503/i.test(errorText);
+                const rejectedReason = String(result?.rejected_reason || '').trim().toLowerCase();
+                const httpStatus = Number(result?.http_status || 0);
+                const queueSize = Number(result?.queue_size || 0);
+                const queueBusy = rejectedReason === 'queue_full'
+                    || rejectedReason === 'rate_limited'
+                    || (/queue|busy|rate|limit|full|capacity|409|429/i.test(errorText) && httpStatus !== 503);
                 if (this.isQuotaOrRateLimitError(errorText)) {
                     this.setProviderWarning('Provider quota/rate limit detected. Awaiting your recovery choice.');
                     await this.promptQuotaRecovery(reportId, errorText);
                 }
+
+                if (httpStatus === 503 || result?.worker_running === false) {
+                    this.setModalStatusText('Queue worker is not running. Please restart local backend and retry.');
+                    this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
+                    this.notify('Queue worker is not running. Restart backend and retry.', 'error');
+                    return;
+                }
+
                 if (queueBusy) {
-                    this.setModalStatusText(`Queue busy: ${errorText}`);
+                    const busyMessage = (rejectedReason === 'rate_limited' && queueSize <= 0)
+                        ? 'Queue appears idle but this request was rate-limited. Please retry in a moment.'
+                        : `Queue busy: ${errorText}`;
+                    this.setModalStatusText(busyMessage);
                     this.notify(`Queue busy for report ${reportId}. Monitoring in progress.`, 'warning');
                     this.startModalCooldown(runtime.cooldownSeconds);
                     return;

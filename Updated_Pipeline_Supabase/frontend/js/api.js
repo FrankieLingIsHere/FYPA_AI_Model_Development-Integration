@@ -527,11 +527,19 @@ const API = {
                     force: !!options.force
                 })
             });
+            const data = await response.json().catch(() => ({}));
             if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.error || 'Failed to trigger priority generation');
+                return {
+                    success: false,
+                    error: data.error || 'Failed to trigger priority generation',
+                    rejected_reason: data.rejected_reason || '',
+                    queue_size: Number(data.queue_size || 0),
+                    queue_capacity: Number(data.queue_capacity || 0),
+                    worker_running: data.worker_running,
+                    http_status: response.status
+                };
             }
-            return await response.json();
+            return data;
         } catch (error) {
             console.error('Error triggering priority generation:', error);
             return { success: false, error: error.message };

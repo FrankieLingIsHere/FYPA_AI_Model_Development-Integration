@@ -6338,7 +6338,7 @@ def api_report_recovery_execute():
                 queue_full = queue_capacity > 0 and queue_size >= queue_capacity
 
                 if not queue_full:
-                    fallback_device_id = f'recovery_reprocess_{report_id}'
+                    fallback_device_id = f'recovery_reprocess_{report_id}_{time.time_ns()}'
                     enqueued = violation_queue.enqueue(
                         violation_data=violation_data,
                         device_id=fallback_device_id,
@@ -7045,7 +7045,7 @@ def api_generate_report_now(report_id):
             queue_full = queue_capacity > 0 and queue_size >= queue_capacity
 
             if not queue_full:
-                fallback_device_id = f'manual_reprocess_{report_id}'
+                fallback_device_id = f'manual_reprocess_{report_id}_{time.time_ns()}'
                 enqueued = violation_queue.enqueue(
                     violation_data=violation_data,
                     device_id=fallback_device_id,

@@ -3100,7 +3100,7 @@ def api_violations():
         if has_cloud_artifacts and is_local_device:
             return 'synced_local', 'cloud_record_local_device'
         if has_cloud_artifacts and has_local_artifacts:
-            return 'shared', 'cloud_and_local_artifacts'
+            return 'cloud', 'cloud_artifacts_with_local_cache'
         if has_cloud_artifacts:
             return 'cloud', 'cloud_artifacts'
         if has_local_artifacts or is_local_device:
@@ -3335,9 +3335,9 @@ def api_violations():
 
                 if existing_scope == 'cloud':
                     if existing_local_device:
-                        existing.update(_build_source_payload('synced_local', 'cloud_plus_local_cache'))
+                        existing.update(_build_source_payload('synced_local', 'cloud_record_local_device'))
                     else:
-                        existing.update(_build_source_payload('shared', 'cloud_plus_local_cache'))
+                        existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
                     existing.update(_build_source_payload('local', 'local_cache_row'))
                 continue
@@ -7243,6 +7243,7 @@ def api_pending_reports():
         return 'Cloud'
 
     # Always include local filesystem state for immediate queue/generation visibility.
+    local_seed_device_id = 'local_cache' if db_manager is None else None
     local_rows = _collect_local_report_state_rows(limit=300)
     for row in local_rows:
         report_id = str(row.get('report_id') or '').strip()
@@ -7256,7 +7257,7 @@ def api_pending_reports():
             'report_id': report_id,
             'timestamp': row.get('updated_at') or row.get('timestamp'),
             'status': status,
-            'device_id': 'local_cache',
+            'device_id': local_seed_device_id,
             'severity': 'HIGH',
             'has_original': bool(row.get('has_original')),
             'has_annotated': bool(row.get('has_annotated')),

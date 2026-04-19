@@ -342,6 +342,7 @@ const ReportsPage = {
             const existing = byId.get(reportId);
 
             if (existing) {
+                const existingScope = this.inferSourceScope(existing);
                 const existingStatus = this.normalizeStatus(existing);
                 const existingHasReport = !!existing.has_report;
                 const pendingPriority = this.getStatusPriority(pendingStatus);
@@ -357,7 +358,11 @@ const ReportsPage = {
                     existing.timestamp = item.timestamp;
                 }
                 if (!existing.device_id && item.device_id) {
-                    existing.device_id = item.device_id;
+                    const pendingDevice = String(item.device_id || '').trim().toLowerCase();
+                    const isLocalCacheSeed = pendingScope === 'local' && (pendingDevice === 'local_cache' || pendingDevice === 'offline_local_cache');
+                    if (!(existingScope === 'cloud' && isLocalCacheSeed)) {
+                        existing.device_id = item.device_id;
+                    }
                 }
                 if (!existing.severity && item.severity) {
                     existing.severity = item.severity;
@@ -366,7 +371,6 @@ const ReportsPage = {
                 existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
                 existing.has_report = !!existing.has_report || !!item.has_report;
 
-                const existingScope = this.inferSourceScope(existing);
                 let mergedScope = existingScope || pendingScope || 'cloud';
                 if (pendingScope === 'synced_local') {
                     mergedScope = 'synced_local';
@@ -1540,6 +1544,13 @@ const ReportsPage = {
         const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
+        const sourceScope = this.inferSourceScope(violation);
+        const deviceId = String((violation && violation.device_id) || '').trim();
+        const deviceKey = deviceId.toLowerCase();
+        const shouldShowDevice = Boolean(deviceId) && !(
+            sourceScope === 'cloud'
+            && (deviceKey === 'local_cache' || deviceKey === 'offline_local_cache')
+        );
         const isReady = this.isReportReady(violation);
         const processAction = this.getProcessAction(violation);
         const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
@@ -1629,9 +1640,9 @@ const ReportsPage = {
                                 ${violation.violation_summary || 'PPE Violation'}
                             </p>
                         `}
-                        ${violation.device_id ? `
+                        ${shouldShowDevice ? `
                             <p style="margin: 0.5rem 0 0 0; color: #95a5a6; font-size: 0.8rem;">
-                                <i class="fas fa-desktop"></i> Device: ${violation.device_id}
+                                <i class="fas fa-desktop"></i> Device: ${deviceId}
                             </p>
                         ` : ''}
                     </div>

@@ -271,6 +271,42 @@ When local reconnect tests fail early with page navigation timeouts, validate ba
    - http://127.0.0.1:5000/
    - http://127.0.0.1:5000/api/system/startup-status
 
+### Six-Step Recovery Procedure (Use This Exact Order)
+
+Use this when users report queue/reprocess drift and process ownership confusion on Windows.
+
+1. Snapshot active ownership and queue state first:
+   - list all `python` processes containing `luna_app.py`
+   - check port 5000 listener PID + executable path
+   - query `GET /api/queue/status` and keep `queue_size`, `by_device`, and `queue_preview`
+
+2. Stop all existing `luna_app.py` python processes before restart:
+   - only target processes where command line contains `luna_app.py`
+   - do not kill unrelated python tasks
+
+3. Start backend from project venv in `Updated_Pipeline_Supabase`:
+   - `"<repo>/.venv/Scripts/python.exe" luna_app.py`
+   - prefer one dedicated foreground terminal for diagnostics to avoid silent detached failures
+
+4. Validate readiness immediately after start:
+   - `GET /api/system/startup-status` must return HTTP 200
+   - `GET /api/queue/status` must return HTTP 200 and `worker_running=true`
+
+5. Confirm migration pressure source before reprocess actions:
+   - if `by_device.local_cache_sync` dominates and logs show repeated `local_cache_sync_queued`, treat as migration/reconnect queue pressure
+   - use `queue_preview` to identify actual queued `report_id` entries
+
+6. After any patch, enforce git sync completion:
+   - `git add <intended files>`
+   - `git commit -m "<clear message>"`
+   - `git pull --ff-only`
+   - `git status -sb` and report final branch clean/ahead/behind state
+
+PowerShell caution:
+
+- never use `$PID` as a loop variable because it is read-only in PowerShell
+- use names like `$procId` when iterating owning process ids
+
 ## Runtime Triage Addendum: Bounded Local Checkup Prepare Timeout
 
 If local checkup appears stuck while waiting for model pull/prepare, use bounded timeout tuning instead of treating as hard runtime failure.

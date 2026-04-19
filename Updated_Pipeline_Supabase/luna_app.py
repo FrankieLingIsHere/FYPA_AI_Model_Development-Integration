@@ -2601,6 +2601,14 @@ def api_startup_status():
     """Expose startup progress so frontend can block UI until system is fully ready."""
     ensure_startup_thread()
     snapshot = get_startup_state_snapshot()
+    if isinstance(snapshot, dict):
+        snapshot['runtime'] = {
+            'pid': os.getpid(),
+            'ppid': os.getppid() if hasattr(os, 'getppid') else None,
+            'python_executable': sys.executable,
+            'python_version': sys.version.split(' ', 1)[0],
+            'argv0': sys.argv[0] if sys.argv else None,
+        }
     status_code = 200
     if snapshot.get('status') == 'error':
         status_code = 500
@@ -3463,6 +3471,11 @@ def api_queue_status():
             queue_preview = violation_queue.get_queue_preview(limit=20)
         return jsonify({
             'available': True,
+            'runtime': {
+                'pid': os.getpid(),
+                'ppid': os.getppid() if hasattr(os, 'getppid') else None,
+                'python_executable': sys.executable,
+            },
             'queue_size': stats.get('current_size', 0),
             'capacity': stats.get('capacity', 100),
             'total_enqueued': stats.get('total_enqueued', 0),

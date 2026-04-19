@@ -290,6 +290,7 @@ Use this when users report queue/reprocess drift and process ownership confusion
 
 4. Validate readiness immediately after start:
    - `GET /api/system/startup-status` must return HTTP 200
+   - `startup-status.runtime.python_executable` should match expected interpreter path for this session
    - `GET /api/queue/status` must return HTTP 200 and `worker_running=true`
 
 5. Confirm migration pressure source before reprocess actions:

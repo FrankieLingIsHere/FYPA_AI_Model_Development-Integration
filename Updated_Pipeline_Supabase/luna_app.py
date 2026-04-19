@@ -234,6 +234,11 @@ app = Flask(__name__,
             static_url_path='/static')
 
 SERVE_FRONTEND = os.getenv('SERVE_FRONTEND', 'true').lower() == 'true'
+FRONTEND_APP_URL = os.getenv(
+    'FRONTEND_APP_URL',
+    'https://fypa-ai-model-development-integrati.vercel.app'
+).strip().rstrip('/')
+API_ONLY_ROOT_REDIRECT_ENABLED = os.getenv('API_ONLY_ROOT_REDIRECT_ENABLED', 'true').lower() == 'true'
 ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv('ALLOWED_ORIGINS', '*').split(',') if origin.strip()
 ]
@@ -2609,15 +2614,50 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 # FRONTEND ROUTES
 # =========================================================================
 
+def _request_prefers_html(req) -> bool:
+    """Best-effort check to distinguish browser navigation from API clients."""
+    accept = str(req.headers.get('Accept', '') or '').lower()
+    if 'text/html' in accept:
+        return True
+    user_agent = str(req.headers.get('User-Agent', '') or '').lower()
+    browser_signals = ('mozilla', 'chrome', 'safari', 'edg', 'firefox')
+    return any(signal in user_agent for signal in browser_signals)
+
+
+def _build_api_only_redirect_page(frontend_url: str) -> str:
+    safe_url = html.escape(frontend_url, quote=True)
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <meta http-equiv=\"refresh\" content=\"0;url={safe_url}\" />
+    <title>LUNA PPE API</title>
+</head>
+<body>
+    <p>Frontend is deployed separately. Redirecting to <a href=\"{safe_url}\">LUNA PPE frontend</a>...</p>
+    <script>
+        window.location.replace({json.dumps(frontend_url)});
+    </script>
+</body>
+</html>"""
+
 @app.route('/')
 def index():
     """Serve frontend (unified mode) or a backend status payload (API-only mode)."""
     ensure_startup_thread()
     if not SERVE_FRONTEND:
+        if API_ONLY_ROOT_REDIRECT_ENABLED and FRONTEND_APP_URL and _request_prefers_html(request):
+            response = Response(_build_api_only_redirect_page(FRONTEND_APP_URL), mimetype='text/html')
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         return jsonify({
             'service': 'LUNA PPE API',
             'status': 'ok',
             'frontend_served': False,
+            'frontend_url': FRONTEND_APP_URL or None,
             'message': 'Frontend is deployed separately. Use this host for API requests only.'
         })
     return send_from_directory('frontend', 'index.html')

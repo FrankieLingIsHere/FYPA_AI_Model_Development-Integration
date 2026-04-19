@@ -325,6 +325,8 @@ Non-negotiable rules:
    Use an explicit "selector-open" state (focus/pointer activated) so the sidebar does not collapse before the user can pick an option.
 7. Do not bind global nav-close click handlers to non-navigable sidebar containers that host controls (for example timezone select wrappers).
    Restrict handlers to actual navigation links (`a.sidebar-link` / `.nav-link`) to avoid accidental blur/close loops.
+8. Before debugging UI interactions on a deployed URL, verify the URL actually serves frontend HTML.
+   If root response indicates `frontend_served=false` (API-only host), route users to the frontend host first or enable API-only root browser redirect.
 
 Verification checklist:
 

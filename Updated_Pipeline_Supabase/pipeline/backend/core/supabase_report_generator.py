@@ -116,6 +116,8 @@ class SupabaseReportGenerator(ReportGenerator):
         if not result:
             logger.error(f"Failed to generate local report: {report_id}")
             return result
+
+        cloud_upload_disabled = bool(report_data.get('cloud_upload_disabled'))
         
         # Step 1.5: Validate caption against annotations
         caption = report_data.get('caption', '')
@@ -139,6 +141,14 @@ class SupabaseReportGenerator(ReportGenerator):
         except Exception as e:
             logger.error(f"Error validating caption: {e}")
             # Continue anyway
+
+        if cloud_upload_disabled:
+            logger.info(
+                f"Local-first pipeline active; skipping Supabase upload/DB persistence for {report_id}"
+            )
+            result['storage_keys'] = {}
+            result['cloud_upload_skipped'] = True
+            return result
 
         person_count = report_data.get('person_count', 0)
         violation_count = report_data.get('violation_count', 0)

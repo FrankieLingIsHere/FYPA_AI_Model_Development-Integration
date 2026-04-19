@@ -2,6 +2,7 @@
 
 import os
 import time
+from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional, Tuple
 
@@ -26,11 +27,25 @@ class LiveSourceAdapter:
         self.active_realsense_source = None
         self._webcam_probe_cache = []
         self._webcam_probe_cache_ts = 0.0
+        self._backend_fail_until: Dict[Tuple[int, str], float] = {}
+        self._preferred_backend_by_index: Dict[int, str] = {}
         try:
             probe_cache_seconds = float(os.getenv('WEBCAM_PROBE_CACHE_SECONDS', '15'))
         except Exception:
             probe_cache_seconds = 15.0
         self.webcam_probe_cache_seconds = max(2.0, probe_cache_seconds)
+        try:
+            backend_fail_cooldown = float(os.getenv('WEBCAM_BACKEND_FAIL_COOLDOWN_SECONDS', '180'))
+        except Exception:
+            backend_fail_cooldown = 180.0
+        self.webcam_backend_fail_cooldown_seconds = max(5.0, min(backend_fail_cooldown, 1800.0))
+        self.last_good_camera_index_path = Path(
+            os.getenv(
+                'WEBCAM_LAST_GOOD_INDEX_FILE',
+                str(Path.home() / '.luna_local_state' / 'last_webcam_index.txt')
+            )
+        )
+        self.active_camera_index = self._load_last_good_camera_index(default_index=self.active_camera_index)
         try:
             read_retry_attempts = int(os.getenv('WEBCAM_READ_RETRY_ATTEMPTS', '5'))
         except Exception:
@@ -66,6 +81,51 @@ class LiveSourceAdapter:
             'sdk_available': True,
             'reason': 'No edge relay frames received yet'
         }
+
+    def _load_last_good_camera_index(self, default_index: int = 0) -> int:
+        try:
+            if self.last_good_camera_index_path.exists():
+                value = int(self.last_good_camera_index_path.read_text(encoding='utf-8').strip())
+                return max(0, value)
+        except Exception:
+            pass
+        return max(0, int(default_index or 0))
+
+    def _persist_last_good_camera_index(self, camera_index: int) -> None:
+        try:
+            self.last_good_camera_index_path.parent.mkdir(parents=True, exist_ok=True)
+            self.last_good_camera_index_path.write_text(str(max(0, int(camera_index))), encoding='utf-8')
+        except Exception:
+            pass
+
+    @staticmethod
+    def _backend_label(backend: Optional[int]) -> str:
+        if backend is None:
+            return 'any'
+        if hasattr(cv2, 'CAP_DSHOW') and backend == cv2.CAP_DSHOW:
+            return 'dshow'
+        if hasattr(cv2, 'CAP_MSMF') and backend == cv2.CAP_MSMF:
+            return 'msmf'
+        return str(backend)
+
+    def _is_backend_suppressed(self, camera_index: int, backend_label: str) -> bool:
+        key = (int(camera_index), str(backend_label))
+        until_epoch = float(self._backend_fail_until.get(key, 0.0) or 0.0)
+        if until_epoch <= 0:
+            return False
+        if time.monotonic() >= until_epoch:
+            self._backend_fail_until.pop(key, None)
+            return False
+        return True
+
+    def _mark_backend_failure(self, camera_index: int, backend_label: str) -> None:
+        key = (int(camera_index), str(backend_label))
+        self._backend_fail_until[key] = time.monotonic() + float(self.webcam_backend_fail_cooldown_seconds)
+
+    def _mark_backend_success(self, camera_index: int, backend_label: str) -> None:
+        key = (int(camera_index), str(backend_label))
+        self._backend_fail_until.pop(key, None)
+        self._preferred_backend_by_index[int(camera_index)] = str(backend_label)
 
     def _read_webcam_frame_with_retries(
         self,
@@ -181,6 +241,7 @@ class LiveSourceAdapter:
     def _open_webcam(self, camera_index: int, probe_mode: bool = False):
         """Open webcam with backend fallbacks while keeping probe noise low on Windows."""
         cap = None
+        preferred_backend = self._preferred_backend_by_index.get(int(camera_index))
 
         if os.name == 'nt':
             allow_probe_msmf = os.getenv('WEBCAM_PROBE_USE_MSMF_WINDOWS', 'false').lower() in (
@@ -193,14 +254,26 @@ class LiveSourceAdapter:
             if hasattr(cv2, 'CAP_MSMF') and (not probe_mode or allow_probe_msmf):
                 backend_candidates.append(cv2.CAP_MSMF)
 
+            if preferred_backend:
+                backend_candidates.sort(
+                    key=lambda backend: 0 if self._backend_label(backend) == preferred_backend else 1
+                )
+
             for backend in backend_candidates:
+                backend_label = self._backend_label(backend)
+                if self._is_backend_suppressed(camera_index, backend_label):
+                    continue
+
                 try:
                     cap = cv2.VideoCapture(camera_index, backend)
                 except Exception:
                     cap = None
 
                 if cap is not None and cap.isOpened():
+                    self._mark_backend_success(camera_index, backend_label)
                     return cap
+
+                self._mark_backend_failure(camera_index, backend_label)
 
                 try:
                     if cap is not None:
@@ -226,7 +299,16 @@ class LiveSourceAdapter:
                     cap.release()
             except Exception:
                 pass
+
+            if self._is_backend_suppressed(camera_index, 'any'):
+                return None
+
             cap = cv2.VideoCapture(camera_index)
+
+        if cap is not None and cap.isOpened():
+            self._mark_backend_success(camera_index, 'any')
+        else:
+            self._mark_backend_failure(camera_index, 'any')
 
         return cap
 
@@ -507,6 +589,7 @@ class LiveSourceAdapter:
 
         self.active_camera_source = 'webcam'
         self.active_camera_index = opened_index
+        self._persist_last_good_camera_index(self.active_camera_index)
         if fallback_to_webcam and fallback_message:
             start_message = f'{fallback_message} Using webcam index {self.active_camera_index}.'
         else:

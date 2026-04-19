@@ -799,6 +799,22 @@ SUPABASE_AUTO_SYNC_BATCH_SIZE = max(
     5,
     min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '20') or 20))
 )
+LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
+    'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_SYNC_CLEANUP_ENABLED = os.getenv(
+    'LOCAL_CACHE_SYNC_CLEANUP_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR = os.getenv(
+    'LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS = max(
+    0,
+    int(os.getenv('LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS', '0') or 0)
+)
 supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
@@ -2015,6 +2031,106 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         return None
 
 
+def _is_local_cache_sync_job_marker(sync_source: str = '', device_id: str = '') -> bool:
+    sync_markers = {
+        'sync_local_cache',
+        'local_cache_sync',
+        'offline_local_cache_sync',
+    }
+    normalized_source = str(sync_source or '').strip().lower()
+    normalized_device = str(device_id or '').strip().lower()
+    return normalized_source in sync_markers or normalized_device in sync_markers
+
+
+def _should_force_local_artifact_pipeline(sync_source: str = '', device_id: str = '') -> bool:
+    """Return True when local runtime should generate reports locally and defer cloud upload."""
+    if not LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS:
+        return False
+    if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
+        return False
+    return not _is_local_cache_sync_job_marker(sync_source=sync_source, device_id=device_id)
+
+
+def _local_sync_has_complete_cloud_artifacts(
+    storage_keys: Dict[str, Any],
+    *,
+    local_has_annotated: bool,
+    local_has_report: bool
+) -> bool:
+    if not isinstance(storage_keys, dict):
+        return False
+    if not storage_keys.get('original_image_key'):
+        return False
+    if local_has_annotated and not storage_keys.get('annotated_image_key'):
+        return False
+    if local_has_report and not storage_keys.get('report_html_key'):
+        return False
+    return True
+
+
+def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Path) -> Dict[str, Any]:
+    """Remove local artifacts after confirmed cloud sync to reduce disk usage."""
+    if not LOCAL_CACHE_SYNC_CLEANUP_ENABLED:
+        return {'cleaned': False, 'reason': 'cleanup_disabled'}
+
+    if not violation_dir.exists() or not violation_dir.is_dir():
+        return {'cleaned': False, 'reason': 'directory_missing'}
+
+    try:
+        age_seconds = max(0.0, time.time() - violation_dir.stat().st_mtime)
+    except Exception:
+        age_seconds = 0.0
+
+    if age_seconds < float(LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS):
+        return {
+            'cleaned': False,
+            'reason': 'retention_window_active',
+            'age_seconds': int(age_seconds),
+            'min_age_seconds': int(LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS),
+        }
+
+    if LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR:
+        try:
+            shutil.rmtree(violation_dir)
+            return {
+                'cleaned': True,
+                'reason': 'deleted_whole_directory',
+            }
+        except Exception as dir_err:
+            logger.warning(f"Could not remove local violation directory for {report_id}: {dir_err}")
+
+    removable_files = (
+        'original.jpg',
+        'annotated.jpg',
+        'report.html',
+        'report.pdf',
+        'caption.txt',
+        'generation_failure.txt',
+        'environment_validation.json',
+    )
+    removed_files = []
+    for filename in removable_files:
+        candidate = violation_dir / filename
+        try:
+            if candidate.exists() and candidate.is_file():
+                candidate.unlink()
+                removed_files.append(filename)
+        except Exception as file_err:
+            logger.debug(f"Could not remove local file {candidate}: {file_err}")
+
+    try:
+        if violation_dir.exists() and not any(violation_dir.iterdir()):
+            violation_dir.rmdir()
+    except Exception:
+        pass
+
+    return {
+        'cleaned': bool(removed_files),
+        'reason': 'removed_selected_files' if removed_files else 'no_files_removed',
+        'removed_files': removed_files,
+    }
+
+
 def process_queued_violation(queued_violation: 'QueuedViolation'):
     """
     Process a violation from the queue.
@@ -2039,6 +2155,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     )
     queued_source_scope = str(data.get('source_scope') or '').strip().lower()
     queued_sync_source = str(data.get('sync_source') or data.get('source') or '').strip().lower()
+    is_local_cache_sync_job = _is_local_cache_sync_job_marker(
+        sync_source=queued_sync_source,
+        device_id=queue_device_id,
+    )
+    force_local_artifact_pipeline = _should_force_local_artifact_pipeline(
+        sync_source=queued_sync_source,
+        device_id=queue_device_id,
+    )
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
@@ -2174,6 +2298,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     # Generate report
     report_created = False
     failure_reason = None
+    cloud_upload_skipped = False
+    result_storage_keys: Dict[str, Any] = {}
     caption_provider = None
     caption_model = None
     try:
@@ -2227,15 +2353,30 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'annotated_image_path': str(annotated_path),
                 'location': 'Live Stream Monitor',
                 'severity': 'HIGH',
-                'person_count': len(detections)
+                'person_count': len(detections),
+                'cloud_upload_disabled': force_local_artifact_pipeline,
             }
             if queued_source_scope:
                 report_data['source_scope'] = queued_source_scope
+            elif force_local_artifact_pipeline:
+                report_data['source_scope'] = 'local'
             if queued_sync_source:
                 report_data['sync_source'] = queued_sync_source
                 report_data['source'] = queued_sync_source
+            elif force_local_artifact_pipeline:
+                report_data['sync_source'] = 'local_pipeline'
+                report_data['source'] = 'local_pipeline'
+
+            if force_local_artifact_pipeline:
+                logger.info(
+                    f"Local-first artifact pipeline active for {report_id}; deferring cloud upload until sync"
+                )
             
             result = report_generator.generate_report(report_data)
+            if isinstance(result, dict):
+                cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
+                if isinstance(result.get('storage_keys'), dict):
+                    result_storage_keys = result.get('storage_keys') or {}
             
             if result and result.get('html'):
                 target_html = violation_dir / 'report.html'
@@ -2325,6 +2466,31 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     metadata_path = violation_dir / 'metadata.json'
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
+
+    if report_created and is_local_cache_sync_job and not cloud_upload_skipped:
+        local_has_annotated = annotated_path.exists()
+        local_has_report = (violation_dir / 'report.html').exists()
+        if _local_sync_has_complete_cloud_artifacts(
+            result_storage_keys,
+            local_has_annotated=local_has_annotated,
+            local_has_report=local_has_report,
+        ):
+            cleanup_summary = _cleanup_local_artifacts_after_cloud_sync(report_id, violation_dir)
+            if cleanup_summary.get('cleaned'):
+                logger.info(
+                    f"Cleaned local artifacts after cloud sync for {report_id} "
+                    f"(reason={cleanup_summary.get('reason')})"
+                )
+            else:
+                logger.info(
+                    f"Skipped local artifact cleanup for {report_id} "
+                    f"(reason={cleanup_summary.get('reason')})"
+                )
+        else:
+            logger.info(
+                f"Skipped local cleanup for {report_id}: cloud artifact keys incomplete "
+                f"(keys={sorted(result_storage_keys.keys()) if isinstance(result_storage_keys, dict) else []})"
+            )
     
     logger.info(f"✅ Queued violation processing complete: {report_id}")
 
@@ -8331,6 +8497,11 @@ def get_image(report_id, filename):
     if image_path.exists():
         return _serve_local_image(image_path)
 
+    if _is_supabase_offline_backoff_active():
+        if not violation_dir.exists():
+            abort(404, description="Report not found")
+        abort(404, description="Image is not cached locally while cloud storage is offline")
+
     if storage_manager is None or db_manager is None:
         if not violation_dir.exists():
             abort(404, description="Report not found")
@@ -8366,9 +8537,12 @@ def get_image(report_id, filename):
     except HTTPException:
         raise
     except Exception as e:
+        _activate_local_offline_runtime('get_image.fetch', e)
         logger.error(f"Error fetching image from Supabase: {e}")
         if image_path.exists():
             return _serve_local_image(image_path)
+        if _is_supabase_connectivity_failure(e):
+            abort(404, description="Image unavailable while cloud storage is offline")
         abort(500, description="Failed to fetch image")
 
 

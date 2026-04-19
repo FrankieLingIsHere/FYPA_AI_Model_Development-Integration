@@ -213,7 +213,7 @@ Use this when users report "queue busy" during reprocess even though no report a
 
 1. Confirm actual queue state first:
    - `GET /api/queue/status`
-   - check `current_size`, `worker_running`, and `available`
+   - check `queue_size`, `worker_running`, `available`, `by_device`, and `queue_preview`
 
 2. Confirm generate-now rejection type:
    - `POST /api/report/<report_id>/generate-now`
@@ -223,6 +223,12 @@ Use this when users report "queue busy" during reprocess even though no report a
    - `rejected_reason=queue_full` with `queue_size >= queue_capacity` means true queue saturation.
    - `rejected_reason=rate_limited` with `queue_size=0` means device rate limiting, not queue saturation.
    - `worker_running=false` should be surfaced as worker-health error, not generic queue-busy cooldown.
+   - if `by_device.local_cache_sync` dominates and logs are full of `local_cache_sync_queued`, local-to-cloud reconciliation is likely driving queue pressure.
+
+5. Local-to-cloud migration interaction check:
+   - inspect `GET /api/logs?limit=...` for repeated `local_cache_sync_queued` with reconnect reasons.
+   - avoid running multiple backend instances; confirm only one `luna_app.py` process owns port 5000.
+   - for auto reconnect sync, defer/limit sync enqueue when queue already has backlog.
 
 4. Patch guidance for manual reprocess/recovery actions:
    - Avoid reusing deterministic per-report fallback `device_id` values for retries.

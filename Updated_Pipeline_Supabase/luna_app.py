@@ -790,6 +790,10 @@ SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
     30,
     int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '180') or 180)
 )
+SUPABASE_AUTO_SYNC_BATCH_SIZE = max(
+    5,
+    min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '20') or 20))
+)
 supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
@@ -1775,21 +1779,23 @@ def queue_worker_loop():
                     recovery.get('success')
                     and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
                 ):
-                    last_supabase_auto_sync_epoch = now_epoch
-                    try:
-                        sync_summary = _sync_local_cache_candidates(
-                            max_items=80,
-                            dry_run=False,
-                            reconcile_reason='auto_reconnect',
-                            require_worker=False
-                        )
-                        enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
-                        if enqueued_count > 0:
-                            logger.info(
-                                f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
+                    queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
+                    if queue_size_now <= 0:
+                        last_supabase_auto_sync_epoch = now_epoch
+                        try:
+                            sync_summary = _sync_local_cache_candidates(
+                                max_items=SUPABASE_AUTO_SYNC_BATCH_SIZE,
+                                dry_run=False,
+                                reconcile_reason='auto_reconnect',
+                                require_worker=False
                             )
-                    except Exception as sync_err:
-                        logger.debug(f"Auto reconnect local-cache sync skipped: {sync_err}")
+                            enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
+                            if enqueued_count > 0:
+                                logger.info(
+                                    f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
+                                )
+                        except Exception as sync_err:
+                            logger.debug(f"Auto reconnect local-cache sync skipped: {sync_err}")
 
             if violation_queue is None:
                 time.sleep(1)
@@ -3452,6 +3458,9 @@ def api_queue_status():
     
     try:
         stats = violation_queue.get_stats()
+        queue_preview = []
+        if hasattr(violation_queue, 'get_queue_preview'):
+            queue_preview = violation_queue.get_queue_preview(limit=20)
         return jsonify({
             'available': True,
             'queue_size': stats.get('current_size', 0),
@@ -3463,7 +3472,8 @@ def api_queue_status():
             'worker_running': _is_queue_worker_alive(),
             'environment_validation_enabled': ENVIRONMENT_VALIDATION_ENABLED,
             'by_priority': stats.get('by_priority', {}),
-            'by_device': stats.get('by_device', {})
+            'by_device': stats.get('by_device', {}),
+            'queue_preview': queue_preview,
         })
     except Exception as e:
         logger.error(f"Error getting queue status: {e}")
@@ -6398,6 +6408,7 @@ def _sync_local_cache_candidates(
         max_items = 120
 
     reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
+    is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
 
     if (db_manager is None or storage_manager is None) and not dry_run:
         if _is_supabase_offline_backoff_active():
@@ -6447,6 +6458,24 @@ def _sync_local_cache_candidates(
     if not dry_run and require_worker and not ensure_queue_worker_running():
         return {'success': False, 'error': 'Queue worker is not running'}
 
+    if is_auto_reconnect and not dry_run:
+        queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
+        if queue_size_now > 0:
+            return {
+                'success': True,
+                'reconcile_reason': reason,
+                'dry_run': False,
+                'scanned': 0,
+                'candidates': 0,
+                'enqueued': 0,
+                'skipped': 0,
+                'errors': [],
+                'worker_running': _is_queue_worker_alive(),
+                'deferred': True,
+                'deferred_reason': 'queue_not_empty',
+                'queue_size': queue_size_now,
+            }
+
     local_dirs = []
     if VIOLATIONS_DIR.exists():
         for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
@@ -6477,6 +6506,15 @@ def _sync_local_cache_candidates(
             violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
         except Exception as lookup_err:
             errors.append(f"{report_id}: lookup failed ({lookup_err})")
+            skipped += 1
+            continue
+
+        event_status = str((event or {}).get('status') or '').strip().lower()
+        if event_status in ('pending', 'queued', 'processing', 'generating'):
+            skipped += 1
+            continue
+
+        if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
             skipped += 1
             continue
 

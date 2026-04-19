@@ -289,6 +289,45 @@ class ViolationQueueManager:
                 'current_size': self.queue.qsize(),
                 'capacity': self.max_size
             }
+
+    def is_report_queued(self, report_id: str) -> bool:
+        """Return True if the given report_id is already waiting in the queue."""
+        target = str(report_id or '').strip()
+        if not target:
+            return False
+
+        with self.queue.mutex:
+            return any(
+                str(getattr(item, 'report_id', '') or '').strip() == target
+                for item in list(self.queue.queue)
+            )
+
+    def get_queue_preview(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return a stable preview snapshot of queued items for diagnostics."""
+        try:
+            limit = max(1, min(int(limit or 20), 100))
+        except Exception:
+            limit = 20
+
+        with self.queue.mutex:
+            items = list(self.queue.queue)
+
+        items.sort(key=lambda item: (int(getattr(item, 'priority', 999)), float(getattr(item, 'timestamp', 0.0))))
+        now = time.time()
+
+        preview: List[Dict[str, Any]] = []
+        for item in items[:limit]:
+            ts_value = float(getattr(item, 'timestamp', 0.0) or 0.0)
+            age_seconds = max(0.0, now - ts_value)
+            preview.append({
+                'report_id': str(getattr(item, 'report_id', '') or ''),
+                'device_id': str(getattr(item, 'device_id', '') or ''),
+                'priority': int(getattr(item, 'priority', 0) or 0),
+                'retry_count': int(getattr(item, 'retry_count', 0) or 0),
+                'age_seconds': round(age_seconds, 2),
+            })
+
+        return preview
     
     def clear(self):
         """Clear the queue."""

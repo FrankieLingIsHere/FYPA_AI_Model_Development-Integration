@@ -121,9 +121,10 @@ def _try_generate_now(base_url: str, max_candidates: int = 12) -> Dict[str, Any]
         except Exception as exc:
             error_text = str(exc)
 
-        accepted = bool(status_code is not None and status_code < 500)
-        if accepted and isinstance(body, dict) and body.get("success") is False:
-            accepted = False
+        accepted = bool(status_code is not None and 200 <= int(status_code) < 300)
+        if accepted and isinstance(body, dict):
+            if body.get("success") is False:
+                accepted = False
 
         attempts.append(
             {
@@ -168,7 +169,7 @@ def _poll_report_status(base_url: str, report_id: str, timeout_seconds: int = 90
                     "message": _as_text(payload.get("message")),
                 }
             )
-            if status in ("completed", "failed", "skipped"):
+            if status in ("completed", "failed", "skipped", "not_found"):
                 return {
                     "terminal": True,
                     "history": history,

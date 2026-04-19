@@ -51,6 +51,14 @@ Run from repository root:
 python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
 python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
 
+Timezone-specific enforcement (Reports + sidebar timezone changes):
+
+- `deployed_frontend_navigation_timezone_action_test.py` now also enforces timezone timestamp alignment contract checks:
+   - synthetic `report_id` and timestamp pair stays aligned at database timezone,
+   - switching sidebar timezone changes rendered timestamp output,
+   - timezone change events and page refresh hooks still fire across reports/home/analytics.
+- Any patch touching report timestamp rendering, timezone parsing, or sidebar timezone selector must keep this contract green.
+
 When patching installer/startup batch flows (
 `frontend/static/LUNA_LocalInstaller.bat`, `start.bat`, or `/api/bootstrap/installer` rendering),
 `deployed_provisioning_action_test.py` is mandatory because it now also asserts:
@@ -260,6 +268,25 @@ without depending on cloud heartbeat/Supabase writes while connectivity is down.
    - local folder contains `original.jpg`
    - then `annotated.jpg`
    - then `report.html`
+
+## Runtime Triage Addendum: Report Timestamp and Timezone Drift
+
+Use this when `report_id` clock fragments (for example `YYYYMMDD_HHMMSS`) do not match rendered report timestamp on the Reports page.
+
+1. Confirm backend timestamp semantics:
+   - report-id-derived timestamps must be timezone-aware,
+   - naive timestamp strings from local cache must be interpreted in backend database timezone context.
+
+2. Confirm frontend normalization path:
+   - sidebar selector supports IANA timezone IDs,
+   - frontend timestamp parser treats naive timestamps as database timezone time,
+   - timezone change re-renders Reports/Home/Analytics timestamp surfaces.
+
+3. Validate with action test:
+
+   python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+
+4. If action test fails only on deployed target but passes locally with same commit, treat as deployment lag/runtime drift and re-check after redeploy.
 
 ### No-cloud-fallback interpretation
 

@@ -204,6 +204,12 @@ const AnalyticsPage = {
             .filter((d) => !Number.isNaN(d.getTime()))
             .sort((a, b) => b.getTime() - a.getTime())[0];
 
+        const lastViolationDisplay = lastViolation
+            ? (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function'
+                ? TimezoneManager.formatDateTime(lastViolation.toISOString())
+                : lastViolation.toLocaleString())
+            : 'No data';
+
         container.innerHTML = `
             <div class="analytics-insight-card">
                 <div class="label">Top Violation Type</div>
@@ -215,7 +221,7 @@ const AnalyticsPage = {
             </div>
             <div class="analytics-insight-card">
                 <div class="label">Last Violation Seen</div>
-                <div class="value">${lastViolation ? lastViolation.toLocaleString() : 'No data'}</div>
+                <div class="value">${lastViolationDisplay}</div>
             </div>
         `;
     },

@@ -2716,7 +2716,7 @@ def api_violations():
 
             report_id = violation_dir.name
             try:
-                timestamp = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
+                timestamp = _parse_report_id_timestamp(report_id)
 
                 metadata_file = violation_dir / 'metadata.json'
                 metadata = {}
@@ -2979,12 +2979,12 @@ def api_stats():
             for violation_dir in VIOLATIONS_DIR.iterdir():
                 if violation_dir.is_dir():
                     try:
-                        timestamp = datetime.strptime(violation_dir.name, '%Y%m%d_%H%M%S')
+                        timestamp = _parse_report_id_timestamp(violation_dir.name)
                         violations.append(timestamp)
                     except ValueError:
                         continue
         
-        now = datetime.now()
+        now = get_local_time()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         # Calculate actual week start (Monday of current week)
         # weekday() returns 0=Monday, 1=Tuesday, etc.
@@ -3038,6 +3038,28 @@ def api_stats():
         return jsonify({'error': 'Failed to fetch statistics'}), 500
 
 
+@app.route('/api/system/timezone', methods=['GET'])
+def api_system_timezone():
+    """Expose backend timezone context for frontend timestamp normalization."""
+    tz_info = get_timezone_info()
+    now_local = datetime.now(tz_info)
+    offset_delta = now_local.utcoffset() or timedelta(0)
+    offset_minutes = int(offset_delta.total_seconds() // 60)
+    abs_minutes = abs(offset_minutes)
+    hours = abs_minutes // 60
+    minutes = abs_minutes % 60
+    sign = '+' if offset_minutes >= 0 else '-'
+
+    return jsonify({
+        'success': True,
+        'database_timezone': getattr(tz_info, 'key', str(tz_info)),
+        'database_utc_offset_minutes': offset_minutes,
+        'database_offset_label': f"UTC{sign}{hours:02d}:{minutes:02d}",
+        'database_time': now_local.isoformat(),
+        'server_time_utc': datetime.now(timezone.utc).isoformat(),
+    })
+
+
 # =========================================================================
 # API ENDPOINTS - STATUS & MONITORING (from Pipeline_Luna)
 # =========================================================================
@@ -3056,11 +3078,8 @@ def api_get_violation(report_id):
         if metadata_file.exists():
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
-        
-        try:
-            timestamp = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
-        except ValueError:
-            timestamp = datetime.now()
+
+        timestamp = _parse_report_id_timestamp(report_id)
         
         return jsonify({
             'report_id': report_id,
@@ -3522,7 +3541,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
 
         timestamp_value = None
         try:
-            timestamp_value = datetime.strptime(report_id, '%Y%m%d_%H%M%S').isoformat()
+            timestamp_value = _parse_report_id_timestamp(report_id).isoformat()
         except Exception:
             try:
                 timestamp_value = datetime.fromtimestamp(violation_dir.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -5617,11 +5636,13 @@ def api_prepare_local_mode():
 
 
 def _parse_report_id_timestamp(report_id: str) -> datetime:
-    """Parse report timestamp from report_id with a safe fallback."""
+    """Parse report_id as configured local timezone timestamp with a safe fallback."""
+    tz_info = get_timezone_info()
     try:
-        return datetime.strptime(str(report_id), '%Y%m%d_%H%M%S')
+        parsed = datetime.strptime(str(report_id), '%Y%m%d_%H%M%S')
+        return parsed.replace(tzinfo=tz_info)
     except Exception:
-        return datetime.now()
+        return datetime.now(tz_info)
 
 
 def _read_local_violation_metadata(violation_dir: Path) -> Dict[str, Any]:
@@ -6422,10 +6443,10 @@ def _sync_local_cache_candidates(
             ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
         else:
             try:
-                ts_obj = datetime.strptime(report_id, '%Y%m%d_%H%M%S')
+                ts_obj = _parse_report_id_timestamp(report_id)
                 ts_value = ts_obj.isoformat()
             except Exception:
-                ts_value = datetime.now().isoformat()
+                ts_value = get_local_time().isoformat()
 
         violation_summary_text = (violation or {}).get('violation_summary') if isinstance(violation, dict) else ''
         violation_types, resolved_violation_count = _resolve_violation_types_and_count(

@@ -614,12 +614,15 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(persisted.get('status'), 'pending')
         self.assertEqual(str(persisted.get('provision_secret') or ''), 'local-secret-001')
 
-        # Provisioning request + heartbeat snapshot upload.
-        self.assertEqual(mock_post.call_count, 2)
-        request_url = str(mock_post.call_args_list[0].args[0])
-        self.assertIn('/api/provision/request', request_url)
-        heartbeat_url = str(mock_post.call_args_list[1].args[0])
-        self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
+        # Provisioning request + at least one heartbeat snapshot upload.
+        # A background heartbeat worker may add extra POST calls beyond this minimum.
+        self.assertGreaterEqual(mock_post.call_count, 2)
+        all_post_urls = [str(call.args[0]) for call in mock_post.call_args_list]
+        self.assertIn('/api/provision/request', all_post_urls[0])
+        self.assertTrue(
+            any('/api/local-mode/heartbeat' in url for url in all_post_urls[1:]),
+            f'Expected a heartbeat upload POST call, got: {all_post_urls}'
+        )
 
     @patch('luna_app.requests.post')
     @patch('luna_app._local_mode_fetch_authoritative_status')

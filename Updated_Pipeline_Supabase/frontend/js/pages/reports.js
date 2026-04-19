@@ -9,7 +9,8 @@ const ReportsPage = {
     filters: {
         search: '',
         severity: 'all',
-        dateRange: 'all'
+        dateRange: 'all',
+        source: 'all'
     },
     refreshInterval: null,
     prefetchState: {
@@ -47,7 +48,7 @@ const ReportsPage = {
                     </div>
                     <div class="card-content">
                         <!-- Filters -->
-                        <div class="grid grid-3 mb-3">
+                        <div class="grid grid-4 mb-3">
                             <input 
                                 type="text" 
                                 id="search-reports" 
@@ -74,6 +75,17 @@ const ReportsPage = {
                                 <option value="today">Today</option>
                                 <option value="week">This Week</option>
                                 <option value="month">This Month</option>
+                            </select>
+                            <select 
+                                id="filter-source" 
+                                style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md);"
+                                onchange="ReportsPage.handleFilter()"
+                            >
+                                <option value="all">All Sources</option>
+                                <option value="cloud">Cloud</option>
+                                <option value="local">Local</option>
+                                <option value="synced_local">Local Synced</option>
+                                <option value="shared">Shared</option>
                             </select>
                         </div>
 
@@ -237,7 +249,9 @@ const ReportsPage = {
 
                 const existingScope = this.inferSourceScope(existing);
                 let mergedScope = existingScope || pendingScope || 'cloud';
-                if (pendingScope === 'shared') {
+                if (pendingScope === 'synced_local') {
+                    mergedScope = 'synced_local';
+                } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
                     mergedScope = 'shared';
                 } else if (pendingScope === 'local' && existingScope === 'cloud') {
                     mergedScope = 'local';
@@ -372,6 +386,7 @@ const ReportsPage = {
     handleFilter() {
         this.filters.severity = document.getElementById('filter-severity').value;
         this.filters.dateRange = document.getElementById('filter-date').value;
+        this.filters.source = document.getElementById('filter-source').value;
         this.renderReports();
     },
 
@@ -418,6 +433,11 @@ const ReportsPage = {
                         return true;
                 }
             });
+        }
+
+        // Source filter
+        if (this.filters.source !== 'all') {
+            filtered = filtered.filter((v) => this.inferSourceScope(v) === this.filters.source);
         }
 
         return filtered;
@@ -486,7 +506,7 @@ const ReportsPage = {
 
     normalizeSourceScope(scope) {
         const normalized = String(scope || '').trim().toLowerCase();
-        if (normalized === 'local' || normalized === 'cloud' || normalized === 'shared') {
+        if (normalized === 'local' || normalized === 'cloud' || normalized === 'shared' || normalized === 'synced_local') {
             return normalized;
         }
         return '';
@@ -496,10 +516,20 @@ const ReportsPage = {
         const explicit = this.normalizeSourceScope(violation && violation.source_scope);
         if (explicit) return explicit;
 
+        const sourceMarker = String(
+            (violation && (violation.sync_source || violation.source || violation.source_reason)) || ''
+        ).trim().toLowerCase();
+        if (sourceMarker === 'sync_local_cache' || sourceMarker === 'local_cache_sync') {
+            return 'synced_local';
+        }
+
         const deviceId = String((violation && violation.device_id) || '').trim().toLowerCase();
+        if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') {
+            return 'synced_local';
+        }
+
         const localByDevice = deviceId === 'local_cache'
             || deviceId === 'offline_local_cache'
-            || deviceId === 'local_cache_sync'
             || deviceId.startsWith('local_')
             || deviceId.startsWith('offline_');
         return localByDevice ? 'local' : 'cloud';
@@ -507,6 +537,7 @@ const ReportsPage = {
 
     sourceLabelForScope(scope) {
         if (scope === 'local') return 'Local';
+        if (scope === 'synced_local') return 'Local Synced';
         if (scope === 'shared') return 'Shared';
         return 'Cloud';
     },
@@ -672,6 +703,15 @@ const ReportsPage = {
                 label: labelFromApi || this.sourceLabelForScope(scope),
                 color: 'warning',
                 icon: 'fa-laptop'
+            };
+        }
+
+        if (scope === 'synced_local') {
+            return {
+                scope,
+                label: labelFromApi || this.sourceLabelForScope(scope),
+                color: 'success',
+                icon: 'fa-cloud-upload-alt'
             };
         }
 
@@ -1242,12 +1282,15 @@ const ReportsPage = {
 
     getProcessAction(violation) {
         const status = this.normalizeStatus(violation);
-        const isCompleted = status === 'completed';
+        const isReprocess = status === 'completed'
+            || status === 'failed'
+            || status === 'skipped'
+            || status === 'partial';
 
         return {
-            force: isCompleted,
-            label: isCompleted ? 'Reprocess Now' : 'Process Now',
-            icon: isCompleted ? 'fa-rotate-right' : 'fa-bolt'
+            force: isReprocess,
+            label: isReprocess ? 'Reprocess Now' : 'Process Now',
+            icon: isReprocess ? 'fa-rotate-right' : 'fa-bolt'
         };
     },
 

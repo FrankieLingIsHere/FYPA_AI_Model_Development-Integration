@@ -2026,6 +2026,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         or str(data.get('device_id') or '').strip()
         or 'webcam_0'
     )
+    queued_source_scope = str(data.get('source_scope') or '').strip().lower()
+    queued_sync_source = str(data.get('sync_source') or data.get('source') or '').strip().lower()
     
     logger.info(f"📄 Processing queued violation: {report_id}")
     
@@ -2213,6 +2215,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'severity': 'HIGH',
                 'person_count': len(detections)
             }
+            if queued_source_scope:
+                report_data['source_scope'] = queued_source_scope
+            if queued_sync_source:
+                report_data['sync_source'] = queued_sync_source
+                report_data['source'] = queued_sync_source
             
             result = report_generator.generate_report(report_data)
             
@@ -2640,7 +2647,7 @@ def api_violations():
 
     def _normalize_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()
-        if normalized in ('local', 'cloud', 'shared'):
+        if normalized in ('local', 'cloud', 'shared', 'synced_local'):
             return normalized
         return ''
 
@@ -2650,6 +2657,7 @@ def api_violations():
             'local': 'Local',
             'cloud': 'Cloud',
             'shared': 'Shared',
+            'synced_local': 'Local Synced',
         }
         return {
             'source_scope': normalized_scope,
@@ -2683,8 +2691,8 @@ def api_violations():
             or detection_data.get('sync_source')
             or ''
         ).strip().lower()
-        if source_marker in ('sync_local_cache', 'local_cache'):
-            return ('shared', source_marker) if has_cloud_artifacts else ('local', source_marker)
+        if source_marker in ('sync_local_cache', 'local_cache', 'local_cache_sync'):
+            return ('synced_local', source_marker) if has_cloud_artifacts else ('local', source_marker)
 
         device_key = str(device_id or '').strip().lower()
         local_device_markers = {'local_cache', 'offline_local_cache', 'local_cache_sync'}
@@ -2694,10 +2702,10 @@ def api_violations():
             or device_key.startswith('offline_')
         )
 
+        if has_cloud_artifacts and is_local_device:
+            return 'synced_local', 'cloud_record_local_device'
         if has_cloud_artifacts and has_local_artifacts:
             return 'shared', 'cloud_and_local_artifacts'
-        if has_cloud_artifacts and is_local_device:
-            return 'shared', 'cloud_record_local_device'
         if has_cloud_artifacts:
             return 'cloud', 'cloud_artifacts'
         if has_local_artifacts or is_local_device:
@@ -2922,8 +2930,19 @@ def api_violations():
                 if not existing.get('timestamp') and local_row.get('timestamp'):
                     existing['timestamp'] = local_row.get('timestamp')
 
-                if str(existing.get('source_scope') or '').strip().lower() == 'cloud':
-                    existing.update(_build_source_payload('shared', 'cloud_plus_local_cache'))
+                existing_scope = str(existing.get('source_scope') or '').strip().lower()
+                existing_device_key = str(existing.get('device_id') or '').strip().lower()
+                existing_local_device = (
+                    existing_device_key in ('local_cache', 'offline_local_cache', 'local_cache_sync')
+                    or existing_device_key.startswith('local_')
+                    or existing_device_key.startswith('offline_')
+                )
+
+                if existing_scope == 'cloud':
+                    if existing_local_device:
+                        existing.update(_build_source_payload('synced_local', 'cloud_plus_local_cache'))
+                    else:
+                        existing.update(_build_source_payload('shared', 'cloud_plus_local_cache'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
                     existing.update(_build_source_payload('local', 'local_cache_row'))
                 continue
@@ -6227,8 +6246,22 @@ def api_report_recovery_execute():
 
             detections = []
             violation = db_manager.get_violation(report_id) if (db_manager is not None and hasattr(db_manager, 'get_violation')) else None
-            if violation and isinstance(violation.get('detection_data'), dict):
-                detections = violation['detection_data'].get('detections', []) or []
+            detection_data = violation.get('detection_data') if isinstance(violation, dict) else None
+            if isinstance(detection_data, dict):
+                detections = detection_data.get('detections', []) or []
+            else:
+                detection_data = {}
+
+            source_scope_marker = str(
+                detection_data.get('source_scope')
+                or detection_data.get('report_scope')
+                or ''
+            ).strip().lower()
+            sync_source_marker = str(
+                detection_data.get('sync_source')
+                or detection_data.get('source')
+                or ''
+            ).strip().lower()
 
             local_violation_types = []
             if isinstance(item.get('violation_types'), list):
@@ -6277,6 +6310,11 @@ def api_report_recovery_execute():
                 'annotated_image_path': str(annotated_path),
                 'violation_dir': str(violation_dir)
             }
+            if source_scope_marker:
+                violation_data['source_scope'] = source_scope_marker
+            if sync_source_marker:
+                violation_data['sync_source'] = sync_source_marker
+                violation_data['source'] = sync_source_marker
 
             device_id = (event.get('device_id') if isinstance(event, dict) else None)
             if not device_id:
@@ -6284,12 +6322,35 @@ def api_report_recovery_execute():
                     'recovery_pipeline_offline' if db_manager is None else 'recovery_pipeline'
                 )
 
+            enqueue_device_id = device_id
+
             enqueued = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id=device_id,
+                device_id=enqueue_device_id,
                 report_id=report_id,
                 severity='CRITICAL'
             )
+
+            if not enqueued:
+                queue_stats = violation_queue.get_stats()
+                queue_size = int(queue_stats.get('current_size', 0) or 0)
+                queue_capacity = int(queue_stats.get('capacity', 0) or 0)
+                queue_full = queue_capacity > 0 and queue_size >= queue_capacity
+
+                if not queue_full:
+                    fallback_device_id = f'recovery_reprocess_{report_id}'
+                    enqueued = violation_queue.enqueue(
+                        violation_data=violation_data,
+                        device_id=fallback_device_id,
+                        report_id=report_id,
+                        severity='CRITICAL'
+                    )
+                    if enqueued:
+                        enqueue_device_id = fallback_device_id
+                        logger.info(
+                            f"Recovery enqueue fallback succeeded for {report_id} "
+                            f"with device_id={fallback_device_id}"
+                        )
 
             if not enqueued:
                 skipped_count += 1
@@ -6444,6 +6505,19 @@ def _sync_local_cache_candidates(
         detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
         if isinstance(detection_data, dict):
             detections = detection_data.get('detections', []) or []
+        else:
+            detection_data = {}
+
+        source_scope_marker = str(
+            detection_data.get('source_scope')
+            or detection_data.get('report_scope')
+            or 'synced_local'
+        ).strip().lower()
+        sync_source_marker = str(
+            detection_data.get('sync_source')
+            or detection_data.get('source')
+            or 'sync_local_cache'
+        ).strip().lower()
 
         if not annotated_path.exists():
             try:
@@ -6481,7 +6555,10 @@ def _sync_local_cache_candidates(
             'violation_count': resolved_violation_count,
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path if annotated_path.exists() else original_path),
-            'violation_dir': str(violation_dir)
+            'violation_dir': str(violation_dir),
+            'source_scope': source_scope_marker,
+            'sync_source': sync_source_marker,
+            'source': sync_source_marker,
         }
         event_device_id = (event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync'
 
@@ -6641,12 +6718,14 @@ def api_pending_reports():
 
     def _normalize_pending_source_scope(scope: Any, device_id: Any) -> str:
         normalized_scope = str(scope or '').strip().lower()
-        if normalized_scope in ('local', 'cloud', 'shared'):
+        if normalized_scope in ('local', 'cloud', 'shared', 'synced_local'):
             return normalized_scope
 
         device_key = str(device_id or '').strip().lower()
+        if device_key in ('local_cache_sync', 'sync_local_cache'):
+            return 'synced_local'
         if (
-            device_key in ('local_cache', 'offline_local_cache', 'local_cache_sync')
+            device_key in ('local_cache', 'offline_local_cache')
             or device_key.startswith('local_')
             or device_key.startswith('offline_')
         ):
@@ -6656,6 +6735,8 @@ def api_pending_reports():
     def _source_label(scope: str) -> str:
         if scope == 'local':
             return 'Local'
+        if scope == 'synced_local':
+            return 'Local Synced'
         if scope == 'shared':
             return 'Shared'
         return 'Cloud'
@@ -6746,7 +6827,9 @@ def api_pending_reports():
                     merged.get('source_scope'),
                     merged.get('device_id'),
                 )
-                if source_scope == 'shared':
+                if source_scope == 'synced_local':
+                    merged_scope = 'synced_local'
+                elif source_scope == 'shared':
                     merged_scope = 'shared'
                 elif source_scope == 'local' and merged_scope == 'cloud':
                     merged_scope = 'local'
@@ -6857,9 +6940,23 @@ def api_generate_report_now(report_id):
 
         detections = []
         violation_types = []
+        detection_data = {}
+        source_scope_marker = ''
+        sync_source_marker = ''
 
         if isinstance(violation, dict) and isinstance(violation.get('detection_data'), dict):
-            detections = violation['detection_data'].get('detections', []) or []
+            detection_data = violation.get('detection_data') or {}
+            detections = detection_data.get('detections', []) or []
+            source_scope_marker = str(
+                detection_data.get('source_scope')
+                or detection_data.get('report_scope')
+                or ''
+            ).strip().lower()
+            sync_source_marker = str(
+                detection_data.get('sync_source')
+                or detection_data.get('source')
+                or ''
+            ).strip().lower()
 
         local_violation_type = str(local_metadata.get('violation_type') or '').strip()
         local_violation_types = [local_violation_type] if local_violation_type else []
@@ -6927,21 +7024,52 @@ def api_generate_report_now(report_id):
             'annotated_image_path': str(annotated_path),
             'violation_dir': str(violation_dir)
         }
+        if source_scope_marker:
+            violation_data['source_scope'] = source_scope_marker
+        if sync_source_marker:
+            violation_data['sync_source'] = sync_source_marker
+            violation_data['source'] = sync_source_marker
 
+        enqueue_device_id = device_id
         enqueued = violation_queue.enqueue(
             violation_data=violation_data,
-            device_id=device_id,
+            device_id=enqueue_device_id,
             report_id=report_id,
             severity='CRITICAL'
         )
 
         if not enqueued:
             queue_stats = violation_queue.get_stats()
+            queue_size = int(queue_stats.get('current_size', 0) or 0)
+            queue_capacity = int(queue_stats.get('capacity', 0) or 0)
+            queue_full = queue_capacity > 0 and queue_size >= queue_capacity
+
+            if not queue_full:
+                fallback_device_id = f'manual_reprocess_{report_id}'
+                enqueued = violation_queue.enqueue(
+                    violation_data=violation_data,
+                    device_id=fallback_device_id,
+                    report_id=report_id,
+                    severity='CRITICAL'
+                )
+                if enqueued:
+                    enqueue_device_id = fallback_device_id
+                    logger.info(
+                        f"Generate-now enqueue fallback succeeded for {report_id} "
+                        f"with device_id={fallback_device_id}"
+                    )
+
+        if not enqueued:
+            queue_stats = violation_queue.get_stats()
+            queue_size = int(queue_stats.get('current_size', 0) or 0)
+            queue_capacity = int(queue_stats.get('capacity', 0) or 0)
+            queue_full = queue_capacity > 0 and queue_size >= queue_capacity
             return jsonify({
                 'success': False,
                 'error': 'Could not enqueue report (queue full or rate limited)',
-                'queue_size': queue_stats.get('current_size', 0),
-                'queue_capacity': queue_stats.get('capacity', 100),
+                'rejected_reason': 'queue_full' if queue_full else 'rate_limited',
+                'queue_size': queue_size,
+                'queue_capacity': queue_capacity,
                 'worker_running': _is_queue_worker_alive()
             }), 409
 
@@ -6961,6 +7089,7 @@ def api_generate_report_now(report_id):
             'offline_local_cache_mode': db_manager is None,
             'db_event_available': event is not None,
             'queue_size': queue_stats.get('current_size', 0),
+            'enqueue_device_id': enqueue_device_id,
             'worker_running': _is_queue_worker_alive()
         })
 

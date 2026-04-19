@@ -300,7 +300,6 @@ const GlobalSettingsModal = {
                                     <label style="font-weight: 600;">NLP Model</label>
                                     <select id="globalNlpModelSelect" class="global-provider-input">
                                         <option value="gemma3:4b">Gemma 3 4B (local, lower memory)</option>
-                                        <option value="gemma4">Gemma 4 (local, higher memory)</option>
                                         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                     </select>
                                 </div>
@@ -308,7 +307,6 @@ const GlobalSettingsModal = {
                                     <label style="font-weight: 600;">Vision Model</label>
                                     <select id="globalVisionModelSelect" class="global-provider-input">
                                         <option value="gemma3:4b">Gemma 3 4B (local, lower memory)</option>
-                                        <option value="gemma4">Gemma 4 (local, higher memory)</option>
                                         <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                     </select>
                                 </div>

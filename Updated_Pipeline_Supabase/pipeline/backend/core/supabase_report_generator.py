@@ -274,6 +274,21 @@ class SupabaseReportGenerator(ReportGenerator):
             metadata = {
                 'detections': detection_data
             }
+            source_scope = str(
+                report_data.get('source_scope')
+                or report_data.get('report_scope')
+                or ''
+            ).strip().lower()
+            sync_source = str(
+                report_data.get('sync_source')
+                or report_data.get('source')
+                or ''
+            ).strip().lower()
+            if source_scope:
+                metadata['source_scope'] = source_scope
+            if sync_source:
+                metadata['sync_source'] = sync_source
+                metadata['source'] = sync_source
             if device_id:
                 metadata['device_id'] = device_id
             caption_provider = report_data.get('caption_provider')

@@ -1196,14 +1196,29 @@ function bindTimezoneSelectorVisibilityGuard() {
 
     selector.dataset.visibilityGuardBound = 'true';
 
+    const setSelectorOpenState = (isOpen) => {
+        sidebar.classList.toggle('timezone-selector-open', !!isOpen);
+    };
+
     const closeSelector = () => {
         if (typeof selector.blur === 'function') {
             selector.blur();
         }
+        setSelectorOpenState(false);
     };
 
     // Do not force-close on sidebar mouseleave. Native select popups can render
     // outside the sidebar box and would otherwise close immediately.
+    selector.addEventListener('focus', () => setSelectorOpenState(true));
+    selector.addEventListener('mousedown', () => setSelectorOpenState(true));
+    selector.addEventListener('touchstart', () => setSelectorOpenState(true), { passive: true });
+    selector.addEventListener('blur', () => {
+        window.setTimeout(() => {
+            if (document.activeElement !== selector) {
+                setSelectorOpenState(false);
+            }
+        }, 0);
+    });
     selector.addEventListener('change', closeSelector);
 
     document.addEventListener('click', (event) => {
@@ -1213,8 +1228,8 @@ function bindTimezoneSelectorVisibilityGuard() {
     });
 
     window.addEventListener('resize', () => {
-        if (!sidebar.matches(':hover')) {
-            closeSelector();
+        if (document.activeElement !== selector) {
+            setSelectorOpenState(false);
         }
     }, { passive: true });
 

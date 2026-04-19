@@ -321,10 +321,13 @@ Non-negotiable rules:
    - large text (>= 18px regular or >= 14px bold): 3:1 or higher
 4. Native select/dropdown options must explicitly set readable foreground + background colors (avoid white-on-white states).
 5. If sidebar/nav collapses, open dropdowns/selectors must close/blur so floating lists do not remain visible off-state.
+6. For native selects inside hover-collapsed sidebars, do not rely on `:hover` alone to keep controls visible while interacting.
+   Use an explicit "selector-open" state (focus/pointer activated) so the sidebar does not collapse before the user can pick an option.
 
 Verification checklist:
 
 - open timezone selector and inspect option list text/background contrast
+- keep timezone selector open and move pointer toward option area; selector must remain usable until selection/escape/outside click
 - collapse/minimize sidebar and confirm dropdown list disappears immediately
 - expand sidebar again and confirm selector remains usable
 

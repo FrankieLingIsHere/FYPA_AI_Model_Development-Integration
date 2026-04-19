@@ -18,6 +18,12 @@ STRICT_RUNTIME = str(os.environ.get("LUNA_RUNTIME_HEALTH_STRICT", "0")).strip().
     "yes",
     "on",
 }
+DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("LUNA_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 OUTAGE_MARKERS = (
     "localhost:11434",
@@ -87,6 +93,12 @@ def main() -> int:
                 f"nlp_provider_order={fields['nlp_provider_order']} missing={EXPECTED_NLP_PROVIDER}"
             )
 
+        if fields["last_provider"] and fields["last_provider"] not in {EXPECTED_NLP_PROVIDER, "fallback"}:
+            issues.append(f"last_provider={fields['last_provider']} unexpected")
+
+        if DISALLOW_FALLBACK_PROVIDER and fields["last_provider"] == "fallback":
+            issues.append("last_provider=fallback is disallowed by runtime contract")
+
         if EXPECTED_ROUTING_PROFILE == "cloud":
             conflicting = [
                 provider for provider in fields["nlp_provider_order"]
@@ -98,9 +110,6 @@ def main() -> int:
                 )
 
         if STRICT_RUNTIME:
-            if fields["last_provider"] not in {None, "", EXPECTED_NLP_PROVIDER, "fallback"}:
-                issues.append(f"last_provider={fields['last_provider']} unexpected")
-
             if _contains_outage_marker(fields["last_error"]):
                 issues.append(f"last_error contains outage marker: {fields['last_error']}")
 

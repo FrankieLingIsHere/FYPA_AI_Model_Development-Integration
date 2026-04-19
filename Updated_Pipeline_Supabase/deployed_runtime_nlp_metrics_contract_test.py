@@ -18,6 +18,12 @@ NON_BLOCKING = str(os.environ.get("LUNA_RUNTIME_NLP_CONTRACT_NON_BLOCKING", "0")
     "yes",
     "on",
 }
+DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("LUNA_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 OUTAGE_MARKERS = (
     "localhost:11434",
@@ -127,16 +133,22 @@ def main() -> int:
                 11,
             )
 
+        if last_provider == "fallback":
+            if DISALLOW_FALLBACK_PROVIDER:
+                return fail(
+                    "last_provider=fallback is disallowed by runtime contract",
+                    15,
+                )
+            if not last_fallback_reason:
+                return fail(
+                    "last_fallback_reason should be present when last_provider=fallback",
+                    13,
+                )
+
         if last_provider == "gemini" and last_fallback_reason:
             return fail(
                 f"last_fallback_reason should be empty when last_provider=gemini: {last_fallback_reason}",
                 12,
-            )
-
-        if last_provider == "fallback" and not last_fallback_reason:
-            return fail(
-                "last_fallback_reason should be present when last_provider=fallback",
-                13,
             )
 
         print(

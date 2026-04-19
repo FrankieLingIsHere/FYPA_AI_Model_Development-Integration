@@ -14,6 +14,13 @@ OUTAGE_MARKERS = (
     "nlp analysis failed",
     "max retries exceeded",
 )
+DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("LUNA_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DEFAULT_STATUS_POLL_TIMEOUT_SECONDS = max(45, int(os.environ.get("LUNA_GENERATE_POLL_TIMEOUT_SECONDS", "150") or 150))
 
 
 def _as_text(value: Any) -> str:
@@ -94,11 +101,53 @@ def _list_violations(base_url: str, limit: int = 60) -> List[Dict[str, Any]]:
     return payload if isinstance(payload, list) else []
 
 
+def _prioritize_generate_candidates(violations: List[Dict[str, Any]], max_candidates: int) -> List[Dict[str, Any]]:
+    ranked: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    status_rank = {
+        "pending": 0,
+        "queued": 1,
+        "generating": 2,
+        "failed": 3,
+        "unknown": 4,
+        "completed": 5,
+        "skipped": 6,
+    }
+
+    for item in violations:
+        if not isinstance(item, dict):
+            continue
+        report_id = _as_text(item.get("report_id"))
+        if not report_id:
+            continue
+
+        status = _as_text(item.get("status")).lower()
+        has_report = bool(item.get("has_report"))
+        detection_count_raw = item.get("detection_count")
+        try:
+            detection_count = int(detection_count_raw or 0)
+        except (TypeError, ValueError):
+            detection_count = 0
+        is_manual_regen = report_id.startswith("manual_regenerate_")
+
+        key = (
+            1 if is_manual_regen else 0,
+            1 if has_report else 0,
+            status_rank.get(status, 7),
+            -max(0, detection_count),
+            report_id,
+        )
+        ranked.append((key, item))
+
+    ranked.sort(key=lambda pair: pair[0])
+    return [item for _, item in ranked[:max_candidates]]
+
+
 def _try_generate_now(base_url: str, max_candidates: int = 12) -> Dict[str, Any]:
     violations = _list_violations(base_url, limit=max(20, max_candidates * 2))
+    candidates = _prioritize_generate_candidates(violations, max_candidates=max_candidates)
     attempts: List[Dict[str, Any]] = []
 
-    for item in violations[:max_candidates]:
+    for item in candidates:
         report_id = _as_text(item.get("report_id"))
         if not report_id:
             continue
@@ -129,6 +178,9 @@ def _try_generate_now(base_url: str, max_candidates: int = 12) -> Dict[str, Any]
         attempts.append(
             {
                 "report_id": report_id,
+                "status": _as_text(item.get("status")).lower() or None,
+                "has_report": bool(item.get("has_report")),
+                "detection_count": item.get("detection_count"),
                 "status_code": status_code,
                 "accepted": accepted,
                 "body": body,
@@ -285,8 +337,24 @@ def _run_mode_probe(base_url: str, expected_mode: str, do_generate: bool = True)
         result["generation"] = generation
 
         if generation.get("accepted") and generation.get("report_id"):
-            status_poll = _poll_report_status(base_url, generation["report_id"], timeout_seconds=90)
+            status_poll = _poll_report_status(
+                base_url,
+                generation["report_id"],
+                timeout_seconds=DEFAULT_STATUS_POLL_TIMEOUT_SECONDS,
+            )
             generation["status_poll"] = status_poll
+            if not status_poll.get("terminal"):
+                history_tail = (status_poll.get("history") or [])[-3:]
+                result["issues"].append(
+                    "generation status did not reach terminal state "
+                    f"within {DEFAULT_STATUS_POLL_TIMEOUT_SECONDS}s (final={status_poll.get('final_status')}, tail={history_tail})"
+                )
+            else:
+                final_status = _as_text(status_poll.get("final_status")).lower()
+                if final_status in ("failed", "not_found", "error", "unknown"):
+                    result["issues"].append(
+                        f"generation terminal status is non-success: {final_status}"
+                    )
 
             try:
                 runtime_after = _extract_runtime_fields(base_url)
@@ -297,6 +365,8 @@ def _run_mode_probe(base_url: str, expected_mode: str, do_generate: bool = True)
                         result["issues"].append(
                             f"cloud run last_provider unexpected: {runtime_after.get('last_provider')}"
                         )
+                    if DISALLOW_FALLBACK_PROVIDER and runtime_after.get("last_provider") == "fallback":
+                        result["issues"].append("cloud run used fallback provider")
                     if _contains_outage_marker(runtime_after.get("last_error")):
                         result["issues"].append(
                             f"cloud run last_error has outage marker: {runtime_after.get('last_error')}"
@@ -311,10 +381,16 @@ def _run_mode_probe(base_url: str, expected_mode: str, do_generate: bool = True)
                         result["issues"].append(
                             f"local run last_provider unexpected: {runtime_after.get('last_provider')}"
                         )
+                    if DISALLOW_FALLBACK_PROVIDER and runtime_after.get("last_provider") == "fallback":
+                        result["issues"].append("local run used fallback provider")
             except Exception as exc:
                 result["issues"].append(f"runtime post-generation probe failed: {exc}")
         else:
-            result["issues"].append("no generate-now candidate accepted")
+            attempts_preview = (generation.get("attempts") or [])[:3]
+            result["issues"].append(
+                "no generate-now candidate accepted"
+                + (f" (attempts={attempts_preview})" if attempts_preview else "")
+            )
 
     result["pass"] = len(result["issues"]) == 0
     return result

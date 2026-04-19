@@ -356,16 +356,8 @@ if STRICT_PROVIDER_MODE_SPLIT:
     if _initial_profile_raw in ('local', 'cloud'):
         _initial_profile = _initial_profile_raw
     else:
-        _hosted_markers = (
-            'RAILWAY_SERVICE_ID',
-            'RAILWAY_PROJECT_ID',
-            'RAILWAY_ENVIRONMENT',
-            'VERCEL',
-            'RENDER',
-            'RENDER_SERVICE_ID',
-        )
-        _is_hosted_runtime = any(str(os.getenv(marker) or '').strip() for marker in _hosted_markers)
-        _initial_profile = 'cloud' if _is_hosted_runtime else 'local'
+        # Safe default when profile is unset: cloud (Gemini). Local/Ollama must be explicit.
+        _initial_profile = 'cloud'
     _initial_preset = PROVIDER_PROFILE_PRESETS.get(_initial_profile, PROVIDER_PROFILE_PRESETS['cloud'])
     MODEL_API_CONFIG['enabled'] = bool(_initial_preset.get('model_api_enabled', False))
     MODEL_API_CONFIG['nlp_provider_order'] = list(_initial_preset.get('nlp_provider_order', ['gemini']))
@@ -4377,7 +4369,7 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
                 and routing_profile == 'local'
             )
         if hasattr(report_generator, 'allow_nlp_fallback'):
-            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
             report_generator.allow_nlp_fallback = (
                 False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
             )
@@ -6570,7 +6562,7 @@ def api_provider_routing_settings():
                     and routing_profile == 'local'
                 )
 
-            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
             if hasattr(report_generator, 'allow_nlp_fallback'):
                 report_generator.allow_nlp_fallback = False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
 

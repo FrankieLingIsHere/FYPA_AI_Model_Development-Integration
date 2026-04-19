@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -22,11 +23,15 @@ SCENARIO_SCRIPTS: Dict[str, List[str]] = {
     "deployed-parity": [
         "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
         "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
+        "Updated_Pipeline_Supabase/deployed_runtime_cloud_health_check.py",
+        "Updated_Pipeline_Supabase/deployed_runtime_nlp_metrics_contract_test.py",
     ],
     "all": [
         "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
         "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
         "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
+        "Updated_Pipeline_Supabase/deployed_runtime_cloud_health_check.py",
+        "Updated_Pipeline_Supabase/deployed_runtime_nlp_metrics_contract_test.py",
     ],
 }
 
@@ -45,6 +50,10 @@ def extract_status_and_payload(output: str) -> Tuple[str, Optional[Dict[str, Any
         token = line.strip()
         if token in {"PASS", "FAIL"}:
             status = token
+        elif token.startswith("PASS:"):
+            status = "PASS"
+        elif token.startswith("FAIL:"):
+            status = "FAIL"
 
     parsed: Optional[Dict[str, Any]] = None
     brace_indices = [idx for idx, ch in enumerate(output) if ch == "{"]
@@ -120,6 +129,31 @@ def extract_deployed_local_label_metrics(payload: Dict[str, Any]) -> Dict[str, A
         "label_contract_pass": payload.get("pass"),
         "cardCount": payload.get("cardCount"),
         "checks": compact_checks,
+    }
+
+
+def extract_runtime_summary_metrics(output: str) -> Dict[str, Any]:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    summary_line = ""
+    for line in reversed(lines):
+        if line.startswith(("PASS:", "FAIL:", "INFO:", "WARN:")):
+            summary_line = line
+            break
+
+    profile = None
+    provider = None
+    profile_match = re.search(r"profile=([^\s,\)]+)", summary_line)
+    if profile_match:
+        profile = profile_match.group(1)
+
+    provider_match = re.search(r"last_provider=([^\s,\)]+)", summary_line)
+    if provider_match:
+        provider = provider_match.group(1)
+
+    return {
+        "summary_line": summary_line,
+        "profile": profile,
+        "last_provider": provider,
     }
 
 
@@ -247,6 +281,10 @@ def run_script(
             result["metrics"] = extract_deployed_parity_metrics(payload)
         elif script_relative.endswith("deployed_frontend_local_reports_label_contract_test.py"):
             result["metrics"] = extract_deployed_local_label_metrics(payload)
+    elif script_relative.endswith("deployed_runtime_cloud_health_check.py"):
+        result["metrics"] = extract_runtime_summary_metrics(combined_output)
+    elif script_relative.endswith("deployed_runtime_nlp_metrics_contract_test.py"):
+        result["metrics"] = extract_runtime_summary_metrics(combined_output)
 
     if not passed:
         result["stdout_tail"] = (completed.stdout or "")[-1500:]

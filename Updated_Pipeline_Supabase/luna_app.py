@@ -4852,10 +4852,17 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         )
         body = response.json() if response.content else {}
     except Exception as heartbeat_err:
+        error_text = str(heartbeat_err)
+        if _is_supabase_connectivity_failure(error_text):
+            return {
+                'sent': False,
+                'reason': 'cloud_unreachable',
+                'error': error_text,
+            }
         return {
             'sent': False,
             'reason': 'request_failed',
-            'error': str(heartbeat_err),
+            'error': error_text,
         }
 
     if not response.ok:
@@ -4894,7 +4901,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
             error_text = str(result.get('error') or '').strip()
 
             # Keep informational startup-state reasons quiet to avoid log noise.
-            noisy_reason = reason not in {
+            quiet_reason = reason in {
                 'heartbeat_disabled',
                 'hosted_runtime',
                 'cloud_url_missing',
@@ -4903,7 +4910,17 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                 'machine_id_missing',
                 'provision_secret_missing',
                 'supabase_offline_backoff',
+                'cloud_unreachable',
             }
+            noisy_reason = not quiet_reason
+
+            # In local/offline workflows, cloud heartbeat unreachability is expected and should not
+            # flood warning logs while users inspect local runtime behavior.
+            if reason == 'cloud_unreachable' and (failure_count == 1 or failure_count % 24 == 0):
+                logger.info(
+                    'Local-mode cloud heartbeat deferred '
+                    f"(reason={reason}, error={error_text or 'none'})"
+                )
 
             if noisy_reason and (failure_count == 1 or failure_count % 8 == 0):
                 logger.warning(

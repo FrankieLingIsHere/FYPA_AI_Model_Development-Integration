@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,10 +21,12 @@ SCENARIO_SCRIPTS: Dict[str, List[str]] = {
     ],
     "deployed-parity": [
         "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
+        "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
     ],
     "all": [
         "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
         "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
+        "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
     ],
 }
 
@@ -89,11 +94,93 @@ def extract_deployed_parity_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def extract_deployed_local_label_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
+    checks = payload.get("checks") or []
+    if not isinstance(checks, list):
+        checks = []
+
+    compact_checks = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        compact_checks.append(
+            {
+                "reportId": item.get("reportId"),
+                "expectedStatus": item.get("expectedStatus"),
+                "exists": item.get("exists"),
+                "sourceOk": item.get("sourceOk"),
+                "statusOk": item.get("statusOk"),
+                "sourceBadgeText": item.get("sourceBadgeText"),
+                "statusBadgeText": item.get("statusBadgeText"),
+            }
+        )
+
+    return {
+        "frontend": payload.get("frontend"),
+        "label_contract_pass": payload.get("pass"),
+        "cardCount": payload.get("cardCount"),
+        "checks": compact_checks,
+    }
+
+
+def probe_local_backend(local_ui_url: str, timeout_seconds: float = 4.0) -> Dict[str, Any]:
+    base = str(local_ui_url or "http://127.0.0.1:5000").rstrip("/")
+    checks: List[Dict[str, Any]] = []
+    endpoints = [
+        ("root", f"{base}/", {200}),
+        ("startup_status", f"{base}/api/system/startup-status", {200, 202}),
+        ("queue_status", f"{base}/api/queue/status", {200}),
+    ]
+
+    for name, url, ok_statuses in endpoints:
+        try:
+            request = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                status_code = int(getattr(response, "status", 0) or 0)
+                body_text = response.read().decode("utf-8", errors="ignore")
+            checks.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "status_code": status_code,
+                    "ok": status_code in ok_statuses,
+                    "body_snippet": body_text[:180],
+                }
+            )
+        except urllib.error.HTTPError as exc:
+            checks.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "status_code": int(getattr(exc, "code", 0) or 0),
+                    "ok": False,
+                    "error": f"HTTPError: {exc}",
+                }
+            )
+        except Exception as exc:
+            checks.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "status_code": 0,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "base_url": base,
+        "ready": all(bool(item.get("ok")) for item in checks),
+        "checks": checks,
+    }
+
+
 def run_script(
     repo_root: Path,
     python_cmd: str,
     script_relative: str,
     timeout_seconds: int,
+    env_overrides: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     script_path = repo_root / script_relative
     if not script_path.exists():
@@ -107,6 +194,12 @@ def run_script(
         }
 
     command = [python_cmd, str(script_path)]
+    command_env = os.environ.copy()
+    for key, value in (env_overrides or {}).items():
+        if value is None:
+            continue
+        command_env[str(key)] = str(value)
+
     started = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -114,6 +207,7 @@ def run_script(
             cwd=str(repo_root),
             capture_output=True,
             text=True,
+            env=command_env,
             timeout=None if timeout_seconds <= 0 else timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
@@ -151,6 +245,8 @@ def run_script(
             result["metrics"] = extract_local_reconnect_metrics(payload)
         elif script_relative.endswith("deployed_frontend_reports_progress_parity_test.py"):
             result["metrics"] = extract_deployed_parity_metrics(payload)
+        elif script_relative.endswith("deployed_frontend_local_reports_label_contract_test.py"):
+            result["metrics"] = extract_deployed_local_label_metrics(payload)
 
     if not passed:
         result["stdout_tail"] = (completed.stdout or "")[-1500:]
@@ -184,6 +280,21 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional path to write summary JSON.",
     )
+    parser.add_argument(
+        "--frontend-url",
+        default="",
+        help="Override LUNA_VERCEL_URL for deployed parity/label scripts.",
+    )
+    parser.add_argument(
+        "--local-ui-url",
+        default="",
+        help="Override LUNA_LOCAL_UI_URL for local reconnect script.",
+    )
+    parser.add_argument(
+        "--check-local-backend",
+        action="store_true",
+        help="Run local backend endpoint preflight checks before local reconnect scenario scripts.",
+    )
     return parser.parse_args()
 
 
@@ -192,12 +303,59 @@ def main() -> int:
     repo_root = find_repo_root(Path(__file__).resolve())
     scripts = SCENARIO_SCRIPTS[args.scenario]
 
+    env_overrides: Dict[str, str] = {}
+    if args.frontend_url:
+        env_overrides["LUNA_VERCEL_URL"] = str(args.frontend_url).rstrip("/")
+    if args.local_ui_url:
+        env_overrides["LUNA_LOCAL_UI_URL"] = str(args.local_ui_url).rstrip("/")
+
+    local_ui_effective = (
+        env_overrides.get("LUNA_LOCAL_UI_URL")
+        or str(os.environ.get("LUNA_LOCAL_UI_URL", "http://127.0.0.1:5000")).rstrip("/")
+    )
+    preflight: Optional[Dict[str, Any]] = None
+
+    if args.check_local_backend and any(
+        script.endswith("local_mode_ui_checkup_reconnect_perf_test.py") for script in scripts
+    ):
+        preflight = probe_local_backend(local_ui_effective)
+        if not preflight.get("ready"):
+            summary = {
+                "scenario": args.scenario,
+                "repo_root": str(repo_root),
+                "python": args.python_cmd,
+                "all_passed": False,
+                "env_overrides": env_overrides,
+                "preflight": preflight,
+                "results": [
+                    {
+                        "script": "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
+                        "status": "FAIL",
+                        "exit_code": 111,
+                        "duration_ms": 0,
+                        "passed": False,
+                        "error": "Local backend preflight failed. Start local backend and retry.",
+                    }
+                ],
+            }
+
+            if args.json_out:
+                out_path = Path(args.json_out)
+                if not out_path.is_absolute():
+                    out_path = repo_root / out_path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=True), encoding="utf-8")
+
+            print(json.dumps(summary, indent=2, ensure_ascii=True))
+            return 2
+
     results = [
         run_script(
             repo_root=repo_root,
             python_cmd=args.python_cmd,
             script_relative=script,
             timeout_seconds=args.timeout_seconds,
+            env_overrides=env_overrides,
         )
         for script in scripts
     ]
@@ -208,6 +366,8 @@ def main() -> int:
         "repo_root": str(repo_root),
         "python": args.python_cmd,
         "all_passed": all_passed,
+        "env_overrides": env_overrides,
+        "preflight": preflight,
         "results": results,
     }
 

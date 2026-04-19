@@ -790,6 +790,129 @@ SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
     30,
     int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '180') or 180)
 )
+supabase_offline_backoff_lock = Lock()
+supabase_offline_backoff_until_epoch = 0.0
+supabase_offline_backoff_context = ''
+supabase_offline_backoff_error = ''
+SUPABASE_OFFLINE_BACKOFF_SECONDS = max(
+    10,
+    int(os.getenv('SUPABASE_OFFLINE_BACKOFF_SECONDS', '90') or 90)
+)
+SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS = max(
+    SUPABASE_OFFLINE_BACKOFF_SECONDS,
+    int(os.getenv('SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS', '900') or 900)
+)
+
+
+def _is_supabase_offline_backoff_active() -> bool:
+    with supabase_offline_backoff_lock:
+        return time.time() < float(supabase_offline_backoff_until_epoch or 0.0)
+
+
+def _get_supabase_offline_backoff_snapshot() -> Dict[str, Any]:
+    with supabase_offline_backoff_lock:
+        now_epoch = time.time()
+        until_epoch = float(supabase_offline_backoff_until_epoch or 0.0)
+        remaining = max(0, int(until_epoch - now_epoch))
+        return {
+            'active': until_epoch > now_epoch,
+            'remaining_seconds': remaining,
+            'context': str(supabase_offline_backoff_context or '').strip(),
+            'error': str(supabase_offline_backoff_error or '').strip(),
+        }
+
+
+def _is_supabase_connectivity_failure(raw_error: Any) -> bool:
+    normalized = str(raw_error or '').strip().lower()
+    if not normalized:
+        return False
+
+    if '_local_mode_is_name_resolution_error' in globals() and _local_mode_is_name_resolution_error(normalized):
+        return True
+
+    markers = (
+        'could not translate host name',
+        'name or service not known',
+        'failed to resolve',
+        'getaddrinfo failed',
+        'server closed the connection unexpectedly',
+        'connection refused',
+        'connection timed out',
+        'timeout expired',
+        'network is unreachable',
+        'could not connect to server',
+        'connection already closed',
+        'cursor already closed',
+        'broken pipe',
+        'ssl syscall error',
+        'eof detected',
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def _clear_supabase_offline_backoff(reason: str = '') -> None:
+    global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
+    with supabase_offline_backoff_lock:
+        if supabase_offline_backoff_until_epoch <= 0:
+            return
+        supabase_offline_backoff_until_epoch = 0.0
+        supabase_offline_backoff_context = ''
+        supabase_offline_backoff_error = ''
+    if reason:
+        logger.info(f"Supabase offline backoff cleared ({reason})")
+
+
+def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
+    global db_manager, storage_manager, report_generator
+    global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
+
+    if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
+        return
+
+    error_text = str(error or '').strip()
+    if error_text and not _is_supabase_connectivity_failure(error_text):
+        return
+
+    now_epoch = time.time()
+    with supabase_offline_backoff_lock:
+        previous_until = float(supabase_offline_backoff_until_epoch or 0.0)
+        new_until = now_epoch + float(SUPABASE_OFFLINE_BACKOFF_SECONDS)
+        if previous_until > now_epoch:
+            extended_until = previous_until + float(SUPABASE_OFFLINE_BACKOFF_SECONDS)
+            cap_until = now_epoch + float(SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS)
+            new_until = min(extended_until, cap_until)
+
+        supabase_offline_backoff_until_epoch = new_until
+        supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
+        supabase_offline_backoff_error = error_text[:300]
+
+    demoted_parts = []
+    if db_manager is not None:
+        db_manager = None
+        demoted_parts.append('db_manager')
+
+    if storage_manager is not None:
+        storage_manager = None
+        demoted_parts.append('storage_manager')
+
+    if report_generator is not None and _is_supabase_report_generator_active():
+        try:
+            report_generator = _run_with_timeout(
+                lambda: ReportGenerator(_build_report_generator_config()),
+                STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
+                'report-generator-local-fallback'
+            )
+            demoted_parts.append('report_generator_local')
+        except Exception as local_gen_err:
+            logger.warning(f"Could not switch to local report generator during offline demotion: {local_gen_err}")
+
+    if demoted_parts:
+        logger.warning(
+            "Supabase connectivity failure detected; switched to local-only runtime "
+            f"(context={supabase_offline_backoff_context}, parts={','.join(demoted_parts)}, "
+            f"backoff_seconds={int(max(0, supabase_offline_backoff_until_epoch - now_epoch))}, "
+            f"error={error_text or 'none'})"
+        )
 
 
 def _is_queue_worker_alive() -> bool:
@@ -1495,6 +1618,19 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
             'errors': []
         }
 
+    if not force and _is_supabase_offline_backoff_active():
+        snapshot = _get_supabase_offline_backoff_snapshot()
+        return {
+            'success': False,
+            'recovered': False,
+            'reason': 'offline_backoff',
+            'parts': [],
+            'errors': [
+                f"context={snapshot.get('context')}",
+                f"remaining_seconds={snapshot.get('remaining_seconds')}",
+            ],
+        }
+
     now_epoch = time.time()
     with supabase_runtime_recovery_lock:
         elapsed = now_epoch - float(last_supabase_runtime_recovery_epoch or 0.0)
@@ -1563,6 +1699,9 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
         logger.debug(
             f"Supabase runtime recovery ({reason}) warnings: {' | '.join(errors)}"
         )
+
+    if db_manager is not None and storage_manager is not None:
+        _clear_supabase_offline_backoff('runtime_recovery_success')
 
     return {
         'success': bool(db_manager is not None and storage_manager is not None),
@@ -1817,7 +1956,11 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 )
                 logger.info(f"✓ Inserted PENDING detection event: {report_id}")
             except Exception as e:
-                logger.error(f"Failed to insert pending event: {e}")
+                _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
+                logger.warning(
+                    "Could not insert pending event into Supabase; "
+                    f"continuing local queue processing ({e})"
+                )
         
         # === QUEUE: Add to queue for async processing ===
         if violation_queue:
@@ -2244,7 +2387,11 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 )
                 logger.info(f"✓ Inserted PENDING detection event: {report_id} (visible in frontend now)")
             except Exception as e:
-                logger.error(f"Failed to insert pending event: {e}")
+                _activate_local_offline_runtime('process_violation.insert_pending_event', e)
+                logger.warning(
+                    "Could not insert pending event into Supabase; "
+                    f"continuing local report flow ({e})"
+                )
         
         # Save original frame
         original_path = violation_dir / 'original.jpg'
@@ -2614,6 +2761,8 @@ def api_violations():
 
     if db_manager is None:
         return jsonify(_collect_local_violation_rows('filesystem_fallback'))
+    if _is_supabase_offline_backoff_active():
+        return jsonify(_collect_local_violation_rows('filesystem_fallback_offline_backoff'))
     
     # Use Supabase - get ALL violations including pending
     try:
@@ -2808,6 +2957,7 @@ def api_violations():
         return jsonify(formatted_violations)
         
     except Exception as e:
+        _activate_local_offline_runtime('api_violations.fetch', e)
         logger.error(f"Error fetching violations from Supabase: {e}")
         fallback_rows = _collect_local_violation_rows('filesystem_fallback_after_supabase_error')
         if fallback_rows:
@@ -2960,14 +3110,60 @@ def api_report_status(report_id):
                 'status': 'not_found',
                 'message': 'Report not found'
             })
-        
+
         has_report = (violation_dir / 'report.html').exists()
+        has_original = (violation_dir / 'original.jpg').exists()
+        has_annotated = (violation_dir / 'annotated.jpg').exists()
+        has_caption = (violation_dir / 'caption.txt').exists()
+        failure_path = violation_dir / 'generation_failure.txt'
+        skipped_marker_path = None
+        for candidate in (
+            violation_dir / 'SKIPPED_NO_RETRY.txt',
+            violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
+        ):
+            if candidate.exists():
+                skipped_marker_path = candidate
+                break
+
+        status = 'pending'
+        error_message = None
+        if has_report:
+            status = 'completed'
+        elif failure_path.exists():
+            status = 'failed'
+            error_message = _read_generation_failure_reason(failure_path)
+        elif skipped_marker_path is not None:
+            status = 'skipped'
+            error_message = _read_generation_failure_reason(skipped_marker_path)
+        elif has_annotated or has_caption:
+            status = 'generating'
+        elif has_original:
+            status = 'pending'
+
+        progress = get_report_progress() or {}
+        progress_current = str(progress.get('current') or '').strip()
+        progress_status = str(progress.get('status') or '').strip().lower()
+        if status in ('pending', 'generating') and progress_current == str(report_id).strip():
+            if progress_status in ('processing', 'running', 'active'):
+                status = 'generating'
+            elif progress_status in ('queued', 'pending'):
+                status = 'pending'
+
+        message_map = {
+            'pending': 'Report is queued for processing',
+            'queued': 'Report is queued for processing',
+            'generating': 'AI is analyzing the violation and generating the report',
+            'completed': 'Report is ready',
+            'failed': f"Report generation failed: {error_message or 'Unknown error'}",
+            'skipped': f"Skipped - not a work environment: {error_message or 'Invalid scene'}",
+        }
         return jsonify({
-            'status': 'completed' if has_report else 'generating',
+            'status': status,
             'has_report': has_report,
-            'has_original': (violation_dir / 'original.jpg').exists(),
-            'has_annotated': (violation_dir / 'annotated.jpg').exists(),
-            'message': 'Report is ready' if has_report else 'Report is being generated...'
+            'has_original': has_original,
+            'has_annotated': has_annotated,
+            'error_message': error_message,
+            'message': message_map.get(status, 'Status unknown')
         })
     
     # Use Supabase
@@ -3294,7 +3490,14 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         caption_path = violation_dir / 'caption.txt'
         report_path = violation_dir / 'report.html'
         failure_path = violation_dir / 'generation_failure.txt'
-        skipped_path = violation_dir / 'SKIPPED_NO_RETRY.txt'
+        skipped_path = None
+        for candidate in (
+            violation_dir / 'SKIPPED_NO_RETRY.txt',
+            violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
+        ):
+            if candidate.exists():
+                skipped_path = candidate
+                break
 
         has_original = original_path.exists()
         has_annotated = annotated_path.exists()
@@ -3308,7 +3511,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         elif failure_path.exists():
             status = 'failed'
             error_message = _read_generation_failure_reason(failure_path)
-        elif skipped_path.exists():
+        elif skipped_path is not None:
             status = 'skipped'
         elif has_annotated or caption_path.exists():
             status = 'generating'
@@ -3331,7 +3534,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
             updated_source = report_path
         elif failure_path.exists():
             updated_source = failure_path
-        elif skipped_path.exists():
+        elif skipped_path is not None:
             updated_source = skipped_path
         elif caption_path.exists():
             updated_source = caption_path
@@ -4544,6 +4747,8 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         return {'sent': False, 'reason': 'heartbeat_disabled'}
     if _is_hosted_runtime_environment():
         return {'sent': False, 'reason': 'hosted_runtime'}
+    if _is_supabase_offline_backoff_active():
+        return {'sent': False, 'reason': 'supabase_offline_backoff'}
 
     submission = _local_mode_collect_cloud_heartbeat_submission()
     if not submission.get('ready'):
@@ -4678,6 +4883,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                 'cloud_url_localhost',
                 'machine_id_missing',
                 'provision_secret_missing',
+                'supabase_offline_backoff',
             }
 
             if noisy_reason and (failure_count == 1 or failure_count % 8 == 0):
@@ -5480,6 +5686,8 @@ def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]
 def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
     if db_manager is None:
         return _collect_local_recovery_candidates(limit)
+    if _is_supabase_offline_backoff_active():
+        return _collect_local_recovery_candidates(limit)
 
     rows = []
     try:
@@ -5488,8 +5696,9 @@ def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
         elif hasattr(db_manager, 'get_pending_reports'):
             rows = db_manager.get_pending_reports(limit=limit) or []
     except Exception as e:
+        _activate_local_offline_runtime('collect_recovery_candidates', e)
         logger.warning(f"Failed collecting recovery candidates: {e}")
-        rows = []
+        return _collect_local_recovery_candidates(limit)
 
     candidates = []
     for row in rows:
@@ -6056,6 +6265,7 @@ def api_report_recovery_execute():
             enqueued_count += 1
 
         except Exception as e:
+            _activate_local_offline_runtime('api_report_recovery_execute.enqueue', e)
             errors.append(f"{report_id}: {e}")
             skipped_count += 1
 
@@ -6091,7 +6301,43 @@ def _sync_local_cache_candidates(
     reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
 
     if (db_manager is None or storage_manager is None) and not dry_run:
+        if _is_supabase_offline_backoff_active():
+            snapshot = _get_supabase_offline_backoff_snapshot()
+            return {
+                'success': False,
+                'error': (
+                    'Supabase offline backoff active; local-only mode is currently enforced '
+                    f"(context={snapshot.get('context')}, remaining_seconds={snapshot.get('remaining_seconds')})"
+                )
+            }
         _attempt_supabase_runtime_recovery(reason=f'sync_local_cache:{reason}', force=True)
+
+    if dry_run and (db_manager is None or storage_manager is None):
+        scanned = 0
+        candidates = 0
+        if VIOLATIONS_DIR.exists():
+            for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+                if not violation_dir.is_dir():
+                    continue
+                scanned += 1
+                if (violation_dir / 'original.jpg').exists():
+                    candidates += 1
+                if scanned >= max_items:
+                    break
+
+        skipped = max(0, scanned - candidates)
+        return {
+            'success': True,
+            'reconcile_reason': reason,
+            'dry_run': True,
+            'scanned': scanned,
+            'candidates': candidates,
+            'enqueued': 0,
+            'skipped': skipped,
+            'errors': [],
+            'worker_running': bool(violation_queue is not None),
+            'offline_local_cache_mode': True,
+        }
 
     if db_manager is None:
         return {'success': False, 'error': 'Database manager unavailable'}
@@ -6325,11 +6571,62 @@ def api_pending_reports():
     """Get all reports that are still pending or generating."""
     pending_by_id: Dict[str, Dict[str, Any]] = {}
 
+    def _normalize_pending_status(status: Any, has_report: bool = False) -> str:
+        raw = str(status or '').strip().lower()
+        if not raw:
+            return 'completed' if has_report else 'pending'
+
+        if raw in ('queued', 'queue', 'waiting', 'enqueued'):
+            return 'pending'
+        if raw in ('processing', 'in_progress', 'in-progress', 'running'):
+            return 'generating'
+        if raw in ('completed', 'ready', 'done', 'success'):
+            return 'completed'
+        if raw in ('failed', 'error', 'errored'):
+            return 'failed'
+        if raw in ('skipped', 'cancelled', 'canceled'):
+            return 'skipped'
+        if raw in ('pending', 'generating', 'partial'):
+            return raw
+
+        if has_report:
+            return 'completed'
+        return raw
+
+    def _pending_status_priority(status: Any) -> int:
+        normalized = _normalize_pending_status(status)
+        if normalized == 'generating':
+            return 30
+        if normalized == 'pending':
+            return 20
+        return 0
+
+    def _normalize_pending_source_scope(scope: Any, device_id: Any) -> str:
+        normalized_scope = str(scope or '').strip().lower()
+        if normalized_scope in ('local', 'cloud', 'shared'):
+            return normalized_scope
+
+        device_key = str(device_id or '').strip().lower()
+        if (
+            device_key in ('local_cache', 'offline_local_cache', 'local_cache_sync')
+            or device_key.startswith('local_')
+            or device_key.startswith('offline_')
+        ):
+            return 'local'
+        return 'cloud'
+
+    def _source_label(scope: str) -> str:
+        if scope == 'local':
+            return 'Local'
+        if scope == 'shared':
+            return 'Shared'
+        return 'Cloud'
+
     # Always include local filesystem state for immediate queue/generation visibility.
     local_rows = _collect_local_report_state_rows(limit=300)
     for row in local_rows:
         report_id = str(row.get('report_id') or '').strip()
-        status = str(row.get('status') or '').strip().lower()
+        status = _normalize_pending_status(row.get('status'), has_report=bool(row.get('has_report')))
         if not report_id:
             continue
         if status not in ('pending', 'queued', 'processing', 'generating'):
@@ -6344,6 +6641,8 @@ def api_pending_reports():
             'has_original': bool(row.get('has_original')),
             'has_annotated': bool(row.get('has_annotated')),
             'has_report': bool(row.get('has_report')),
+            'source_scope': 'local',
+            'source_label': 'Local',
         }
 
     if db_manager is not None:
@@ -6362,10 +6661,15 @@ def api_pending_reports():
                 if not report_id:
                     continue
 
-                status = str((p or {}).get('status') or '').strip().lower()
                 has_report = bool((p or {}).get('report_html_key'))
+                status = _normalize_pending_status((p or {}).get('status'), has_report=has_report)
                 if status not in ('pending', 'generating', 'queued', 'processing') and (status or has_report):
                     continue
+
+                source_scope = _normalize_pending_source_scope(
+                    (p or {}).get('source_scope'),
+                    (p or {}).get('device_id'),
+                )
 
                 ts = (p or {}).get('timestamp')
                 if hasattr(ts, 'isoformat'):
@@ -6382,9 +6686,16 @@ def api_pending_reports():
                     'has_original': False,
                     'has_annotated': False,
                     'has_report': has_report,
+                    'source_scope': source_scope,
+                    'source_label': _source_label(source_scope),
                 })
 
-                merged['status'] = status or merged.get('status') or 'pending'
+                existing_status = _normalize_pending_status(
+                    merged.get('status'),
+                    has_report=bool(merged.get('has_report')),
+                )
+                if _pending_status_priority(status) >= _pending_status_priority(existing_status):
+                    merged['status'] = status or existing_status or 'pending'
                 if ts_value:
                     merged['timestamp'] = ts_value
                 if (p or {}).get('device_id'):
@@ -6393,9 +6704,21 @@ def api_pending_reports():
                     merged['severity'] = (p or {}).get('severity')
                 merged['has_report'] = bool(merged.get('has_report')) or has_report
 
+                merged_scope = _normalize_pending_source_scope(
+                    merged.get('source_scope'),
+                    merged.get('device_id'),
+                )
+                if source_scope == 'shared':
+                    merged_scope = 'shared'
+                elif source_scope == 'local' and merged_scope == 'cloud':
+                    merged_scope = 'local'
+                merged['source_scope'] = merged_scope
+                merged['source_label'] = _source_label(merged_scope)
+
                 pending_by_id[report_id] = merged
 
         except Exception as e:
+            _activate_local_offline_runtime('api_pending_reports.fetch', e)
             logger.error(f"Error fetching pending reports from database: {e}", exc_info=True)
 
     pending = list(pending_by_id.values())
@@ -6426,37 +6749,46 @@ def api_generate_report_now(report_id):
         violation = None
 
         if db_manager is not None:
-            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
-            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            try:
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+                violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
 
-            current_status = str((event or {}).get('status') or '').lower()
-            if current_status == 'completed' and not force_reprocess:
-                return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
+                current_status = str((event or {}).get('status') or '').lower()
+                if current_status == 'completed' and not force_reprocess:
+                    return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
 
-            if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
-                queue_stats = violation_queue.get_stats()
-                return jsonify({
-                    'success': True,
-                    'message': 'Report is already queued or generating',
-                    'already_queued': True,
-                    'report_id': report_id,
-                    'queue_size': queue_stats.get('current_size', 0),
-                    'worker_running': _is_queue_worker_alive()
-                })
+                if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
+                    queue_stats = violation_queue.get_stats()
+                    return jsonify({
+                        'success': True,
+                        'message': 'Report is already queued or generating',
+                        'already_queued': True,
+                        'report_id': report_id,
+                        'queue_size': queue_stats.get('current_size', 0),
+                        'worker_running': _is_queue_worker_alive()
+                    })
 
-            if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
-                try:
-                    original_key = violation.get('original_image_key')
-                    if original_key:
-                        blob = storage_manager.download_file_content(original_key)
-                        if blob:
-                            violation_dir.mkdir(parents=True, exist_ok=True)
-                            if isinstance(blob, str):
-                                blob = blob.encode('utf-8')
-                            original_path.write_bytes(blob)
-                            logger.info(f"Recovered original image from Supabase for report {report_id}")
-                except Exception as recover_err:
-                    logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+                if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
+                    try:
+                        original_key = violation.get('original_image_key')
+                        if original_key:
+                            blob = storage_manager.download_file_content(original_key)
+                            if blob:
+                                violation_dir.mkdir(parents=True, exist_ok=True)
+                                if isinstance(blob, str):
+                                    blob = blob.encode('utf-8')
+                                original_path.write_bytes(blob)
+                                logger.info(f"Recovered original image from Supabase for report {report_id}")
+                    except Exception as recover_err:
+                        _activate_local_offline_runtime('api_generate_report_now.recover_original', recover_err)
+                        logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+            except Exception as db_lookup_err:
+                _activate_local_offline_runtime('api_generate_report_now.db_lookup', db_lookup_err)
+                logger.warning(
+                    f"generate-now falling back to local cache for {report_id} after Supabase lookup failure: {db_lookup_err}"
+                )
+                event = None
+                violation = None
         else:
             if report_html_path.exists() and not force_reprocess:
                 return jsonify({
@@ -6538,6 +6870,7 @@ def api_generate_report_now(report_id):
                 )
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else event
             except Exception as insert_err:
+                _activate_local_offline_runtime('api_generate_report_now.insert_detection_event', insert_err)
                 logger.warning(f"Could not create pending detection event for {report_id}: {insert_err}")
 
         event_ts = event.get('timestamp') if isinstance(event, dict) else None
@@ -6578,6 +6911,7 @@ def api_generate_report_now(report_id):
             try:
                 db_manager.update_detection_status(report_id, 'pending')
             except Exception as status_err:
+                _activate_local_offline_runtime('api_generate_report_now.update_detection_status', status_err)
                 logger.warning(f"Could not update pending status for {report_id}: {status_err}")
 
         queue_stats = violation_queue.get_stats()

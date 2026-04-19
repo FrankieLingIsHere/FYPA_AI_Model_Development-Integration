@@ -10,6 +10,7 @@ import logging
 import os
 import json
 import re
+import time
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 
@@ -39,6 +40,8 @@ class SupabaseDatabaseManager:
         self.db_url = db_url
         self.connect_timeout = int(connect_timeout if connect_timeout is not None else os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
         self.conn = None
+        self.reconnect_backoff_seconds = max(3, int(os.getenv('SUPABASE_DB_RECONNECT_BACKOFF_SECONDS', '12')))
+        self._reconnect_retry_after_epoch = 0.0
         
         try:
             self._connect()
@@ -56,14 +59,20 @@ class SupabaseDatabaseManager:
                 connect_timeout=max(1, int(self.connect_timeout))
             )
             self.conn.autocommit = False
+            self._reconnect_retry_after_epoch = 0.0
             logger.info(f"Connected to Supabase Postgres (connect_timeout={self.connect_timeout}s)")
         except Exception as e:
+            self._reconnect_retry_after_epoch = time.time() + float(self.reconnect_backoff_seconds)
             logger.error(f"Failed to connect to database: {e}")
             raise
     
     def _ensure_connection(self):
         """Ensure database connection is active."""
         if self.conn is None or self.conn.closed:
+            now_epoch = time.time()
+            if now_epoch < float(self._reconnect_retry_after_epoch or 0.0):
+                remaining = max(0, int(self._reconnect_retry_after_epoch - now_epoch))
+                raise ConnectionError(f"Database reconnect backoff active ({remaining}s remaining)")
             logger.warning("Database connection lost, reconnecting...")
             self._connect()
 
@@ -499,9 +508,8 @@ class SupabaseDatabaseManager:
         self._ensure_connection()
         
         try:
-            with self.conn.cursor() as cur:
-                # Try query with status column first
-                try:
+            try:
+                with self.conn.cursor() as cur:
                     cur.execute("""
                         SELECT 
                             de.report_id,
@@ -525,9 +533,12 @@ class SupabaseDatabaseManager:
                         ORDER BY de.timestamp DESC
                         LIMIT %s
                     """, (limit,))
-                except Exception:
-                    # Fallback without status column
-                    cur.execute("""
+                    results = cur.fetchall()
+                    return [dict(row) for row in results]
+            except Exception:
+                self.conn.rollback()
+                with self.conn.cursor() as fallback_cur:
+                    fallback_cur.execute("""
                         SELECT 
                             de.report_id,
                             de.timestamp,
@@ -550,10 +561,9 @@ class SupabaseDatabaseManager:
                         ORDER BY de.timestamp DESC
                         LIMIT %s
                     """, (limit,))
-                
-                results = cur.fetchall()
-                return [dict(row) for row in results]
-                
+                    results = fallback_cur.fetchall()
+                    return [dict(row) for row in results]
+
         except Exception as e:
             logger.error(f"Failed to get violations with status: {e}")
             return []

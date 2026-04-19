@@ -85,9 +85,30 @@ class ReportGenerator:
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
+        self.allow_nlp_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
+        try:
+            self.ollama_nlp_max_attempts = int(os.getenv('OLLAMA_NLP_MAX_ATTEMPTS', '3') or 3)
+        except (TypeError, ValueError):
+            self.ollama_nlp_max_attempts = 3
+        self.ollama_nlp_max_attempts = max(1, min(self.ollama_nlp_max_attempts, 8))
+        try:
+            self.ollama_schema_regen_attempts = int(os.getenv('OLLAMA_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
+        except (TypeError, ValueError):
+            self.ollama_schema_regen_attempts = 1
+        self.ollama_schema_regen_attempts = max(0, min(self.ollama_schema_regen_attempts, 3))
+        try:
+            self.ollama_retry_backoff_seconds = float(os.getenv('OLLAMA_RETRY_BACKOFF_SECONDS', '0.9') or 0.9)
+        except (TypeError, ValueError):
+            self.ollama_retry_backoff_seconds = 0.9
+        self.ollama_retry_backoff_seconds = max(0.0, min(self.ollama_retry_backoff_seconds, 5.0))
+
+        if self.strict_local_profile:
+            if self.allow_nlp_fallback:
+                logger.info("Strict local provider profile active; disabling NLP fallback generation")
+            self.allow_nlp_fallback = False
 
         # Gemini spend guardrails (all USD values; set to 0 to disable a limit)
         self.gemini_daily_budget_usd = float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0)
@@ -1189,75 +1210,153 @@ RESPONSE FORMAT (JSON):
             except Exception:
                 pass
 
-        payload = {
-            'model': self.model,
-            'prompt': prompt,
-            'context': [],
-            'stream': False,
-            'format': 'json',
-            'options': {
-                'temperature': self.temperature,
-                'num_predict': 1500,
-                'top_k': 40,
-                'top_p': 0.9
+        max_attempts = max(1, int(getattr(self, 'ollama_nlp_max_attempts', 1) or 1))
+        backoff_seconds = max(0.0, float(getattr(self, 'ollama_retry_backoff_seconds', 0.0) or 0.0))
+        schema_regen_attempts = max(0, int(getattr(self, 'ollama_schema_regen_attempts', 0) or 0))
+
+        def _sleep_before_retry(attempt_no: int):
+            if backoff_seconds <= 0:
+                return
+            time.sleep(min(5.0, backoff_seconds * max(1, attempt_no)))
+
+        def _request_ollama_json(request_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+            payload = {
+                'model': self.model,
+                'prompt': request_prompt,
+                'context': [],
+                'stream': False,
+                'format': 'json',
+                'options': {
+                    'temperature': self.temperature,
+                    'num_predict': 1500,
+                    'top_k': 40,
+                    'top_p': 0.9
+                }
             }
-        }
 
-        data = {}
-        try:
-            logger.info("Calling Ollama API for NLP analysis...")
+            last_error = None
+            for attempt_idx in range(max_attempts):
+                attempt_no = attempt_idx + 1
+                data = {}
 
-            response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
-
-            if (
-                not response.ok
-                and response.status_code in (500, 502, 503, 504)
-                and callable(recovery_helper)
-            ):
-                recovery = recovery_helper(
-                    reason=f"HTTP {response.status_code}",
-                    model_name=self.model,
-                    require_model=True,
-                )
-                if recovery.get('ready'):
+                try:
+                    logger.info(
+                        "Calling Ollama API for NLP analysis (attempt %s/%s)...",
+                        attempt_no,
+                        max_attempts,
+                    )
                     response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
 
-            if not response.ok:
-                logger.error(f"Ollama API error: {response.status_code}")
-                return None
+                    if not response.ok:
+                        text_detail = ''
+                        try:
+                            text_detail = str(response.text or '').strip()[:220]
+                        except Exception:
+                            text_detail = ''
 
-            data = response.json()
-            logger.debug(f"Ollama response: {data}")
+                        last_error = f"Ollama API HTTP {response.status_code}"
+                        if text_detail:
+                            last_error = f"{last_error}: {text_detail}"
 
-            nlp_response = json.loads(data['response'])
-            logger.info("[OK] NLP analysis completed")
+                        if callable(recovery_helper) and response.status_code in (404, 408, 409, 425, 429, 500, 502, 503, 504):
+                            try:
+                                recovery_helper(
+                                    reason=f"HTTP {response.status_code}",
+                                    model_name=self.model,
+                                    require_model=True,
+                                )
+                            except Exception:
+                                pass
 
-            return nlp_response
+                        if attempt_no < max_attempts:
+                            _sleep_before_retry(attempt_no)
+                            continue
+                        return None, last_error
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Ollama JSON response: {e}")
-            logger.debug(f"Raw response: {data.get('response', 'N/A') if isinstance(data, dict) else 'N/A'}")
+                    data = response.json()
+                    logger.debug(f"Ollama response: {data}")
+
+                    raw_json = data.get('response')
+                    if raw_json is None:
+                        last_error = 'Ollama response missing response payload'
+                        if attempt_no < max_attempts:
+                            _sleep_before_retry(attempt_no)
+                            continue
+                        return None, last_error
+
+                    nlp_response = json.loads(raw_json)
+                    if not isinstance(nlp_response, dict):
+                        last_error = 'Ollama response JSON root must be an object'
+                        if attempt_no < max_attempts:
+                            _sleep_before_retry(attempt_no)
+                            continue
+                        return None, last_error
+
+                    return nlp_response, None
+
+                except json.JSONDecodeError as e:
+                    last_error = f"Failed to parse Ollama JSON response: {e}"
+                    logger.warning(last_error)
+                    logger.debug(f"Raw response: {data.get('response', 'N/A') if isinstance(data, dict) else 'N/A'}")
+                except requests.exceptions.RequestException as e:
+                    last_error = f"Ollama API request failed: {e}"
+                    if callable(recovery_helper):
+                        try:
+                            recovery_helper(
+                                reason=str(e),
+                                model_name=self.model,
+                                require_model=True,
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    last_error = f"Error calling Ollama API: {e}"
+                    logger.error(last_error, exc_info=True)
+
+                if attempt_no < max_attempts:
+                    _sleep_before_retry(attempt_no)
+
+            return None, last_error or 'Ollama NLP request failed'
+
+        nlp_response, error_detail = _request_ollama_json(prompt)
+        if not nlp_response:
+            self.last_nlp_error = error_detail
+            logger.error(error_detail or "Ollama NLP analysis failed")
             return None
-        except requests.exceptions.RequestException as e:
-            if callable(recovery_helper):
-                try:
-                    recovery = recovery_helper(
-                        reason=str(e),
-                        model_name=self.model,
-                        require_model=True,
-                    )
-                    if recovery.get('ready'):
-                        retry_response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
-                        if retry_response.ok:
-                            retry_data = retry_response.json()
-                            return json.loads(retry_data['response'])
-                except Exception:
-                    pass
-            logger.error(f"Ollama API request failed: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error calling Ollama API: {e}", exc_info=True)
-            return None
+
+        missing_fields = self._missing_required_nlp_fields(nlp_response)
+        if missing_fields and schema_regen_attempts > 0:
+            logger.warning(
+                "Ollama NLP output missing required fields %s; attempting schema regeneration",
+                missing_fields,
+            )
+            regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
+            for regen_idx in range(schema_regen_attempts):
+                candidate, regen_error = _request_ollama_json(regen_prompt)
+                if candidate:
+                    candidate_missing = self._missing_required_nlp_fields(candidate)
+                    if not candidate_missing:
+                        logger.info(
+                            "Ollama schema regeneration succeeded on attempt %s",
+                            regen_idx + 1,
+                        )
+                        self.last_nlp_error = None
+                        return candidate
+                    missing_fields = candidate_missing
+
+                if regen_error:
+                    error_detail = regen_error
+
+                regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
+
+            logger.warning(
+                "Ollama output still missing fields after regeneration (%s); continuing with best-effort model output",
+                ', '.join(missing_fields),
+            )
+
+        self.last_nlp_error = None
+        logger.info("[OK] Ollama NLP analysis completed")
+        return nlp_response
     
     # =========================================================================
     # REPORT GENERATION
@@ -1407,8 +1506,9 @@ RESPONSE FORMAT (JSON):
         
         if not nlp_analysis:
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
-            allow_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            allow_fallback = bool(self.allow_nlp_fallback)
             if self.strict_report_generation and not allow_fallback:
+                self.last_nlp_fallback_reason = detail
                 raise RuntimeError(f"NLP analysis failed: {detail}")
             logger.warning(f"NLP analysis failed ({detail}), using fallback")
             nlp_analysis = self._generate_fallback_analysis(report_data)

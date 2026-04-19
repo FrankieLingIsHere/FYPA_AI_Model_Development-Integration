@@ -178,11 +178,8 @@ const ReportsPage = {
     },
 
     isPendingLikeStatus(status) {
-        const normalized = String(status || '').trim().toLowerCase();
-        return normalized === 'pending'
-            || normalized === 'queued'
-            || normalized === 'processing'
-            || normalized === 'generating';
+        const normalized = this.normalizeStatusValue(status);
+        return normalized === 'pending' || normalized === 'generating';
     },
 
     mergePendingReports(violations, pendingReports) {
@@ -193,20 +190,36 @@ const ReportsPage = {
         base.forEach((item) => {
             const reportId = String((item && item.report_id) || '').trim();
             if (!reportId) return;
-            byId.set(reportId, { ...item, report_id: reportId });
+            const normalized = { ...item, report_id: reportId };
+            normalized.status = this.normalizeStatus(normalized);
+            const inferredScope = this.inferSourceScope(normalized);
+            normalized.source_scope = inferredScope;
+            normalized.source_label = String(normalized.source_label || '').trim() || this.sourceLabelForScope(inferredScope);
+            byId.set(reportId, normalized);
         });
 
         pending.forEach((item) => {
             const reportId = String((item && item.report_id) || '').trim();
             if (!reportId) return;
 
-            const pendingStatus = String((item && item.status) || '').trim().toLowerCase() || 'pending';
+            const pendingStatus = this.normalizeStatusValue(
+                item && item.status,
+                !!(item && item.has_report)
+            );
+            const pendingScope = this.inferSourceScope(item);
+            const pendingLabel = String((item && item.source_label) || '').trim() || this.sourceLabelForScope(pendingScope);
             const existing = byId.get(reportId);
 
             if (existing) {
                 const existingStatus = this.normalizeStatus(existing);
                 const existingHasReport = !!existing.has_report;
-                if (this.isPendingLikeStatus(pendingStatus) && !existingHasReport && existingStatus !== 'completed') {
+                const pendingPriority = this.getStatusPriority(pendingStatus);
+                const existingPriority = this.getStatusPriority(existingStatus);
+                const allowRetryTransition = this.isPendingLikeStatus(pendingStatus)
+                    && !existingHasReport
+                    && (existingStatus === 'failed' || existingStatus === 'skipped');
+
+                if ((pendingPriority > existingPriority && !existingHasReport) || allowRetryTransition) {
                     existing.status = pendingStatus;
                 }
                 if (!existing.timestamp && item.timestamp) {
@@ -217,6 +230,26 @@ const ReportsPage = {
                 }
                 if (!existing.severity && item.severity) {
                     existing.severity = item.severity;
+                }
+                existing.has_original = !!existing.has_original || !!item.has_original;
+                existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
+                existing.has_report = !!existing.has_report || !!item.has_report;
+
+                const existingScope = this.inferSourceScope(existing);
+                let mergedScope = existingScope || pendingScope || 'cloud';
+                if (pendingScope === 'shared') {
+                    mergedScope = 'shared';
+                } else if (pendingScope === 'local' && existingScope === 'cloud') {
+                    mergedScope = 'local';
+                } else if (!existingScope && pendingScope) {
+                    mergedScope = pendingScope;
+                }
+
+                existing.source_scope = mergedScope;
+                if (mergedScope === pendingScope && pendingLabel) {
+                    existing.source_label = pendingLabel;
+                } else {
+                    existing.source_label = String(existing.source_label || '').trim() || this.sourceLabelForScope(mergedScope);
                 }
                 return;
             }
@@ -232,7 +265,9 @@ const ReportsPage = {
                 violation_summary: item.violation_summary || 'Violation queued for report generation',
                 has_original: !!item.has_original,
                 has_annotated: !!item.has_annotated,
-                has_report: false
+                has_report: !!item.has_report,
+                source_scope: pendingScope,
+                source_label: pendingLabel
             });
         });
 
@@ -388,10 +423,92 @@ const ReportsPage = {
         return filtered;
     },
 
+    normalizeStatusValue(status, hasReport = false) {
+        const raw = String(status || '').trim().toLowerCase();
+        if (!raw) {
+            return hasReport ? 'completed' : 'pending';
+        }
+
+        if (raw === 'completed' || raw === 'ready' || raw === 'done' || raw === 'success') {
+            return 'completed';
+        }
+        if (raw === 'partial' || raw === 'degraded') {
+            return 'partial';
+        }
+        if (raw === 'failed' || raw === 'error' || raw === 'errored') {
+            return 'failed';
+        }
+        if (raw === 'skipped' || raw === 'cancelled' || raw === 'canceled') {
+            return 'skipped';
+        }
+        if (
+            raw === 'generating'
+            || raw === 'processing'
+            || raw === 'in_progress'
+            || raw === 'in-progress'
+            || raw === 'running'
+        ) {
+            return 'generating';
+        }
+        if (
+            raw === 'pending'
+            || raw === 'queued'
+            || raw === 'queue'
+            || raw === 'waiting'
+            || raw === 'enqueued'
+        ) {
+            return 'pending';
+        }
+
+        if (hasReport) {
+            return 'completed';
+        }
+        return raw;
+    },
+
+    getStatusPriority(status) {
+        const normalized = this.normalizeStatusValue(status);
+        if (normalized === 'completed') return 50;
+        if (normalized === 'failed' || normalized === 'skipped' || normalized === 'partial') return 40;
+        if (normalized === 'generating') return 30;
+        if (normalized === 'pending') return 20;
+        if (normalized === 'unknown') return 10;
+        return 0;
+    },
+
     normalizeStatus(violation) {
-        const raw = (violation && violation.status ? String(violation.status) : '').trim().toLowerCase();
-        if (raw) return raw;
-        return violation && violation.has_report ? 'completed' : 'pending';
+        const hasReport = !!(violation && violation.has_report);
+        const raw = violation && Object.prototype.hasOwnProperty.call(violation, 'status')
+            ? violation.status
+            : '';
+        return this.normalizeStatusValue(raw, hasReport);
+    },
+
+    normalizeSourceScope(scope) {
+        const normalized = String(scope || '').trim().toLowerCase();
+        if (normalized === 'local' || normalized === 'cloud' || normalized === 'shared') {
+            return normalized;
+        }
+        return '';
+    },
+
+    inferSourceScope(violation) {
+        const explicit = this.normalizeSourceScope(violation && violation.source_scope);
+        if (explicit) return explicit;
+
+        const deviceId = String((violation && violation.device_id) || '').trim().toLowerCase();
+        const localByDevice = deviceId === 'local_cache'
+            || deviceId === 'offline_local_cache'
+            || deviceId === 'local_cache_sync'
+            || deviceId.startsWith('local_')
+            || deviceId.startsWith('offline_');
+        return localByDevice ? 'local' : 'cloud';
+    },
+
+    sourceLabelForScope(scope) {
+        if (scope === 'local') return 'Local';
+        if (scope === 'shared') return 'Shared';
+        return 'Cloud';
     },
 
     notify(message, type = 'info') {
@@ -526,10 +643,16 @@ const ReportsPage = {
                 return { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Finalizing...' };
             case 'generating':
                 return { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Generating...' };
+            case 'processing':
+                return { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Generating...' };
             case 'pending':
+                return { icon: 'fa-clock', color: 'warning', text: 'Queued' };
+            case 'queued':
                 return { icon: 'fa-clock', color: 'warning', text: 'Queued' };
             case 'failed':
                 return { icon: 'fa-exclamation-triangle', color: 'danger', text: 'Failed' };
+            case 'skipped':
+                return { icon: 'fa-ban', color: 'danger', text: 'Skipped' };
             case 'partial':
                 return { icon: 'fa-exclamation-circle', color: 'warning', text: 'Partial' };
             default:
@@ -540,24 +663,13 @@ const ReportsPage = {
     },
 
     getSourceInfo(violation) {
-        const rawScope = String((violation && violation.source_scope) || '').trim().toLowerCase();
-        const deviceId = String((violation && violation.device_id) || '').trim().toLowerCase();
+        const scope = this.inferSourceScope(violation);
         const labelFromApi = String((violation && violation.source_label) || '').trim();
-
-        let scope = rawScope;
-        if (!scope) {
-            const localByDevice = deviceId === 'local_cache'
-                || deviceId === 'offline_local_cache'
-                || deviceId === 'local_cache_sync'
-                || deviceId.startsWith('local_')
-                || deviceId.startsWith('offline_');
-            scope = localByDevice ? 'local' : 'cloud';
-        }
 
         if (scope === 'local') {
             return {
                 scope,
-                label: labelFromApi || 'Local',
+                label: labelFromApi || this.sourceLabelForScope(scope),
                 color: 'warning',
                 icon: 'fa-laptop'
             };
@@ -566,7 +678,7 @@ const ReportsPage = {
         if (scope === 'shared') {
             return {
                 scope,
-                label: labelFromApi || 'Shared',
+                label: labelFromApi || this.sourceLabelForScope(scope),
                 color: 'success',
                 icon: 'fa-link'
             };
@@ -574,7 +686,7 @@ const ReportsPage = {
 
         return {
             scope: 'cloud',
-            label: labelFromApi || 'Cloud',
+            label: labelFromApi || this.sourceLabelForScope('cloud'),
             color: 'info',
             icon: 'fa-cloud'
         };
@@ -616,7 +728,7 @@ const ReportsPage = {
             overflow-y: auto;
         `;
         
-        const errorDetails = violation.status === 'failed' && detailedError ? `
+        const errorDetails = this.normalizeStatus(violation) === 'failed' && detailedError ? `
             <div style="margin-top: 1rem; padding: 1rem; background: #fee; border-left: 3px solid #e74c3c; border-radius: 4px; text-align: left; max-height: 200px; overflow-y: auto;">
                 <strong style="color: #c0392b; display: block; margin-bottom: 0.5rem;">Error Details:</strong>
                 <pre style="margin: 0; font-size: 0.85rem; color: #7f8c8d; white-space: pre-wrap; word-wrap: break-word;">${detailedError}</pre>
@@ -724,10 +836,16 @@ const ReportsPage = {
         switch(status) {
             case 'generating':
                 return 'The AI is analyzing the violation and generating a detailed report. This usually takes 30-60 seconds.';
+            case 'processing':
+                return 'The report job is actively processing and generation is in progress.';
             case 'pending':
+                return 'This report is queued for processing. It will be generated shortly.';
+            case 'queued':
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'failed':
                 return `Report generation failed. ${violation.error_message || 'Please try again or contact support.'}`;
+            case 'skipped':
+                return `Report was skipped. ${violation.error_message || 'The scene may not match a valid work environment.'}`;
             default:
                 return 'The report is being processed. Please wait a moment.';
         }
@@ -1000,7 +1118,7 @@ const ReportsPage = {
 
     async pollReportProgress(reportId, { autoOpen = false } = {}) {
         const data = await API.getReportStatus(reportId);
-        const status = String((data && data.status) || '').toLowerCase();
+        const status = this.normalizeStatusValue(data && data.status, !!(data && data.has_report));
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
         const runtime = this.ensureModalRuntime(reportId);

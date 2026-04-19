@@ -22,6 +22,26 @@ Use this skill when the user asks to simulate offline behavior, validate reconne
 
    python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario all
 
+5. Runner overrides for target URL and preflight:
+
+    - Pin deployed checks to a specific frontend target:
+
+       python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario deployed-parity --frontend-url http://127.0.0.1:5000
+
+    - Pin local reconnect base URL:
+
+       python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario local-reconnect --local-ui-url http://127.0.0.1:5000
+
+    - Enforce local backend readiness checks before local reconnect script:
+
+       python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario local-reconnect --check-local-backend
+
+6. Deployment trigger reminder for this repository:
+
+   - Treat a commit on the deployment-tracked repository branch as the redeploy trigger.
+   - Keep deployment-impacting fixes grouped into a single clear commit when possible.
+   - If validation JSON artifacts are generated during checks, do not include them in the deploy commit unless explicitly requested.
+
 ## Patch Gate: Action Tests Must Pass
 
 When patching frontend/runtime behavior, do not finalize the patch until all repository action tests pass with exit code 0.
@@ -57,6 +77,8 @@ Enforcement rule:
 After each run, report the exact evidence fields from the runner JSON:
 
 - all_passed
+- env_overrides
+- preflight (when `--check-local-backend` is used)
 - results[].script
 - results[].status and exit_code
 - local reconnect metrics:
@@ -81,8 +103,61 @@ After each run, report the exact evidence fields from the runner JSON:
 
 - Local reconnect test script: Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py
 - Deployed parity script: Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py
+- Deployed local-label contract script: Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py
 - Skill runner script: .agents/skills/local-mode-playwright-validation/run_playwright_validation.py
 - Avoid broad Playwright route interception for this reconnect flow; this project uses in-page fetch telemetry for more reliable evidence.
+
+## Runtime Triage Addendum: Deployed Local Report Label Contract
+
+Use this when validating Reports-page label clarity for local-mode rows in deployed frontend.
+
+Contract target:
+
+- local-source badge shows `Local`
+- status badges map clearly for local rows:
+   - `queued -> Queued`
+   - `generating -> Generating...`
+   - `failed -> Failed`
+   - `completed -> Ready`
+
+Script:
+
+- `Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py`
+
+Runner integration:
+
+- Included in `deployed-parity` and `all` scenarios via
+   `.agents/skills/local-mode-playwright-validation/run_playwright_validation.py`
+
+Required reporting fields for this contract:
+
+- `results[].metrics.label_contract_pass`
+- `results[].metrics.checks[]` with:
+   - `reportId`
+   - `expectedStatus`
+   - `sourceBadgeText`
+   - `statusBadgeText`
+   - `sourceOk`
+   - `statusOk`
+
+Interpretation detail:
+
+- `pending` and `queued` are treated as the same queue stage and must render user-facing badge text `Queued`.
+- `processing` and `generating` are treated as the same generation stage and must render `Generating...`.
+
+## Runtime Triage Addendum: URL Targeting and Deployment Lag
+
+Use this when source patches are correct but deployed frontend still shows stale labels.
+
+1. Verify patched behavior against local served frontend first:
+
+   python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario deployed-parity --frontend-url http://127.0.0.1:5000 --check-local-backend --local-ui-url http://127.0.0.1:5000
+
+2. Then run against deployed target without overrides:
+
+   python .agents/skills/local-mode-playwright-validation/run_playwright_validation.py --scenario deployed-parity
+
+3. If local passes but deployed fails, treat as deployment lag/runtime drift instead of a patch regression.
 
 ## Runtime Triage Addendum: Queue Worker Health
 
@@ -152,3 +227,57 @@ Frontend checkup flow now supports runtime overrides:
 - `window.LUNA_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS` (clamped 60..900, default 120)
 
 Use these when diagnosing slow environments or test constraints where long pull windows can exceed UI/test wait budgets.
+
+## Runtime Triage Addendum: Offline Report Generation (No Cloud Fallback)
+
+Use this when local backend logs show repeated Supabase/cloud connectivity errors during report flow, for example:
+
+- `Failed to connect to database: could not translate host name ...`
+- `Failed to insert pending event ...`
+- `Failed collecting recovery candidates ...`
+
+### Goal
+
+Keep report generation functional in local/offline mode by using local filesystem + queue processing only,
+without depending on cloud heartbeat/Supabase writes while connectivity is down.
+
+### Required checks
+
+1. Verify local backend is reachable:
+   - `http://127.0.0.1:5000/`
+   - `http://127.0.0.1:5000/api/system/startup-status`
+
+2. Verify recovery endpoints still respond in offline mode:
+   - `GET /api/reports/recovery/options` returns `success=true`
+   - `POST /api/reports/sync-local-cache` with `{"dry_run": true}` returns counters and `success=true`
+   - `POST /api/reports/recovery/execute` accepts local mode payload when queue worker is healthy
+
+3. Validate queue health after startup settles:
+   - `GET /api/queue/status`
+   - expect `available=true` and `worker_running=true`
+
+4. Validate local artifact progression for one report id:
+   - local folder contains `original.jpg`
+   - then `annotated.jpg`
+   - then `report.html`
+
+### No-cloud-fallback interpretation
+
+- In strict offline validation, do not treat cloud/Supabase dependency as required for local report completion.
+- If connectivity is down, local generation should continue via local runtime paths; cloud sync can resume after reconnect.
+
+### Optional strict NLP no-fallback gate
+
+When you must also enforce no NLP fallback behavior (model-provider strictness), run deployed system conditions with:
+
+- `LUNA_REQUIRE_NO_NLP_FALLBACK=1`
+
+and ensure runtime provider status reports empty `last_fallback_reason`.
+
+### Runtime tuning knobs for repeated offline churn
+
+- `SUPABASE_OFFLINE_BACKOFF_SECONDS` (default 90)
+- `SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS` (default 900)
+- `SUPABASE_DB_RECONNECT_BACKOFF_SECONDS` (default 12)
+
+Use these only for diagnostics/tuning; keep defaults unless environment constraints require adjustment.

@@ -308,6 +308,26 @@ PowerShell caution:
 - never use `$PID` as a loop variable because it is read-only in PowerShell
 - use names like `$procId` when iterating owning process ids
 
+## Runtime UI Guardrail: Text Visibility and Contrast
+
+Use this whenever patching sidebar/nav/select/dropdown UI states.
+
+Non-negotiable rules:
+
+1. Text must remain readable in all interactive states (default, hover, active, focused, expanded, collapsed).
+2. Do not rely on "different color" only; maintain strong contrast against background.
+3. Target minimum contrast:
+   - normal text: WCAG AA 4.5:1 or higher
+   - large text (>= 18px regular or >= 14px bold): 3:1 or higher
+4. Native select/dropdown options must explicitly set readable foreground + background colors (avoid white-on-white states).
+5. If sidebar/nav collapses, open dropdowns/selectors must close/blur so floating lists do not remain visible off-state.
+
+Verification checklist:
+
+- open timezone selector and inspect option list text/background contrast
+- collapse/minimize sidebar and confirm dropdown list disappears immediately
+- expand sidebar again and confirm selector remains usable
+
 ## Runtime Triage Addendum: Bounded Local Checkup Prepare Timeout
 
 If local checkup appears stuck while waiting for model pull/prepare, use bounded timeout tuning instead of treating as hard runtime failure.

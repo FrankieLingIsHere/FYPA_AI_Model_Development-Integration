@@ -510,6 +510,7 @@ async function initializeWithStartupGate() {
 
     if (typeof TimezoneManager !== 'undefined') {
         TimezoneManager.initSelector('timezone-selector');
+        bindTimezoneSelectorVisibilityGuard();
         console.log('Timezone set to:', TimezoneManager.getTimezoneLabel());
     } else if (typeof TimezoneUtils !== 'undefined' && typeof TimezoneUtils.updateAllTimestamps === 'function') {
         TimezoneUtils.updateAllTimestamps();
@@ -1187,6 +1188,41 @@ function initializeAdaptivePipelineModeManager() {
     manager.evaluate(bootState, { force: true });
 }
 
+function bindTimezoneSelectorVisibilityGuard() {
+    const sidebar = document.querySelector('.sidebar');
+    const selector = document.getElementById('timezone-selector');
+    if (!sidebar || !selector) return;
+    if (selector.dataset.visibilityGuardBound === 'true') return;
+
+    selector.dataset.visibilityGuardBound = 'true';
+
+    const closeSelector = () => {
+        if (typeof selector.blur === 'function') {
+            selector.blur();
+        }
+    };
+
+    sidebar.addEventListener('mouseleave', closeSelector);
+
+    document.addEventListener('click', (event) => {
+        if (!sidebar.contains(event.target)) {
+            closeSelector();
+        }
+    });
+
+    window.addEventListener('resize', () => {
+        if (!sidebar.matches(':hover')) {
+            closeSelector();
+        }
+    }, { passive: true });
+
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeSelector();
+        }
+    });
+}
+
 function setupResponsiveMobileUX() {
     const body = document.body;
     const navToggle = document.getElementById('navToggle');
@@ -1194,6 +1230,7 @@ function setupResponsiveMobileUX() {
     const navMorePanel = document.getElementById('navMorePanel');
     const overlay = document.getElementById('mobileOrientationOverlay');
     const retryBtn = document.getElementById('orientationRetryBtn');
+    const timezoneSelector = document.getElementById('timezone-selector');
     const navLinks = Array.from(document.querySelectorAll('.nav-link, .sidebar-link'));
 
     if (!body) return;
@@ -1203,9 +1240,16 @@ function setupResponsiveMobileUX() {
         wasLocked: false
     };
 
+    const closeTimezoneSelector = () => {
+        if (timezoneSelector && typeof timezoneSelector.blur === 'function') {
+            timezoneSelector.blur();
+        }
+    };
+
     const closePhoneMoreMenu = () => {
         body.classList.remove('nav-more-open');
         if (navMoreToggle) navMoreToggle.setAttribute('aria-expanded', 'false');
+        closeTimezoneSelector();
     };
 
     const getDeviceProfile = () => {

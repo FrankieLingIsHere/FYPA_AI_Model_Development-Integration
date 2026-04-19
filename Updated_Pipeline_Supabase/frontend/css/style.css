@@ -582,6 +582,35 @@ body.is-tablet-landscape .main-content {
     color: #fff;
     padding: 0.35rem 0.5rem;
     max-width: 180px;
+    transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease, max-width 0.2s ease,
+        opacity 0.2s ease, padding 0.2s ease;
+}
+
+.timezone-select:focus {
+    border-color: rgba(255, 255, 255, 0.8);
+    background: rgba(15, 23, 42, 0.9);
+    color: #f8fafc;
+    outline: none;
+}
+
+.timezone-select option {
+    color: #0f172a;
+    background: #f8fafc;
+}
+
+/* Keep selector labels visible with strong contrast and collapse cleanly with sidebar shrink. */
+body:not(.is-phone-device) .sidebar .timezone-select {
+    width: 100%;
+    min-width: 0;
+}
+
+body:not(.is-phone-device) .sidebar:not(:hover):not(:focus-within) .timezone-select {
+    max-width: 0;
+    opacity: 0;
+    pointer-events: none;
+    padding-left: 0;
+    padding-right: 0;
+    border-color: transparent;
 }
 
 .realtime-badge {

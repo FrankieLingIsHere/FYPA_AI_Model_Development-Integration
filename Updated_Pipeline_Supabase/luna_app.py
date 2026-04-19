@@ -2034,6 +2034,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     )
     queued_source_scope = str(data.get('source_scope') or '').strip().lower()
     queued_sync_source = str(data.get('sync_source') or data.get('source') or '').strip().lower()
+    force_reprocess_requested = bool(data.get('force_reprocess'))
+    skip_environment_validation = bool(data.get('skip_environment_validation'))
+    allow_placeholder_report = bool(data.get('allow_placeholder_report'))
     
     logger.info(f"📄 Processing queued violation: {report_id}")
     
@@ -2045,7 +2048,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     
     # === ENVIRONMENT VALIDATION (before heavy processing) ===
     # Uses semaphore to prevent concurrent Ollama calls (VRAM exhaustion)
-    if ENVIRONMENT_VALIDATION_ENABLED:
+    if ENVIRONMENT_VALIDATION_ENABLED and not skip_environment_validation:
         try:
             from caption_image import validate_work_environment
             
@@ -2251,7 +2254,31 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.error(f"❌ Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
     
-    # Do not auto-create fallback report. Keep explicit failed status with detailed reason.
+    if not report_created and allow_placeholder_report and force_reprocess_requested:
+        try:
+            logger.warning(
+                f"Forced reprocess fallback activated for {report_id}; creating placeholder HTML report."
+            )
+            create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
+            if (violation_dir / 'report.html').exists():
+                report_created = True
+                if not failure_reason:
+                    failure_reason = "Forced reprocess used placeholder report fallback"
+                else:
+                    failure_reason = f"{failure_reason}; placeholder report fallback applied"
+                if db_manager:
+                    try:
+                        db_manager.update_detection_status(
+                            report_id,
+                            'completed',
+                            'Generated placeholder fallback report after forced reprocess recovery path'
+                        )
+                    except Exception as status_err:
+                        logger.warning(f"Could not update completed status after placeholder fallback: {status_err}")
+        except Exception as fallback_err:
+            logger.warning(f"Forced reprocess placeholder fallback failed for {report_id}: {fallback_err}")
+
+    # Do not auto-create fallback report for regular processing paths.
     if not report_created:
         if not failure_reason:
             failure_reason = "Unknown error: report generation did not complete"
@@ -5718,6 +5745,35 @@ def _read_local_violation_metadata(violation_dir: Path) -> Dict[str, Any]:
         return {}
 
 
+def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path, reason: str = '') -> bool:
+    """Create a deterministic placeholder image for forced reprocess recovery paths."""
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas = np.full((720, 1280, 3), (28, 35, 44), dtype=np.uint8)
+        cv2.rectangle(canvas, (24, 24), (1256, 696), (64, 78, 97), thickness=2)
+
+        header = 'LUNA Reprocess Placeholder'
+        subtitle = f'Report ID: {report_id}'
+        reason_text = str(reason or 'Original artifact unavailable in runtime storage').strip()
+        if len(reason_text) > 120:
+            reason_text = reason_text[:117] + '...'
+
+        cv2.putText(canvas, header, (54, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (245, 247, 250), 2, cv2.LINE_AA)
+        cv2.putText(canvas, subtitle, (54, 176), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (203, 213, 225), 2, cv2.LINE_AA)
+        cv2.putText(canvas, 'Forced reprocess fallback: source image missing', (54, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (248, 250, 252), 2, cv2.LINE_AA)
+        cv2.putText(canvas, reason_text, (54, 304), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (229, 231, 235), 2, cv2.LINE_AA)
+
+        saved = bool(cv2.imwrite(str(output_path), canvas))
+        if not saved:
+            logger.warning(f"Could not write placeholder image for {report_id}: {output_path}")
+        return saved
+    except Exception as placeholder_err:
+        logger.warning(
+            f"Could not create placeholder image for {report_id} at {output_path}: {placeholder_err}"
+        )
+        return False
+
+
 def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
     """Collect pending/failed local reports from filesystem for offline recovery."""
     if not VIOLATIONS_DIR.exists():
@@ -6919,6 +6975,7 @@ def api_generate_report_now(report_id):
 
         event = None
         violation = None
+        placeholder_reprocess_recovery_used = False
 
         if db_manager is not None:
             try:
@@ -6982,6 +7039,34 @@ def api_generate_report_now(report_id):
                 'offline_local_cache_mode': db_manager is None,
                 'report_id': report_id,
             })
+
+        if not original_path.exists() and force_reprocess:
+            placeholder_reason = (
+                "Original image missing for forced reprocess; generated synthetic placeholder "
+                "to unblock queue execution"
+            )
+            if _create_force_reprocess_placeholder_image(report_id, original_path, placeholder_reason):
+                placeholder_reprocess_recovery_used = True
+                if not annotated_path.exists():
+                    _create_force_reprocess_placeholder_image(
+                        report_id,
+                        annotated_path,
+                        "Annotated placeholder generated for forced reprocess"
+                    )
+                if db_manager is not None and hasattr(db_manager, 'log_event'):
+                    try:
+                        db_manager.log_event(
+                            event_type='generate_now_placeholder_recovery',
+                            message='Forced reprocess used placeholder image recovery due to missing original',
+                            report_id=report_id,
+                            device_id=(event.get('device_id') if isinstance(event, dict) else None) or 'manual_reprocess',
+                            metadata={
+                                'force_reprocess': True,
+                                'reason': 'missing_original_image',
+                            }
+                        )
+                    except Exception as log_err:
+                        logger.debug(f"Could not log placeholder recovery event for {report_id}: {log_err}")
 
         if not original_path.exists():
             return jsonify({
@@ -7073,8 +7158,13 @@ def api_generate_report_now(report_id):
             'violation_count': resolved_violation_count,
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path),
-            'violation_dir': str(violation_dir)
+            'violation_dir': str(violation_dir),
+            'force_reprocess': force_reprocess,
         }
+        if placeholder_reprocess_recovery_used:
+            violation_data['skip_environment_validation'] = True
+            violation_data['allow_placeholder_report'] = True
+            violation_data['placeholder_original_used'] = True
         if source_scope_marker:
             violation_data['source_scope'] = source_scope_marker
         if sync_source_marker:
@@ -7137,6 +7227,7 @@ def api_generate_report_now(report_id):
             'message': 'Report moved to the front of queue for generation' + (' (reprocess mode)' if force_reprocess else ''),
             'report_id': report_id,
             'force_reprocess': force_reprocess,
+            'placeholder_reprocess_recovery_used': placeholder_reprocess_recovery_used,
             'offline_local_cache_mode': db_manager is None,
             'db_event_available': event is not None,
             'queue_size': queue_stats.get('current_size', 0),

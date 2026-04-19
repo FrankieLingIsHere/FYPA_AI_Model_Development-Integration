@@ -75,19 +75,22 @@ def test_schema_regen_success():
     _assert("SCHEMA REGENERATION REQUIREMENT" in fake.calls[1]["prompt"], "Expected schema regeneration instruction in second prompt")
 
 
-def test_schema_regen_failure_still_missing():
+def test_schema_regen_failure_returns_best_effort():
     first_missing = _valid_payload()
     first_missing.pop("summary")
     second_still_missing = _valid_payload()
     second_still_missing.pop("persons")
+    second_still_missing.pop("summary")
 
     fake = _FakeGeminiClient([first_missing, second_still_missing])
     subject = _new_subject(fake, regen_attempts=1)
 
     result = subject._call_gemini_api("base prompt", image_path=None, report_id="r2")
 
-    _assert(result is None, "Expected None when required fields still missing after regeneration")
-    _assert(subject.last_nlp_error is not None, "Expected explicit last_nlp_error when schema remains invalid")
+    _assert(result is not None, "Expected best-effort payload when schema remains incomplete after regeneration")
+    _assert(not result.get("summary"), "Expected returned best-effort payload to remain schema-incomplete")
+    _assert(len(fake.calls) == 2, "Expected two Gemini calls (initial + regeneration)")
+    _assert(subject.last_nlp_error is None, "Expected no terminal nlp error when best-effort payload is returned")
 
 
 def test_schema_no_regen_when_valid():
@@ -103,7 +106,7 @@ def test_schema_no_regen_when_valid():
 def main():
     tests = [
         test_schema_regen_success,
-        test_schema_regen_failure_still_missing,
+        test_schema_regen_failure_returns_best_effort,
         test_schema_no_regen_when_valid,
     ]
     failures = []

@@ -1080,6 +1080,8 @@ RESPONSE FORMAT (JSON):
                     attempts = max(0, self.gemini_schema_regen_attempts)
                     repaired_result = None
                     repaired_missing = list(missing_fields)
+                    best_effort_result = result if isinstance(result, dict) else None
+                    best_effort_missing = list(missing_fields)
 
                     for attempt_idx in range(attempts):
                         candidate = self.gemini_client.generate_report_json(
@@ -1091,6 +1093,10 @@ RESPONSE FORMAT (JSON):
                             continue
 
                         candidate_missing = self._missing_required_nlp_fields(candidate)
+                        if best_effort_result is None or len(candidate_missing) < len(best_effort_missing):
+                            best_effort_result = candidate
+                            best_effort_missing = list(candidate_missing)
+
                         if not candidate_missing:
                             repaired_result = candidate
                             repaired_missing = []
@@ -1105,6 +1111,12 @@ RESPONSE FORMAT (JSON):
 
                     if repaired_result is not None:
                         result = repaired_result
+                    elif best_effort_result is not None:
+                        logger.warning(
+                            "Gemini output still missing fields after regeneration (%s); continuing with best-effort Gemini output for downstream sanitization",
+                            ', '.join(best_effort_missing),
+                        )
+                        result = best_effort_result
                     else:
                         detail = (
                             "Gemini output missing required fields after regeneration: "
@@ -1608,6 +1620,10 @@ RESPONSE FORMAT (JSON):
                 if needs_persons and fallback is not None:
                     logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
+
+            if not str(nlp_analysis.get('summary', '')).strip():
+                logger.info("NLP output missing summary; synthesizing grounded summary")
+                nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
         if isinstance(nlp_analysis, dict):
             if self.last_nlp_provider and not nlp_analysis.get('provider'):

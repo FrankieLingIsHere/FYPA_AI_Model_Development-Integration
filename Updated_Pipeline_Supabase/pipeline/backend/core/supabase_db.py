@@ -76,6 +76,120 @@ class SupabaseDatabaseManager:
             logger.warning("Database connection lost, reconnecting...")
             self._connect()
 
+    def _safe_rollback(self) -> None:
+        """Rollback current transaction if connection is still usable."""
+        try:
+            if self.conn is not None and not self.conn.closed:
+                self.conn.rollback()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_connection_failure(raw_error: Any) -> bool:
+        """Return True when an error indicates network/connection loss."""
+        normalized = str(raw_error or '').strip().lower()
+        if not normalized:
+            return False
+
+        markers = (
+            'database reconnect backoff active',
+            'could not translate host name',
+            'name or service not known',
+            'failed to resolve',
+            'getaddrinfo failed',
+            'server closed the connection unexpectedly',
+            'connection refused',
+            'connection timed out',
+            'timeout expired',
+            'network is unreachable',
+            'could not connect to server',
+            'connection already closed',
+            'cursor already closed',
+            'broken pipe',
+            'ssl syscall error',
+            'eof detected',
+        )
+        return any(marker in normalized for marker in markers)
+
+    def _raise_if_connection_failure(self, raw_error: Any, context: str) -> None:
+        """Raise ConnectionError and arm reconnect backoff for transport-level failures."""
+        if not self._is_connection_failure(raw_error):
+            return
+
+        try:
+            if self.conn is not None and not self.conn.closed:
+                self.conn.close()
+        except Exception:
+            pass
+
+        self.conn = None
+        self._reconnect_retry_after_epoch = time.time() + float(self.reconnect_backoff_seconds)
+        wrapped = ConnectionError(f"{context}: {raw_error}")
+        if isinstance(raw_error, Exception):
+            raise wrapped from raw_error
+        raise wrapped
+
+    @staticmethod
+    def _is_unique_constraint_violation(raw_error: Any) -> bool:
+        """True when Postgres reports duplicate-key unique-constraint violation."""
+        if str(getattr(raw_error, 'pgcode', '') or '').strip() == '23505':
+            return True
+
+        normalized = str(raw_error or '').strip().lower()
+        if not normalized:
+            return False
+        return 'duplicate key value violates unique constraint' in normalized
+
+    def _get_existing_detection_event_report_id(self, report_id: str) -> Optional[str]:
+        """Fetch existing detection-event report_id for idempotent insert retries."""
+        self._ensure_connection()
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT report_id
+                    FROM public.detection_events
+                    WHERE report_id = %s
+                    LIMIT 1
+                    """,
+                    (report_id,),
+                )
+                row = cur.fetchone()
+                return str((row or {}).get('report_id') or '') if row else None
+        except Exception as lookup_error:
+            self._safe_rollback()
+            self._raise_if_connection_failure(
+                lookup_error,
+                f'get_existing_detection_event_report_id:{report_id}',
+            )
+            return None
+
+    def _get_existing_violation_id(self, report_id: str) -> Optional[str]:
+        """Fetch existing violations.id for idempotent insert retries."""
+        self._ensure_connection()
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM public.violations
+                    WHERE report_id = %s
+                    LIMIT 1
+                    """,
+                    (report_id,),
+                )
+                row = cur.fetchone()
+                return str((row or {}).get('id') or '') if row else None
+        except Exception as lookup_error:
+            self._safe_rollback()
+            self._raise_if_connection_failure(
+                lookup_error,
+                f'get_existing_violation_id:{report_id}',
+            )
+            return None
+
     def _normalize_device_id(self, device_id: Optional[str]) -> Optional[str]:
         """Normalize and validate camera device IDs before DB writes."""
         normalized = str(device_id or '').strip()
@@ -211,11 +325,20 @@ class SupabaseDatabaseManager:
                 self.conn.commit()
                 break
             except Exception as attempt_error:
-                self.conn.rollback()
+                self._safe_rollback()
+                if self._is_unique_constraint_violation(attempt_error):
+                    existing_report_id = self._get_existing_detection_event_report_id(report_id)
+                    if existing_report_id:
+                        logger.info(
+                            f"Detection event already exists for {report_id}; "
+                            "using existing row"
+                        )
+                        return existing_report_id
                 last_error = attempt_error
                 result = None
 
         if not result:
+            self._raise_if_connection_failure(last_error, 'insert_detection_event')
             logger.error(f"Failed to insert detection event: {last_error}")
             return None
 
@@ -275,7 +398,8 @@ class SupabaseDatabaseManager:
                 return True
                 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'update_detection_status')
             logger.warning(f"Could not update detection status (column may not exist): {e}")
             return False
     
@@ -341,7 +465,8 @@ class SupabaseDatabaseManager:
                 return cur.rowcount > 0
                 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'update_detection_event')
             logger.error(f"Failed to update detection event: {e}")
             return False
     
@@ -458,6 +583,8 @@ class SupabaseDatabaseManager:
                 return dict(result) if result else None
                 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, f'get_detection_event:{report_id}')
             logger.error(f"Failed to get detection event {report_id}: {e}")
             return None
     
@@ -485,6 +612,8 @@ class SupabaseDatabaseManager:
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_recent_detection_events')
             logger.error(f"Failed to get recent detection events: {e}")
             return []
     
@@ -535,8 +664,12 @@ class SupabaseDatabaseManager:
                     """, (limit,))
                     results = cur.fetchall()
                     return [dict(row) for row in results]
-            except Exception:
-                self.conn.rollback()
+            except Exception as primary_query_error:
+                self._safe_rollback()
+                self._raise_if_connection_failure(
+                    primary_query_error,
+                    'get_all_violations_with_status.primary_query'
+                )
                 with self.conn.cursor() as fallback_cur:
                     fallback_cur.execute("""
                         SELECT 
@@ -565,6 +698,8 @@ class SupabaseDatabaseManager:
                     return [dict(row) for row in results]
 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_all_violations_with_status')
             logger.error(f"Failed to get violations with status: {e}")
             return []
     
@@ -662,11 +797,21 @@ class SupabaseDatabaseManager:
                 self.conn.commit()
                 break
             except Exception as attempt_error:
-                self.conn.rollback()
+                self._safe_rollback()
+                if self._is_unique_constraint_violation(attempt_error):
+                    existing_violation_id = self._get_existing_violation_id(report_id)
+                    if existing_violation_id:
+                        logger.info(
+                            f"Violation already exists for {report_id}; using existing row"
+                        )
+                        if normalized_device_id:
+                            self._upsert_device_presence(normalized_device_id)
+                        return existing_violation_id
                 last_error = attempt_error
                 result = None
 
         if not result:
+            self._raise_if_connection_failure(last_error, 'insert_violation')
             logger.error(f"Failed to insert violation: {last_error}")
             return None
 
@@ -704,6 +849,8 @@ class SupabaseDatabaseManager:
                 return dict(result) if result else None
                 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, f'get_violation:{report_id}')
             logger.error(f"Failed to get violation {report_id}: {e}")
             return None
     
@@ -733,6 +880,8 @@ class SupabaseDatabaseManager:
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_recent_violations')
             logger.error(f"Failed to get recent violations: {e}")
             return []
     
@@ -798,7 +947,8 @@ class SupabaseDatabaseManager:
                 return cur.rowcount > 0
                 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'update_violation_storage_keys')
             logger.error(f"Failed to update storage keys: {e}")
             return False
     
@@ -888,7 +1038,8 @@ class SupabaseDatabaseManager:
                 return cur.rowcount > 0
                 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'update_violation')
             logger.error(f"Failed to update violation: {e}")
             return False
     
@@ -917,7 +1068,8 @@ class SupabaseDatabaseManager:
                 return cur.rowcount > 0
                 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'delete_violation')
             logger.error(f"Failed to delete violation: {e}")
             return False
     
@@ -995,9 +1147,10 @@ class SupabaseDatabaseManager:
                     self._upsert_device_presence(normalized_device_id)
                 return True
             except Exception as attempt_error:
-                self.conn.rollback()
+                self._safe_rollback()
                 last_error = attempt_error
 
+        self._raise_if_connection_failure(last_error, 'log_event')
         logger.error(f"Failed to log event: {last_error}")
         return False
 
@@ -1037,8 +1190,12 @@ class SupabaseDatabaseManager:
                         """,
                         (normalized_device_id,),
                     )
-                except Exception:
-                    self.conn.rollback()
+                except Exception as primary_query_error:
+                    self._safe_rollback()
+                    self._raise_if_connection_failure(
+                        primary_query_error,
+                        f'get_device_stats.primary_query:{normalized_device_id}'
+                    )
                     with self.conn.cursor() as fallback_cur:
                         fallback_cur.execute(
                             """
@@ -1079,6 +1236,8 @@ class SupabaseDatabaseManager:
                     'last_detection': row.get('last_detection').isoformat() if row.get('last_detection') else None,
                 }
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, f'get_device_stats:{normalized_device_id}')
             logger.error(f"Failed to get device stats for {normalized_device_id}: {e}")
             return {
                 'device_id': normalized_device_id,
@@ -1125,6 +1284,8 @@ class SupabaseDatabaseManager:
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_recent_logs')
             logger.error(f"Failed to get recent logs: {e}")
             return []
 

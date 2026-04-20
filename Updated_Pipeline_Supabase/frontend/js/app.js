@@ -712,6 +712,29 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
     }
 
     backendResolutionInFlight = (async () => {
+        const currentHost = String(window.location.hostname || '').toLowerCase();
+        const hostLooksLocal = currentHost === 'localhost'
+            || currentHost === '127.0.0.1'
+            || currentHost === '0.0.0.0'
+            || currentHost.endsWith('.local');
+
+        if (hostLooksLocal) {
+            const sameOriginReachable = await probeBackend('', STARTUP_STATUS_ENDPOINT);
+            if (sameOriginReachable) {
+                API_CONFIG.BASE_URL = '';
+                lastResolvedBackendBaseUrl = '';
+                window.dispatchEvent(new CustomEvent('ppe-backend:resolved', {
+                    detail: {
+                        baseUrl: '',
+                        preferLocal: true,
+                        measuredAt: Date.now(),
+                        pinnedLocalhost: true
+                    }
+                }));
+                return '';
+            }
+        }
+
         const preferLocalNow = preferLocal || navigator.onLine === false;
         const candidates = buildBackendCandidates(preferLocalNow);
 

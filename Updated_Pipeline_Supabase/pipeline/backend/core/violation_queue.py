@@ -6,7 +6,7 @@ Thread-safe queue manager for handling multiple violations from multiple devices
 Provides priority queuing, rate limiting, and batch processing capabilities.
 
 Features:
-- Priority-based processing (CRITICAL > HIGH > MEDIUM > LOW)
+- Priority-based processing (URGENT > CRITICAL > HIGH > MEDIUM > LOW)
 - Per-device rate limiting
 - Batch processing for efficiency
 - Thread-safe operations
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 class ViolationPriority(IntEnum):
     """Priority levels for violation processing."""
+    URGENT = 0
     CRITICAL = 1
     HIGH = 2
     MEDIUM = 3
@@ -103,6 +104,7 @@ class ViolationQueueManager:
     def _get_priority(self, severity: str) -> int:
         """Convert severity string to priority value."""
         mapping = {
+            'URGENT': ViolationPriority.URGENT,
             'CRITICAL': ViolationPriority.CRITICAL,
             'HIGH': ViolationPriority.HIGH,
             'MEDIUM': ViolationPriority.MEDIUM,
@@ -148,7 +150,8 @@ class ViolationQueueManager:
         violation_data: Dict[str, Any],
         device_id: str = 'unknown',
         report_id: str = None,
-        severity: str = 'HIGH'
+        severity: str = 'HIGH',
+        expedite: bool = False,
     ) -> bool:
         """
         Add a violation to the queue.
@@ -158,6 +161,7 @@ class ViolationQueueManager:
             device_id: Source device identifier
             report_id: Unique report ID
             severity: Severity level
+            expedite: If True, place item ahead of normal backlog at same priority
         
         Returns:
             True if enqueued, False if rejected
@@ -179,10 +183,14 @@ class ViolationQueueManager:
             report_id = f"{timestamp}_{device_hash}_{micro}"
         
         priority = self._get_priority(severity)
+        queue_timestamp = time.time()
+        if expedite:
+            # Keep urgent user-triggered actions responsive even when historical queue backlog exists.
+            queue_timestamp -= 1_000_000_000.0
         
         queued = QueuedViolation(
             priority=priority,
-            timestamp=time.time(),
+            timestamp=queue_timestamp,
             data=violation_data,
             device_id=device_id,
             report_id=report_id

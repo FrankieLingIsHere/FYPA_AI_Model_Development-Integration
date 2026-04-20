@@ -95,6 +95,7 @@ startup_state = {
 }
 startup_auto_provision_thread_lock = Lock()
 startup_auto_provision_thread = None
+local_mode_auto_provision_lock = Lock()
 local_mode_heartbeat_thread_lock = Lock()
 local_mode_heartbeat_thread = None
 
@@ -913,8 +914,8 @@ SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
     int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '180') or 180)
 )
 SUPABASE_AUTO_SYNC_BATCH_SIZE = max(
-    5,
-    min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '20') or 20))
+    0,
+    min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '0') or 0))
 )
 LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
     'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
@@ -1842,6 +1843,14 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
             f"Supabase runtime recovery ({reason}) warnings: {' | '.join(errors)}"
         )
 
+    if errors and not (db_manager is not None and storage_manager is not None):
+        connectivity_errors = [entry for entry in errors if _is_supabase_connectivity_failure(entry)]
+        if connectivity_errors:
+            _activate_local_offline_runtime(
+                f'supabase_runtime_recovery:{reason}',
+                ' | '.join(connectivity_errors)
+            )
+
     if db_manager is not None and storage_manager is not None:
         _clear_supabase_offline_backoff('runtime_recovery_success')
 
@@ -1903,7 +1912,8 @@ def queue_worker_loop():
     """
     global queue_worker_running
     last_supabase_recovery_check_epoch = 0.0
-    last_supabase_auto_sync_epoch = 0.0
+    # Delay first autosync attempt to avoid startup burst from historical cache.
+    last_supabase_auto_sync_epoch = time.time()
     
     logger.info("Queue worker loop started - waiting for violations...")
     
@@ -1915,6 +1925,7 @@ def queue_worker_loop():
                 recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
                 if (
                     recovery.get('success')
+                    and SUPABASE_AUTO_SYNC_BATCH_SIZE > 0
                     and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
                 ):
                     queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
@@ -2038,6 +2049,15 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
     
     try:
         trigger_source = (trigger_source or 'live').strip().lower()
+        routing_profile = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE', ''))
+        local_profile_active = routing_profile == 'local'
+        force_local_scope = bool(
+            local_profile_active
+            and _should_force_local_artifact_pipeline(
+                sync_source='local_pipeline',
+                device_id='local_cache',
+            )
+        )
 
         # Check capture cooldown (shorter than processing time)
         current_time = time.time()
@@ -2065,7 +2085,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
-        runtime_device_id = 'webcam_0'
+        runtime_device_id = 'local_cache' if force_local_scope else 'webcam_0'
         
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -2087,7 +2107,8 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         logger.info(f"✓ Saved annotated image: {annotated_path}")
         
         # === IMMEDIATE: Insert pending detection event ===
-        if db_manager:
+        # Local-first profile must not depend on cloud DB availability during capture.
+        if db_manager and not force_local_scope:
             try:
                 db_manager.insert_detection_event(
                     report_id=report_id,
@@ -2105,6 +2126,10 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     "Could not insert pending event into Supabase; "
                     f"continuing local queue processing ({e})"
                 )
+        elif force_local_scope:
+            logger.info(
+                f"Local scope active for {report_id}; deferring Supabase detection insert until sync"
+            )
         
         # === QUEUE: Add to queue for async processing ===
         if violation_queue:
@@ -2118,12 +2143,21 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 'annotated_image_path': str(annotated_path),
                 'violation_dir': str(violation_dir)
             }
+
+            if force_local_scope:
+                violation_data['source_scope'] = 'local'
+                violation_data['sync_source'] = 'local_pipeline'
+                violation_data['source'] = 'local_pipeline'
+
+            queue_severity = 'URGENT' if trigger_source == 'upload' else 'HIGH'
+            queue_expedite = trigger_source == 'upload'
             
             success = violation_queue.enqueue(
                 violation_data=violation_data,
                 device_id=runtime_device_id,
                 report_id=report_id,
-                severity='HIGH'
+                severity=queue_severity,
+                expedite=queue_expedite,
             )
             
             if success:
@@ -2248,6 +2282,222 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
     }
 
 
+def _handle_local_cache_sync_job(
+    *,
+    report_id: str,
+    violation_dir: Path,
+    timestamp: Any,
+    detections: List[Dict[str, Any]],
+    queued_violation_count: Any,
+    original_path: Path,
+    annotated_path: Path,
+    queue_device_id: str,
+    queued_source_scope: str,
+    queued_sync_source: str,
+) -> bool:
+    """Fast-path sync: upload existing local artifacts without re-running NLP generation."""
+    global db_manager, storage_manager
+
+    local_report_path = violation_dir / 'report.html'
+    local_pdf_path = violation_dir / 'report.pdf'
+
+    logger.info(
+        f"Local-cache sync fast-path start for {report_id} "
+        f"(device={queue_device_id}, source_scope={queued_source_scope or 'n/a'}, "
+        f"sync_source={queued_sync_source or 'n/a'}, "
+        f"db_manager={'ready' if db_manager is not None else 'missing'}, "
+        f"storage_manager={'ready' if storage_manager is not None else 'missing'})"
+    )
+
+    # Sync queue jobs should not trigger full regeneration; wait for local report completion.
+    if not local_report_path.exists():
+        logger.info(f"Skipping local-cache sync for {report_id}: local report.html not ready")
+        return True
+
+    if db_manager is None or storage_manager is None:
+        _attempt_supabase_runtime_recovery(reason=f'local_cache_sync_job:{report_id}', force=True)
+
+    if storage_manager is None:
+        logger.info(
+            f"Deferring local-cache sync for {report_id}: storage manager unavailable "
+            f"(db_manager={'ready' if db_manager is not None else 'missing'})"
+        )
+        return True
+
+    storage_keys: Dict[str, Any] = {}
+    try:
+        storage_keys = storage_manager.upload_violation_artifacts(
+            report_id=report_id,
+            original_image_path=original_path if original_path.exists() else None,
+            annotated_image_path=annotated_path if annotated_path.exists() else None,
+            report_html_path=local_report_path,
+            report_pdf_path=local_pdf_path if local_pdf_path.exists() else None,
+            upsert=False,
+        ) or {}
+    except Exception as upload_err:
+        logger.warning(f"Local-cache cloud upload failed for {report_id}: {upload_err}")
+        storage_keys = {}
+
+    if storage_keys:
+        logger.info(
+            f"Local-cache cloud upload result for {report_id}: "
+            f"original={bool(storage_keys.get('original_image_key'))}, "
+            f"annotated={bool(storage_keys.get('annotated_image_key'))}, "
+            f"report_html={bool(storage_keys.get('report_html_key'))}, "
+            f"report_pdf={bool(storage_keys.get('report_pdf_key'))}"
+        )
+    else:
+        logger.info(f"Local-cache cloud upload produced no storage keys for {report_id}; DB reconciliation will continue")
+
+    caption_text = ''
+    caption_path = violation_dir / 'caption.txt'
+    if caption_path.exists():
+        try:
+            caption_text = caption_path.read_text(encoding='utf-8', errors='ignore').strip()
+        except Exception:
+            caption_text = ''
+
+    violation_types_raw = _extract_violation_types_from_detections(detections)
+    violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
+    violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
+
+    source_scope_marker = str(queued_source_scope or 'local').strip().lower() or 'local'
+    sync_source_marker = str(queued_sync_source or 'sync_local_cache').strip().lower() or 'sync_local_cache'
+
+    metadata: Dict[str, Any] = {
+        'detections': detections,
+        'source_scope': source_scope_marker,
+        'sync_source': sync_source_marker,
+        'source': sync_source_marker,
+        'device_id': queue_device_id,
+    }
+
+    local_has_annotated = annotated_path.exists()
+    cloud_artifacts_complete = _local_sync_has_complete_cloud_artifacts(
+        storage_keys,
+        local_has_annotated=local_has_annotated,
+        local_has_report=True,
+    )
+
+    db_reconciled = False
+
+    if db_manager is not None:
+        db_event_inserted = False
+        violation_action = 'none'
+        try:
+            ts_value = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
+            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+
+            if not event and hasattr(db_manager, 'insert_detection_event'):
+                resolved_violation_count = max(
+                    len(violation_types_raw),
+                    int(queued_violation_count or 0),
+                    1,
+                )
+                db_manager.insert_detection_event(
+                    report_id=report_id,
+                    timestamp=ts_value,
+                    person_count=max(1, len([d for d in detections if 'person' in str((d or {}).get('class_name', '')).lower()])),
+                    violation_count=resolved_violation_count,
+                    severity='HIGH',
+                    device_id=queue_device_id,
+                    status='completed',
+                )
+                db_event_inserted = True
+
+            existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            if existing_violation and hasattr(db_manager, 'update_violation'):
+                db_manager.update_violation(
+                    report_id=report_id,
+                    violation_summary=violation_summary_text,
+                    caption=caption_text if caption_text else None,
+                    detection_data=metadata,
+                    original_image_key=storage_keys.get('original_image_key'),
+                    annotated_image_key=storage_keys.get('annotated_image_key'),
+                    report_html_key=storage_keys.get('report_html_key'),
+                    report_pdf_key=storage_keys.get('report_pdf_key'),
+                )
+                violation_action = 'update_violation'
+            elif hasattr(db_manager, 'insert_violation'):
+                inserted_id = db_manager.insert_violation(
+                    report_id=report_id,
+                    violation_summary=violation_summary_text,
+                    caption=caption_text or 'Local cached report synced without regenerated caption',
+                    nlp_analysis={},
+                    detection_data=metadata,
+                    original_image_key=storage_keys.get('original_image_key'),
+                    annotated_image_key=storage_keys.get('annotated_image_key'),
+                    report_html_key=storage_keys.get('report_html_key'),
+                    report_pdf_key=storage_keys.get('report_pdf_key'),
+                    device_id=queue_device_id,
+                )
+                if not inserted_id and hasattr(db_manager, 'update_violation_storage_keys'):
+                    db_manager.update_violation_storage_keys(
+                        report_id=report_id,
+                        original_image_key=storage_keys.get('original_image_key'),
+                        annotated_image_key=storage_keys.get('annotated_image_key'),
+                        report_html_key=storage_keys.get('report_html_key'),
+                        report_pdf_key=storage_keys.get('report_pdf_key'),
+                    )
+                    violation_action = 'update_storage_keys'
+                else:
+                    violation_action = 'insert_violation'
+
+            if hasattr(db_manager, 'update_detection_status'):
+                if cloud_artifacts_complete:
+                    db_manager.update_detection_status(
+                        report_id,
+                        'completed',
+                        'Local cached report synced to Supabase storage'
+                    )
+                else:
+                    db_manager.update_detection_status(
+                        report_id,
+                        'completed',
+                        'Local report ready; cloud sync pending retry due incomplete cloud artifact upload'
+                    )
+
+            db_reconciled = True
+            logger.info(
+                f"Local-cache sync DB reconciliation for {report_id}: "
+                f"event_inserted={db_event_inserted}, violation_action={violation_action}, "
+                f"cloud_artifacts_complete={cloud_artifacts_complete}"
+            )
+        except Exception as db_sync_err:
+            _activate_local_offline_runtime('local_cache_sync_job.db', db_sync_err)
+            logger.warning(f"Local-cache sync DB reconciliation warning for {report_id}: {db_sync_err}")
+    else:
+        logger.warning(
+            f"Local-cache sync DB reconciliation deferred for {report_id}: db_manager unavailable; "
+            "keeping local artifacts for retry"
+        )
+
+    if cloud_artifacts_complete and db_reconciled:
+        cleanup_summary = _cleanup_local_artifacts_after_cloud_sync(report_id, violation_dir)
+        if cleanup_summary.get('cleaned'):
+            logger.info(
+                f"Cleaned local artifacts after sync-only cloud upload for {report_id} "
+                f"(reason={cleanup_summary.get('reason')})"
+            )
+        else:
+            logger.info(
+                f"Skipped local artifact cleanup after sync-only upload for {report_id} "
+                f"(reason={cleanup_summary.get('reason')})"
+            )
+    elif cloud_artifacts_complete and not db_reconciled:
+        logger.info(
+            f"Cloud artifacts uploaded for {report_id} but DB reconciliation incomplete; "
+            "keeping local artifacts for retry"
+        )
+    else:
+        logger.info(
+            f"Sync-only cloud upload incomplete for {report_id}; "
+            "keeping local artifacts for retry"
+        )
+
+    return True
+
+
 def process_queued_violation(queued_violation: 'QueuedViolation'):
     """
     Process a violation from the queue.
@@ -2283,8 +2533,29 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
+    if force_local_artifact_pipeline:
+        # Local-first runs should still produce a report artifact so reconnect sync can
+        # flush to cloud even when local NLP generation fails.
+        allow_placeholder_report = True
     
     logger.info(f"📄 Processing queued violation: {report_id}")
+
+    if is_local_cache_sync_job:
+        handled_sync_job = _handle_local_cache_sync_job(
+            report_id=report_id,
+            violation_dir=violation_dir,
+            timestamp=timestamp,
+            detections=detections,
+            queued_violation_count=queued_violation_count,
+            original_path=original_path,
+            annotated_path=annotated_path,
+            queue_device_id=queue_device_id,
+            queued_source_scope=queued_source_scope,
+            queued_sync_source=queued_sync_source,
+        )
+        if handled_sync_job:
+            logger.info(f"✅ Local-cache sync job completed without regeneration: {report_id}")
+            return
     
     # Update progress
     update_report_progress(
@@ -2323,6 +2594,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             f"Not a work environment: {env_result['environment_type']}"
                         )
                     except Exception as e:
+                        _activate_local_offline_runtime('process_queued_violation.status_skipped', e)
                         logger.warning(f"Could not update status: {e}")
                 
                 # Create a "skipped" marker file instead of full report
@@ -2346,6 +2618,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             db_manager.update_detection_status(report_id, 'generating')
             logger.info(f"✓ Status updated to GENERATING: {report_id}")
         except Exception as e:
+            _activate_local_offline_runtime('process_queued_violation.status_generating', e)
             logger.warning(f"Could not update status: {e}")
     
     # Update progress
@@ -2490,6 +2763,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'severity': 'HIGH',
                 'person_count': len(detections),
                 'cloud_upload_disabled': force_local_artifact_pipeline,
+                'force_local_nlp': force_local_artifact_pipeline,
+                'allow_local_nlp_fallback': force_local_artifact_pipeline,
             }
             if queued_source_scope:
                 report_data['source_scope'] = queued_source_scope
@@ -2525,6 +2800,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             db_manager.update_detection_status(report_id, 'completed')
                             logger.info(f"✓ Status updated to COMPLETED: {report_id}")
                         except Exception as e:
+                            _activate_local_offline_runtime('process_queued_violation.status_completed', e)
                             logger.warning(f"Could not update status: {e}")
                 else:
                     failure_reason = "report.html was not found in violation directory after generation"
@@ -2535,16 +2811,25 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.error(f"❌ Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
     
-    if not report_created and allow_placeholder_report and force_reprocess_requested:
+    if not report_created and allow_placeholder_report and (
+        force_reprocess_requested or force_local_artifact_pipeline
+    ):
         try:
+            fallback_source = 'forced reprocess' if force_reprocess_requested else 'local-first runtime'
             logger.warning(
-                f"Forced reprocess fallback activated for {report_id}; creating placeholder HTML report."
+                f"Placeholder report fallback activated for {report_id} ({fallback_source}); "
+                "creating placeholder HTML report."
             )
             create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
             if (violation_dir / 'report.html').exists():
                 report_created = True
+                fallback_message = (
+                    'Forced reprocess used placeholder report fallback'
+                    if force_reprocess_requested
+                    else 'Local-first runtime used placeholder report fallback'
+                )
                 if not failure_reason:
-                    failure_reason = "Forced reprocess used placeholder report fallback"
+                    failure_reason = fallback_message
                 else:
                     failure_reason = f"{failure_reason}; placeholder report fallback applied"
                 if db_manager:
@@ -2552,9 +2837,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         db_manager.update_detection_status(
                             report_id,
                             'completed',
-                            'Generated placeholder fallback report after forced reprocess recovery path'
+                            (
+                                'Generated placeholder fallback report after forced reprocess recovery path'
+                                if force_reprocess_requested
+                                else 'Generated placeholder fallback report after local-first recovery path'
+                            )
                         )
                     except Exception as status_err:
+                        _activate_local_offline_runtime('process_queued_violation.status_placeholder_completed', status_err)
                         logger.warning(f"Could not update completed status after placeholder fallback: {status_err}")
         except Exception as fallback_err:
             logger.warning(f"Forced reprocess placeholder fallback failed for {report_id}: {fallback_err}")
@@ -2581,6 +2871,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     failure_reason
                 )
             except Exception as e:
+                _activate_local_offline_runtime('process_queued_violation.status_failed', e)
                 logger.warning(f"Could not update failed status for report: {e}")
     
     # Save metadata
@@ -3453,6 +3744,7 @@ def api_stats():
         return jsonify(stats)
         
     except Exception as e:
+        _activate_local_offline_runtime('api_stats.fetch', e)
         logger.error(f"Error fetching stats from Supabase: {e}")
         return jsonify({'error': 'Failed to fetch statistics'}), 500
 
@@ -5602,6 +5894,11 @@ def api_local_mode_provisioning_status():
 
 @app.route('/api/local-mode/provisioning/auto', methods=['GET', 'POST'])
 def api_local_mode_auto_provisioning():
+    with local_mode_auto_provision_lock:
+        return _api_local_mode_auto_provisioning_impl()
+
+
+def _api_local_mode_auto_provisioning_impl():
     """Auto-trigger cloud approval + bootstrap credential exchange for local mode access."""
     payload = request.get_json(silent=True) or {}
     if request.method == 'GET':
@@ -5665,7 +5962,22 @@ def api_local_mode_auto_provisioning():
         )
 
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
-    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+    if authoritative_status in ('pending_approval', 'rejected'):
+        effective_status = authoritative_status
+        _send_local_mode_cloud_heartbeat_once()
+        return jsonify({
+            'success': True,
+            'status': effective_status,
+            'provisioned': effective_status == 'provisioned',
+            'machine_id': machine_id,
+            'admin_portal_url': admin_portal_url,
+            'cloud_url': cloud_url,
+            'credentials_present': credentials_present,
+            'cloud_status_checked': bool(cloud_state.get('checked')),
+            'cloud_status_code': cloud_state.get('status_code'),
+        })
+
+    if credentials_present and authoritative_status in ('approved', 'provisioned'):
         effective_status = authoritative_status
         _send_local_mode_cloud_heartbeat_once()
         return jsonify({
@@ -6717,18 +7029,75 @@ def api_report_recovery_execute():
 
     candidates = _collect_recovery_candidates(limit=300)
     requested_report_ids = payload.get('report_ids')
+    requested_set = set()
     if isinstance(requested_report_ids, list) and requested_report_ids:
         requested_set = {str(r).strip() for r in requested_report_ids if str(r).strip()}
         candidates = [c for c in candidates if c.get('report_id') in requested_set]
 
+    try:
+        max_enqueue_per_call = int(payload.get('max_enqueue') or 0)
+    except Exception:
+        max_enqueue_per_call = 0
+
+    if max_enqueue_per_call <= 0:
+        try:
+            max_enqueue_per_call = max(
+                1,
+                min(int(os.getenv('REPORT_RECOVERY_MAX_ENQUEUE_PER_CALL', '4') or 4), 200),
+            )
+        except Exception:
+            max_enqueue_per_call = 4
+
+    if requested_set:
+        max_enqueue_per_call = max(max_enqueue_per_call, len(requested_set))
+
+    try:
+        defer_queue_threshold = max(
+            1,
+            min(int(os.getenv('REPORT_RECOVERY_DEFER_QUEUE_THRESHOLD', '12') or 12), 1000),
+        )
+    except Exception:
+        defer_queue_threshold = 12
+
+    queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
+    if not requested_set and queue_size_now >= defer_queue_threshold:
+        return jsonify({
+            'success': True,
+            'mode': mode,
+            'applied_routing_profile': applied_profile.get('routing_profile', target_profile),
+            'offline_local_cache_mode': db_manager is None,
+            'local_mode_warning': local_mode_warning,
+            'applied_nlp_provider_order': applied_order,
+            'total_candidates': len(candidates),
+            'enqueued': 0,
+            'skipped': 0,
+            'errors': [],
+            'worker_running': _is_queue_worker_alive(),
+            'deferred': True,
+            'deferred_reason': 'queue_busy',
+            'queue_size': queue_size_now,
+            'queue_threshold': defer_queue_threshold,
+            'max_enqueue_per_call': max_enqueue_per_call,
+        })
+
     enqueued_count = 0
     skipped_count = 0
     errors = []
+    enqueue_cap_reached = False
 
     for item in candidates:
+        if enqueued_count >= max_enqueue_per_call:
+            enqueue_cap_reached = True
+            break
+
         report_id = item.get('report_id')
         try:
-            event = db_manager.get_detection_event(report_id) if (db_manager is not None and hasattr(db_manager, 'get_detection_event')) else None
+            if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
+                skipped_count += 1
+                continue
+
+            db_reads_allowed = bool(db_manager is not None and not _is_supabase_offline_backoff_active())
+            event = db_manager.get_detection_event(report_id) if (db_reads_allowed and hasattr(db_manager, 'get_detection_event')) else None
             violation_dir = VIOLATIONS_DIR.absolute() / report_id
             original_path = violation_dir / 'original.jpg'
             annotated_path = violation_dir / 'annotated.jpg'
@@ -6738,7 +7107,7 @@ def api_report_recovery_execute():
                 continue
 
             detections = []
-            violation = db_manager.get_violation(report_id) if (db_manager is not None and hasattr(db_manager, 'get_violation')) else None
+            violation = db_manager.get_violation(report_id) if (db_reads_allowed and hasattr(db_manager, 'get_violation')) else None
             detection_data = violation.get('detection_data') if isinstance(violation, dict) else None
             if isinstance(detection_data, dict):
                 detections = detection_data.get('detections', []) or []
@@ -6872,7 +7241,10 @@ def api_report_recovery_execute():
         'enqueued': enqueued_count,
         'skipped': skipped_count,
         'errors': errors[:10],
-        'worker_running': _is_queue_worker_alive()
+        'worker_running': _is_queue_worker_alive(),
+        'max_enqueue_per_call': max_enqueue_per_call,
+        'enqueue_cap_reached': enqueue_cap_reached,
+        'remaining_candidates': max(0, len(candidates) - (enqueued_count + skipped_count)),
     })
 
 
@@ -6943,7 +7315,15 @@ def _sync_local_cache_candidates(
 
     if is_auto_reconnect and not dry_run:
         queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
-        if queue_size_now > 0:
+        try:
+            reconnect_defer_threshold = max(
+                0,
+                int(os.getenv('LOCAL_CACHE_SYNC_DEFER_QUEUE_THRESHOLD', '0') or 0),
+            )
+        except Exception:
+            reconnect_defer_threshold = 0
+
+        if reconnect_defer_threshold > 0 and queue_size_now >= reconnect_defer_threshold:
             return {
                 'success': True,
                 'reconcile_reason': reason,
@@ -6957,6 +7337,7 @@ def _sync_local_cache_candidates(
                 'deferred': True,
                 'deferred_reason': 'queue_not_empty',
                 'queue_size': queue_size_now,
+                'queue_threshold': reconnect_defer_threshold,
             }
 
     local_dirs = []
@@ -6972,13 +7353,36 @@ def _sync_local_cache_candidates(
     skipped = 0
     candidates = 0
     errors = []
+    enqueue_cap_reached = False
+
+    try:
+        if is_auto_reconnect:
+            max_enqueue_per_call = max(
+                1,
+                min(int(os.getenv('LOCAL_CACHE_SYNC_AUTO_MAX_ENQUEUE_PER_CALL', '4') or 4), 200),
+            )
+        else:
+            max_enqueue_per_call = max(
+                1,
+                min(int(os.getenv('LOCAL_CACHE_SYNC_MAX_ENQUEUE_PER_CALL', '25') or 25), 500),
+            )
+    except Exception:
+        max_enqueue_per_call = 4 if is_auto_reconnect else 25
+
+    sync_queue_severity = 'CRITICAL' if is_auto_reconnect else 'HIGH'
+    sync_queue_expedite = bool(is_auto_reconnect)
 
     for violation_dir in local_dirs:
+        if not dry_run and enqueued >= max_enqueue_per_call:
+            enqueue_cap_reached = True
+            break
+
         scanned += 1
         report_id = violation_dir.name
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
         report_html_path = violation_dir / 'report.html'
+        local_has_report = report_html_path.exists()
 
         if not original_path.exists():
             skipped += 1
@@ -6993,9 +7397,21 @@ def _sync_local_cache_candidates(
             continue
 
         event_status = str((event or {}).get('status') or '').strip().lower()
-        if event_status in ('pending', 'queued', 'processing', 'generating'):
+        if event_status in ('pending', 'queued', 'processing', 'generating') and not local_has_report:
             skipped += 1
             continue
+
+        if local_has_report and event_status in ('pending', 'queued', 'processing', 'generating'):
+            try:
+                if hasattr(db_manager, 'update_detection_status'):
+                    db_manager.update_detection_status(
+                        report_id,
+                        'completed',
+                        'Local report.html detected during sync scan; auto-healed stale generating status.'
+                    )
+                event_status = 'completed'
+            except Exception as status_heal_err:
+                logger.debug(f"Could not auto-heal stale status for {report_id}: {status_heal_err}")
 
         if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
             skipped += 1
@@ -7004,7 +7420,6 @@ def _sync_local_cache_candidates(
         has_cloud_original = bool((violation or {}).get('original_image_key'))
         has_cloud_annotated = bool((violation or {}).get('annotated_image_key'))
         has_cloud_report = bool((violation or {}).get('report_html_key'))
-        local_has_report = report_html_path.exists()
 
         needs_sync = (
             not event
@@ -7034,11 +7449,14 @@ def _sync_local_cache_candidates(
             or detection_data.get('report_scope')
             or 'synced_local'
         ).strip().lower()
-        sync_source_marker = str(
+        original_sync_source = str(
             detection_data.get('sync_source')
             or detection_data.get('source')
-            or 'sync_local_cache'
+            or ''
         ).strip().lower()
+        # Reconciliation queue jobs must carry the sync marker so worker can use
+        # fast artifact-sync path instead of re-running local NLP generation.
+        sync_source_marker = 'sync_local_cache'
 
         if not annotated_path.exists():
             try:
@@ -7081,6 +7499,8 @@ def _sync_local_cache_candidates(
             'sync_source': sync_source_marker,
             'source': sync_source_marker,
         }
+        if original_sync_source:
+            violation_data['origin_sync_source'] = original_sync_source
         event_device_id = (event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync'
 
         try:
@@ -7099,7 +7519,8 @@ def _sync_local_cache_candidates(
                 violation_data=violation_data,
                 device_id=event_device_id,
                 report_id=report_id,
-                severity='HIGH'
+                severity=sync_queue_severity,
+                expedite=sync_queue_expedite,
             )
 
             if not queued:
@@ -7146,7 +7567,10 @@ def _sync_local_cache_candidates(
         'enqueued': enqueued,
         'skipped': skipped,
         'errors': errors[:20],
-        'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None)
+        'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None),
+        'max_enqueue_per_call': max_enqueue_per_call,
+        'enqueue_cap_reached': enqueue_cap_reached,
+        'remaining_unscanned': max(0, len(local_dirs) - scanned),
     }
 
 
@@ -7263,12 +7687,18 @@ def api_pending_reports():
         return 'Cloud'
 
     # Always include local filesystem state for immediate queue/generation visibility.
-    local_seed_device_id = 'local_cache' if db_manager is None else None
+    active_profile = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE', ''))
+    local_seed_device_id = 'local_cache' if (db_manager is None or active_profile == 'local') else None
     local_rows = _collect_local_report_state_rows(limit=300)
+    completed_local_report_ids = set()
     for row in local_rows:
         report_id = str(row.get('report_id') or '').strip()
         status = _normalize_pending_status(row.get('status'), has_report=bool(row.get('has_report')))
         if not report_id:
+            continue
+        if status == 'completed':
+            completed_local_report_ids.add(report_id)
+            pending_by_id.pop(report_id, None)
             continue
         if status not in ('pending', 'queued', 'processing', 'generating'):
             continue
@@ -7304,6 +7734,9 @@ def api_pending_reports():
 
                 has_report = bool((p or {}).get('report_html_key'))
                 status = _normalize_pending_status((p or {}).get('status'), has_report=has_report)
+                if report_id in completed_local_report_ids and status in ('pending', 'generating'):
+                    pending_by_id.pop(report_id, None)
+                    continue
                 if status not in ('pending', 'generating'):
                     pending_by_id.pop(report_id, None)
                     continue
@@ -7312,6 +7745,7 @@ def api_pending_reports():
                     (p or {}).get('source_scope'),
                     (p or {}).get('device_id'),
                 )
+                explicit_source_scope = str((p or {}).get('source_scope') or '').strip().lower()
 
                 ts = (p or {}).get('timestamp')
                 if hasattr(ts, 'isoformat'):
@@ -7336,11 +7770,21 @@ def api_pending_reports():
                     merged.get('status'),
                     has_report=bool(merged.get('has_report')),
                 )
+                existing_scope = _normalize_pending_source_scope(
+                    merged.get('source_scope'),
+                    merged.get('device_id'),
+                )
+                preserve_local_scope = bool(
+                    existing_scope == 'local'
+                    and source_scope == 'cloud'
+                    and explicit_source_scope in ('', 'unknown')
+                )
+
                 if _pending_status_priority(status) >= _pending_status_priority(existing_status):
                     merged['status'] = status or existing_status or 'pending'
                 if ts_value:
                     merged['timestamp'] = ts_value
-                if (p or {}).get('device_id'):
+                if (p or {}).get('device_id') and not preserve_local_scope:
                     merged['device_id'] = (p or {}).get('device_id')
                 if (p or {}).get('severity'):
                     merged['severity'] = (p or {}).get('severity')
@@ -7350,7 +7794,9 @@ def api_pending_reports():
                     merged.get('source_scope'),
                     merged.get('device_id'),
                 )
-                if source_scope == 'synced_local':
+                if preserve_local_scope:
+                    merged_scope = 'local'
+                elif source_scope == 'synced_local':
                     merged_scope = 'synced_local'
                 elif source_scope == 'shared':
                     merged_scope = 'shared'

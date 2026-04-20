@@ -282,7 +282,7 @@ class LiveSourceAdapter:
                     pass
                 cap = None
 
-            allow_generic_probe = os.getenv('WEBCAM_PROBE_ALLOW_GENERIC_FALLBACK_WINDOWS', 'false').lower() in (
+            allow_generic_probe = os.getenv('WEBCAM_PROBE_ALLOW_GENERIC_FALLBACK_WINDOWS', 'true').lower() in (
                 '1', 'true', 'yes', 'on'
             )
             if probe_mode and not allow_generic_probe:
@@ -353,7 +353,10 @@ class LiveSourceAdapter:
             opened = False
             try:
                 cap = self._open_webcam(idx, probe_mode=True)
-                opened = cap is not None and cap.isOpened() and self._is_webcam_capture_ready(cap, attempts=1)
+                opened = cap is not None and cap.isOpened() and self._is_webcam_capture_ready(
+                    cap,
+                    attempts=max(1, min(2, self.webcam_start_warmup_attempts)),
+                )
                 if opened:
                     devices.append({'index': idx, 'label': f'Camera {idx}'})
                     found_any = True

@@ -64,6 +64,37 @@ class SupabaseStorageManager:
     # =========================================================================
     # UPLOAD OPERATIONS
     # =========================================================================
+
+    def _object_exists(self, bucket_name: str, storage_key: str) -> bool:
+        """Best-effort check for object presence to keep uploads idempotent."""
+        try:
+            normalized_key = str(storage_key or '').strip().strip('/')
+            if not normalized_key:
+                return False
+
+            if '/' in normalized_key:
+                folder, target_name = normalized_key.rsplit('/', 1)
+            else:
+                folder, target_name = '', normalized_key
+
+            list_result = self.client.storage.from_(bucket_name).list(path=folder)
+            if isinstance(list_result, dict):
+                # Some supabase-py versions return {'data': [...]} wrappers.
+                list_result = list_result.get('data')
+
+            if not isinstance(list_result, list):
+                return False
+
+            for entry in list_result:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get('name') or '').strip()
+                if name == target_name:
+                    return True
+            return False
+        except Exception as e:
+            logger.debug(f"Storage existence check failed for {bucket_name}/{storage_key}: {e}")
+            return False
     
     def upload_image(
         self,
@@ -90,6 +121,11 @@ class SupabaseStorageManager:
             return None
         
         storage_key = f"{report_id}/{filename}"
+        full_key = f"{self.images_bucket}/{storage_key}"
+
+        if not upsert and self._object_exists(self.images_bucket, storage_key):
+            logger.info(f"Image already exists in storage, reusing key: {full_key}")
+            return full_key
         
         try:
             with open(local_path, 'rb') as f:
@@ -99,10 +135,9 @@ class SupabaseStorageManager:
             result = self.client.storage.from_(self.images_bucket).upload(
                 path=storage_key,
                 file=file_data,
-                file_options={"content-type": "image/jpeg", "upsert": str(upsert).lower()}
+                file_options={"content-type": "image/jpeg", "upsert": 'true' if upsert else 'false'}
             )
             
-            full_key = f"{self.images_bucket}/{storage_key}"
             logger.info(f"Uploaded image: {full_key}")
             return full_key
             
@@ -136,6 +171,11 @@ class SupabaseStorageManager:
             return None
         
         storage_key = f"{report_id}/{filename}"
+        full_key = f"{self.reports_bucket}/{storage_key}"
+
+        if not upsert and self._object_exists(self.reports_bucket, storage_key):
+            logger.info(f"Report already exists in storage, reusing key: {full_key}")
+            return full_key
         
         try:
             with open(local_path, 'rb') as f:
@@ -145,10 +185,9 @@ class SupabaseStorageManager:
             result = self.client.storage.from_(self.reports_bucket).upload(
                 path=storage_key,
                 file=file_data,
-                file_options={"content-type": content_type, "upsert": str(upsert).lower()}
+                file_options={"content-type": content_type, "upsert": 'true' if upsert else 'false'}
             )
             
-            full_key = f"{self.reports_bucket}/{storage_key}"
             logger.info(f"Uploaded report: {full_key}")
             return full_key
             

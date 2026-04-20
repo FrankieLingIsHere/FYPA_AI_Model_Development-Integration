@@ -1238,7 +1238,12 @@ RESPONSE FORMAT (JSON):
             or ('requires' in text and 'memory' in text)
         )
     
-    def _call_ollama_api(self, prompt: str, allow_local_fallback: bool = True) -> Optional[Dict[str, Any]]:
+    def _call_ollama_api(
+        self,
+        prompt: str,
+        allow_local_fallback: bool = True,
+        fast_mode: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """
         Call Ollama API or use local Llama to get NLP analysis (fallback).
         
@@ -1299,6 +1304,17 @@ RESPONSE FORMAT (JSON):
         backoff_seconds = max(0.0, float(getattr(self, 'ollama_retry_backoff_seconds', 0.0) or 0.0))
         schema_regen_attempts = max(0, int(getattr(self, 'ollama_schema_regen_attempts', 0) or 0))
 
+        request_timeout = self.ollama_timeout
+        if fast_mode:
+            max_attempts = 1
+            schema_regen_attempts = 0
+            forced_read_timeout = max(
+                30,
+                int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '120') or 120),
+            )
+            connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
+            request_timeout = (connect_timeout, forced_read_timeout)
+
         def _sleep_before_retry(attempt_no: int):
             if backoff_seconds <= 0:
                 return
@@ -1331,7 +1347,7 @@ RESPONSE FORMAT (JSON):
                         attempt_no,
                         max_attempts,
                     )
-                    response = requests.post(self.api_url, json=payload, timeout=self.ollama_timeout)
+                    response = requests.post(self.api_url, json=payload, timeout=request_timeout)
 
                     if not response.ok:
                         text_detail = ''
@@ -1557,24 +1573,39 @@ RESPONSE FORMAT (JSON):
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_gemini_budget_block_reason = None
+        force_local_nlp = bool(report_data.get('force_local_nlp'))
+        allow_forced_local_fallback = bool(report_data.get('allow_local_nlp_fallback'))
 
         effective_provider_order = _resolve_effective_nlp_provider_order(
             self.nlp_provider_order,
             routing_profile=self.routing_profile,
             enforce_strict_provider_split=self.enforce_strict_provider_split,
         )
-        sticky_provider = str(self.sticky_nlp_provider or '').strip().lower()
-        sticky_active = (
-            self.sticky_nlp_provider_enabled
-            and sticky_provider
-            and self.sticky_nlp_provider_until_epoch > time.time()
-            and sticky_provider in effective_provider_order
-        )
-        if sticky_active:
-            effective_provider_order = [
-                sticky_provider,
-                *[p for p in effective_provider_order if p != sticky_provider]
-            ]
+
+        if force_local_nlp:
+            # Local/offline runtime should stay independent from cloud provider routing.
+            effective_provider_order = ['ollama', 'local']
+            logger.info("Forced local NLP route enabled for this report")
+        else:
+            sticky_provider = str(self.sticky_nlp_provider or '').strip().lower()
+            sticky_active = (
+                self.sticky_nlp_provider_enabled
+                and sticky_provider
+                and self.sticky_nlp_provider_until_epoch > time.time()
+                and sticky_provider in effective_provider_order
+            )
+            if sticky_active:
+                effective_provider_order = [
+                    sticky_provider,
+                    *[p for p in effective_provider_order if p != sticky_provider]
+                ]
+
+        if not effective_provider_order:
+            self.last_nlp_error = self.last_nlp_error or 'NLP provider order resolved empty for current routing profile'
+            if force_local_nlp or self.strict_local_profile:
+                effective_provider_order = ['ollama', 'local']
+            else:
+                effective_provider_order = ['gemini', 'model_api', 'ollama', 'local']
 
         for provider in effective_provider_order:
             if nlp_analysis:
@@ -1611,13 +1642,21 @@ RESPONSE FORMAT (JSON):
                         self._record_gemini_spend(est_cost)
             elif provider_name == 'ollama':
                 logger.info("Trying Ollama NLP API...")
-                nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=False)
+                nlp_analysis = self._call_ollama_api(
+                    prompt,
+                    allow_local_fallback=False,
+                    fast_mode=force_local_nlp,
+                )
                 self.last_nlp_model = self.last_ollama_model_used or self.model
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Ollama NLP provider failed'
             elif provider_name == 'local':
                 logger.info("Trying local Llama fallback...")
-                nlp_analysis = self._call_ollama_api(prompt, allow_local_fallback=True)
+                nlp_analysis = self._call_ollama_api(
+                    prompt,
+                    allow_local_fallback=True,
+                    fast_mode=force_local_nlp,
+                )
                 self.last_nlp_model = self.last_ollama_model_used if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
@@ -1634,7 +1673,7 @@ RESPONSE FORMAT (JSON):
         
         if not nlp_analysis:
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
-            allow_fallback = bool(self.allow_nlp_fallback)
+            allow_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
             if self.strict_report_generation and not allow_fallback:
                 self.last_nlp_fallback_reason = detail
                 raise RuntimeError(f"NLP analysis failed: {detail}")

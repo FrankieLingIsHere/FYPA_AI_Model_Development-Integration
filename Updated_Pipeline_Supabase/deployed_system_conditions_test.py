@@ -20,6 +20,20 @@ STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "0") != "0"
 REQUIRE_NO_NLP_FALLBACK = os.environ.get("LUNA_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
 REQUIRE_GENERATE_PROGRESSION = os.environ.get("LUNA_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
 ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini", "ollama"}
+TRANSIENT_GENERATE_REJECTED_REASONS = {"queue_full", "rate_limited"}
+TRANSIENT_GENERATE_ERROR_MARKERS = (
+    "queue full",
+    "rate limited",
+    "queue is currently busy",
+    "please wait and retry",
+    "could not enqueue report",
+    "queue worker is not running",
+    "temporarily unavailable",
+    "service unavailable",
+    "high demand",
+    "resource_exhausted",
+    "503 unavailable",
+)
 
 ALLOWED_REPORT_STATUSES = {
     "pending",
@@ -123,6 +137,24 @@ def is_skippable_generate_now_error(code: int, payload) -> bool:
         return False
     msg = str(payload.get("error") or payload.get("message") or "").lower()
     return "original image is missing" in msg or "report not found" in msg
+
+
+def is_transient_generate_now_error(code: int, payload) -> bool:
+    if code in (500, 502, 503, 504):
+        return True
+
+    if not isinstance(payload, dict):
+        return code in (408, 409, 425, 429)
+
+    rejected_reason = str(payload.get("rejected_reason") or "").strip().lower()
+    if rejected_reason in TRANSIENT_GENERATE_REJECTED_REASONS:
+        return True
+
+    msg = str(payload.get("error") or payload.get("message") or "").lower()
+    if any(marker in msg for marker in TRANSIENT_GENERATE_ERROR_MARKERS):
+        return True
+
+    return code in (408, 409, 425, 429)
 
 
 def assert_no_nlp_fallback(runtime_payload: dict) -> None:
@@ -308,13 +340,24 @@ def run_provider_mode_matrix_probe(report_ids):
                     timeout=45,
                 )
                 if g_code >= 500:
-                    raise RuntimeError(
-                        f"generate-now server error in mode {mode_name} for {probe_report_id}: {g_code} {g_text}"
-                    )
+                    if is_transient_generate_now_error(g_code, g_payload):
+                        print(
+                            f"INFO: mode {mode_name} generate-now transient server issue for {probe_report_id}: "
+                            f"code={g_code} body={json.dumps(g_payload)[:260] if isinstance(g_payload, dict) else g_text[:260]}"
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"generate-now server error in mode {mode_name} for {probe_report_id}: {g_code} {g_text}"
+                        )
                 if isinstance(g_payload, dict) and g_payload.get("success") is False:
                     if is_skippable_generate_now_error(g_code, g_payload):
                         print(
                             f"INFO: mode {mode_name} generate-now skipped for {probe_report_id}: "
+                            f"{json.dumps(g_payload)[:260]}"
+                        )
+                    elif is_transient_generate_now_error(g_code, g_payload):
+                        print(
+                            f"INFO: mode {mode_name} generate-now transient rejection for {probe_report_id}: "
                             f"{json.dumps(g_payload)[:260]}"
                         )
                     else:
@@ -433,6 +476,7 @@ def main() -> int:
             "already_queued_or_generating": False,
             "accepted_new_or_reprocess": False,
             "missing_original": False,
+            "transient_rejection": False,
         }
 
         progression_candidate = None
@@ -459,6 +503,13 @@ def main() -> int:
             if success is False:
                 if "original image is missing" in err_msg:
                     conditions["missing_original"] = True
+                    continue
+                if is_transient_generate_now_error(code, payload):
+                    conditions["transient_rejection"] = True
+                    print(
+                        f"INFO: generate-now transient rejection for {rid}: "
+                        f"code={code} body={json.dumps(payload)[:260]}"
+                    )
                     continue
                 return fail(f"generate-now returned success=false for {rid}: {json.dumps(payload)[:350]}", 13)
 

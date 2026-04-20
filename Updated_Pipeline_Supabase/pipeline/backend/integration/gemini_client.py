@@ -547,8 +547,17 @@ class GeminiClient:
                 err_text = str(e)
                 logger.error(f"Gemini captioning error (attempt {attempt + 1}): {err_text}")
                 upper = err_text.upper()
-                if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
-                    if self._switch_to_next_api_key('quota/resource exhaustion (caption)'):
+                quota_or_exhausted = ('RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper)
+                service_unavailable = ('UNAVAILABLE' in upper or '503' in upper or 'HIGH DEMAND' in upper)
+                if quota_or_exhausted or service_unavailable:
+                    reason = (
+                        'quota/resource exhaustion (caption)'
+                        if quota_or_exhausted
+                        else 'service temporarily unavailable (caption)'
+                    )
+                    if self._switch_to_next_api_key(reason):
+                        continue
+                    if self._try_switch_to_next_model(reason):
                         continue
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
@@ -697,16 +706,21 @@ class GeminiClient:
                     error=self.last_error,
                 )
 
-                # Fail fast on quota/resource exhaustion to avoid long stuck generation windows.
+                # Fail fast on hard quota/resource exhaustion. Service-unavailable (503/high demand)
+                # is treated as transient and can rotate keys/models before normal retry backoff.
                 upper = err_text.upper()
-                if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
-                    switched_key = self._switch_to_next_api_key('quota/resource exhaustion')
+                quota_or_exhausted = ('RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper)
+                service_unavailable = ('UNAVAILABLE' in upper or '503' in upper or 'HIGH DEMAND' in upper)
+                if quota_or_exhausted or service_unavailable:
+                    reason = 'quota/resource exhaustion' if quota_or_exhausted else 'service temporarily unavailable'
+                    switched_key = self._switch_to_next_api_key(reason)
                     if switched_key:
                         continue
-                    switched = self._try_switch_to_next_model('quota/resource exhaustion')
+                    switched = self._try_switch_to_next_model(reason)
                     if switched:
                         continue
-                    break
+                    if quota_or_exhausted:
+                        break
 
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)

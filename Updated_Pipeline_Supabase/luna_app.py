@@ -5605,11 +5605,72 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         }
 
     if not response.ok:
+        response_status_code = int(response.status_code)
+        response_error = str((body or {}).get('error') or f'HTTP {response.status_code}').strip()
+        invalid_secret_rejected = (
+            response_status_code in (401, 404)
+            and 'provision_secret' in response_error.lower()
+        )
+
+        if invalid_secret_rejected:
+            try:
+                refresh_response = requests.post(
+                    f"{cloud_url}/api/provision/request",
+                    json={'machine_id': machine_id},
+                    timeout=12,
+                )
+                refresh_body = refresh_response.json() if refresh_response.content else {}
+                refreshed_secret = str((refresh_body or {}).get('provision_secret') or '').strip()
+
+                if refresh_response.ok and refreshed_secret and refreshed_secret != provision_secret:
+                    refreshed_state = _local_mode_load_provision_state()
+                    refreshed_state.update({
+                        'machine_id': machine_id,
+                        'provision_secret': refreshed_secret,
+                        'cloud_url': cloud_url,
+                        'status': str(
+                            (refresh_body or {}).get('device_status')
+                            or refreshed_state.get('status')
+                            or 'pending_approval'
+                        ).strip().lower() or 'pending_approval',
+                        'updated_at': datetime.now(timezone.utc).isoformat(),
+                    })
+                    if not refreshed_state.get('requested_at'):
+                        refreshed_state['requested_at'] = datetime.now(timezone.utc).isoformat()
+                    _local_mode_save_provision_state(refreshed_state)
+
+                    retry_payload = dict(heartbeat_payload)
+                    retry_payload['provision_secret'] = refreshed_secret
+                    retry_response = requests.post(
+                        f"{cloud_url}/api/local-mode/heartbeat",
+                        json=retry_payload,
+                        timeout=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+                    )
+                    retry_body = retry_response.json() if retry_response.content else {}
+                    if retry_response.ok:
+                        logger.info(
+                            f"Recovered stale provision_secret and retried local heartbeat for {machine_id}"
+                        )
+                        return {
+                            'sent': True,
+                            'status_code': int(retry_response.status_code),
+                            'machine_id': machine_id,
+                        }
+
+                    response_error = str(
+                        (retry_body or {}).get('error') or f'HTTP {retry_response.status_code}'
+                    ).strip()
+                    response_status_code = int(retry_response.status_code)
+            except Exception as refresh_err:
+                logger.debug(
+                    f"Heartbeat provision_secret recovery failed for {machine_id}: {refresh_err}"
+                )
+
         return {
             'sent': False,
             'reason': 'request_rejected',
-            'status_code': int(response.status_code),
-            'error': str((body or {}).get('error') or f'HTTP {response.status_code}').strip(),
+            'status_code': response_status_code,
+            'error': response_error,
         }
 
     return {

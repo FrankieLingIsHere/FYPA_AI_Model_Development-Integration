@@ -15,6 +15,7 @@ const ReportsPage = {
         source: 'all'
     },
     refreshInterval: null,
+    autoRefreshTick: 0,
     prefetchState: {
         completed: new Set(),
         inFlight: new Set()
@@ -111,7 +112,7 @@ const ReportsPage = {
             if (this.realtimeRefreshTimer) return;
             this.realtimeRefreshTimer = setTimeout(async () => {
                 this.realtimeRefreshTimer = null;
-                await this.loadReports();
+                await this.loadReports({ noCache: true });
             }, 700);
         };
         window.addEventListener('ppe-realtime:update', this.realtimeHandler);
@@ -155,25 +156,26 @@ const ReportsPage = {
     },
 
     syncFallbackPolling() {
-        const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
-        if (connected) {
-            this.stopAutoRefresh();
-        } else {
-            this.startAutoRefresh();
-        }
+        // Keep a low-frequency reconciliation poll even when realtime is connected.
+        // This heals rare drift where notifications update but list state lags.
+        this.startAutoRefresh();
     },
 
     startAutoRefresh() {
         if (this.refreshInterval) return;
 
-        // Check for in-flight reports every 10 seconds when realtime is unavailable.
+        // Reconcile pending/in-flight reports every 10 seconds.
+        // Even with realtime connected, periodic no-cache polling prevents stale drift.
         this.refreshInterval = setInterval(async () => {
+            this.autoRefreshTick += 1;
             const hasPending = this.violations.some((v) => {
                 const status = this.normalizeStatus(v);
                 return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
             });
-            if (hasPending) {
-                await this.loadReports();
+            const periodicReconcile = (this.autoRefreshTick % 6) === 0;
+            if (hasPending || periodicReconcile) {
+                const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
+                await this.loadReports({ noCache: realtimeConnected });
             }
         }, 10000);
     },
@@ -183,6 +185,7 @@ const ReportsPage = {
             clearInterval(this.refreshInterval);
             this.refreshInterval = null;
         }
+        this.autoRefreshTick = 0;
     },
 
     async loadReports(options = {}) {

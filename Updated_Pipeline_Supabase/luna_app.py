@@ -899,6 +899,39 @@ violation_queue = None  # ViolationQueueManager instance
 queue_worker_thread = None  # Background worker for processing queue
 queue_worker_running = False
 queue_worker_state_lock = Lock()
+queue_worker_last_heartbeat_epoch = 0.0
+queue_worker_watchdog_thread = None
+queue_worker_watchdog_running = False
+queue_worker_watchdog_lock = Lock()
+last_queue_worker_forced_restart_epoch = 0.0
+QUEUE_WORKER_WATCHDOG_ENABLED = os.getenv(
+    'QUEUE_WORKER_WATCHDOG_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS = max(
+    3,
+    int(os.getenv('QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS', '20') or 20)
+)
+QUEUE_WORKER_HEARTBEAT_STALE_SECONDS = max(
+    20,
+    int(os.getenv('QUEUE_WORKER_HEARTBEAT_STALE_SECONDS', '180') or 180)
+)
+QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS = max(
+    30,
+    int(os.getenv('QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS', '300') or 300)
+)
+QUEUE_STUCK_REPORT_SWEEP_ENABLED = os.getenv(
+    'QUEUE_STUCK_REPORT_SWEEP_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS = max(
+    30,
+    int(os.getenv('QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS', '300') or 300)
+)
+QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS = max(
+    5,
+    int(os.getenv('QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS', '20') or 20)
+)
 supabase_runtime_recovery_lock = Lock()
 last_supabase_runtime_recovery_epoch = 0.0
 SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
@@ -1074,6 +1107,8 @@ def ensure_queue_worker_running() -> bool:
         worker_thread_alive = bool(worker_thread is not None and worker_thread.is_alive())
 
     if worker_running_flag and worker_thread_alive:
+        if QUEUE_WORKER_WATCHDOG_ENABLED:
+            start_queue_worker_watchdog()
         return True
 
     if worker_thread is None:
@@ -1863,31 +1898,211 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
     }
 
 
-def start_queue_worker() -> bool:
-    """Start the background worker thread for processing queued violations."""
-    global queue_worker_thread, queue_worker_running
+def _mark_queue_worker_heartbeat(now_epoch: Optional[float] = None):
+    """Update worker heartbeat timestamp for watchdog recovery decisions."""
+    global queue_worker_last_heartbeat_epoch
 
     with queue_worker_state_lock:
-        if queue_worker_thread is not None and queue_worker_thread.is_alive():
-            queue_worker_running = True
-            logger.info(f"Queue worker already running (Thread ID: {queue_worker_thread.ident})")
+        queue_worker_last_heartbeat_epoch = float(now_epoch if now_epoch is not None else time.time())
+
+
+def _queue_worker_heartbeat_age_seconds(now_epoch: Optional[float] = None) -> Optional[float]:
+    """Return queue worker heartbeat age in seconds, or None when heartbeat is unknown."""
+    with queue_worker_state_lock:
+        last_heartbeat = float(queue_worker_last_heartbeat_epoch or 0.0)
+
+    if last_heartbeat <= 0:
+        return None
+
+    now_value = float(now_epoch if now_epoch is not None else time.time())
+    return max(0.0, now_value - last_heartbeat)
+
+
+def _is_queue_watchdog_alive() -> bool:
+    """Return True only when watchdog flag is set and watchdog thread is alive."""
+    return bool(
+        queue_worker_watchdog_running
+        and queue_worker_watchdog_thread is not None
+        and queue_worker_watchdog_thread.is_alive()
+    )
+
+
+def _run_queue_stuck_report_sweep(reason: str = 'watchdog') -> int:
+    """Best-effort periodic fix for stale pending/generating report statuses."""
+    if db_manager is None or not hasattr(db_manager, 'fix_stuck_reports'):
+        return 0
+
+    try:
+        fixed_count = _run_with_timeout(
+            db_manager.fix_stuck_reports,
+            QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS,
+            f'fix_stuck_reports_{reason}'
+        )
+        normalized_count = max(0, int(fixed_count or 0))
+        if normalized_count > 0:
+            logger.info(
+                f"Queue auto-recovery sweep ({reason}) fixed {normalized_count} stuck report(s)"
+            )
+        return normalized_count
+    except Exception as sweep_error:
+        if _is_supabase_connectivity_failure(sweep_error):
+            _activate_local_offline_runtime(
+                f'queue_stuck_report_sweep:{reason}',
+                sweep_error
+            )
+        logger.debug(f"Queue stuck-report sweep skipped ({reason}): {sweep_error}")
+        return 0
+
+
+def start_queue_worker_watchdog() -> bool:
+    """Start watchdog thread that keeps queue worker healthy without manual intervention."""
+    global queue_worker_watchdog_thread, queue_worker_watchdog_running
+
+    if not QUEUE_WORKER_WATCHDOG_ENABLED:
+        return False
+
+    with queue_worker_watchdog_lock:
+        if queue_worker_watchdog_thread is not None and queue_worker_watchdog_thread.is_alive():
+            queue_worker_watchdog_running = True
             return True
 
-        queue_worker_running = True
-        queue_worker_thread = Thread(
-            target=queue_worker_loop,
-            name="ViolationQueueWorker",
+        queue_worker_watchdog_running = True
+        queue_worker_watchdog_thread = Thread(
+            target=queue_worker_watchdog_loop,
+            name='ViolationQueueWatchdog',
             daemon=True
         )
-        queue_worker_thread.start()
+        queue_worker_watchdog_thread.start()
 
-        if not queue_worker_thread.is_alive():
-            queue_worker_running = False
-            logger.error("Queue worker thread failed to become alive after start request")
+        if not queue_worker_watchdog_thread.is_alive():
+            queue_worker_watchdog_running = False
+            logger.error("Queue worker watchdog thread failed to become alive after start request")
             return False
 
-        logger.info(f"✓ Queue worker thread started (Thread ID: {queue_worker_thread.ident})")
+        logger.info(
+            f"✓ Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
+        )
         return True
+
+
+def stop_queue_worker_watchdog():
+    """Stop queue worker watchdog thread."""
+    global queue_worker_watchdog_running
+
+    thread_to_join = None
+    with queue_worker_watchdog_lock:
+        queue_worker_watchdog_running = False
+        thread_to_join = queue_worker_watchdog_thread
+
+    if thread_to_join is not None and thread_to_join.is_alive():
+        thread_to_join.join(timeout=2.0)
+
+    logger.info("Queue worker watchdog stop requested")
+
+
+def queue_worker_watchdog_loop():
+    """Monitor queue worker health and auto-recover stale worker/report states."""
+    global queue_worker_watchdog_running, last_queue_worker_forced_restart_epoch
+
+    last_stuck_report_sweep_epoch = 0.0
+    sleep_seconds = max(3, int(QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS))
+    logger.info("Queue worker watchdog loop started")
+
+    while queue_worker_watchdog_running:
+        try:
+            if violation_queue is not None:
+                now_epoch = time.time()
+                queue_size = max(0, int(violation_queue.get_queue_size() or 0))
+
+                if not _is_queue_worker_alive():
+                    logger.warning(
+                        "Queue worker watchdog detected inactive worker thread; attempting restart"
+                    )
+                    start_queue_worker()
+                elif queue_size > 0:
+                    heartbeat_age = _queue_worker_heartbeat_age_seconds(now_epoch)
+                    if (
+                        heartbeat_age is not None
+                        and heartbeat_age >= QUEUE_WORKER_HEARTBEAT_STALE_SECONDS
+                    ):
+                        elapsed_since_forced_restart = (
+                            now_epoch - float(last_queue_worker_forced_restart_epoch or 0.0)
+                        )
+                        if (
+                            elapsed_since_forced_restart
+                            >= QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS
+                        ):
+                            last_queue_worker_forced_restart_epoch = now_epoch
+                            logger.warning(
+                                "Queue worker heartbeat is stale "
+                                f"({int(heartbeat_age)}s, queue_size={queue_size}); "
+                                "spawning replacement worker thread"
+                            )
+                            start_queue_worker(force_restart=True)
+
+                if (
+                    QUEUE_STUCK_REPORT_SWEEP_ENABLED
+                    and now_epoch - last_stuck_report_sweep_epoch
+                    >= QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS
+                ):
+                    last_stuck_report_sweep_epoch = now_epoch
+                    _run_queue_stuck_report_sweep(reason='watchdog')
+        except Exception as watchdog_error:
+            logger.debug(f"Queue worker watchdog iteration error: {watchdog_error}")
+
+        time.sleep(sleep_seconds)
+
+    with queue_worker_watchdog_lock:
+        queue_worker_watchdog_running = False
+    logger.info("Queue worker watchdog loop stopped")
+
+
+def start_queue_worker(force_restart: bool = False) -> bool:
+    """Start the background worker thread for processing queued violations."""
+    global queue_worker_thread, queue_worker_running, queue_worker_last_heartbeat_epoch
+
+    already_running = False
+    running_thread_id = None
+
+    with queue_worker_state_lock:
+        if queue_worker_thread is not None and queue_worker_thread.is_alive() and not force_restart:
+            queue_worker_running = True
+            if queue_worker_last_heartbeat_epoch <= 0:
+                queue_worker_last_heartbeat_epoch = time.time()
+            already_running = True
+            running_thread_id = queue_worker_thread.ident
+        else:
+            if queue_worker_thread is not None and queue_worker_thread.is_alive() and force_restart:
+                logger.warning(
+                    "Queue worker force-restart requested while existing worker is still alive; "
+                    "spawning replacement worker"
+                )
+
+            queue_worker_running = True
+            queue_worker_thread = Thread(
+                target=queue_worker_loop,
+                name="ViolationQueueWorker",
+                daemon=True
+            )
+            queue_worker_thread.start()
+
+            if not queue_worker_thread.is_alive():
+                queue_worker_running = False
+                logger.error("Queue worker thread failed to become alive after start request")
+                return False
+
+            queue_worker_last_heartbeat_epoch = time.time()
+            running_thread_id = queue_worker_thread.ident
+
+    if already_running:
+        logger.info(f"Queue worker already running (Thread ID: {running_thread_id})")
+    else:
+        logger.info(f"✓ Queue worker thread started (Thread ID: {running_thread_id})")
+
+    if QUEUE_WORKER_WATCHDOG_ENABLED:
+        start_queue_worker_watchdog()
+
+    return True
 
 
 def stop_queue_worker():
@@ -1899,8 +2114,14 @@ def stop_queue_worker():
         queue_worker_running = False
         thread_to_join = queue_worker_thread
 
+    stop_queue_worker_watchdog()
+
     if thread_to_join is not None and thread_to_join.is_alive():
         thread_to_join.join(timeout=2.0)
+
+    with queue_worker_state_lock:
+        if queue_worker_thread is not None and not queue_worker_thread.is_alive():
+            queue_worker_thread = None
 
     logger.info("Queue worker stop requested")
 
@@ -1912,14 +2133,19 @@ def queue_worker_loop():
     """
     global queue_worker_running
     last_supabase_recovery_check_epoch = 0.0
+    last_stuck_report_sweep_epoch = 0.0
     # Delay first autosync attempt to avoid startup burst from historical cache.
     last_supabase_auto_sync_epoch = time.time()
+
+    _mark_queue_worker_heartbeat(last_supabase_auto_sync_epoch)
     
     logger.info("Queue worker loop started - waiting for violations...")
     
     while queue_worker_running:
         try:
             now_epoch = time.time()
+            _mark_queue_worker_heartbeat(now_epoch)
+
             if now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS:
                 last_supabase_recovery_check_epoch = now_epoch
                 recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
@@ -1946,6 +2172,13 @@ def queue_worker_loop():
                         except Exception as sync_err:
                             logger.debug(f"Auto reconnect local-cache sync skipped: {sync_err}")
 
+            if (
+                QUEUE_STUCK_REPORT_SWEEP_ENABLED
+                and now_epoch - last_stuck_report_sweep_epoch >= QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS
+            ):
+                last_stuck_report_sweep_epoch = now_epoch
+                _run_queue_stuck_report_sweep(reason='queue_worker')
+
             if violation_queue is None:
                 time.sleep(1)
                 continue
@@ -1971,6 +2204,8 @@ def queue_worker_loop():
             logger.info(f"📥 Dequeued violation {queued_violation.report_id} for processing")
             
             try:
+                _mark_queue_worker_heartbeat()
+
                 # Update progress: starting processing
                 queue_size = violation_queue.get_queue_size() if violation_queue else 0
                 update_report_progress(
@@ -1985,6 +2220,7 @@ def queue_worker_loop():
                 process_queued_violation(queued_violation)
                 violation_queue.mark_processed(queued_violation)
                 logger.info(f"✅ Completed processing {queued_violation.report_id}")
+                _mark_queue_worker_heartbeat()
                 
                 # Update progress: completed
                 update_report_progress(
@@ -2019,13 +2255,16 @@ def queue_worker_loop():
                             )
                         except Exception as e2:
                             logger.warning(f"Could not update status: {e2}")
+                _mark_queue_worker_heartbeat()
                             
         except Exception as e:
             logger.error(f"Queue worker error: {e}")
+            _mark_queue_worker_heartbeat()
             time.sleep(1)
     
     with queue_worker_state_lock:
         queue_worker_running = False
+    _mark_queue_worker_heartbeat()
     logger.info("Queue worker loop stopped")
 
 
@@ -4147,6 +4386,7 @@ def api_queue_status():
         queue_preview = []
         if hasattr(violation_queue, 'get_queue_preview'):
             queue_preview = violation_queue.get_queue_preview(limit=20)
+        heartbeat_age_seconds = _queue_worker_heartbeat_age_seconds()
         return jsonify({
             'available': True,
             'runtime': {
@@ -4161,6 +4401,12 @@ def api_queue_status():
             'total_failed': stats.get('total_failed', 0),
             'total_rate_limited': stats.get('total_rate_limited', 0),
             'worker_running': _is_queue_worker_alive(),
+            'watchdog_running': _is_queue_watchdog_alive(),
+            'worker_heartbeat_age_seconds': (
+                round(heartbeat_age_seconds, 2)
+                if heartbeat_age_seconds is not None
+                else None
+            ),
             'environment_validation_enabled': ENVIRONMENT_VALIDATION_ENABLED,
             'by_priority': stats.get('by_priority', {}),
             'by_device': stats.get('by_device', {}),
@@ -10064,6 +10310,8 @@ def api_health_summary():
         queue_data = {
             'available': violation_queue is not None,
             'worker_running': _is_queue_worker_alive(),
+            'watchdog_running': _is_queue_watchdog_alive(),
+            'worker_heartbeat_age_seconds': _queue_worker_heartbeat_age_seconds(),
             'queue_size': 0,
             'capacity': None,
         }
@@ -10097,6 +10345,14 @@ def api_health_summary():
             warnings.append('Queue available but worker thread is not running')
         if queue_data.get('queue_size', 0) and queue_data.get('worker_running'):
             warnings.append('Queue has pending work; report generation may be delayed')
+        if (
+            queue_data.get('queue_size', 0)
+            and queue_data.get('worker_running')
+            and queue_data.get('worker_heartbeat_age_seconds') is not None
+            and float(queue_data.get('worker_heartbeat_age_seconds') or 0.0)
+            >= QUEUE_WORKER_HEARTBEAT_STALE_SECONDS
+        ):
+            warnings.append('Queue worker heartbeat is stale; watchdog auto-recovery may be in progress')
 
         return jsonify({
             'timestamp_utc': datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',

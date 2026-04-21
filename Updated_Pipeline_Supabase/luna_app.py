@@ -932,6 +932,30 @@ QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS = max(
     5,
     int(os.getenv('QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS', '20') or 20)
 )
+LOCAL_PENDING_RECOVERY_ENABLED = os.getenv(
+    'LOCAL_PENDING_RECOVERY_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS = max(
+    30,
+    int(os.getenv('LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS', '180') or 180)
+)
+LOCAL_PENDING_RECOVERY_STALE_SECONDS = max(
+    60,
+    int(os.getenv('LOCAL_PENDING_RECOVERY_STALE_SECONDS', '240') or 240)
+)
+LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = max(
+    1,
+    min(30, int(os.getenv('LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP', '2') or 2))
+)
+LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD = max(
+    1,
+    int(os.getenv('LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD', '8') or 8)
+)
+LOCAL_PENDING_RECOVERY_SCAN_LIMIT = max(
+    20,
+    int(os.getenv('LOCAL_PENDING_RECOVERY_SCAN_LIMIT', '300') or 300)
+)
 supabase_runtime_recovery_lock = Lock()
 last_supabase_runtime_recovery_epoch = 0.0
 SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
@@ -1096,9 +1120,41 @@ def _is_queue_worker_alive() -> bool:
     return bool(queue_worker_running and queue_worker_thread is not None and queue_worker_thread.is_alive())
 
 
+def _create_violation_queue_manager() -> ViolationQueueManager:
+    """Create queue manager with centralized defaults for startup and runtime recovery."""
+    return ViolationQueueManager(
+        max_size=100,
+        rate_limit_per_device=20,
+        rate_limit_window=60,
+        max_retries=3
+    )
+
+
+def _ensure_violation_queue_runtime_ready(reason: str = 'runtime') -> bool:
+    """Lazily initialize queue manager if runtime starts partially and queue is missing."""
+    global violation_queue
+
+    if violation_queue is not None:
+        return True
+
+    try:
+        violation_queue = _create_violation_queue_manager()
+        logger.warning(
+            "Queue manager was missing during runtime; initialized lazily "
+            f"(reason={reason})"
+        )
+        return True
+    except Exception as queue_init_error:
+        logger.error(
+            "Failed to lazily initialize violation queue manager "
+            f"(reason={reason}): {queue_init_error}"
+        )
+        return False
+
+
 def ensure_queue_worker_running() -> bool:
     """Best-effort worker self-heal for endpoints that require queue processing."""
-    if violation_queue is None:
+    if not _ensure_violation_queue_runtime_ready(reason='ensure_queue_worker_running'):
         return False
 
     with queue_worker_state_lock:
@@ -1746,12 +1802,8 @@ def initialize_pipeline_components():
         if violation_queue is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing violation queue manager')
             logger.info("Initializing violation queue manager...")
-            violation_queue = ViolationQueueManager(
-                max_size=100,           # Max violations in queue
-                rate_limit_per_device=20,  # Allow more per device before rate limiting
-                rate_limit_window=60,   # Per minute
-                max_retries=3
-            )
+            if not _ensure_violation_queue_runtime_ready(reason='startup_component_init'):
+                raise RuntimeError('Violation queue manager initialization failed')
             logger.info(f"✓ Violation queue initialized (max_size=100)")
         
         # Start queue worker thread if not running
@@ -1954,6 +2006,200 @@ def _run_queue_stuck_report_sweep(reason: str = 'watchdog') -> int:
         return 0
 
 
+def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any]:
+    """Best-effort local pending recovery after interrupted runtime sessions."""
+    summary: Dict[str, Any] = {
+        'reason': reason,
+        'scanned': 0,
+        'eligible': 0,
+        'enqueued': 0,
+        'skipped_recent': 0,
+        'skipped_queue_busy': 0,
+        'skipped_already_queued': 0,
+        'skipped_missing_original': 0,
+        'skipped_enqueue_failed': 0,
+        'skipped_queue_unavailable': 0,
+    }
+
+    if not LOCAL_PENDING_RECOVERY_ENABLED:
+        return summary
+
+    if not _ensure_violation_queue_runtime_ready(reason=f'local_pending_recovery:{reason}'):
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    if violation_queue is None:
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    try:
+        queue_size_now = int(violation_queue.get_queue_size() or 0)
+    except Exception:
+        queue_size_now = 0
+
+    if queue_size_now >= LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD:
+        summary['skipped_queue_busy'] = 1
+        return summary
+
+    if not VIOLATIONS_DIR.exists():
+        return summary
+
+    try:
+        scan_limit = max(1, int(LOCAL_PENDING_RECOVERY_SCAN_LIMIT or 1))
+        candidate_dirs = sorted(
+            (path for path in VIOLATIONS_DIR.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime
+        )[:scan_limit]
+    except Exception as scan_error:
+        logger.debug(f"Local pending recovery scan skipped ({reason}): {scan_error}")
+        return summary
+
+    now_epoch = time.time()
+    tz_info = get_timezone_info()
+
+    for violation_dir in candidate_dirs:
+        if summary['enqueued'] >= LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP:
+            break
+
+        summary['scanned'] += 1
+        report_id = str(violation_dir.name or '').strip()
+        if not report_id:
+            continue
+
+        report_path = violation_dir / 'report.html'
+        if report_path.exists():
+            continue
+
+        # Respect intentional skip markers and avoid requeue loops.
+        skip_markers = (
+            violation_dir / 'SKIPPED_NO_RETRY.txt',
+            violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
+        )
+        if any(marker.exists() for marker in skip_markers):
+            continue
+
+        original_path = violation_dir / 'original.jpg'
+        if not original_path.exists():
+            summary['skipped_missing_original'] += 1
+            continue
+
+        try:
+            age_seconds = max(0.0, now_epoch - float(violation_dir.stat().st_mtime))
+        except Exception:
+            age_seconds = float(LOCAL_PENDING_RECOVERY_STALE_SECONDS)
+
+        if age_seconds < float(LOCAL_PENDING_RECOVERY_STALE_SECONDS):
+            summary['skipped_recent'] += 1
+            continue
+
+        if violation_queue.is_report_queued(report_id):
+            summary['skipped_already_queued'] += 1
+            continue
+
+        summary['eligible'] += 1
+
+        event = None
+        violation = None
+        if db_manager is not None:
+            try:
+                event = db_manager.get_detection_event(report_id)
+            except Exception:
+                event = None
+            try:
+                violation = db_manager.get_violation(report_id)
+            except Exception:
+                violation = None
+
+        detection_payload = violation.get('detection_data') if isinstance(violation, dict) else None
+        if isinstance(detection_payload, str):
+            try:
+                detection_payload = json.loads(detection_payload)
+            except Exception:
+                detection_payload = None
+
+        detections: List[Dict[str, Any]] = []
+        if isinstance(detection_payload, dict):
+            raw_detections = detection_payload.get('detections')
+            if isinstance(raw_detections, list):
+                detections = [item for item in raw_detections if isinstance(item, dict)]
+
+        fallback_count = None
+        if isinstance(event, dict):
+            fallback_count = event.get('violation_count')
+
+        violation_summary = violation.get('violation_summary') if isinstance(violation, dict) else None
+        violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+            detections,
+            event=event if isinstance(event, dict) else None,
+            violation_summary=violation_summary,
+            fallback_count=fallback_count,
+        )
+
+        try:
+            timestamp_iso = _parse_report_id_timestamp(report_id).isoformat()
+        except Exception:
+            try:
+                timestamp_iso = datetime.fromtimestamp(violation_dir.stat().st_mtime, tz=tz_info).isoformat()
+            except Exception:
+                timestamp_iso = datetime.now(tz_info).isoformat()
+
+        annotated_path = violation_dir / 'annotated.jpg'
+        if not annotated_path.exists():
+            annotated_path = original_path
+
+        if not ensure_queue_worker_running():
+            summary['skipped_queue_unavailable'] += 1
+            break
+
+        recovery_device_id = f"local_recovery_{report_id}_{time.time_ns()}"
+        queue_payload = {
+            'report_id': report_id,
+            'timestamp': timestamp_iso,
+            'detections': detections,
+            'violation_types': violation_types,
+            'violation_count': resolved_violation_count,
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(annotated_path),
+            'violation_dir': str(violation_dir),
+            'source_scope': 'local',
+            'sync_source': 'local_pending_recovery',
+            'source': 'local_pending_recovery',
+            'allow_placeholder_report': True,
+        }
+
+        enqueued = violation_queue.enqueue(
+            violation_data=queue_payload,
+            device_id=recovery_device_id,
+            report_id=report_id,
+            severity='HIGH',
+            expedite=False,
+        )
+
+        if not enqueued:
+            summary['skipped_enqueue_failed'] += 1
+            continue
+
+        summary['enqueued'] += 1
+        logger.info(
+            "Queued stale local pending report for recovery "
+            f"(report_id={report_id}, age_seconds={int(age_seconds)}, reason={reason})"
+        )
+
+        if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'pending',
+                    f"Queued for local recovery ({reason})"
+                )
+            except Exception as status_error:
+                logger.debug(
+                    f"Could not update detection status during local recovery for {report_id}: {status_error}"
+                )
+
+    return summary
+
+
 def start_queue_worker_watchdog() -> bool:
     """Start watchdog thread that keeps queue worker healthy without manual intervention."""
     global queue_worker_watchdog_thread, queue_worker_watchdog_running
@@ -2134,6 +2380,7 @@ def queue_worker_loop():
     global queue_worker_running
     last_supabase_recovery_check_epoch = 0.0
     last_stuck_report_sweep_epoch = 0.0
+    last_local_pending_recovery_sweep_epoch = 0.0
     # Delay first autosync attempt to avoid startup burst from historical cache.
     last_supabase_auto_sync_epoch = time.time()
 
@@ -2178,6 +2425,18 @@ def queue_worker_loop():
             ):
                 last_stuck_report_sweep_epoch = now_epoch
                 _run_queue_stuck_report_sweep(reason='queue_worker')
+
+            if (
+                LOCAL_PENDING_RECOVERY_ENABLED
+                and now_epoch - last_local_pending_recovery_sweep_epoch >= LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS
+            ):
+                last_local_pending_recovery_sweep_epoch = now_epoch
+                recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
+                enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
+                if enqueued_count > 0:
+                    logger.info(
+                        f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
+                    )
 
             if violation_queue is None:
                 time.sleep(1)
@@ -2371,48 +2630,52 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             )
         
         # === QUEUE: Add to queue for async processing ===
-        if violation_queue:
-            violation_data = {
-                'report_id': report_id,
-                'timestamp': timestamp.isoformat(),  # Use ISO format
-                'detections': detections,
-                'violation_types': violation_types,
-                'violation_count': len(violation_detections),
-                'original_image_path': str(original_path),
-                'annotated_image_path': str(annotated_path),
-                'violation_dir': str(violation_dir)
-            }
-
-            if force_local_scope:
-                violation_data['source_scope'] = 'local'
-                violation_data['sync_source'] = 'local_pipeline'
-                violation_data['source'] = 'local_pipeline'
-
-            queue_severity = 'URGENT' if trigger_source == 'upload' else 'HIGH'
-            queue_expedite = trigger_source == 'upload'
-            
-            success = violation_queue.enqueue(
-                violation_data=violation_data,
-                device_id=runtime_device_id,
-                report_id=report_id,
-                severity=queue_severity,
-                expedite=queue_expedite,
+        if not ensure_queue_worker_running():
+            logger.error(
+                "Violation queue worker is unavailable after recovery attempt; "
+                "captured frame cannot be queued"
             )
-            
-            if success:
-                logger.info(f"✓ Violation {report_id} added to processing queue")
-                queue_stats = violation_queue.get_stats()
-                logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
-                return report_id
-            else:
-                logger.error("Failed to add violation to queue")
-                return None
-        else:
-            # Queue not available - log error but DON'T fallback to direct processing
-            # (avoids concurrent Ollama calls that cause VRAM exhaustion)
-            logger.error("Violation queue not initialized - violation captured but won't be processed")
-            logger.error("Restart the server to initialize the queue worker")
             return None
+
+        if violation_queue is None:
+            logger.error("Violation queue manager unavailable after runtime recovery attempt")
+            return None
+
+        violation_data = {
+            'report_id': report_id,
+            'timestamp': timestamp.isoformat(),  # Use ISO format
+            'detections': detections,
+            'violation_types': violation_types,
+            'violation_count': len(violation_detections),
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(annotated_path),
+            'violation_dir': str(violation_dir)
+        }
+
+        if force_local_scope:
+            violation_data['source_scope'] = 'local'
+            violation_data['sync_source'] = 'local_pipeline'
+            violation_data['source'] = 'local_pipeline'
+
+        queue_severity = 'URGENT' if trigger_source == 'upload' else 'HIGH'
+        queue_expedite = trigger_source == 'upload'
+
+        success = violation_queue.enqueue(
+            violation_data=violation_data,
+            device_id=runtime_device_id,
+            report_id=report_id,
+            severity=queue_severity,
+            expedite=queue_expedite,
+        )
+
+        if success:
+            logger.info(f"✓ Violation {report_id} added to processing queue")
+            queue_stats = violation_queue.get_stats()
+            logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
+            return report_id
+
+        logger.error("Failed to add violation to queue")
+        return None
         
         return None
         
@@ -3920,72 +4183,264 @@ def api_violations():
 
 @app.route('/api/stats')
 def api_stats():
-    """Get violation statistics from Supabase."""
-    if db_manager is None:
-        # Fallback to local filesystem
-        violations = []
-        if VIOLATIONS_DIR.exists():
-            for violation_dir in VIOLATIONS_DIR.iterdir():
-                if violation_dir.is_dir():
-                    try:
-                        timestamp = _parse_report_id_timestamp(violation_dir.name)
-                        violations.append(timestamp)
-                    except ValueError:
-                        continue
-        
-        now = get_local_time()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        # Calculate actual week start (Monday of current week)
-        # weekday() returns 0=Monday, 1=Tuesday, etc.
-        days_since_monday = now.weekday()
-        week_start = today_start - timedelta(days=days_since_monday)
-        
-        stats = {
-            'total': len(violations),
-            'today': sum(1 for v in violations if v >= today_start),
-            'thisWeek': sum(1 for v in violations if v >= week_start),
-            'severity': {
-                'high': 0,
-                'medium': len(violations),
-                'low': 0
-            }
+    """Get unified violation statistics across cloud and local/synced-local caches."""
+
+    now = get_local_time()
+    tz_info = now.tzinfo or get_timezone_info()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    days_since_monday = now.weekday()
+    week_start = today_start - timedelta(days=days_since_monday)
+
+    def _safe_parse_timestamp(
+        value: Any,
+        *,
+        report_id: str = '',
+        fallback_dir: Optional[Path] = None
+    ) -> Optional[datetime]:
+        dt_value: Optional[datetime] = None
+
+        if isinstance(value, datetime):
+            dt_value = value
+        elif value is not None:
+            text = str(value).strip()
+            if text:
+                normalized = text.replace('Z', '+00:00') if text.endswith('Z') else text
+                try:
+                    dt_value = datetime.fromisoformat(normalized)
+                except Exception:
+                    dt_value = None
+
+        if dt_value is None and report_id:
+            try:
+                dt_value = _parse_report_id_timestamp(report_id)
+            except Exception:
+                dt_value = None
+
+        if dt_value is None and fallback_dir is not None:
+            try:
+                dt_value = datetime.fromtimestamp(fallback_dir.stat().st_mtime, tz=tz_info)
+            except Exception:
+                dt_value = None
+
+        if dt_value is None:
+            return None
+
+        if dt_value.tzinfo is None:
+            dt_value = dt_value.replace(tzinfo=tz_info)
+        elif tz_info is not None:
+            try:
+                dt_value = dt_value.astimezone(tz_info)
+            except Exception:
+                pass
+
+        return dt_value
+
+    def _normalize_source_scope(scope: Any) -> str:
+        normalized = str(scope or '').strip().lower()
+        if normalized in ('local', 'cloud', 'shared', 'synced_local'):
+            return normalized
+        return ''
+
+    def _infer_source_scope(row: Dict[str, Any], has_local_artifacts: bool) -> str:
+        detection_payload = row.get('detection_data')
+        if isinstance(detection_payload, str):
+            try:
+                detection_payload = json.loads(detection_payload)
+            except Exception:
+                detection_payload = None
+        if not isinstance(detection_payload, dict):
+            detection_payload = {}
+
+        explicit_scope = _normalize_source_scope(
+            detection_payload.get('source_scope')
+            or detection_payload.get('report_scope')
+            or detection_payload.get('scope')
+        )
+        if explicit_scope:
+            return explicit_scope
+
+        source_marker = str(
+            detection_payload.get('source')
+            or detection_payload.get('sync_source')
+            or ''
+        ).strip().lower()
+        local_markers = {
+            'sync_local_cache',
+            'local_cache',
+            'local_cache_sync',
+            'local_pending_recovery',
+            'local_pipeline',
         }
-        return jsonify(stats)
-    
-    # Use Supabase
+
+        has_cloud_artifacts = bool(
+            row.get('original_image_key')
+            or row.get('annotated_image_key')
+            or row.get('report_html_key')
+            or row.get('report_pdf_key')
+        )
+
+        if source_marker in local_markers:
+            return 'synced_local' if has_cloud_artifacts else 'local'
+
+        if has_cloud_artifacts:
+            return 'synced_local' if has_local_artifacts else 'cloud'
+
+        return 'local' if has_local_artifacts else 'cloud'
+
+    def _build_stats_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        severity = {'high': 0, 'medium': 0, 'low': 0}
+        source_counts = {'local': 0, 'cloud': 0, 'shared': 0, 'synced_local': 0}
+        pending_statuses = {'pending', 'generating', 'queued', 'processing'}
+        completed_statuses = {'completed', 'ready'}
+        failed_statuses = {'failed', 'error', 'skipped'}
+
+        today_count = 0
+        week_count = 0
+        pending_count = 0
+        completed_count = 0
+        failed_count = 0
+
+        for row in rows:
+            dt_value = row.get('timestamp')
+            if isinstance(dt_value, datetime):
+                if dt_value >= today_start:
+                    today_count += 1
+                if dt_value >= week_start:
+                    week_count += 1
+
+            severity_key = str(row.get('severity') or '').strip().lower()
+            if severity_key in severity:
+                severity[severity_key] += 1
+            else:
+                severity['medium'] += 1
+
+            scope_key = _normalize_source_scope(row.get('source_scope')) or 'cloud'
+            source_counts[scope_key] = source_counts.get(scope_key, 0) + 1
+
+            status_key = str(row.get('status') or '').strip().lower()
+            if status_key in completed_statuses:
+                completed_count += 1
+            elif status_key in failed_statuses:
+                failed_count += 1
+            elif status_key in pending_statuses:
+                pending_count += 1
+
+        return {
+            'total': len(rows),
+            'today': today_count,
+            'thisWeek': week_count,
+            'severity': severity,
+            'pending': pending_count,
+            'completed': completed_count,
+            'failed': failed_count,
+            'sourceCounts': source_counts,
+            'source_counts': source_counts,
+            'syncedLocal': source_counts.get('synced_local', 0),
+        }
+
     try:
-        violations = db_manager.get_recent_violations(limit=1000)
-        
-        now = datetime.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        # Calculate actual week start (Monday of current week)
-        # weekday() returns 0=Monday, 1=Tuesday, etc.
-        days_since_monday = now.weekday()
-        week_start = today_start - timedelta(days=days_since_monday)
-        
-        # Convert to timezone-aware for comparison if needed
-        if violations and violations[0].get('timestamp') and violations[0]['timestamp'].tzinfo:
-            from datetime import timezone
-            today_start = today_start.replace(tzinfo=timezone.utc)
-            week_start = week_start.replace(tzinfo=timezone.utc)
-        
-        stats = {
-            'total': len(violations),
-            'today': sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= today_start),
-            'thisWeek': sum(1 for v in violations if v.get('timestamp') and v['timestamp'] >= week_start),
-            'severity': {
-                'high': sum(1 for v in violations if v.get('severity', '').upper() == 'HIGH'),
-                'medium': sum(1 for v in violations if v.get('severity', '').upper() == 'MEDIUM'),
-                'low': sum(1 for v in violations if v.get('severity', '').upper() == 'LOW')
+        by_report: Dict[str, Dict[str, Any]] = {}
+
+        db_rows: List[Dict[str, Any]] = []
+        if db_manager is not None:
+            try:
+                if hasattr(db_manager, 'get_all_violations_with_status'):
+                    db_rows = db_manager.get_all_violations_with_status(limit=2000) or []
+                else:
+                    db_rows = db_manager.get_recent_violations(limit=2000) or []
+            except Exception as db_error:
+                _activate_local_offline_runtime('api_stats.fetch', db_error)
+                logger.warning(f"Stats query fell back to local cache: {db_error}")
+                db_rows = []
+
+        for row in db_rows:
+            report_id = str(row.get('report_id') or '').strip()
+            if not report_id:
+                continue
+
+            local_dir = VIOLATIONS_DIR / report_id
+            has_local_artifacts = local_dir.exists()
+            timestamp_value = _safe_parse_timestamp(
+                row.get('timestamp'),
+                report_id=report_id,
+                fallback_dir=local_dir if has_local_artifacts else None,
+            )
+
+            status_value = str(row.get('status') or '').strip().lower()
+            if not status_value:
+                status_value = 'completed' if row.get('report_html_key') else 'pending'
+
+            severity_value = str(row.get('severity') or '').strip().upper()
+            if severity_value not in ('HIGH', 'MEDIUM', 'LOW'):
+                severity_value = 'MEDIUM'
+
+            by_report[report_id] = {
+                'report_id': report_id,
+                'timestamp': timestamp_value,
+                'severity': severity_value,
+                'status': status_value,
+                'source_scope': _infer_source_scope(row, has_local_artifacts),
             }
-        }
-        
+
+        local_rows = _collect_local_report_state_rows(
+            limit=max(500, len(by_report) + 600)
+        )
+        for local_row in local_rows:
+            report_id = str(local_row.get('report_id') or '').strip()
+            if not report_id:
+                continue
+
+            local_dir = VIOLATIONS_DIR / report_id
+            local_status = str(local_row.get('status') or 'pending').strip().lower()
+            timestamp_value = _safe_parse_timestamp(
+                local_row.get('timestamp'),
+                report_id=report_id,
+                fallback_dir=local_dir,
+            )
+
+            existing = by_report.get(report_id)
+            if existing is None:
+                by_report[report_id] = {
+                    'report_id': report_id,
+                    'timestamp': timestamp_value,
+                    'severity': 'MEDIUM',
+                    'status': local_status or 'pending',
+                    'source_scope': 'local',
+                }
+                continue
+
+            if local_status == 'completed':
+                existing['status'] = 'completed'
+            elif existing.get('status') in ('pending', 'generating', 'queued', 'processing'):
+                if local_status in ('failed', 'skipped'):
+                    existing['status'] = local_status
+
+            if existing.get('timestamp') is None and timestamp_value is not None:
+                existing['timestamp'] = timestamp_value
+
+            if existing.get('source_scope') == 'cloud':
+                existing['source_scope'] = 'synced_local'
+
+        stats = _build_stats_payload(list(by_report.values()))
         return jsonify(stats)
-        
+
     except Exception as e:
-        _activate_local_offline_runtime('api_stats.fetch', e)
-        logger.error(f"Error fetching stats from Supabase: {e}")
-        return jsonify({'error': 'Failed to fetch statistics'}), 500
+        logger.error(f"Error building unified stats payload: {e}", exc_info=True)
+        local_rows = _collect_local_report_state_rows(limit=1500)
+        fallback_rows: List[Dict[str, Any]] = []
+        for row in local_rows:
+            fallback_rows.append({
+                'report_id': row.get('report_id'),
+                'timestamp': _safe_parse_timestamp(
+                    row.get('timestamp'),
+                    report_id=str(row.get('report_id') or ''),
+                    fallback_dir=VIOLATIONS_DIR / str(row.get('report_id') or ''),
+                ),
+                'severity': 'MEDIUM',
+                'status': str(row.get('status') or 'pending').strip().lower() or 'pending',
+                'source_scope': 'local',
+            })
+        return jsonify(_build_stats_payload(fallback_rows))
 
 
 @app.route('/api/system/timezone', methods=['GET'])

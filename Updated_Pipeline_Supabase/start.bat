@@ -37,7 +37,7 @@ if not exist .env (
 REM Normalize .env local defaults so stale cloud settings do not override local BAT startup.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
-    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma3:4b'; 'OLLAMA_MODEL'='gemma3:4b'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info'; 'QUEUE_WORKER_WATCHDOG_ENABLED'='true'; 'QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS'='20'; 'QUEUE_WORKER_HEARTBEAT_STALE_SECONDS'='180'; 'QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_ENABLED'='true'; 'QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS'='20' }; " ^
+    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma3:4b'; 'OLLAMA_MODEL'='gemma3:4b'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info'; 'QUEUE_WORKER_WATCHDOG_ENABLED'='true'; 'QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS'='20'; 'QUEUE_WORKER_HEARTBEAT_STALE_SECONDS'='180'; 'QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_ENABLED'='true'; 'QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS'='20'; 'LOCAL_PENDING_RECOVERY_ENABLED'='true'; 'LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS'='180'; 'LOCAL_PENDING_RECOVERY_STALE_SECONDS'='240'; 'LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP'='2'; 'LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD'='8'; 'LOCAL_PENDING_RECOVERY_SCAN_LIMIT'='300' }; " ^
     "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
     "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
     "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
@@ -62,6 +62,12 @@ set "QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS=300"
 set "QUEUE_STUCK_REPORT_SWEEP_ENABLED=true"
 set "QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS=300"
 set "QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS=20"
+set "LOCAL_PENDING_RECOVERY_ENABLED=true"
+set "LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS=180"
+set "LOCAL_PENDING_RECOVERY_STALE_SECONDS=240"
+set "LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP=2"
+set "LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD=8"
+set "LOCAL_PENDING_RECOVERY_SCAN_LIMIT=300"
 
 REM Read model preference from .env when present so startup checks and model pull stay aligned
 for /f "tokens=2 delims==" %%A in ('findstr /B /I "OLLAMA_MODEL=" .env 2^>nul') do set "OLLAMA_MODEL=%%~A"

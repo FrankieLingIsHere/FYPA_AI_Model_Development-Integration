@@ -7,8 +7,9 @@ let pwaBootstrapped = false;
 let adaptivePipelineBootstrapped = false;
 let backendResolutionInFlight = null;
 let lastResolvedBackendBaseUrl = null;
-const LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
-const LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
+const LEGACY_LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
+const LEGACY_LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
+const LOCAL_MODE_POLICY_STATE_KEY = 'ppe.localMode.policyState.v2';
 const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v1';
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
 const LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -48,14 +49,54 @@ let provisioningLastAnnouncedStatus = '';
 
 function purgeLegacyLocalModeStatusCache() {
     try {
-        localStorage.removeItem(LOCAL_MODE_CHECKUP_COMPLETED_KEY);
-        localStorage.removeItem(LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY);
+        localStorage.removeItem(LEGACY_LOCAL_MODE_CHECKUP_COMPLETED_KEY);
+        localStorage.removeItem(LEGACY_LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY);
     } catch (error) {
         console.warn('Unable to clear legacy local-mode cache keys:', error);
     }
 }
 
 purgeLegacyLocalModeStatusCache();
+
+function loadPersistedLocalModePolicy() {
+    try {
+        const raw = localStorage.getItem(LOCAL_MODE_POLICY_STATE_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+
+        return {
+            checkupCompleted: !!parsed.checkupCompleted,
+            autoSetupAllowed: !!parsed.autoSetupAllowed
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function persistLocalModePolicy(state) {
+    try {
+        localStorage.setItem(
+            LOCAL_MODE_POLICY_STATE_KEY,
+            JSON.stringify({
+                checkupCompleted: !!(state && state.checkupCompleted),
+                autoSetupAllowed: !!(state && state.autoSetupAllowed),
+                measuredAt: Date.now()
+            })
+        );
+    } catch (error) {
+        // Ignore localStorage write failures (private mode/quota restrictions).
+    }
+}
+
+const persistedLocalModePolicy = loadPersistedLocalModePolicy();
+if (persistedLocalModePolicy) {
+    localModePolicyState = {
+        ...localModePolicyState,
+        ...persistedLocalModePolicy
+    };
+}
 
 function isLikelyRemoteBackend() {
     try {
@@ -110,6 +151,7 @@ function setLocalModePolicy({ checkupCompleted, autoSetupAllowed } = {}) {
     if (autoSetupAllowed !== undefined) {
         localModePolicyState.autoSetupAllowed = !!autoSetupAllowed;
     }
+    persistLocalModePolicy(localModePolicyState);
     window.dispatchEvent(new CustomEvent('ppe-local-mode:policy-changed', {
         detail: {
             ...getLocalModePolicy(),
@@ -904,6 +946,7 @@ function initializeAdaptivePipelineModeManager() {
         lastEvaluatedNetworkState: null,
         localUnavailableNotified: false,
         evaluationTimer: null,
+        offlineBootstrapAttempted: false,
 
         notify(message, type = 'info', options = {}) {
             if (typeof NotificationManager !== 'undefined') {
@@ -1112,9 +1155,18 @@ function initializeAdaptivePipelineModeManager() {
                 let localReady = !!(options && options.success !== false && options.local && options.local.local_mode_possible);
                 const policy = getLocalModePolicy();
                 const isOffline = navigator.onLine === false;
-                const canAutoPrepare = isOffline && policy.checkupCompleted && policy.autoSetupAllowed;
+                const isRemoteBackend = isLikelyRemoteBackend();
+                const allowOfflineBootstrapOnce = isOffline && !isRemoteBackend && !this.offlineBootstrapAttempted;
+                const canAutoPrepare = isOffline && (
+                    (policy.checkupCompleted && policy.autoSetupAllowed)
+                    || allowOfflineBootstrapOnce
+                );
+                const attemptedOfflineBootstrap = allowOfflineBootstrapOnce;
 
                 if (!localReady && canAutoPrepare) {
+                    if (allowOfflineBootstrapOnce) {
+                        this.offlineBootstrapAttempted = true;
+                    }
                     const prep = await API.prepareLocalMode({
                         autoPull: true,
                         setLocalFirst: true,
@@ -1126,8 +1178,13 @@ function initializeAdaptivePipelineModeManager() {
 
                 if (!localReady) {
                     if (!this.localUnavailableNotified) {
-                        if (isOffline && !policy.checkupCompleted) {
-                            this.notify('Offline detected. Open Settings (gear icon) and run Local Mode Checkup once to enable offline auto-setup.', 'warning', {
+                        if (isOffline && attemptedOfflineBootstrap) {
+                            this.notify('Offline auto-setup attempted but local runtime is still not ready. Open Settings (gear icon) and run Local Mode Checkup for guided setup.', 'warning', {
+                                dedupeKey: 'adaptive-local-offline-bootstrap-failed',
+                                dedupeTtlMs: 30000
+                            });
+                        } else if (isOffline && !policy.checkupCompleted) {
+                            this.notify('Offline detected. Open Settings (gear icon) and run Local Mode Checkup once to enable persistent offline auto-setup.', 'warning', {
                                 dedupeKey: 'adaptive-local-checkup-required',
                                 dedupeTtlMs: 30000
                             });

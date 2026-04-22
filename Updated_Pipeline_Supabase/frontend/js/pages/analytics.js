@@ -129,6 +129,14 @@ const AnalyticsPage = {
             window.analyticsChart.destroy();
             window.analyticsChart = null;
         }
+        if (window.violationPieChart) {
+            window.violationPieChart.destroy();
+            window.violationPieChart = null;
+        }
+        if (window.timePieChart) {
+            window.timePieChart.destroy();
+            window.timePieChart = null;
+        }
     },
 
     syncFallbackPolling() {
@@ -351,20 +359,75 @@ const AnalyticsPage = {
         const total = types.reduce((sum, type) => sum + type.count, 0);
 
         container.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 1rem;">
-                ${types.map(type => `
-                    <div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                            <span style="font-weight: 500;">${type.name}</span>
-                            <span style="font-weight: 600; color: ${type.color};">${type.count}</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+                <div style="font-weight:600;">Breakdown</div>
+                <div style="display:flex;gap:0.5rem">
+                    <button id="violationToggleBtn" class="btn btn-secondary" type="button">Show Pie</button>
+                </div>
+            </div>
+
+            <div id="analytics-violation-types-original">
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                    ${types.map(type => `
+                        <div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <span style="font-weight: 500;">${type.name}</span>
+                                <span style="font-weight: 600; color: ${type.color};">${type.count}</span>
+                            </div>
+                            <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
+                                <div style="height: 100%; background: ${type.color}; width: ${total > 0 ? (type.count / total * 100) : 0}%; transition: width 0.5s ease;"></div>
+                            </div>
                         </div>
-                        <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
-                            <div style="height: 100%; background: ${type.color}; width: ${total > 0 ? (type.count / total * 100) : 0}%; transition: width 0.5s ease;"></div>
-                        </div>
-                    </div>
-                `).join('')}
+                    `).join('')}
+                </div>
+            </div>
+
+            <div id="analytics-violation-types-pie" style="display:none;text-align:center;">
+                <canvas id="violationTypesPie" style="max-height:220px;"></canvas>
             </div>
         `;
+
+        const toggleBtn = document.getElementById('violationToggleBtn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                const orig = document.getElementById('analytics-violation-types-original');
+                const pie = document.getElementById('analytics-violation-types-pie');
+                const showingPie = pie && pie.style.display !== 'none';
+                if (showingPie) {
+                    if (pie) pie.style.display = 'none';
+                    if (orig) orig.style.display = 'block';
+                    toggleBtn.textContent = 'Show Pie';
+                    if (window.violationPieChart) { window.violationPieChart.destroy(); window.violationPieChart = null; }
+                } else {
+                    if (orig) orig.style.display = 'none';
+                    if (pie) pie.style.display = 'block';
+                    toggleBtn.textContent = 'Show Bars';
+                    this.initViolationPieChart(types);
+                }
+            });
+        }
+    },
+
+    initViolationPieChart(types) {
+        const canvas = document.getElementById('violationTypesPie');
+        if (!canvas || typeof Chart === 'undefined') return;
+        const ctx = canvas.getContext('2d');
+        if (window.violationPieChart) { window.violationPieChart.destroy(); window.violationPieChart = null; }
+        window.violationPieChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: types.map(t => t.name),
+                datasets: [{
+                    data: types.map(t => t.count),
+                    backgroundColor: types.map(t => t.color)
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'right' } }
+            }
+        });
     },
 
     renderTimeDistribution(violations) {
@@ -391,21 +454,72 @@ const AnalyticsPage = {
 
         const maxCount = Math.max(...Object.values(distribution), 1);
 
+        // Prepare ordered distribution for chart
+        const entries = Object.entries(distribution);
+
         container.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 1rem;">
-                ${Object.entries(distribution).map(([period, count]) => `
-                    <div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
-                            <span style="font-weight: 500;">${period}</span>
-                            <span style="font-weight: 600;">${count}</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+                <div style="font-weight:600;">Time Distribution</div>
+                <div style="display:flex;gap:0.5rem">
+                    <button id="timeToggleBtn" class="btn btn-secondary" type="button">Show Pie</button>
+                </div>
+            </div>
+
+            <div id="analytics-time-distribution-original">
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                    ${entries.map(([period, count]) => `
+                        <div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <span style="font-weight: 500;">${period}</span>
+                                <span style="font-weight: 600;">${count}</span>
+                            </div>
+                            <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
+                                <div style="height: 100%; background: var(--secondary-color); width: ${(count / maxCount * 100)}%; transition: width 0.5s ease;"></div>
+                            </div>
                         </div>
-                        <div style="height: 8px; background: var(--background-color); border-radius: 4px; overflow: hidden;">
-                            <div style="height: 100%; background: var(--secondary-color); width: ${(count / maxCount * 100)}%; transition: width 0.5s ease;"></div>
-                        </div>
-                    </div>
-                `).join('')}
+                    `).join('')}
+                </div>
+            </div>
+
+            <div id="analytics-time-distribution-pie" style="display:none;text-align:center;">
+                <canvas id="timeDistributionPie" style="max-height:220px;"></canvas>
             </div>
         `;
+
+        const toggleBtn = document.getElementById('timeToggleBtn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                const orig = document.getElementById('analytics-time-distribution-original');
+                const pie = document.getElementById('analytics-time-distribution-pie');
+                const showingPie = pie && pie.style.display !== 'none';
+                if (showingPie) {
+                    if (pie) pie.style.display = 'none';
+                    if (orig) orig.style.display = 'block';
+                    toggleBtn.textContent = 'Show Pie';
+                    if (window.timePieChart) { window.timePieChart.destroy(); window.timePieChart = null; }
+                } else {
+                    if (orig) orig.style.display = 'none';
+                    if (pie) pie.style.display = 'block';
+                    toggleBtn.textContent = 'Show Bars';
+                    this.initTimePieChart(entries);
+                }
+            });
+        }
+    },
+
+    initTimePieChart(entries) {
+        const canvas = document.getElementById('timeDistributionPie');
+        if (!canvas || typeof Chart === 'undefined') return;
+        const ctx = canvas.getContext('2d');
+        if (window.timePieChart) { window.timePieChart.destroy(); window.timePieChart = null; }
+        window.timePieChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: entries.map(e => e[0]),
+                datasets: [{ data: entries.map(e => e[1]), backgroundColor: ['#3498db','#f1c40f','#9b59b6','#95a5a6'] }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+        });
     },
 
     calculateSafetyScore(stats) {

@@ -65,6 +65,26 @@ const HomePage = {
                     </div>
                 </div>
 
+                <!-- REPORTS OVERVIEW -->
+                <div class="card home-reports-card">
+                    <div class="card-header">
+                        <span><i class="fas fa-file-alt"></i> Reports Overview</span>
+                    </div>
+                    <div class="card-content">
+                        <div class="summary-grid">
+                            <div class="summary-block">
+                                <span class="label">Pending</span>
+                                <span class="value" id="pendingCount">0</span>
+                            </div>
+
+                            <div class="summary-block">
+                                <span class="label">Processing</span>
+                                <span class="value" id="processingCount">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- VIOLATION TYPES -->
                 <div class="card home-violation-card home-violation-types-card">
                     <div class="card-header">
@@ -258,11 +278,33 @@ const HomePage = {
     },
 
     async refreshData() {
-        const stats = await API.getStats();
+        const [stats, pendingReports] = await Promise.all([
+            API.getStats(),
+            API.getPendingReports()
+        ]);
+
         this.renderHomeSummary(stats);
         this.renderViolationTypes(stats);
         this.renderRecentViolations(stats.recentViolations || []);
         this.calculateSafetyScore(stats);
+        this.renderReportsOverview(stats, pendingReports || []);
+    },
+
+    renderReportsOverview(stats, pendingReports) {
+        const pendingEl = document.getElementById('pendingCount');
+        const processingEl = document.getElementById('processingCount');
+        if (!pendingEl || !processingEl) return;
+
+        const pendingCount = Number.isFinite(Number(stats.pending)) ? Number(stats.pending) : (Array.isArray(pendingReports) ? pendingReports.length : 0);
+        const processingCount = Array.isArray(pendingReports)
+            ? pendingReports.filter((r) => {
+                const s = String(r.status || '').toLowerCase();
+                return s === 'processing' || s === 'generating' || s === 'queued';
+            }).length
+            : 0;
+
+        pendingEl.textContent = pendingCount;
+        processingEl.textContent = processingCount;
     },
 
     renderProvisioningStatus(statusPayload) {

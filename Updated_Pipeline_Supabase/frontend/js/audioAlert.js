@@ -4,11 +4,15 @@
 const AudioAlert = (function () {
     const STORAGE_KEY_ENABLED = 'luna_voice_alerts_enabled';
     const STORAGE_KEY_PLAYED = 'luna_voice_alerts_played';
+    const STORAGE_KEY_VOLUME = 'luna_voice_volume';
+    const STORAGE_KEY_VOICE = 'luna_voice_choice';
 
     let enabled = false;
     let playedReports = new Set();
     let button = null;
     let originalNotifyFn = null;
+    let volume = 1.0;
+    let preferredVoice = '';
 
     function _loadState() {
         try {
@@ -24,6 +28,17 @@ const AudioAlert = (function () {
         } catch (e) {
             playedReports = new Set();
         }
+
+        try {
+            const vol = Number(localStorage.getItem(STORAGE_KEY_VOLUME));
+            if (Number.isFinite(vol)) {
+                volume = Math.max(0, Math.min(1, vol / 100));
+            }
+        } catch (e) {}
+
+        try {
+            preferredVoice = String(localStorage.getItem(STORAGE_KEY_VOICE) || '').trim();
+        } catch (e) { preferredVoice = ''; }
     }
 
     function _saveState() {
@@ -166,11 +181,20 @@ const AudioAlert = (function () {
             utter.rate = 1.0;
             utter.pitch = 1.0;
 
-            // Choose a voice if available (prefer English voices)
-            const voices = window.speechSynthesis.getVoices();
+            // apply saved volume (0..1)
+            try { utter.volume = Number.isFinite(Number(volume)) ? Number(volume) : 1.0; } catch (e) {}
+
+            // Choose a voice if available (prefer saved selection, then English voices)
+            const voices = window.speechSynthesis.getVoices() || [];
             if (voices && voices.length) {
-                const preferred = voices.find(v => /en|google/i.test(v.name) || /en-US|en_US/i.test(v.lang));
-                if (preferred) utter.voice = preferred;
+                let selected = null;
+                if (preferredVoice) {
+                    selected = voices.find(v => v.name === preferredVoice || `${v.lang} ${v.name}` === preferredVoice || v.name === String(preferredVoice));
+                }
+                if (!selected) {
+                    selected = voices.find(v => /en|google/i.test(v.name) || /en-US|en_US/i.test(v.lang));
+                }
+                if (selected) utter.voice = selected;
             }
 
             // Mark as played immediately to avoid duplicates while speaking
@@ -185,6 +209,22 @@ const AudioAlert = (function () {
         } catch (e) {
             console.warn('Speech synthesis failed:', e);
         }
+    }
+
+    function setVolume(v) {
+        try {
+            const n = Number(v);
+            if (!Number.isFinite(n)) return;
+            volume = Math.max(0, Math.min(1, n));
+            try { localStorage.setItem(STORAGE_KEY_VOLUME, String(Math.round(volume * 100))); } catch (e) {}
+        } catch (e) {}
+    }
+
+    function setPreferredVoice(name) {
+        try {
+            preferredVoice = String(name || '').trim();
+            try { if (preferredVoice) localStorage.setItem(STORAGE_KEY_VOICE, preferredVoice); } catch (e) {}
+        } catch (e) {}
     }
 
     function patchViolationMonitor() {
@@ -289,7 +329,9 @@ const AudioAlert = (function () {
         toggle,
         speakViolation,
         isEnabled() { return enabled; },
-        markPlayed(reportId) { playedReports.add(reportId); _saveState(); }
+        markPlayed(reportId) { playedReports.add(reportId); _saveState(); },
+        setVolume,
+        setPreferredVoice
     };
 })();
 

@@ -227,6 +227,7 @@ const GlobalSettingsModal = {
                     <div class="global-settings-tabs">
                         <button type="button" class="global-settings-tab active" data-global-settings-tab="Dsettings">Detection Settings</button>
                         <button type="button" class="global-settings-tab" data-global-settings-tab="Psettings">Processing Settings</button>
+                        <button type="button" class="global-settings-tab" data-global-settings-tab="Asettings">Audio Settings</button>
                     </div>
 
                     <section id="global-settings-tab-Dsettings" class="global-settings-section active">
@@ -331,6 +332,33 @@ const GlobalSettingsModal = {
                             </div>
                             <div id="globalProviderRoutingStatus" class="global-settings-status"></div>
                         </div>
+
+                        <section id="global-settings-tab-Asettings" class="global-settings-section">
+                            <h3 style="margin-top: 0;">Audio Settings</h3>
+                            <div class="global-settings-grid">
+                                <div class="global-settings-card">
+                                    <h4><i class="fas fa-volume-up" style="color: var(--primary-color);"></i> Alert Volume</h4>
+                                    <div style="display:flex;align-items:center;gap:0.7rem;margin-top:0.4rem;">
+                                        <input type="range" id="globalVolumeSlider" min="0" max="100" value="100" style="flex:1;">
+                                        <span id="globalVolumeValue" style="font-weight:700;min-width:54px;text-align:center;">100%</span>
+                                    </div>
+                                    <button id="globalApplyAudioBtn" class="btn btn-primary" type="button" style="margin-top:0.75rem;width:100%;">
+                                        <i class="fas fa-save"></i> Apply Audio Settings
+                                    </button>
+                                </div>
+
+                                <div class="global-settings-card">
+                                    <h4><i class="fas fa-user-voice" style="color: var(--warning-color);"></i> Voice Output</h4>
+                                    <label style="font-weight:600;display:block;margin-top:0.35rem;">Preferred Voice</label>
+                                    <select id="globalVoiceSelect" class="global-provider-input" style="margin-top:0.35rem;"></select>
+                                    <label style="font-weight:600;display:block;margin-top:0.5rem;">Or custom voice name</label>
+                                    <input id="globalVoiceCustom" class="global-provider-input" placeholder="Custom voice name" style="margin-top:0.35rem;">
+                                    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-top:0.75rem;">
+                                        <button id="globalTestVoiceBtn" class="btn btn-secondary" type="button"><i class="fas fa-play"></i> Test Voice</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
 
                         <div class="global-settings-card" style="margin-top: 0.9rem;">
                             <h4><i class="fas fa-wifi" style="color: var(--primary-color);"></i> Local Mode Checkup</h4>
@@ -1031,6 +1059,53 @@ const GlobalSettingsModal = {
         }
     },
 
+    async loadAudioSettings() {
+        try {
+            const volumeSlider = this.getEl('globalVolumeSlider');
+            const volumeValue = this.getEl('globalVolumeValue');
+            const voiceSelect = this.getEl('globalVoiceSelect');
+            const voiceCustom = this.getEl('globalVoiceCustom');
+
+            // Load from localStorage fallback
+            const storedVolume = Number(localStorage.getItem('luna_voice_volume'));
+            const storedVoice = String(localStorage.getItem('luna_voice_choice') || '').trim();
+
+            if (volumeSlider && !Number.isNaN(storedVolume)) {
+                volumeSlider.value = String(Math.max(0, Math.min(100, Math.round(storedVolume))));
+            }
+            if (volumeValue) {
+                volumeValue.textContent = `${volumeSlider ? volumeSlider.value : (Number.isFinite(storedVolume) ? storedVolume : 100)}%`;
+            }
+
+            // Populate voices if available
+            if (voiceSelect && typeof window.speechSynthesis !== 'undefined') {
+                const populate = () => {
+                    const voices = window.speechSynthesis.getVoices() || [];
+                    voiceSelect.innerHTML = '';
+                    voices.forEach((v) => {
+                        const opt = document.createElement('option');
+                        opt.value = v.name || `${v.lang} ${v.name}`;
+                        opt.textContent = `${v.name} (${v.lang})`;
+                        voiceSelect.appendChild(opt);
+                    });
+                    if (storedVoice) {
+                        const found = Array.from(voiceSelect.options).find(o => o.value === storedVoice || o.text === storedVoice);
+                        if (found) voiceSelect.value = found.value;
+                        else voiceCustom.value = storedVoice;
+                    }
+                };
+
+                populate();
+                // Some browsers populate asynchronously
+                setTimeout(populate, 250);
+            } else if (voiceCustom) {
+                voiceCustom.value = storedVoice || '';
+            }
+        } catch (e) {
+            console.warn('loadAudioSettings failed', e);
+        }
+    },
+
     async loadProviderRoutingSettings() {
         try {
             this.setProviderStatus('Loading provider settings...');
@@ -1458,7 +1533,8 @@ const GlobalSettingsModal = {
         await Promise.all([
             this.loadCurrentSettings(),
             this.loadProviderRoutingSettings(),
-            this.refreshProvisioningState()
+            this.refreshProvisioningState(),
+            this.loadAudioSettings()
         ]);
         this.updateHeartbeatBadge();
 
@@ -1604,6 +1680,70 @@ const GlobalSettingsModal = {
                 requestParams.set('_ts', String(Date.now()));
 
                 window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${requestParams.toString()}`);
+            });
+        }
+
+        // Audio settings bindings
+        const volumeSlider = this.getEl('globalVolumeSlider');
+        const volumeValue = this.getEl('globalVolumeValue');
+        const applyAudioBtn = this.getEl('globalApplyAudioBtn');
+        const voiceSelect = this.getEl('globalVoiceSelect');
+        const voiceCustom = this.getEl('globalVoiceCustom');
+        const testVoiceBtn = this.getEl('globalTestVoiceBtn');
+
+        if (volumeSlider && volumeValue) {
+            volumeSlider.addEventListener('input', () => {
+                volumeValue.textContent = `${volumeSlider.value}%`;
+            });
+        }
+
+        if (applyAudioBtn) {
+            applyAudioBtn.addEventListener('click', () => {
+                try {
+                    const vol = Number(volumeSlider ? volumeSlider.value : 100);
+                    const voiceChoice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : (voiceCustom ? voiceCustom.value : '');
+                    localStorage.setItem('luna_voice_volume', String(Math.max(0, Math.min(100, Math.round(vol)))));
+                    if (voiceChoice && String(voiceChoice || '').trim()) localStorage.setItem('luna_voice_choice', String(voiceChoice).trim());
+                    this.showNotification('Audio settings saved', 'success');
+                    // Propagate to runtime AudioAlert if available
+                    try {
+                        if (window.AudioAlert && typeof window.AudioAlert.setVolume === 'function') {
+                            window.AudioAlert.setVolume(Math.max(0, Math.min(100, Math.round(vol))) / 100);
+                        }
+                        if (window.AudioAlert && typeof window.AudioAlert.setPreferredVoice === 'function' && voiceChoice) {
+                            window.AudioAlert.setPreferredVoice(String(voiceChoice).trim());
+                        }
+                    } catch (e) { /* ignore */ }
+                } catch (e) {
+                    console.warn('Failed saving audio settings', e);
+                    this.showNotification('Failed saving audio settings', 'error');
+                }
+            });
+        }
+
+        if (testVoiceBtn) {
+            testVoiceBtn.addEventListener('click', () => {
+                try {
+                    if (typeof window.speechSynthesis === 'undefined') {
+                        this.showNotification('SpeechSynthesis not supported', 'error');
+                        return;
+                    }
+                    const utter = new SpeechSynthesisUtterance('This is a voice test.');
+                    utter.rate = 1.0; utter.pitch = 1.0;
+                    const storedVoice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : (voiceCustom ? voiceCustom.value : '');
+                    const voices = window.speechSynthesis.getVoices() || [];
+                    if (storedVoice && voices.length) {
+                        const preferred = voices.find(v => v.name === storedVoice || `${v.lang} ${v.name}` === storedVoice || v.name === String(storedVoice));
+                        if (preferred) utter.voice = preferred;
+                    }
+                    const storedVol = Number(localStorage.getItem('luna_voice_volume'));
+                    utter.volume = Number.isFinite(storedVol) ? Math.max(0, Math.min(1, storedVol / 100)) : 1.0;
+                    window.speechSynthesis.cancel(); window.speechSynthesis.speak(utter);
+                    this.showNotification('Playing test voice', 'info');
+                } catch (err) {
+                    console.warn('Test voice failed', err);
+                    this.showNotification('Test voice failed', 'error');
+                }
             });
         }
 

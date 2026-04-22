@@ -1560,7 +1560,7 @@ const ReportsPage = {
                              (violation.severity === 'MEDIUM' ? 'warning' : 'info');
         
         return `
-            <div class="card" id="report-${violation.report_id}" 
+            <div class="report_card" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
@@ -1589,7 +1589,7 @@ const ReportsPage = {
                 <div class="card-content">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
                         <div style="flex: 1;">
-                            <h3 style="color: var(--footer-color); margin-bottom: 0.5rem; font-size: 1.1rem;">
+                            <h3 style="color: var(--primary-color); margin-bottom: 0.5rem; font-size: 1.1rem;">
                                 Report #${violation.report_id}
                             </h3>
                             <p style="color: #7f8c8d; font-size: 0.9rem; margin: 0;">

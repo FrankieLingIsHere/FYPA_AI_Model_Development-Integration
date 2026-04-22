@@ -771,13 +771,16 @@ body.mobile-portrait-locked .mobile-orientation-overlay {
     transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.card {
+.report_card {
     background: var(--container-bg);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-md);
     overflow: hidden;
     transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-    
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); /* 2 columns */
+    gap: 20px;
+
 }
 
 .card:hover {

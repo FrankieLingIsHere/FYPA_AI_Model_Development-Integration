@@ -60,7 +60,7 @@ const HomePage = {
                         </p>
 
                         <div style="
-                            max-width:400px;
+                            max-width:600px;
                             height:20px;
                             background:var(--background-color);
                             border-radius:10px;

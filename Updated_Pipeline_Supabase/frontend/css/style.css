@@ -771,6 +771,15 @@ body.mobile-portrait-locked .mobile-orientation-overlay {
     transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
+.card {
+    background: var(--container-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+    
+}
+
 .card:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);

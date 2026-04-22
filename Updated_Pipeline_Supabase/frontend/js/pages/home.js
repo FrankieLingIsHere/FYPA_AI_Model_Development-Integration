@@ -44,57 +44,6 @@ const HomePage = {
                     </div>
                 </div>
 
-                <div class="card home-local-mode-card">
-                    <div class="card-header home-local-mode-header">
-                        <span><i class="fas fa-plug-circle-check"></i> Local Mode Approval</span>
-                        <span id="homeProvisionBadge" class="badge badge-info">Checking...</span>
-                    </div>
-                    <div class="card-content home-local-mode-content">
-                        <p id="homeProvisionMessage" style="margin: 0; color: var(--text-color);">
-                            Loading latest local mode provisioning status...
-                        </p>
-                        <p id="homeProvisionMachine" style="margin: 0.45rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;"></p>
-                        <div class="home-local-mode-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem;">
-                            <button id="homeRunLocalCheckupBtn" class="btn btn-primary" type="button">
-                                <i class="fas fa-wifi"></i> Local Mode Checkup
-                            </button>
-                            <button id="homeRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: none;">
-                                <i class="fas fa-download"></i> Re-download Installer BAT
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- REPORTS OVERVIEW -->
-                <div class="card home-reports-card">
-                    <div class="card-header">
-                        <span><i class="fas fa-file-alt"></i> Reports Overview</span>
-                    </div>
-                    <div class="card-content">
-                        <div class="summary-grid">
-                            <div class="summary-block">
-                                <span class="label">Pending</span>
-                                <span class="value" id="pendingCount">0</span>
-                            </div>
-
-                            <div class="summary-block">
-                                <span class="label">Processing</span>
-                                <span class="value" id="processingCount">0</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- VIOLATION TYPES -->
-                <div class="card home-violation-card home-violation-types-card">
-                    <div class="card-header">
-                        <span><i class="fas fa-pie-chart"></i> Violation Types</span>
-                    </div>
-                    <div class="card-content home-violation-content" id="violation-types">
-                        <div class="spinner"></div>
-                    </div>
-                </div>
-
                 <!-- SAFETY SCORE -->
                 <div class="card">
                     <div class="card-header">
@@ -129,6 +78,37 @@ const HomePage = {
                     </div>
                 </div>
 
+                <!-- VIOLATION TYPES -->
+                <div class="card home-violation-card home-violation-types-card">
+                    <div class="card-header">
+                        <span><i class="fas fa-pie-chart"></i> Violation Types</span>
+                    </div>
+                    <div class="card-content home-violation-content" id="violation-types">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+
+
+                <!-- REPORTS OVERVIEW -->
+                <div class="card home-reports-card">
+                    <div class="card-header">
+                        <span><i class="fas fa-file-alt"></i> Reports Overview</span>
+                    </div>
+                    <div class="card-content">
+                        <div class="summary-grid">
+                            <div class="summary-block">
+                                <span class="label">Pending</span>
+                                <span class="value" id="pendingCount">0</span>
+                            </div>
+
+                            <div class="summary-block">
+                                <span class="label">Processing</span>
+                                <span class="value" id="processingCount">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- RECENT VIOLATIONS -->
                 <div class="card home-violation-card home-recent-violations-card">
                     <div class="recent-header">
@@ -143,6 +123,26 @@ const HomePage = {
                     </div>
                 </div>
 
+                <div class="card home-local-mode-card">
+                    <div class="card-header home-local-mode-header">
+                        <span><i class="fas fa-plug-circle-check"></i> Local Mode Approval</span>
+                        <span id="homeProvisionBadge" class="badge badge-info">Checking...</span>
+                    </div>
+                    <div class="card-content home-local-mode-content">
+                        <p id="homeProvisionMessage" style="margin: 0; color: var(--text-color);">
+                            Loading latest local mode provisioning status...
+                        </p>
+                        <p id="homeProvisionMachine" style="margin: 0.45rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;"></p>
+                        <div class="home-local-mode-actions" style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem;">
+                            <button id="homeRunLocalCheckupBtn" class="btn btn-primary" type="button">
+                                <i class="fas fa-wifi"></i> Local Mode Checkup
+                            </button>
+                            <button id="homeRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: none;">
+                                <i class="fas fa-download"></i> Re-download Installer BAT
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         `;

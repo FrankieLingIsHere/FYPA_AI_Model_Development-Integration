@@ -1439,7 +1439,7 @@ body.is-phone-device .handbook-content {
 
 /* Footer */
 .footer {
-    background: var(--primary-color);
+    background: var(--footer-color);
     color: white;
     text-align: center;
     padding: var(--spacing-lg);

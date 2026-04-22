@@ -1972,7 +1972,7 @@ body.is-phone-device .handbook-content {
 }
 
 .home-local-mode-card {
-    grid-column: 1 / -1;
+    grid-column: 1 / 1;
     border: 1px solid #d7e6f5;
     background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
 }
@@ -2042,6 +2042,9 @@ body.is-phone-device .handbook-content {
 .home-violation-content {
     padding-top: calc(var(--spacing-lg) + 0.25rem);
     padding-bottom: calc(var(--spacing-lg) + 0.25rem);
+    padding-left: calc(var(--spacing-lg) + 0.25rem);
+    padding-right: calc(var(--spacing-lg) + 0.25rem);
+    
 }
 
 .home-recent-content {

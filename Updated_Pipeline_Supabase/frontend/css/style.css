@@ -5179,3 +5179,253 @@ h1, h2, h3, .recent-header span, .card-header span {
         padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem) !important;
     }
 }
+
+/* =============================================================
+   v28 MOBILE PREMIUM POLISH
+   Bottom nav + drawer brought up to "shipped product" level.
+   ============================================================= */
+@media (max-width: 900px) {
+    /* ---------- Frosted bottom nav ---------- */
+    .mobile-bottom-nav {
+        background: rgba(17, 24, 39, 0.86) !important;
+        -webkit-backdrop-filter: saturate(160%) blur(18px) !important;
+        backdrop-filter: saturate(160%) blur(18px) !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+        box-shadow:
+            0 -8px 24px rgba(0, 0, 0, 0.28),
+            inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+        padding: 0.45rem 0.5rem calc(0.45rem + env(safe-area-inset-bottom, 0px)) 0.5rem !important;
+        display: flex !important;
+        gap: 0.25rem !important;
+    }
+
+    .mobile-bottom-nav-link,
+    .mobile-more-btn {
+        position: relative !important;
+        flex: 1 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.18rem !important;
+        padding: 0.45rem 0.2rem !important;
+        min-height: 52px !important;
+        border-radius: 14px !important;
+        color: rgba(255, 255, 255, 0.62) !important;
+        font-size: 0.66rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+        text-decoration: none !important;
+        transition: color 0.18s ease, transform 0.12s ease, background 0.18s ease !important;
+    }
+
+    .mobile-bottom-nav-link i,
+    .mobile-more-btn i {
+        font-size: 1.15rem !important;
+        line-height: 1 !important;
+        transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+    }
+
+    .mobile-bottom-nav-link:active,
+    .mobile-more-btn:active {
+        transform: scale(0.94) !important;
+    }
+
+    /* Active state: raised orange pill with white icon */
+    .mobile-bottom-nav-link.active,
+    .mobile-more-btn.active {
+        color: #ffffff !important;
+        background: linear-gradient(180deg, #f4aa1c 0%, #e89407 100%) !important;
+        box-shadow:
+            0 6px 16px rgba(244, 170, 28, 0.45),
+            0 2px 4px rgba(244, 170, 28, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+    }
+    .mobile-bottom-nav-link.active i,
+    .mobile-more-btn.active i {
+        transform: translateY(-1px) scale(1.05) !important;
+    }
+    .mobile-more-btn.active i {
+        transform: rotate(90deg) scale(1.05) !important;
+    }
+
+    /* ---------- Drawer header upgrade ---------- */
+    body.mobile-drawer-open .sidebar-header {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        padding: 1.4rem 1.2rem 1.2rem !important;
+        background:
+            linear-gradient(135deg, rgba(0, 0, 0, 0.18), transparent 60%),
+            linear-gradient(180deg, #f5b133 0%, #e89407 100%) !important;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.18) !important;
+        gap: 0.35rem !important;
+        position: relative !important;
+    }
+    body.mobile-drawer-open .sidebar-header::after {
+        content: "Safety Operations" !important;
+        font-size: 0.7rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.16em !important;
+        text-transform: uppercase !important;
+        color: rgba(255, 255, 255, 0.78) !important;
+    }
+    body.mobile-drawer-open .sidebar-logo {
+        font-size: 1.5rem !important;
+        color: #ffffff !important;
+    }
+    body.mobile-drawer-open .sidebar-title {
+        font-size: 1.4rem !important;
+        font-weight: 800 !important;
+        color: #ffffff !important;
+        letter-spacing: -0.01em !important;
+    }
+    body.mobile-drawer-open .sidebar-header > i,
+    body.mobile-drawer-open .sidebar-header > span {
+        display: inline-flex !important;
+    }
+    /* Stack icon + title horizontally on the first row */
+    body.mobile-drawer-open .sidebar-header {
+        display: grid !important;
+        grid-template-columns: auto 1fr !important;
+        grid-template-rows: auto auto !important;
+        column-gap: 0.7rem !important;
+        align-items: center !important;
+    }
+    body.mobile-drawer-open .sidebar-header::after {
+        grid-column: 1 / -1 !important;
+        margin-top: 0.1rem !important;
+    }
+
+    /* ---------- Drawer section labels ---------- */
+    body.mobile-drawer-open .sidebar-main {
+        padding: 0.85rem 0.6rem 0.4rem !important;
+        position: relative !important;
+    }
+    body.mobile-drawer-open .sidebar-main::before {
+        content: "Navigate" !important;
+        display: block !important;
+        font-size: 0.62rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.18em !important;
+        text-transform: uppercase !important;
+        color: rgba(255, 255, 255, 0.6) !important;
+        padding: 0 0.6rem 0.5rem !important;
+    }
+    body.mobile-drawer-open .sidebar-bottom {
+        padding: 0.85rem 0.6rem calc(0.85rem + env(safe-area-inset-bottom, 0px)) !important;
+        background: rgba(0, 0, 0, 0.18) !important;
+        border-top: 1px solid rgba(0, 0, 0, 0.22) !important;
+        position: relative !important;
+    }
+    body.mobile-drawer-open .sidebar-bottom::before {
+        content: "Preferences" !important;
+        display: block !important;
+        font-size: 0.62rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.18em !important;
+        text-transform: uppercase !important;
+        color: rgba(255, 255, 255, 0.7) !important;
+        padding: 0 0.6rem 0.55rem !important;
+    }
+
+    /* ---------- Drawer link pills ---------- */
+    body.mobile-drawer-open .sidebar-link {
+        margin: 0.15rem 0 !important;
+        padding: 0.85rem 0.95rem !important;
+        border-radius: 12px !important;
+        color: rgba(255, 255, 255, 0.92) !important;
+        font-weight: 600 !important;
+        transition: background 0.18s ease, transform 0.1s ease !important;
+        border-left: 0 !important;
+    }
+    body.mobile-drawer-open .sidebar-link i {
+        width: 22px !important;
+        text-align: center !important;
+        font-size: 1.05rem !important;
+        color: rgba(255, 255, 255, 0.85) !important;
+    }
+    body.mobile-drawer-open .sidebar-link:active {
+        transform: scale(0.98) !important;
+        background: rgba(0, 0, 0, 0.18) !important;
+    }
+    body.mobile-drawer-open .sidebar-link.active {
+        background: rgba(255, 255, 255, 0.18) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+        color: #ffffff !important;
+    }
+    body.mobile-drawer-open .sidebar-link.active i {
+        color: #ffffff !important;
+    }
+
+    /* ---------- Voice toggle as pill with status dot ---------- */
+    body.mobile-drawer-open .sidebar-voice-btn {
+        background: rgba(255, 255, 255, 0.1) !important;
+        border: 1px solid rgba(255, 255, 255, 0.16) !important;
+        border-radius: 12px !important;
+        padding: 0.8rem 0.95rem !important;
+        font-weight: 600 !important;
+        font-size: 0.92rem !important;
+        position: relative !important;
+        transition: background 0.18s ease, transform 0.1s ease !important;
+    }
+    body.mobile-drawer-open .sidebar-voice-btn:active {
+        transform: scale(0.98) !important;
+    }
+    body.mobile-drawer-open #enableVoice {
+        background: rgba(220, 38, 38, 0.22) !important;
+        border-color: rgba(254, 202, 202, 0.35) !important;
+    }
+    body.mobile-drawer-open #enableVoice::after {
+        content: "" !important;
+        margin-left: auto !important;
+        width: 10px !important;
+        height: 10px !important;
+        border-radius: 50% !important;
+        background: #ef4444 !important;
+        box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25) !important;
+    }
+    body.mobile-drawer-open #enableVoice.btn-success::after,
+    body.mobile-drawer-open #enableVoice[data-enabled="true"]::after {
+        background: #22c55e !important;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3) !important;
+    }
+    body.mobile-drawer-open #testVoice {
+        background: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    /* ---------- Timezone row ---------- */
+    body.mobile-drawer-open .nav-timezone {
+        flex-wrap: wrap !important;
+        padding: 0.7rem 0.85rem !important;
+        gap: 0.5rem !important;
+        background: rgba(0, 0, 0, 0.22) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 12px !important;
+    }
+    body.mobile-drawer-open .nav-timezone::before {
+        content: "Time Zone" !important;
+        flex: 1 1 100% !important;
+        font-size: 0.7rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.1em !important;
+        text-transform: uppercase !important;
+        color: rgba(255, 255, 255, 0.7) !important;
+    }
+    body.mobile-drawer-open .nav-timezone i {
+        color: rgba(255, 255, 255, 0.8) !important;
+    }
+
+    /* ---------- Settings link pill ---------- */
+    body.mobile-drawer-open .sidebar-settings-link {
+        background: rgba(255, 255, 255, 0.1) !important;
+        border: 1px solid rgba(255, 255, 255, 0.14) !important;
+        border-radius: 12px !important;
+        padding: 0.8rem 0.95rem !important;
+        font-weight: 600 !important;
+    }
+
+    /* ---------- Spring slide easing ---------- */
+    .sidebar {
+        transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1) !important;
+    }
+}

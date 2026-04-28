@@ -151,6 +151,22 @@ const LivePage = {
                             </div>
                         </div>
 
+                        <!-- Violation Cooldown Setting -->
+                        <div id="cooldownSettingRow" style="margin-top: 1.25rem; padding: 0.85rem 1rem; background: var(--background-color, #f8f9fa); border: 1px solid var(--border-color, #dee2e6); border-radius: 8px; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                            <i class="fas fa-stopwatch" style="color: var(--primary-color); font-size: 1rem;"></i>
+                            <span style="font-weight: 600; font-size: 0.92rem; white-space: nowrap;">Violation Cooldown</span>
+                            <span style="color: var(--text-secondary); font-size: 0.82rem; flex: 1; min-width: 160px;">Minimum seconds between report captures</span>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <input id="cooldownInput" type="number" min="1" max="300" step="1" value="3"
+                                    style="width: 70px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color, #dee2e6); font-size: 0.9rem; text-align: center;"
+                                    title="1–300 seconds" />
+                                <span style="font-size: 0.82rem; color: var(--text-secondary);">sec</span>
+                                <button id="cooldownSaveBtn" class="btn btn-primary" style="padding: 5px 14px; font-size: 0.85rem;">
+                                    <i class="fas fa-check"></i> Apply
+                                </button>
+                                <span id="cooldownStatus" style="font-size: 0.82rem; display: none;"></span>
+                            </div>
+                        </div>
 
                     </div>
                 </div>
@@ -1584,6 +1600,50 @@ const LivePage = {
 
         await refreshBrowserCameraOptions();
         renderSourceToggle();
+
+        // ---- Violation Cooldown Control ----
+        const cooldownInput = document.getElementById('cooldownInput');
+        const cooldownSaveBtn = document.getElementById('cooldownSaveBtn');
+        const cooldownStatus = document.getElementById('cooldownStatus');
+
+        function setCooldownStatus(msg, color) {
+            cooldownStatus.textContent = msg;
+            cooldownStatus.style.color = color;
+            cooldownStatus.style.display = 'inline';
+            setTimeout(() => { cooldownStatus.style.display = 'none'; }, 3000);
+        }
+
+        // Load current cooldown from backend
+        fetch('/api/settings/cooldown')
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(data => { if (data.cooldown_seconds) cooldownInput.value = data.cooldown_seconds; })
+            .catch(() => {});
+
+        cooldownSaveBtn.addEventListener('click', async () => {
+            const val = parseInt(cooldownInput.value, 10);
+            if (isNaN(val) || val < 1 || val > 300) {
+                setCooldownStatus('Must be 1–300 s', '#c0392b');
+                return;
+            }
+            cooldownSaveBtn.disabled = true;
+            try {
+                const res = await fetch('/api/settings/cooldown', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cooldown_seconds: val })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    setCooldownStatus(`Saved: ${val}s`, '#27ae60');
+                } else {
+                    setCooldownStatus(data.error || 'Error', '#c0392b');
+                }
+            } catch (e) {
+                setCooldownStatus('Network error', '#c0392b');
+            } finally {
+                cooldownSaveBtn.disabled = false;
+            }
+        });
 
         // Simple notification function (fallback if not defined globally)
         function showNotification(message, type = 'info') {

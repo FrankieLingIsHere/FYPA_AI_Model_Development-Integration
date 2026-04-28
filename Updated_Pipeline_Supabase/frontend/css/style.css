@@ -5429,3 +5429,157 @@ h1, h2, h3, .recent-header span, .card-header span {
         transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1) !important;
     }
 }
+
+/* =============================================================
+   v29 MOBILE DECLUTTER - "less is more"
+   On phones: hide decorative noise, shrink hero, soften cards,
+   give content room to breathe.
+   ============================================================= */
+@media (max-width: 768px) {
+    /* ---------- Hide visual noise on mobile only ---------- */
+    /* Caution-tape stripes + paper dot grid background = visually busy on small screens */
+    body, .main-content, .page-content {
+        background-image: none !important;
+        background: #f7f5f0 !important;
+    }
+    .ops-hero::before,
+    .ops-hero::after {
+        display: none !important;
+    }
+    /* PPE standards strip is very dense on phones - hide it (still visible on About/Live) */
+    .home-ops-hero .ppe-standards-strip {
+        display: none !important;
+    }
+    /* Trust strip duplicates the dashboard summary - hide on mobile */
+    .home-dashboard > .trust-strip {
+        display: none !important;
+    }
+    /* Dashboard section labels feel like headers in a doc - too formal for mobile */
+    .dashboard-section-label {
+        display: none !important;
+    }
+
+    /* ---------- Hero: simpler, calmer ---------- */
+    .ops-hero {
+        background: linear-gradient(135deg, #f5b133 0%, #e89407 100%) !important;
+        border-radius: 16px !important;
+        padding: 1.4rem 1.25rem !important;
+        margin: 0.25rem 0 1rem !important;
+        box-shadow: 0 8px 24px rgba(232, 148, 7, 0.18) !important;
+        border: none !important;
+    }
+    .ops-kicker {
+        background: rgba(0, 0, 0, 0.18) !important;
+        color: #fff !important;
+        font-weight: 600 !important;
+        padding: 0.3rem 0.65rem !important;
+        font-size: 0.62rem !important;
+        letter-spacing: 0.12em !important;
+        border: none !important;
+    }
+    .ops-hero h1 {
+        color: #ffffff !important;
+        font-size: 1.55rem !important;
+        line-height: 1.18 !important;
+        margin: 0.55rem 0 0.4rem !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15) !important;
+    }
+    .ops-hero p {
+        color: rgba(255, 255, 255, 0.95) !important;
+        font-size: 0.92rem !important;
+        line-height: 1.45 !important;
+    }
+    .hero-clock-meta {
+        color: rgba(255, 255, 255, 0.85) !important;
+        font-size: 0.78rem !important;
+        margin-top: 0.85rem !important;
+    }
+    .hero-live-badge {
+        background: rgba(255, 255, 255, 0.25) !important;
+        color: #fff !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    }
+    .ops-hero-actions .btn-primary {
+        background: #ffffff !important;
+        color: #1f2937 !important;
+        border: none !important;
+        font-weight: 700 !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12) !important;
+    }
+    .ops-hero-actions .btn-secondary {
+        background: rgba(255, 255, 255, 0.18) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(255, 255, 255, 0.4) !important;
+        backdrop-filter: blur(8px) !important;
+    }
+
+    /* ---------- Cards: airy, no gradient overload ---------- */
+    .card {
+        background: #ffffff !important;
+        border: 1px solid rgba(17, 24, 39, 0.06) !important;
+        border-radius: 14px !important;
+        padding: 1.1rem 1rem !important;
+        box-shadow: 0 2px 8px rgba(17, 24, 39, 0.04) !important;
+    }
+    .card-header {
+        margin-bottom: 0.8rem !important;
+        padding-bottom: 0.7rem !important;
+        border-bottom: 1px solid rgba(17, 24, 39, 0.06) !important;
+        font-size: 0.82rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.02em !important;
+        color: #4b5563 !important;
+    }
+    .card-header i {
+        color: #e89407 !important;
+        margin-right: 0.4rem !important;
+    }
+
+    /* ---------- Stat numbers: clean, no gradient text ---------- */
+    .summary-block .label {
+        font-size: 0.7rem !important;
+        color: #6b7280 !important;
+        letter-spacing: 0.04em !important;
+        font-weight: 600 !important;
+    }
+    .summary-block .value {
+        font-size: 1.85rem !important;
+        font-weight: 800 !important;
+        color: #1f2937 !important;
+        background: none !important;
+        -webkit-background-clip: initial !important;
+        -webkit-text-fill-color: initial !important;
+        background-clip: initial !important;
+    }
+    .summary-block .delta {
+        font-size: 0.72rem !important;
+    }
+
+    /* ---------- Page command bar: simpler ---------- */
+    .page-command-bar {
+        background: #ffffff !important;
+        border: 1px solid rgba(17, 24, 39, 0.06) !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        border-radius: 12px !important;
+        padding: 0.7rem 0.9rem !important;
+        box-shadow: 0 1px 3px rgba(17, 24, 39, 0.04) !important;
+    }
+
+    /* ---------- Tighter spacing between sections ---------- */
+    .home-grid {
+        gap: 0.85rem !important;
+    }
+
+    /* ---------- Score: keep it big but flat ---------- */
+    #safety-score {
+        background: none !important;
+        -webkit-background-clip: initial !important;
+        -webkit-text-fill-color: initial !important;
+        color: #e89407 !important;
+        font-size: 3.2rem !important;
+        font-weight: 800 !important;
+    }
+}

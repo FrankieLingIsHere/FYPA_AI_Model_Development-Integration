@@ -1403,18 +1403,11 @@ function setupResponsiveMobileUX() {
     const navToggle = document.getElementById('navToggle');
     const navMoreToggle = document.getElementById('navMoreToggle');
     const navMorePanel = document.getElementById('navMorePanel');
-    const overlay = document.getElementById('mobileOrientationOverlay');
-    const retryBtn = document.getElementById('orientationRetryBtn');
     const timezoneSelector = document.getElementById('timezone-selector');
     // Only bind navigation close behavior to actual navigable links.
     const navLinks = Array.from(document.querySelectorAll('.nav-link, a.sidebar-link'));
 
     if (!body) return;
-
-    const state = {
-        alertShownForCurrentPortrait: false,
-        wasLocked: false
-    };
 
     const closeTimezoneSelector = () => {
         if (timezoneSelector && typeof timezoneSelector.blur === 'function') {
@@ -1462,7 +1455,7 @@ function setupResponsiveMobileUX() {
         // Tablets keep desktop layout. Only landscape tablet gets a small spacing optimization.
         body.classList.remove('is-tablet-device');
         body.classList.toggle('is-tablet-landscape', tabletDevice && !portrait);
-        // Forced-landscape lock removed: portrait mobile is now fully supported via responsive CSS.
+        // Portrait mobile is fully supported via responsive CSS.
         body.classList.remove('mobile-portrait-locked');
 
         if (!phoneDevice) {
@@ -1471,18 +1464,10 @@ function setupResponsiveMobileUX() {
             closePhoneMoreMenu();
         }
 
-        if (overlay) {
-            overlay.setAttribute('aria-hidden', 'true');
-        }
-
-        // Reset legacy state (alert no longer shown).
-        state.alertShownForCurrentPortrait = false;
-        state.wasLocked = false;
     };
 
     if (navToggle) {
         navToggle.addEventListener('click', () => {
-            if (body.classList.contains('mobile-portrait-locked')) return;
             closePhoneMoreMenu();
             body.classList.toggle('nav-open');
             navToggle.setAttribute('aria-expanded', body.classList.contains('nav-open') ? 'true' : 'false');
@@ -1499,7 +1484,6 @@ function setupResponsiveMobileUX() {
 
     if (navMoreToggle) {
         navMoreToggle.addEventListener('click', () => {
-            if (body.classList.contains('mobile-portrait-locked')) return;
             if (!body.classList.contains('is-phone-device')) return;
             body.classList.remove('nav-open');
             if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
@@ -1517,10 +1501,6 @@ function setupResponsiveMobileUX() {
             closePhoneMoreMenu();
         }
     });
-
-    if (retryBtn) {
-        retryBtn.addEventListener('click', () => applyMobileUX());
-    }
 
     window.addEventListener('resize', applyMobileUX, { passive: true });
     window.addEventListener('orientationchange', applyMobileUX, { passive: true });

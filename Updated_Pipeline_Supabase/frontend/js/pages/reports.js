@@ -38,20 +38,31 @@ const ReportsPage = {
 
     render() {
         return `
-            <div class="page">
+            <div class="page reports-page">
+                <section class="page-command-bar reports-command-bar">
+                    <div>
+                        <span class="ops-kicker"><i class="fas fa-clipboard-list"></i> Incident records</span>
+                        <h1>Violation Reports</h1>
+                        <p>Search, filter, generate, and open PPE compliance reports from cloud or local mode.</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="ReportsPage.refreshReports()">
+                        <i class="fas fa-sync"></i> Refresh
+                    </button>
+                </section>
+
                 <div class="card mb-4">
                     <div class="card-header">
                         <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
                             <span><i class="fas fa-file-alt"></i> Violation Reports</span>
                             <span id="reportsProviderBadge" class="reports-provider-badge">Provider: loading...</span>
                         </div>
-                        <button class="btn btn-primary" onclick="ReportsPage.refreshReports()" style="padding: 0.5rem 1rem;">
+                        <button class="btn btn-primary reports-header-refresh" onclick="ReportsPage.refreshReports()" style="padding: 0.5rem 1rem;">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
                     </div>
                     <div class="card-content">
                         <!-- Filters -->
-                        <div class="grid grid-4 mb-3">
+                        <div class="grid grid-4 mb-3 report-filter-grid">
                             <input 
                                 type="text" 
                                 id="search-reports" 

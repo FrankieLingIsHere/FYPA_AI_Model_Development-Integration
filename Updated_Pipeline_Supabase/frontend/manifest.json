@@ -4,8 +4,8 @@
   "description": "AI-powered PPE compliance monitoring system using YOLOv8, LLaVA, and Llama3 for real-time workplace safety detection.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a1a",
-  "theme_color": "#00d4ff",
+  "background_color": "#f4f6f2",
+  "theme_color": "#20252b",
   "orientation": "any",
   "scope": "/",
   "icons": [

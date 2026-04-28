@@ -9,6 +9,19 @@ const AnalyticsPage = {
     render() {
         return `
             <div class="page analytics-dashboard">
+                <section class="page-command-bar analytics-command-bar">
+                    <div>
+                        <span class="ops-kicker"><i class="fas fa-chart-simple"></i> Safety intelligence</span>
+                        <h1>Analytics</h1>
+                        <p>Trends, severity mix, and timing patterns for PPE compliance decisions.</p>
+                    </div>
+                    <div class="command-bar-pills" aria-label="Analytics focus areas">
+                        <span><i class="fas fa-triangle-exclamation"></i> Risk</span>
+                        <span><i class="fas fa-clock"></i> Timing</span>
+                        <span><i class="fas fa-route"></i> Trend</span>
+                    </div>
+                </section>
+
                 <div class="card mb-4">
                     <div class="card-header">
                         <span><i class="fas fa-chart-line"></i> Safety Analytics Dashboard</span>

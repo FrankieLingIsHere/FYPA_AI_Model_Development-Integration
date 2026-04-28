@@ -13,6 +13,40 @@ const HomePage = {
     render() {
         return `
         <div class="home-dashboard">
+            <section class="ops-hero home-ops-hero" aria-label="Site safety command overview">
+                <div class="ops-hero-copy">
+                    <span class="ops-kicker"><i class="fas fa-shield-halved"></i> Construction safety operations</span>
+                    <h1>Site Safety Command</h1>
+                    <p>Live PPE compliance, report generation, and local edge readiness in one field-ready workspace.</p>
+                    <div class="ops-hero-actions">
+                        <button class="btn btn-primary" type="button" onclick="Router.navigate('live')">
+                            <i class="fas fa-video"></i> Open Live Monitor
+                        </button>
+                        <button class="btn btn-secondary" type="button" onclick="Router.navigate('reports')">
+                            <i class="fas fa-clipboard-check"></i> Review Reports
+                        </button>
+                    </div>
+                </div>
+                <div class="ppe-standards-strip" aria-label="PPE standards visual reference">
+                    <figure>
+                        <img src="/static/images/standards/ms183_helmet.jpg" alt="Safety helmet standard reference" loading="lazy" decoding="async">
+                        <figcaption>Helmet</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="/static/images/standards/ms1731_vest.jpg" alt="Safety vest standard reference" loading="lazy" decoding="async">
+                        <figcaption>Vest</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="/static/images/standards/iso20345_boots.jpg" alt="Safety boot standard reference" loading="lazy" decoding="async">
+                        <figcaption>Boots</figcaption>
+                    </figure>
+                    <figure>
+                        <img src="/static/images/standards/ms2323_mask.png" alt="Respirator mask standard reference" loading="lazy" decoding="async">
+                        <figcaption>Mask</figcaption>
+                    </figure>
+                </div>
+            </section>
+
             <div class="home-grid">
 
                 <!-- OVERVIEW -->
@@ -45,7 +79,7 @@ const HomePage = {
                 </div>
 
                 <!-- SAFETY SCORE -->
-                <div class="card">
+                <div class="card home-score-card">
                     <div class="card-header">
                         <span><i class="fas fa-trophy"></i> Safety Compliance Score</span>
                     </div>

@@ -24,6 +24,19 @@ const LivePage = {
     render() {
         return `
             <div class="page">
+                <section class="page-command-bar live-command-bar">
+                    <div>
+                        <span class="ops-kicker"><i class="fas fa-tower-observation"></i> Field monitoring</span>
+                        <h1>Live Monitor</h1>
+                        <p>Camera stream, browser camera, and image analysis controls for PPE checks.</p>
+                    </div>
+                    <div class="command-bar-pills" aria-label="Live monitor capabilities">
+                        <span><i class="fas fa-video"></i> Stream</span>
+                        <span><i class="fas fa-camera"></i> Capture</span>
+                        <span><i class="fas fa-brain"></i> AI review</span>
+                    </div>
+                </section>
+
                 <!-- Mode Tabs -->
                 <div style="margin-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
                     <div style="display: flex; justify-content: flex-start; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
@@ -102,7 +115,7 @@ const LivePage = {
                                     <i class="fas fa-cloud-upload-alt" style="font-size: 4rem; color: var(--primary-color); opacity: 0.7; margin-bottom: 1rem;"></i>
                                     <p style="margin: 0; font-size: 1.1rem; font-weight: bold;">Drop image here or click to browse</p>
                                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.5rem;">
-                                        Supports JPG, PNG Ã¢â‚¬Â¢ Max 10MB
+                                        Supports JPG, PNG - Max 10MB
                                     </p>
                                 </label>
                             </div>

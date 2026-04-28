@@ -3754,9 +3754,16 @@ body {
 .sidebar-header {
     background: transparent !important;
     border-bottom: 1px solid rgba(0,0,0,0.15) !important;
-    padding: 1.25rem 1rem !important;
+    padding: 1.25rem 0 !important;
     color: var(--brand) !important;
     gap: 0.8rem !important;
+    justify-content: center !important;
+}
+
+.sidebar:hover .sidebar-header,
+.sidebar:focus-within .sidebar-header {
+    padding: 1.25rem 1rem !important;
+    justify-content: flex-start !important;
 }
 
 .sidebar-logo {
@@ -3815,8 +3822,15 @@ body {
     border-left-color: var(--brand) !important;
     font-weight: 700 !important;
     border-radius: 6px !important;
-    margin: 0 6px !important;
+    margin: 0 8px !important;
     box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
+    justify-content: center !important;
+}
+
+.sidebar:hover .sidebar-link.active,
+.sidebar:focus-within .sidebar-link.active {
+    justify-content: flex-start !important;
+    margin: 0 6px !important;
 }
 
 .sidebar-link.active i {

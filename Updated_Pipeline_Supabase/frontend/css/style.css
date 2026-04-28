@@ -3010,13 +3010,7 @@ body {
     position: relative;
     border: 1px solid rgba(196, 122, 0, 0.35);
     border-radius: var(--radius-lg);
-    /* Orange-dominant construction palette: warm safety-orange gradient base with
-       diagonal hazard stripes for the construction-site feel. Dark slate is now
-       only used as a thin accent at the bottom for contrast with the page bg. */
-    background:
-        linear-gradient(135deg, #ffb347 0%, #f4aa1c 35%, #e09413 70%, #c47a00 100%),
-        repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.08) 0 14px, rgba(0, 0, 0, 0) 14px 28px);
-    background-blend-mode: multiply, normal;
+    background: #f4aa1c;
     color: #20252b;
     box-shadow: var(--shadow-md);
     overflow: hidden;
@@ -3033,17 +3027,9 @@ body {
 }
 
 .ops-hero::after {
-    /* Diagonal hazard-stripe texture overlay (the iconic construction look). */
+    /* Stripe overlay removed — flat colour */
     content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-        135deg,
-        rgba(32, 37, 43, 0.16) 0 14px,
-        rgba(32, 37, 43, 0) 14px 32px
-    );
-    pointer-events: none;
-    mix-blend-mode: multiply;
+    display: none;
 }
 
 .ops-hero > * {
@@ -4010,15 +3996,7 @@ body {
 /* ---- Hero Banner ---- */
 .ops-hero {
     border-radius: var(--r-lg) !important;
-    background:
-        repeating-linear-gradient(
-            -45deg,
-            rgba(0,0,0,0.035) 0px,
-            rgba(0,0,0,0.035) 10px,
-            transparent 10px,
-            transparent 20px
-        ),
-        linear-gradient(135deg, #f4aa1c 0%, #e89a0c 55%, #cc7f00 100%) !important;
+    background: #f4aa1c !important;
     border: none !important;
     box-shadow: 0 6px 24px rgba(244, 170, 28, 0.28), 0 2px 6px rgba(0,0,0,0.08) !important;
     overflow: hidden !important;

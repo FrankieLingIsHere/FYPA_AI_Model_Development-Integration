@@ -4792,10 +4792,7 @@ h1, h2, h3, .recent-header span, .card-header span {
         background-size: 16px 16px !important;
     }
 
-    /* Hide desktop sidebar on mobile (mobile bottom nav already exists in index.html) */
-    .sidebar {
-        display: none !important;
-    }
+    /* Sidebar uses existing slide-in drawer (translateX), don't display:none */
     .main-content {
         margin-left: 0 !important;
         padding-bottom: 80px !important; /* room for mobile-bottom-nav */
@@ -4949,23 +4946,26 @@ h1, h2, h3, .recent-header span, .card-header span {
     .btn-primary:hover, .btn-secondary:hover {
         transform: none !important;
     }
-    /* Sidebar should not auto-expand on touch - it would block content */
-    .sidebar:hover {
-        width: 64px !important;
-    }
-    .sidebar:hover .sidebar-link span,
-    .sidebar:hover .sidebar-title {
-        display: none !important;
-    }
-    .sidebar:hover .sidebar-link,
-    .sidebar:hover .sidebar-link.active {
-        padding: 0.7rem 0 !important;
-        justify-content: center !important;
-        gap: 0 !important;
-    }
-    .sidebar:hover .sidebar-header {
-        padding: 1.25rem 0 !important;
-        justify-content: center !important;
+    /* On desktop touch (large screens), prevent sidebar hover-expand;
+       on mobile, the drawer system overrides this anyway. */
+    @media (min-width: 769px) {
+        .sidebar:hover {
+            width: 64px !important;
+        }
+        .sidebar:hover .sidebar-link span,
+        .sidebar:hover .sidebar-title {
+            display: none !important;
+        }
+        .sidebar:hover .sidebar-link,
+        .sidebar:hover .sidebar-link.active {
+            padding: 0.7rem 0 !important;
+            justify-content: center !important;
+            gap: 0 !important;
+        }
+        .sidebar:hover .sidebar-header {
+            padding: 1.25rem 0 !important;
+            justify-content: center !important;
+        }
     }
 }
 
@@ -4980,5 +4980,73 @@ h1, h2, h3, .recent-header span, .card-header span {
     }
     .hero-live-badge .dot {
         animation: none !important;
+    }
+}
+
+/* =============================================================
+   v25 MOBILE DRAWER COLOR + LABEL FIX
+   When sidebar opens as a drawer on mobile, force orange brand
+   bg + show labels (override our touch/collapse rules).
+   ============================================================= */
+@media (max-width: 768px) {
+    body.mobile-drawer-open .sidebar {
+        background: var(--brand) !important;
+        width: 280px !important;
+    }
+    body.mobile-drawer-open .sidebar-link {
+        padding: 0.85rem 1.1rem !important;
+        justify-content: flex-start !important;
+        gap: 0.95rem !important;
+    }
+    body.mobile-drawer-open .sidebar-link span {
+        display: inline !important;
+        visibility: visible !important;
+        width: auto !important;
+        overflow: visible !important;
+        opacity: 1 !important;
+    }
+    body.mobile-drawer-open .sidebar-link.active {
+        padding: 0.85rem 1.1rem !important;
+        justify-content: flex-start !important;
+        margin: 0 8px !important;
+    }
+    body.mobile-drawer-open .sidebar-header {
+        padding: 1.25rem 1.1rem !important;
+        justify-content: flex-start !important;
+    }
+    body.mobile-drawer-open .sidebar-title {
+        display: inline !important;
+        visibility: visible !important;
+        width: auto !important;
+        opacity: 1 !important;
+    }
+
+    /* Mobile app-bar: match brand for cohesive color */
+    .mobile-app-bar {
+        background: linear-gradient(180deg, #1f2937 0%, #111827 100%) !important;
+        border-bottom: 3px solid var(--brand) !important;
+        box-shadow: 0 4px 14px rgba(17, 24, 39, 0.18) !important;
+    }
+    .mobile-drawer-toggle,
+    .mobile-app-bar-action,
+    .mobile-app-bar-brand {
+        color: #ffffff !important;
+    }
+    .mobile-app-bar-brand i {
+        color: var(--brand) !important;
+    }
+
+    /* Mobile bottom nav: match dark charcoal with orange accent */
+    .mobile-bottom-nav {
+        background: linear-gradient(180deg, #1f2937 0%, #111827 100%) !important;
+        border-top: 3px solid var(--brand) !important;
+        box-shadow: 0 -4px 14px rgba(17, 24, 39, 0.18) !important;
+    }
+    .mobile-bottom-nav-link {
+        color: rgba(255, 255, 255, 0.7) !important;
+    }
+    .mobile-bottom-nav-link.active,
+    .mobile-bottom-nav-link:hover {
+        color: var(--brand) !important;
     }
 }

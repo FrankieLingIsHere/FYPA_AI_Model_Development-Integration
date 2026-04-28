@@ -4197,6 +4197,7 @@ body {
     gap: 1.25rem !important;
     width: 100% !important;
     box-sizing: border-box !important;
+    margin-top: 2rem !important;
 }
 
 .home-summary-card,

@@ -1517,8 +1517,14 @@ const GlobalSettingsModal = {
             statusEl.style.color = 'var(--text-secondary)';
         }
 
+        // "Local Test Mode" pings the LOCAL backend (which talks to local Ollama),
+        // never the cloud backend. Otherwise on Vercel we'd be asking the Railway
+        // container to reach its own (non-existent) localhost:11434.
+        const localBase = (API_CONFIG.LOCAL_BACKEND_URL || 'http://localhost:5000').replace(/\/+$/, '');
+        const pingUrl = `${localBase}/api/llm/ping`;
+
         try {
-            const resp = await fetch(`${API_CONFIG.BASE_URL}/api/llm/ping`, {
+            const resp = await fetch(pingUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompt: 'Reply with the single word: PONG' })
@@ -1549,7 +1555,10 @@ const GlobalSettingsModal = {
             }
         } catch (err) {
             if (statusEl) {
-                statusEl.textContent = `\u274C Ping failed: ${err.message || err}`;
+                statusEl.textContent =
+                    `\u274C Could not reach local backend at ${pingUrl}\n` +
+                    `Local Test Mode requires start.bat to be running on this PC.\n` +
+                    `Error: ${err.message || err}`;
                 statusEl.style.color = 'var(--error-color)';
             }
         } finally {

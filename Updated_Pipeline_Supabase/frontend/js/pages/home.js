@@ -14,6 +14,7 @@ const HomePage = {
         return `
         <div class="home-dashboard">
             <section class="ops-hero home-ops-hero" aria-label="Site safety command overview">
+                <span class="hero-live-badge" aria-label="Live monitoring active"><span class="dot"></span> Live monitoring</span>
                 <div class="ops-hero-copy">
                     <span class="ops-kicker"><i class="fas fa-shield-halved"></i> Construction safety operations</span>
                     <h1>Site Safety Command</h1>
@@ -49,6 +50,21 @@ const HomePage = {
                     </figure>
                 </div>
             </section>
+
+            <div class="trust-strip" aria-label="Site safety metrics at a glance">
+                <div class="trust-metric">
+                    <span class="num" id="trustViolationsTotal">0</span>
+                    <span class="lbl">Violations Caught</span>
+                </div>
+                <div class="trust-metric">
+                    <span class="num" id="trustReportsTotal">0</span>
+                    <span class="lbl">Reports Generated</span>
+                </div>
+                <div class="trust-metric">
+                    <span class="num" id="trustComplianceRate">--%</span>
+                    <span class="lbl">Compliance Score</span>
+                </div>
+            </div>
 
             <div class="dashboard-section-label">
                 <span><i class="fas fa-th-large"></i> Dashboard Overview</span>
@@ -346,6 +362,57 @@ const HomePage = {
         this.renderRecentViolations(stats.recentViolations || []);
         this.calculateSafetyScore(stats);
         this.renderReportsOverview(stats, pendingReports || []);
+        this.renderTrustStrip(stats, pendingReports || []);
+    },
+
+    /* ================= COUNT-UP HELPER ================= */
+    countUp(el, target, opts) {
+        if (!el) return;
+        const t = Number(target);
+        if (!Number.isFinite(t)) { el.textContent = target; return; }
+        const suffix = (opts && opts.suffix) || '';
+        const duration = (opts && opts.duration) || 700;
+        // Skip animation on subsequent updates
+        const current = parseFloat(String(el.textContent).replace(/[^0-9.\-]/g, ''));
+        const start = Number.isFinite(current) ? current : 0;
+        if (start === t) { el.textContent = `${t}${suffix}`; return; }
+        const startTime = performance.now();
+        const step = (now) => {
+            const p = Math.min(1, (now - startTime) / duration);
+            // ease-out cubic
+            const eased = 1 - Math.pow(1 - p, 3);
+            const value = Math.round(start + (t - start) * eased);
+            el.textContent = `${value}${suffix}`;
+            if (p < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    },
+
+    /* ================= TRUST STRIP ================= */
+    renderTrustStrip(stats, pendingReports) {
+        const violationsEl = document.getElementById('trustViolationsTotal');
+        const reportsEl = document.getElementById('trustReportsTotal');
+        const complianceEl = document.getElementById('trustComplianceRate');
+        if (!violationsEl || !reportsEl || !complianceEl) return;
+
+        const totalViolations = Number(stats.total)
+            || Number(stats.totalViolations)
+            || (Array.isArray(stats.recentViolations) ? stats.recentViolations.length : 0)
+            || 0;
+
+        const totalReports = Number(stats.totalReports)
+            || Number(stats.reportsTotal)
+            || (Array.isArray(pendingReports) ? pendingReports.length : 0)
+            || 0;
+
+        const safety = (typeof API !== 'undefined' && API.computeSafetyCompliance)
+            ? API.computeSafetyCompliance(stats || {})
+            : { score: 0 };
+        const score = Math.max(0, Math.min(100, Math.round(Number(safety.score) || 0)));
+
+        this.countUp(violationsEl, totalViolations);
+        this.countUp(reportsEl, totalReports);
+        this.countUp(complianceEl, score, { suffix: '%' });
     },
 
     renderReportsOverview(stats, pendingReports) {
@@ -361,8 +428,8 @@ const HomePage = {
             }).length
             : 0;
 
-        pendingEl.textContent = pendingCount;
-        processingEl.textContent = processingCount;
+        this.countUp(pendingEl, pendingCount);
+        this.countUp(processingEl, processingCount);
     },
 
     renderProvisioningStatus(statusPayload) {
@@ -452,9 +519,9 @@ const HomePage = {
             return;
         }
 
-        todayCountEl.textContent = stats.today;
-        weekCountEl.textContent = stats.thisWeek;
-        highSeverityCountEl.textContent = stats.severity?.high ?? 0;
+        this.countUp(todayCountEl, Number(stats.today) || 0);
+        this.countUp(weekCountEl, Number(stats.thisWeek) || 0);
+        this.countUp(highSeverityCountEl, Number(stats.severity?.high ?? 0));
 
         todayDeltaEl.textContent =
             todayDelta > 0 ? `+${todayDelta}` : `${todayDelta}`;

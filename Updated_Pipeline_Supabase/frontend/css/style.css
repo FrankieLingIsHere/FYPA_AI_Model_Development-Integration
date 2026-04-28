@@ -4411,3 +4411,172 @@ body {
     :root { color-scheme: light; }
 }
 
+/* =============================================================
+   v22 INDUSTRIAL UPGRADE PASS
+   - Hero caution-tape texture, LIVE pulse, fade-in entrance
+   - Animated stat counters
+   - Trust strip metrics
+   - Sharper card hover shadow
+   - Page fade-in transitions
+   ============================================================= */
+
+/* ----- Page-level fade-in ----- */
+@keyframes pageFadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.home-dashboard,
+.page-content > *:first-child {
+    animation: pageFadeIn 0.35s ease both;
+}
+
+/* ----- Hero caution-tape diagonal stripe texture ----- */
+.ops-hero {
+    position: relative !important;
+    overflow: hidden !important;
+}
+.ops-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+        135deg,
+        rgba(0, 0, 0, 0.045) 0 18px,
+        transparent 18px 36px
+    );
+    pointer-events: none;
+    z-index: 0;
+}
+.ops-hero > * {
+    position: relative;
+    z-index: 1;
+}
+
+/* Hero copy entrance stagger */
+.ops-hero-copy .ops-kicker { animation: pageFadeIn 0.5s ease 0.05s both; }
+.ops-hero-copy h1          { animation: pageFadeIn 0.5s ease 0.15s both; }
+.ops-hero-copy p           { animation: pageFadeIn 0.5s ease 0.25s both; }
+.ops-hero-copy .ops-hero-actions { animation: pageFadeIn 0.5s ease 0.35s both; }
+.ops-hero-copy #hero-datetime    { animation: pageFadeIn 0.5s ease 0.45s both; }
+.ppe-standards-strip figure {
+    animation: pageFadeIn 0.6s ease both;
+}
+.ppe-standards-strip figure:nth-child(1) { animation-delay: 0.20s; }
+.ppe-standards-strip figure:nth-child(2) { animation-delay: 0.30s; }
+.ppe-standards-strip figure:nth-child(3) { animation-delay: 0.40s; }
+.ppe-standards-strip figure:nth-child(4) { animation-delay: 0.50s; }
+
+/* ----- LIVE MONITORING pulse badge (top-right of hero) ----- */
+.hero-live-badge {
+    position: absolute !important;
+    top: 1rem;
+    right: 1rem;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.85rem;
+    background: #111827;
+    color: #ffffff;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.hero-live-badge .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    animation: livePulse 1.6s ease-out infinite;
+}
+@keyframes livePulse {
+    0%   { box-shadow: 0 0 0 0   rgba(34, 197, 94, 0.7); }
+    70%  { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);  }
+    100% { box-shadow: 0 0 0 0   rgba(34, 197, 94, 0);  }
+}
+
+/* ----- Trust metrics strip (above dashboard) ----- */
+.trust-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin: 1.5rem 0 0.5rem;
+    padding: 1rem 1.5rem;
+    background: #111827;
+    color: #ffffff;
+    border-radius: 12px;
+    border-left: 4px solid var(--brand);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+    position: relative;
+}
+.trust-strip::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.025) 0 14px,
+        transparent 14px 28px
+    );
+    pointer-events: none;
+}
+.trust-metric {
+    text-align: center;
+    padding: 0.25rem 0.75rem;
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    position: relative;
+    z-index: 1;
+}
+.trust-metric:last-child { border-right: none; }
+.trust-metric .num {
+    display: block;
+    font-size: 1.85rem;
+    font-weight: 900;
+    color: var(--brand);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+.trust-metric .lbl {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* ----- Sharper card hover ----- */
+.card {
+    transition: box-shadow 0.18s ease, border-color 0.18s ease !important;
+}
+.card:hover {
+    border-color: rgba(244, 170, 28, 0.45) !important;
+    box-shadow: 0 10px 28px rgba(17, 24, 39, 0.12), 0 2px 4px rgba(244, 170, 28, 0.18) !important;
+}
+
+/* ----- Stat value count-up reveal ----- */
+.summary-block .value {
+    font-variant-numeric: tabular-nums !important;
+    transition: color 0.2s ease;
+}
+
+/* ----- Hero headline weight nudge ----- */
+.ops-hero h1 {
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+/* ----- Buttons: industrial press feedback ----- */
+.btn-primary, .btn-secondary {
+    transition: transform 0.12s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease !important;
+}
+.btn-primary:active, .btn-secondary:active {
+    transform: translateY(1px) !important;
+}
+

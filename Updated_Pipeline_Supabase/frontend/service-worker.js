@@ -1,9 +1,9 @@
 // PPE Safety Monitor - Service Worker
 // Offline support for app shell, read-only API payloads, and violation images.
 
-const STATIC_CACHE = 'ppe-monitor-static-v37';
-const API_CACHE = 'ppe-monitor-api-v37';
-const IMAGE_CACHE = 'ppe-monitor-images-v37';
+const STATIC_CACHE = 'ppe-monitor-static-v38';
+const API_CACHE = 'ppe-monitor-api-v38';
+const IMAGE_CACHE = 'ppe-monitor-images-v38';
 
 const STATIC_ASSETS = [
   '/',

@@ -12800,13 +12800,10 @@ def notify_admin(machine_id, status='pending', token=None):
 
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
-    # PRV1 — Require admin authorisation unless the operator has explicitly opted into
-    # unauthenticated self-registration via PROVISION_ALLOW_SELF_REGISTER=true.
-    if not PROVISION_ALLOW_SELF_REGISTER:
-        token_header = request.headers.get('X-Admin-Token', '').strip()
-        if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
-            return jsonify({'error': 'Unauthorized'}), 401
-
+    # Parse body up-front so we can branch on whether this is a re-request for
+    # an already-approved device (allowed without admin token — the device was
+    # vetted at the time of original approval) versus a brand-new machine_id
+    # (still requires admin auth unless self-register is explicitly enabled).
     data = request.get_json() or {}
     machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
@@ -12814,6 +12811,31 @@ def provision_request():
 
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
         return jsonify({'error': 'Invalid machine_id format'}), 400
+
+    # Look up whether this machine already has a record. We need this to
+    # decide whether the call is a privileged "first-time registration"
+    # (requires admin auth) or a benign "I already exist, give me my
+    # provision_secret again so I can finish reconnecting" call.
+    _existing_devices_for_auth_check = _load_pending_devices()
+    _existing_for_auth = (
+        _existing_devices_for_auth_check.get(machine_id)
+        if isinstance(_existing_devices_for_auth_check.get(machine_id), dict)
+        else {}
+    )
+    _existing_status_for_auth = str((_existing_for_auth or {}).get('status') or '').strip().lower()
+    is_rerequest_for_known_device = _existing_status_for_auth in ('approved', 'provisioned')
+
+    # PRV1 — Require admin authorisation unless either:
+    #   (a) the operator has explicitly opted into unauthenticated
+    #       self-registration via PROVISION_ALLOW_SELF_REGISTER=true; or
+    #   (b) this is a re-request for an already approved/provisioned device
+    #       (the original approval already established trust; we must allow
+    #       the device to recover its provision_secret after the local
+    #       backend was reinstalled or the browser session was cleared).
+    if not PROVISION_ALLOW_SELF_REGISTER and not is_rerequest_for_known_device:
+        token_header = request.headers.get('X-Admin-Token', '').strip()
+        if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
+            return jsonify({'error': 'Unauthorized'}), 401
 
     provision_secret = secrets.token_urlsafe(48)
 

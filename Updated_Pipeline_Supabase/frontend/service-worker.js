@@ -1,9 +1,9 @@
 // PPE Safety Monitor - Service Worker
 // Offline support for app shell, read-only API payloads, and violation images.
 
-const STATIC_CACHE = 'ppe-monitor-static-v45';
-const API_CACHE = 'ppe-monitor-api-v45';
-const IMAGE_CACHE = 'ppe-monitor-images-v45';
+const STATIC_CACHE = 'ppe-monitor-static-v46';
+const API_CACHE = 'ppe-monitor-api-v46';
+const IMAGE_CACHE = 'ppe-monitor-images-v46';
 
 const STATIC_ASSETS = [
   '/',
@@ -196,6 +196,29 @@ self.addEventListener('fetch', (event) => {
 
   if (isViolationImageRequest(url)) {
     event.respondWith(staleWhileRevalidate(request, IMAGE_CACHE));
+    return;
+  }
+
+  // HTML navigations: NETWORK-FIRST so HTML/script changes deploy immediately
+  // (avoids the "PWA stuck on old cached index.html" problem).
+  const isNavigation = request.mode === 'navigate'
+    || (request.headers.get('accept') || '').includes('text/html');
+
+  if (isNavigation) {
+    event.respondWith((async () => {
+      const cache = await caches.open(STATIC_CACHE);
+      try {
+        const networkResponse = await fetch(request);
+        if (networkResponse && networkResponse.ok) {
+          cache.put(request, networkResponse.clone());
+        }
+        return networkResponse;
+      } catch (error) {
+        const cached = await cache.match(request) || await cache.match('/');
+        if (cached) return cached;
+        throw error;
+      }
+    })());
     return;
   }
 

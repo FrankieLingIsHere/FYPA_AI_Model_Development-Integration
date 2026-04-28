@@ -4261,6 +4261,20 @@ body {
     box-sizing: border-box !important;
 }
 
+/* Force reports and recent violations to equal row height */
+.home-reports-card,
+.home-recent-violations-card {
+    align-self: stretch !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+.home-reports-card .card-content,
+.home-recent-violations-card .recent-content {
+    flex: 1 !important;
+    overflow-y: auto !important;
+}
+
 /* ---- Network status badge ---- */
 .network-badge {
     border-radius: var(--r-full) !important;

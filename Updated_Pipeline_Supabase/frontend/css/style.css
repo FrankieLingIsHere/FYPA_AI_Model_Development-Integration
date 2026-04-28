@@ -3781,7 +3781,7 @@ body {
 }
 
 .sidebar-link {
-    color: var(--nav-text) !important;
+    color: var(--brand) !important;
     padding: 0.7rem 0.75rem !important;
     border-left: 3px solid transparent !important;
     border-radius: 0 !important;
@@ -3799,7 +3799,7 @@ body {
 
 .sidebar-link:hover {
     background: var(--nav-bg-hover) !important;
-    color: var(--nav-text-hover) !important;
+    color: #ffffff !important;
     border-left-color: rgba(244, 170, 28, 0.4) !important;
 }
 

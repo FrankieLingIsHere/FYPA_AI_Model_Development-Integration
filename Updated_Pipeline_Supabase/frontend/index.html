@@ -42,53 +42,33 @@
         </div>
     </div>
 
-    <!-- Mobile Top App-bar (visible on phones only) -->
-    <header class="mobile-app-bar" role="banner">
-        <button id="mobileDrawerToggle" class="mobile-drawer-toggle" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
-            <i class="fas fa-bars" aria-hidden="true"></i>
-        </button>
-        <a href="#home" class="mobile-app-bar-brand">
-            <i class="fas fa-hard-hat" aria-hidden="true"></i>
-            <span>CASM</span>
-        </a>
-        <a href="#settings" class="mobile-app-bar-action sidebar-link" data-page="settings" aria-label="Settings">
-            <i class="fas fa-gear" aria-hidden="true"></i>
-        </a>
-    </header>
-    <!-- Defensive inline binding so the hamburger always works even if app.js fails earlier -->
+    <!-- Mobile drawer trigger now lives in bottom nav as the "More" tab. -->
+    <!-- Defensive inline binding so the More toggle always works even if app.js fails earlier -->
     <script>
         (function() {
             function initDrawer() {
-                var btn = document.getElementById('mobileDrawerToggle');
+                var btn = document.getElementById('mobileMoreToggle');
                 var backdrop = document.getElementById('mobileDrawerBackdrop');
                 if (!btn || btn.dataset.bound === '1') return;
                 btn.dataset.bound = '1';
+                var setOpen = function(open) {
+                    document.body.classList.toggle('mobile-drawer-open', open);
+                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    btn.classList.toggle('active', open);
+                };
                 btn.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    var open = !document.body.classList.contains('mobile-drawer-open');
-                    document.body.classList.toggle('mobile-drawer-open', open);
-                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    setOpen(!document.body.classList.contains('mobile-drawer-open'));
                 });
-                if (backdrop) {
-                    backdrop.addEventListener('click', function() {
-                        document.body.classList.remove('mobile-drawer-open');
-                        btn.setAttribute('aria-expanded', 'false');
-                    });
-                }
+                if (backdrop) backdrop.addEventListener('click', function() { setOpen(false); });
                 document.addEventListener('click', function(e) {
                     if (!document.body.classList.contains('mobile-drawer-open')) return;
                     var link = e.target.closest && e.target.closest('.sidebar .sidebar-link');
-                    if (link) {
-                        document.body.classList.remove('mobile-drawer-open');
-                        btn.setAttribute('aria-expanded', 'false');
-                    }
+                    if (link) setOpen(false);
                 });
                 document.addEventListener('keydown', function(e) {
-                    if (e.key === 'Escape') {
-                        document.body.classList.remove('mobile-drawer-open');
-                        btn.setAttribute('aria-expanded', 'false');
-                    }
+                    if (e.key === 'Escape') setOpen(false);
                 });
             }
             if (document.readyState === 'loading') {
@@ -209,10 +189,10 @@
             <i class="fas fa-chart-line" aria-hidden="true"></i>
             <span>Analytics</span>
         </a>
-        <a href="#about" class="mobile-bottom-nav-link sidebar-link" data-page="about">
-            <i class="fas fa-info-circle" aria-hidden="true"></i>
-            <span>About</span>
-        </a>
+        <button id="mobileMoreToggle" class="mobile-bottom-nav-link mobile-more-btn" type="button" aria-label="More options" aria-expanded="false" aria-controls="sidebar">
+            <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
+            <span>More</span>
+        </button>
     </nav>
 
     <!-- Footer -->

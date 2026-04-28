@@ -5136,3 +5136,46 @@ h1, h2, h3, .recent-header span, .card-header span {
         flex: 1 1 auto !important;
     }
 }
+
+/* =============================================================
+   v27 MOBILE NAV SIMPLIFIED
+   - Remove top app-bar (redundant with bottom nav)
+   - Replace 5th bottom-nav slot (About) with "More" -> opens
+     the existing drawer (which now hosts About + extras)
+   - Reclaim top padding previously reserved for app-bar
+   ============================================================= */
+@media (max-width: 768px) {
+    .mobile-app-bar { display: none !important; }
+
+    .main-content {
+        padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem) !important;
+    }
+
+    .mobile-bottom-nav {
+        padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    }
+
+    /* "More" button shares pill style with other bottom-nav items */
+    .mobile-more-btn {
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        background: transparent !important;
+        border: none !important;
+        cursor: pointer !important;
+        font: inherit !important;
+    }
+    .mobile-more-btn.active {
+        color: var(--brand) !important;
+    }
+    .mobile-more-btn.active i {
+        transform: rotate(90deg);
+        transition: transform 0.2s ease;
+    }
+}
+
+@media (max-width: 900px) {
+    .mobile-app-bar { display: none !important; }
+    .main-content {
+        padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem) !important;
+    }
+}

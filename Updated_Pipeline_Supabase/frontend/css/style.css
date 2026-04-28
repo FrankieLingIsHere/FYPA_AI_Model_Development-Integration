@@ -3789,18 +3789,33 @@ body {
 
 .sidebar-link {
     color: #1a1a1a !important;
-    padding: 0.7rem 1.1rem !important;
+    padding: 0.7rem 0 !important;
     border-left: 3px solid transparent !important;
     border-radius: 0 !important;
     margin: 0 !important;
-    transition: all 0.18s ease !important;
+    transition: background 0.18s ease, color 0.18s ease !important;
     font-size: 0.9rem !important;
+    justify-content: center !important;
+    gap: 0 !important;
 }
 
-/* When sidebar expands on hover, restore normal padding */
+/* Hide label completely when collapsed so icon can truly center */
+.sidebar-link span {
+    display: none !important;
+}
+
+/* When sidebar expands on hover, restore normal padding and label */
 .sidebar:hover .sidebar-link,
 .sidebar:focus-within .sidebar-link {
-    padding: 0.7rem 0.75rem !important;
+    padding: 0.7rem 0.95rem !important;
+    justify-content: flex-start !important;
+    gap: 0.85rem !important;
+}
+
+.sidebar:hover .sidebar-link span,
+.sidebar:focus-within .sidebar-link span {
+    display: inline !important;
+    opacity: 1 !important;
 }
 
 .sidebar-link i {

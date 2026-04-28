@@ -114,9 +114,10 @@
     background: #10b981;
 }
 
+/* Original Primary variables from v14 (will be overridden below but just for safety) */
 :root {
     /* Colors - Adopted from Updated_Pipeline2 */
-    --primary-color: #e09c2e;
+    --primary-color: #d17508;
     --secondary-color: #3498db;
     --background-color: #ecf0f1;
     --container-bg: #ffffff;
@@ -828,7 +829,7 @@ body.mobile-portrait-locked .mobile-orientation-overlay {
     grid-template-columns: repeat(4, 1fr);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1100px) {
     .grid-4 {
         grid-template-columns: repeat(2, 1fr);
     }
@@ -1276,7 +1277,7 @@ body.is-phone-device .handbook-overlay {
 }
 
 body.is-phone-device .handbook-modal {
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     max-width: none;
     border-radius: 0;
@@ -2145,7 +2146,7 @@ body.is-phone-device .handbook-content {
     padding: var(--spacing-md);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1100px) {
     .home-grid {
         grid-template-columns: 1fr;
     }
@@ -2877,7 +2878,7 @@ body.is-phone-device .footer {
     /* Modals: full-screen on phones */
     .modal,
     .modal-content {
-        max-width: 100vw;
+        max-width: 100%;
         width: 100%;
     }
 }
@@ -2939,8 +2940,8 @@ body.is-phone-device .footer {
    ===================================================================== */
 
 :root {
-    --primary-color: #f4aa1c;
-    --primary-strong: #c47a00;
+    --primary-color: #d17508; /* Slightly deeper, more industrial orange */
+    --primary-strong: #a45c06;
     --secondary-color: #147a7e;
     --background-color: #f4f6f2;
     --container-bg: #ffffff;
@@ -2957,11 +2958,11 @@ body.is-phone-device .footer {
     --footer-color: var(--primary-color);
     --sidebar-bg: var(--primary-color);
     --sidebar-bg-strong: var(--primary-strong);
-    --sidebar-text: #20252b;
-    --sidebar-text-muted: rgba(32, 37, 43, 0.85);
-    --sidebar-hover-bg: rgba(32, 37, 43, 0.1);
-    --sidebar-active-bg: rgba(32, 37, 43, 0.15);
-    --sidebar-border: rgba(32, 37, 43, 0.15);
+    --sidebar-text: #ffffff; /* Reverting to white for better contrast with deep orange */
+    --sidebar-text-muted: rgba(255, 255, 255, 0.85);
+    --sidebar-hover-bg: rgba(0, 0, 0, 0.15); /* Darker hover */
+    --sidebar-active-bg: rgba(0, 0, 0, 0.25);
+    --sidebar-border: rgba(255, 255, 255, 0.15);
     --radius-sm: 4px;
     --radius-md: 6px;
     --radius-lg: 8px;
@@ -2991,7 +2992,7 @@ body {
     .main-content {
         max-width: none !important;
         padding-top: 28px !important;
-        padding-right: clamp(32px, 4vw, 80px) !important;
+        padding-right: clamp(24px, 4vw, 48px) !important;
         padding-bottom: 28px !important;
         padding-left: clamp(20px, 1.6vw, 32px) !important;
         box-sizing: border-box !important;
@@ -3146,6 +3147,8 @@ body {
     grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
     align-items: stretch;
     min-height: 230px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .ops-hero-copy {
@@ -3353,8 +3356,10 @@ body {
 }
 
 .home-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 390px);
+    grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
     gap: 1rem;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .home-summary-card,

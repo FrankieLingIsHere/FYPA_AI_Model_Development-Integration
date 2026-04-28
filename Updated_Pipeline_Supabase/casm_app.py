@@ -7121,17 +7121,52 @@ def _api_local_mode_auto_provisioning_impl():
         }), 502
 
     if status_response.status_code in (401, 404):
-        # PRV3 — If a provision_secret is already stored locally and the cloud no longer
-        # recognises it (404) or rejects it (401), the admin has explicitly deleted or
-        # rejected the device record.  Re-registering would let a revoked device sneak
-        # back into the approval queue, so we treat this as a definitive rejection.
+        # PRV3 (relaxed) — A 401/404 from /api/provision/status can mean either:
+        #   (a) the admin deleted the device record (genuine revocation), OR
+        #   (b) the cloud secret was rotated by a *different* caller (e.g. the
+        #       Vercel browser session also requested provisioning while we held
+        #       an older secret). The cloud's /api/provision/request endpoint
+        #       only honours unauthenticated re-requests for devices whose
+        #       status is already 'approved'/'provisioned' — so attempting a
+        #       re-request is safe: it will succeed only if the device is still
+        #       legitimately approved on the cloud, otherwise it will fail and
+        #       we then fall back to the genuine-rejection branch below.
+        retry_ok, retry_secret, retry_error = _request_new_secret()
+
+        if retry_ok and retry_secret:
+            state = {
+                'machine_id': machine_id,
+                'provision_secret': retry_secret,
+                'cloud_url': cloud_url,
+                'status': 'pending_approval',
+                'requested_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            }
+            _local_mode_save_provision_state(state)
+
+            _send_local_mode_cloud_heartbeat_once()
+            return jsonify({
+                'success': True,
+                'status': 'pending_approval',
+                'message': 'Provision secret refreshed (cloud rotated previous secret). Re-poll status next tick.',
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+            })
+
+        # Re-request failed — this is the genuine revoked/deleted case. Persist
+        # the rejection so the operator sees an actionable message instead of a
+        # silent retry loop.
         if state.get('provision_secret'):
             state.update({
                 'machine_id': machine_id,
                 'cloud_url': cloud_url,
                 'status': 'rejected',
                 'updated_at': datetime.now(timezone.utc).isoformat(),
-                'rejection_reason': 'Device record removed by administrator (secret no longer recognised).',
+                'rejection_reason': (
+                    'Device record removed by administrator (secret no longer '
+                    'recognised and re-registration was refused).'
+                ),
             })
             _local_mode_save_provision_state(state)
             return jsonify({
@@ -7143,36 +7178,14 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_url': cloud_url,
             }), 403
 
-        retry_ok, retry_secret, retry_error = _request_new_secret()
-        if not retry_ok:
-            return jsonify({
-                'success': False,
-                'status': 'request_failed',
-                'error': retry_error,
-                'machine_id': machine_id,
-                'admin_portal_url': admin_portal_url,
-                'cloud_url': cloud_url,
-            }), 502
-
-        state = {
-            'machine_id': machine_id,
-            'provision_secret': retry_secret,
-            'cloud_url': cloud_url,
-            'status': 'pending_approval',
-            'requested_at': datetime.now(timezone.utc).isoformat(),
-            'updated_at': datetime.now(timezone.utc).isoformat(),
-        }
-        _local_mode_save_provision_state(state)
-
-        _send_local_mode_cloud_heartbeat_once()
         return jsonify({
-            'success': True,
-            'status': 'pending_approval',
-            'message': 'Provision request re-submitted. Waiting for admin approval.',
+            'success': False,
+            'status': 'request_failed',
+            'error': retry_error or 'Provision re-request failed',
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
-        })
+        }), 502
 
     if status_response.status_code == 403:
         state.update({

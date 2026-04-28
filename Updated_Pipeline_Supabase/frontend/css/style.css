@@ -2970,12 +2970,19 @@ body {
     color: var(--ink);
 }
 
-.main-content {
-    max-width: 1520px;
-    /* Symmetric gutters: the sidebar consumes 80px on the left of the viewport,
-       so we add equivalent breathing room on the right via padding-right. */
-    padding: 28px clamp(28px, 3.5vw, 72px) 28px clamp(28px, 2vw, 36px);
-    box-sizing: border-box;
+/* Force symmetric gutters around the main content area on desktop / large tablet.
+   The sidebar takes 80px on the left of the viewport, and we add a matching right
+   gutter via padding so the hero card never slams against the viewport edge.
+   !important is used because several earlier rules also set .main-content padding. */
+@media (min-width: 901px) {
+    .main-content {
+        max-width: none !important;
+        padding-top: 28px !important;
+        padding-right: clamp(32px, 4vw, 80px) !important;
+        padding-bottom: 28px !important;
+        padding-left: clamp(20px, 1.6vw, 32px) !important;
+        box-sizing: border-box !important;
+    }
 }
 
 .page {
@@ -2987,29 +2994,47 @@ body {
 .page-command-bar,
 .ops-hero {
     position: relative;
-    border: 1px solid rgba(32, 37, 43, 0.12);
-    border-left: 6px solid var(--primary-color);
+    border: 1px solid rgba(196, 122, 0, 0.35);
     border-radius: var(--radius-lg);
-    /* Construction-safety palette: dark operational base with bold orange hazard stripes
-       and an orange glow at top-left so the brand color is visible at a glance. */
+    /* Orange-dominant construction palette: warm safety-orange gradient base with
+       diagonal hazard stripes for the construction-site feel. Dark slate is now
+       only used as a thin accent at the bottom for contrast with the page bg. */
     background:
-        radial-gradient(120% 90% at 0% 0%, rgba(244, 170, 28, 0.32) 0%, rgba(244, 170, 28, 0) 55%),
-        linear-gradient(135deg, rgba(32, 37, 43, 0.94), rgba(32, 37, 43, 0.88)),
-        repeating-linear-gradient(135deg, rgba(244, 170, 28, 0.55) 0 12px, rgba(244, 170, 28, 0) 12px 26px);
-    color: #fff;
-    box-shadow: var(--shadow-md), inset 4px 0 0 rgba(244, 170, 28, 0.0);
+        linear-gradient(135deg, #ffb347 0%, #f4aa1c 35%, #e09413 70%, #c47a00 100%),
+        repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.08) 0 14px, rgba(0, 0, 0, 0) 14px 28px);
+    background-blend-mode: multiply, normal;
+    color: #20252b;
+    box-shadow: var(--shadow-md);
     overflow: hidden;
 }
 
 .ops-hero::before {
-    /* Subtle orange under-glow on the bottom edge for warmth */
+    /* Subtle dark slate under-bar at the bottom for visual grounding. */
     content: "";
     position: absolute;
     inset: auto 0 0 0;
-    height: 4px;
-    background: linear-gradient(90deg, var(--primary-color), var(--primary-strong) 70%, transparent);
-    opacity: 0.85;
+    height: 5px;
+    background: linear-gradient(90deg, #20252b, #2d3540 50%, #20252b);
     pointer-events: none;
+}
+
+.ops-hero::after {
+    /* Diagonal hazard-stripe texture overlay (the iconic construction look). */
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        135deg,
+        rgba(32, 37, 43, 0.16) 0 14px,
+        rgba(32, 37, 43, 0) 14px 32px
+    );
+    pointer-events: none;
+    mix-blend-mode: multiply;
+}
+
+.ops-hero > * {
+    position: relative;
+    z-index: 1;
 }
 
 .page-command-bar {
@@ -3026,24 +3051,30 @@ body {
     font-size: clamp(1.45rem, 2.4vw, 2.35rem);
     line-height: 1.1;
     letter-spacing: 0;
+    color: #20252b;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 .page-command-bar p,
 .ops-hero p {
     max-width: 760px;
     margin: 0;
-    color: rgba(255, 255, 255, 0.78);
+    color: rgba(32, 37, 43, 0.82);
 }
 
 .ops-kicker {
     display: inline-flex;
     align-items: center;
     gap: 0.45rem;
-    color: #ffe0a6;
-    font-size: 0.78rem;
+    color: #20252b;
+    background: rgba(32, 37, 43, 0.12);
+    padding: 0.32rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.74rem;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0;
+    letter-spacing: 0.04em;
+    width: fit-content;
 }
 
 .command-bar-pills,
@@ -3061,13 +3092,40 @@ body {
     gap: 0.42rem;
     min-height: 36px;
     padding: 0.45rem 0.7rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(32, 37, 43, 0.25);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.09);
-    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.55);
+    color: #20252b;
     font-size: 0.82rem;
     font-weight: 700;
     white-space: nowrap;
+}
+
+/* Hero buttons: dark slate primary on orange bg, light secondary outlined. */
+.ops-hero .btn-primary,
+.page-command-bar .btn-primary {
+    background: #20252b;
+    color: #ffd27a;
+    border: 1px solid #20252b;
+}
+
+.ops-hero .btn-primary:hover,
+.page-command-bar .btn-primary:hover {
+    background: #2d3540;
+    color: #ffd27a;
+}
+
+.ops-hero .btn-secondary,
+.page-command-bar .btn-secondary {
+    background: rgba(255, 255, 255, 0.85);
+    color: #20252b;
+    border: 1px solid rgba(32, 37, 43, 0.4);
+}
+
+.ops-hero .btn-secondary:hover,
+.page-command-bar .btn-secondary:hover {
+    background: #ffffff;
+    color: #20252b;
 }
 
 .ops-hero {
@@ -3094,8 +3152,8 @@ body {
 .ppe-standards-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 1rem;
-    background: rgba(255, 255, 255, 0.08);
-    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(32, 37, 43, 0.18);
+    border-left: 1px solid rgba(32, 37, 43, 0.22);
 }
 
 .ppe-standards-strip figure,

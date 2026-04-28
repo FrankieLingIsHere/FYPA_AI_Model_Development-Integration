@@ -3847,12 +3847,14 @@ body {
     border-radius: 6px !important;
     margin: 0 6px !important;
     box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
-    padding: 0.7rem 1.1rem !important;
+    padding: 0.7rem 0 !important;
+    justify-content: center !important;
 }
 
 .sidebar:hover .sidebar-link.active,
 .sidebar:focus-within .sidebar-link.active {
-    padding: 0.7rem 0.75rem !important;
+    padding: 0.7rem 0.95rem !important;
+    justify-content: flex-start !important;
 }
 
 .sidebar-link.active i {

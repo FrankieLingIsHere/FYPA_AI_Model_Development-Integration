@@ -379,7 +379,7 @@ def ensure_local_backend_5010() -> Tuple[Optional[subprocess.Popen], Dict[str, A
 
     log_fh = LOCAL_LOG_PATH.open("w", encoding="utf-8", errors="ignore")
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), "luna_app.py"],
+        [str(VENV_PYTHON), "casm_app.py"],
         cwd=str(UPDATED_DIR),
         env=env,
         stdout=log_fh,

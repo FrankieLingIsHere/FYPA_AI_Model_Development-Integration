@@ -456,9 +456,23 @@ function initializeProvisioningStatusTracker() {
         notify: false
     });
 
-    provisioningStatusPollInterval = setInterval(() => {
-        refreshProvisioningStatus({ source: 'background-poll' });
-    }, LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS);
+    // Background polling intentionally disabled to prevent the home-page
+    // provisioning badge from flickering green->orange->green when transient
+    // poll responses arrive. The status now refreshes only on:
+    //   - app startup
+    //   - browser regaining network connectivity ('online')
+    //   - backend resolution event
+    //   - tab becoming visible again
+    //   - explicit user action (e.g. Run Local Mode Checkup button)
+    // To re-enable timed polling for debugging, set
+    //   window.PPE_PROVISIONING_BG_POLL_MS = <ms>
+    // before app.js loads.
+    const debugPollMs = Number(window.PPE_PROVISIONING_BG_POLL_MS || 0);
+    if (debugPollMs > 1000) {
+        provisioningStatusPollInterval = setInterval(() => {
+            refreshProvisioningStatus({ source: 'background-poll' });
+        }, debugPollMs);
+    }
 
     window.addEventListener('online', () => {
         refreshProvisioningStatus({ source: 'online', force: true });
@@ -702,7 +716,12 @@ function buildBackendCandidates(preferLocal) {
     const explicitApiOverride = normalizeBaseUrl(window.PPE_API_URL || '');
     const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || API_CONFIG.BASE_URL || '');
     const sameOrigin = '';
-    const locals = ['http://127.0.0.1:5000', 'http://127.0.0.1:5001', 'http://localhost:5000', 'http://localhost:5001'];
+    // Backend listens on 5000 (see start.bat). Port 5001 was a legacy
+    // view_reports.py port; including it here causes the resolver to
+    // probe a port nothing listens on, then the browser caches a
+    // chrome-error://chromewebdata/ tab when the user is later navigated
+    // to /api/bootstrap/installer/request on that bogus host.
+    const locals = ['http://127.0.0.1:5000', 'http://localhost:5000'];
     const currentHost = String(window.location.hostname || '').toLowerCase();
     const hostLooksLocal = currentHost === 'localhost'
         || currentHost === '127.0.0.1'
@@ -753,7 +772,10 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
         return backendResolutionInFlight;
     }
 
-    backendResolutionInFlight = (async () => {
+    // Build and assign the promise synchronously before the first await so that any
+    // concurrent caller entering this function before the microtask queue yields will
+    // see a non-null backendResolutionInFlight and dedup correctly (M3 race fix).
+    const resolution = (async () => {
         const currentHost = String(window.location.hostname || '').toLowerCase();
         const hostLooksLocal = currentHost === 'localhost'
             || currentHost === '127.0.0.1'
@@ -801,10 +823,15 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
         return API_CONFIG.BASE_URL || lastResolvedBackendBaseUrl || '';
     })();
 
+    backendResolutionInFlight = resolution;
     try {
-        return await backendResolutionInFlight;
+        return await resolution;
     } finally {
-        backendResolutionInFlight = null;
+        // Only clear if this invocation's promise is still the in-flight one.
+        // A concurrent force=true call may have already replaced it (M3 race fix).
+        if (backendResolutionInFlight === resolution) {
+            backendResolutionInFlight = null;
+        }
     }
 }
 

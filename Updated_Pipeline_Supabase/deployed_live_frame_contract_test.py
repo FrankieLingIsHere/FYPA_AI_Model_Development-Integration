@@ -6,7 +6,7 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
@@ -14,7 +14,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _DEFAULT_IMAGE_PATH = (_SCRIPT_DIR / "static" / "images" / "handbook-live.png").resolve()
 
 IMAGE_PATH = os.environ.get(
-    "LUNA_LIVE_FRAME_TEST_IMAGE",
+    "CASM_LIVE_FRAME_TEST_IMAGE",
     str(_DEFAULT_IMAGE_PATH),
 )
 

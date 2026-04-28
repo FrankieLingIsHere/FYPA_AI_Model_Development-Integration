@@ -6,12 +6,12 @@ from playwright.sync_api import sync_playwright
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
-STARTUP_WAIT_MS = int(os.environ.get("LUNA_MOBILE_STARTUP_WAIT_MS", "120000"))
-NAV_WAIT_MS = int(os.environ.get("LUNA_MOBILE_NAV_WAIT_MS", "20000"))
+STARTUP_WAIT_MS = int(os.environ.get("CASM_MOBILE_STARTUP_WAIT_MS", "120000"))
+NAV_WAIT_MS = int(os.environ.get("CASM_MOBILE_NAV_WAIT_MS", "20000"))
 
 
 def fail(message: str, code: int = 2) -> int:

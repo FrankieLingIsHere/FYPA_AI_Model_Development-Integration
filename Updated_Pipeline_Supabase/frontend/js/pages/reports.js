@@ -164,18 +164,25 @@ const ReportsPage = {
     startAutoRefresh() {
         if (this.refreshInterval) return;
 
-        // Reconcile pending/in-flight reports every 10 seconds.
-        // Even with realtime connected, periodic no-cache polling prevents stale drift.
+        // Egress guard:
+        //  - Reconcile only when there are pending/generating reports (real work).
+        //  - When Realtime is connected, the server already pushes status updates,
+        //    so we drop the blind 60s `periodicReconcile` AND we let the response
+        //    come from cache (noCache:false) instead of forcing a fresh DB query
+        //    every tick. The previous code had this inverted: noCache:true while
+        //    realtime was connected, which actively defeated caching.
+        //  - Periodic reconcile only runs when Realtime is NOT connected, every
+        //    ~120s, to heal rare drift on pure-polling clients.
         this.refreshInterval = setInterval(async () => {
             this.autoRefreshTick += 1;
             const hasPending = this.violations.some((v) => {
                 const status = this.normalizeStatus(v);
                 return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
             });
-            const periodicReconcile = (this.autoRefreshTick % 6) === 0;
+            const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
+            const periodicReconcile = !realtimeConnected && (this.autoRefreshTick % 12) === 0;
             if (hasPending || periodicReconcile) {
-                const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
-                await this.loadReports({ noCache: realtimeConnected });
+                await this.loadReports({ noCache: hasPending && !realtimeConnected });
             }
         }, 10000);
     },
@@ -797,7 +804,7 @@ const ReportsPage = {
             return;
         }
 
-        // Show ALL reports including in-progress ones (Pipeline_Luna behavior)
+        // Show ALL reports including in-progress ones (Pipeline_CASM behavior)
         list.innerHTML = `
             <div class="grid">
                 ${filtered.map(v => this.renderReportCard(v)).join('')}

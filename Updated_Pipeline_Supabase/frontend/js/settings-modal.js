@@ -375,6 +375,23 @@ const GlobalSettingsModal = {
                             </div>
                             <div id="globalLocalModeHeartbeatBadge" class="global-heartbeat-badge"></div>
                         </div>
+
+                        <div class="global-settings-card" style="margin-top: 0.9rem;">
+                            <h4><i class="fas fa-flask" style="color: var(--warning-color);"></i> Local Test Mode</h4>
+                            <p style="margin: 0 0 0.55rem 0; color: var(--text-secondary); font-size: 0.88rem;">
+                                Verify local pipeline health without waiting for the LLM. Use <b>Ping Gemma</b> to confirm
+                                the local model responds, and <b>Snapshot</b> to see whether the backend is fully offline.
+                            </p>
+                            <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.35rem;">
+                                <button id="globalPingGemmaBtn" class="btn btn-primary" type="button">
+                                    <i class="fas fa-bolt"></i> Ping Gemma
+                                </button>
+                                <button id="globalLocalSnapshotBtn" class="btn btn-secondary" type="button">
+                                    <i class="fas fa-stethoscope"></i> Local Mode Snapshot
+                                </button>
+                            </div>
+                            <div id="globalTestModeStatus" class="global-settings-status" style="margin-top: 0.65rem; white-space: pre-wrap;"></div>
+                        </div>
                     </section>
                 </div>
             </div>
@@ -883,7 +900,9 @@ const GlobalSettingsModal = {
         const status = this.normalizeLocalProvisionStatus(statusRaw);
         const machineId = String(machineIdRaw || '').trim();
         if (!machineId) return false;
-        return status === 'approved' || status === 'provisioned' || status === 'credentials_present';
+        // Only allow re-download for explicitly admin-approved or provisioned devices.
+        // credentials_present is NOT sufficient — those credentials may not be admin-authorised.
+        return status === 'approved' || status === 'provisioned';
     },
 
     updateInstallerRedownloadButton() {
@@ -1156,6 +1175,24 @@ const GlobalSettingsModal = {
             this.setProviderStatus('Local provider profile applied', 'success');
             this.showNotification('Local provider profile applied', 'success');
             await this.loadProviderRoutingSettings();
+
+            // Redirect API traffic to the local backend now that the profile has switched.
+            // Without this, all subsequent API calls (generate-now, live/start, etc.) would
+            // still go to the cloud URL even though the NLP profile is set to local.
+            if (this.isLikelyRemoteBackend()) {
+                this.setProviderStatus(
+                    'Local profile applied. Note: you are on the HTTPS deployed frontend. ' +
+                    'Browsers block requests to http://localhost:5000 from HTTPS pages (mixed content). ' +
+                    'Open http://127.0.0.1:5000 directly in your browser to use local mode.',
+                    'warning'
+                );
+            } else if (typeof window.PPEResolveWorkingBackendBaseUrl === 'function') {
+                try {
+                    await window.PPEResolveWorkingBackendBaseUrl({ preferLocal: true, force: true });
+                } catch (resolveErr) {
+                    console.warn('GlobalSettingsModal: backend URL resolution after local profile apply failed', resolveErr);
+                }
+            }
         } catch (error) {
             console.error('GlobalSettingsModal: apply local profile failed', error);
             this.setProviderStatus(error.message || 'Failed applying local provider profile', 'error');
@@ -1267,9 +1304,39 @@ const GlobalSettingsModal = {
         }
     },
 
-    async runLocalModeCheckup() {
+    _restoreLocalCheckupButton() {
         const btn = this.getEl('globalRunLocalModeCheckupBtn');
         if (!btn) return;
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-wifi"></i> Run Local Mode Checkup';
+    },
+
+    async runLocalModeCheckup() {
+        // Re-entrancy guard: prevent double-clicks while a previous run is
+        // still awaiting cloud round-trips. Without this guard the button
+        // would visually reset, then a second click would race the first
+        // and one of them would re-disable the button after it finished.
+        if (this._localCheckupRunning) {
+            return;
+        }
+        const btn = this.getEl('globalRunLocalModeCheckupBtn');
+        if (!btn) return;
+
+        this._localCheckupRunning = true;
+
+        // Watchdog: if anything below hangs (cloud unreachable + missing
+        // fetch timeout, browser tab throttled, etc.), force the button back
+        // to a usable state after 60s instead of trapping the user in a
+        // permanent "Checking..." spinner.
+        const watchdog = setTimeout(() => {
+            try {
+                this._restoreLocalCheckupButton();
+                this.setProviderStatus(
+                    'Local mode checkup is taking longer than expected. The check will continue in the background; you can rerun it.',
+                    'warning'
+                );
+            } catch (_) { /* best-effort */ }
+        }, 60000);
 
         try {
             btn.disabled = true;
@@ -1299,15 +1366,15 @@ const GlobalSettingsModal = {
                 if (isLikelyRemoteBackend) {
                     const remoteHint = heartbeatRecent
                         ? `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`
-                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start LUNA_LOCALINSTALLER, wait for first sync/provisioning request, then rerun checkup.`;
+                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start CASM_LOCALINSTALLER, wait for first sync/provisioning request, then rerun checkup.`;
                     this.setProviderStatus(remoteHint, 'warning');
                     this.showNotification(remoteHint, 'warning');
                 } else {
                     const configuredWaitSeconds = Number(
-                        (window && (window.LUNA_LOCAL_CHECKUP_WAIT_SECONDS ?? window.__LUNA_LOCAL_CHECKUP_WAIT_SECONDS)) ?? 8
+                        (window && (window.CASM_LOCAL_CHECKUP_WAIT_SECONDS ?? window.__CASM_LOCAL_CHECKUP_WAIT_SECONDS)) ?? 8
                     );
                     const configuredPullTimeoutSeconds = Number(
-                        (window && (window.LUNA_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS ?? window.__LUNA_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS)) ?? 120
+                        (window && (window.CASM_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS ?? window.__CASM_LOCAL_CHECKUP_PULL_TIMEOUT_SECONDS)) ?? 120
                     );
                     const waitSeconds = Number.isFinite(configuredWaitSeconds)
                         ? Math.max(3, Math.min(30, Math.round(configuredWaitSeconds)))
@@ -1425,18 +1492,133 @@ const GlobalSettingsModal = {
             }
         } catch (error) {
             console.error('GlobalSettingsModal: local checkup failed', error);
-            this.setProviderStatus(error.message || 'Local mode checkup failed', 'error');
-            this.showNotification(error.message || 'Local mode checkup failed', 'error');
+            const message = (error && error.name === 'TimeoutError')
+                ? 'Local mode checkup timed out waiting for the cloud. Local mode can still run offline; rerun once connectivity returns.'
+                : (error && error.message) || 'Local mode checkup failed';
+            this.setProviderStatus(message, 'error');
+            this.showNotification(message, 'error');
+        } finally {
+            clearTimeout(watchdog);
+            this._localCheckupRunning = false;
+            this._restoreLocalCheckupButton();
+        }
+    },
+
+    async pingGemma() {
+        const btn = this.getEl('globalPingGemmaBtn');
+        const statusEl = this.getEl('globalTestModeStatus');
+        if (!btn) return;
+
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pinging Gemma...';
+        if (statusEl) {
+            statusEl.textContent = 'Sending tiny prompt to local LLM...';
+            statusEl.style.color = 'var(--text-secondary)';
+        }
+
+        try {
+            const resp = await fetch(`${API_CONFIG.BASE_URL}/api/llm/ping`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: 'Reply with the single word: PONG' })
+            });
+            const data = await resp.json().catch(() => ({}));
+
+            if (resp.ok && data.ok) {
+                if (statusEl) {
+                    statusEl.textContent =
+                        `\u2705 Gemma is working\n` +
+                        `Model: ${data.model || '?'}\n` +
+                        `Latency: ${data.latency_ms ?? '?'} ms\n` +
+                        `Reply: ${data.response_preview || '(empty)'}`;
+                    statusEl.style.color = 'var(--success-color)';
+                }
+            } else {
+                const errMsg = data.error || `HTTP ${resp.status}`;
+                if (statusEl) {
+                    statusEl.textContent =
+                        `\u274C Gemma is not responding\n` +
+                        `Model: ${data.model || '?'}\n` +
+                        `Base URL: ${data.base_url || '?'}\n` +
+                        `Ollama running: ${data.ollama_running ? 'yes' : 'no'}\n` +
+                        `Model pulled: ${data.model_available ? 'yes' : 'no'}\n` +
+                        `Error: ${errMsg}`;
+                    statusEl.style.color = 'var(--error-color)';
+                }
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.textContent = `\u274C Ping failed: ${err.message || err}`;
+                statusEl.style.color = 'var(--error-color)';
+            }
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-wifi"></i> Run Local Mode Checkup';
+            btn.innerHTML = originalLabel;
+        }
+    },
+
+    async fetchLocalModeSnapshot() {
+        const btn = this.getEl('globalLocalSnapshotBtn');
+        const statusEl = this.getEl('globalTestModeStatus');
+        if (!btn) return;
+
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+
+        try {
+            const resp = await fetch(`${API_CONFIG.BASE_URL}/api/system/local-mode-snapshot`);
+            const data = await resp.json().catch(() => ({}));
+            if (statusEl) {
+                const lines = [
+                    `Routing profile: ${data.routing_profile}`,
+                    `Pure offline mode: ${data.pure_offline_active ? 'YES (no Supabase)' : 'no'}`,
+                    `Supabase DB active: ${data.supabase_db_active ? 'yes' : 'no'}`,
+                    `Cloud credentials present: ${data.supabase_credentials_present ? 'yes' : 'no'}`,
+                    `Mock report mode (env): ${data.mock_reports_enabled ? 'ON' : 'off'}`,
+                    `Local reports dir: ${data.local_reports_dir || '(unknown)'}`,
+                    `Local report count: ${data.local_report_count}`,
+                ];
+                statusEl.textContent = lines.join('\n');
+                statusEl.style.color = data.pure_offline_active
+                    ? 'var(--success-color)'
+                    : 'var(--text-secondary)';
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.textContent = `Snapshot failed: ${err.message || err}`;
+                statusEl.style.color = 'var(--error-color)';
+            }
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalLabel;
         }
     },
 
     ensureLocalProvisionPolling() {
         if (this.localProvisionPollInterval) return;
 
-        this.localProvisionPollInterval = setInterval(async () => {
+        // Adaptive cadence: poll fast right after the request was submitted so
+        // the UI flips green within ~5s of admin approval, then back off to
+        // avoid hammering the cloud once it's been pending for a while.
+        const FAST_INTERVAL_MS = 5000;     // first ~2 minutes
+        const SLOW_INTERVAL_MS = 15000;    // after that
+        const FAST_WINDOW_MS = 2 * 60 * 1000;
+        const startedAt = Date.now();
+        let currentIntervalMs = FAST_INTERVAL_MS;
+
+        const scheduleNext = () => {
+            const elapsed = Date.now() - startedAt;
+            const desired = elapsed > FAST_WINDOW_MS ? SLOW_INTERVAL_MS : FAST_INTERVAL_MS;
+            if (desired !== currentIntervalMs) {
+                clearInterval(this.localProvisionPollInterval);
+                currentIntervalMs = desired;
+                this.localProvisionPollInterval = setInterval(tick, currentIntervalMs);
+            }
+        };
+
+        const tick = async () => {
             if (!this.isOpen) return;
 
             const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
@@ -1455,11 +1637,16 @@ const GlobalSettingsModal = {
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
                 if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
                     this.stopLocalProvisionPolling();
+                    return;
                 }
             } catch (error) {
                 console.warn('GlobalSettingsModal: silent provision poll failed', error);
             }
-        }, 15000);
+
+            scheduleNext();
+        };
+
+        this.localProvisionPollInterval = setInterval(tick, currentIntervalMs);
     },
 
     stopLocalProvisionPolling() {
@@ -1572,6 +1759,8 @@ const GlobalSettingsModal = {
         const reloadProviderBtn = this.getEl('globalReloadProviderRoutingBtn');
         const runCheckupBtn = this.getEl('globalRunLocalModeCheckupBtn');
         const redownloadInstallerBtn = this.getEl('globalRedownloadInstallerBtn');
+        const pingGemmaBtn = this.getEl('globalPingGemmaBtn');
+        const localSnapshotBtn = this.getEl('globalLocalSnapshotBtn');
 
         document.querySelectorAll('.global-settings-tab').forEach((tab) => {
             tab.addEventListener('click', () => {
@@ -1643,8 +1832,16 @@ const GlobalSettingsModal = {
             runCheckupBtn.addEventListener('click', () => this.runLocalModeCheckup());
         }
 
+        if (pingGemmaBtn) {
+            pingGemmaBtn.addEventListener('click', () => this.pingGemma());
+        }
+
+        if (localSnapshotBtn) {
+            localSnapshotBtn.addEventListener('click', () => this.fetchLocalModeSnapshot());
+        }
+
         if (redownloadInstallerBtn) {
-            redownloadInstallerBtn.addEventListener('click', () => {
+            redownloadInstallerBtn.addEventListener('click', async () => {
                 const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
                 const machineId = String(this.localProvisionState.machineId || '').trim();
 
@@ -1668,18 +1865,50 @@ const GlobalSettingsModal = {
                     return;
                 }
 
-                const remoteState = this.loadRemoteProvisionState();
-                const provisionSecret = String((remoteState && remoteState.provisionSecret) || '').trim();
-
-                const requestParams = new URLSearchParams();
-                requestParams.set('machine_id', machineId);
-                if (provisionSecret) {
-                    requestParams.set('provision_secret', provisionSecret);
+                // Refuse to navigate when the page itself is in a chrome-error
+                // or other invalid context. This prevents the user-facing
+                // "Unsafe attempt to load URL ... from frame with URL
+                // chrome-error://chromewebdata/" warning.
+                const currentProtocol = String(window.location.protocol || '').toLowerCase();
+                if (currentProtocol === 'chrome-error:' || currentProtocol === 'about:' || currentProtocol === 'data:') {
+                    this.showNotification(
+                        'This page is in an error state. Refresh the tab from the backend URL and try again.',
+                        'error'
+                    );
+                    return;
                 }
-                // Add a cache buster so stale redirects/403s are not reused by browsers/proxies.
-                requestParams.set('_ts', String(Date.now()));
 
-                window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${requestParams.toString()}`);
+                // The local backend has the provision_secret persisted on
+                // disk in LOCAL_MODE_PROVISION_STATE_FILE, and the cloud URL
+                // in its .env. Hand off the redirect entirely to the backend
+                // via /api/local-mode/installer/redirect — that way the
+                // browser never needs to know the secret and we don't have
+                // to fight sessionStorage being cleared between tab opens.
+                const localBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
+                const proxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+
+                // Preflight the local backend so we abort cleanly instead of
+                // navigating into a chrome-error page if it's down.
+                try {
+                    const probeController = new AbortController();
+                    const probeTimer = setTimeout(() => probeController.abort(), 4000);
+                    const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
+                        cache: 'no-store',
+                        signal: probeController.signal
+                    }).finally(() => clearTimeout(probeTimer));
+                    if (!probeResp || (probeResp.status >= 500 && probeResp.status !== 503)) {
+                        throw new Error(`Backend probe returned ${probeResp ? probeResp.status : 'no response'}`);
+                    }
+                } catch (probeErr) {
+                    console.warn('GlobalSettingsModal: local backend probe failed before installer download', probeErr);
+                    this.showNotification(
+                        'Local backend is not reachable. Run ./start.bat and try again.',
+                        'error'
+                    );
+                    return;
+                }
+
+                window.location.assign(proxyUrl);
             });
         }
 

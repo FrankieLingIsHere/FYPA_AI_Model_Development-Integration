@@ -7,18 +7,18 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-POLL_SECONDS = int(os.environ.get("LUNA_CONDITIONS_POLL_SECONDS", "30"))
-POLL_INTERVAL = int(os.environ.get("LUNA_CONDITIONS_POLL_INTERVAL", "3"))
-MAX_REPORT_IDS = int(os.environ.get("LUNA_CONDITIONS_MAX_REPORT_IDS", "15"))
-ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("LUNA_PROVIDER_MODE_MATRIX", "1") != "0"
-PROVIDER_MODE_GENERATE_PROBE = os.environ.get("LUNA_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
-STRICT_CONDITIONS = os.environ.get("LUNA_CONDITIONS_STRICT", "0") != "0"
-REQUIRE_NO_NLP_FALLBACK = os.environ.get("LUNA_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
-REQUIRE_GENERATE_PROGRESSION = os.environ.get("LUNA_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
+POLL_SECONDS = int(os.environ.get("CASM_CONDITIONS_POLL_SECONDS", "30"))
+POLL_INTERVAL = int(os.environ.get("CASM_CONDITIONS_POLL_INTERVAL", "3"))
+MAX_REPORT_IDS = int(os.environ.get("CASM_CONDITIONS_MAX_REPORT_IDS", "15"))
+ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("CASM_PROVIDER_MODE_MATRIX", "1") != "0"
+PROVIDER_MODE_GENERATE_PROBE = os.environ.get("CASM_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
+STRICT_CONDITIONS = os.environ.get("CASM_CONDITIONS_STRICT", "0") != "0"
+REQUIRE_NO_NLP_FALLBACK = os.environ.get("CASM_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
+REQUIRE_GENERATE_PROGRESSION = os.environ.get("CASM_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
 ALLOWED_NO_FALLBACK_PROVIDERS = {"model_api", "gemini", "ollama"}
 TRANSIENT_GENERATE_REJECTED_REASONS = {"queue_full", "rate_limited"}
 TRANSIENT_GENERATE_ERROR_MARKERS = (
@@ -558,7 +558,7 @@ def main() -> int:
         if ENABLE_PROVIDER_MODE_MATRIX:
             run_provider_mode_matrix_probe(report_ids)
         else:
-            print("INFO: provider mode matrix probe disabled via LUNA_PROVIDER_MODE_MATRIX=0")
+            print("INFO: provider mode matrix probe disabled via CASM_PROVIDER_MODE_MATRIX=0")
 
         if REQUIRE_NO_NLP_FALLBACK:
             runtime_code, runtime_payload, runtime_text = request_json(

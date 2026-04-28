@@ -236,7 +236,7 @@ def api_stats():
 def system_info():
     """System information endpoint."""
     return jsonify({
-        'system': 'LUNA PPE Safety Monitor - Supabase Edition',
+        'system': 'CASM PPE Safety Monitor - Supabase Edition',
         'version': '1.0.0-supabase',
         'database': 'Supabase Postgres',
         'storage': 'Supabase Storage',
@@ -254,7 +254,7 @@ SIMPLE_INDEX = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LUNA Reports - Supabase Edition</title>
+    <title>CASM Reports - Supabase Edition</title>
     <style>
         * {
             margin: 0;
@@ -366,7 +366,7 @@ SIMPLE_INDEX = '''
 </head>
 <body>
     <div class="container">
-        <h1>🌙 LUNA Reports</h1>
+        <h1>🌙 CASM Reports</h1>
         <span class="badge">☁️ Supabase Edition</span>
         
         <div id="stats"></div>
@@ -427,7 +427,7 @@ SIMPLE_INDEX = '''
 
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("LUNA PPE Violation Report Viewer - Supabase Edition")
+    logger.info("CASM PPE Violation Report Viewer - Supabase Edition")
     logger.info("=" * 60)
     logger.info("Database: Supabase Postgres")
     logger.info("Storage: Supabase Storage (Private Buckets)")

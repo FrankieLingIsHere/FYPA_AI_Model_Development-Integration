@@ -7,10 +7,10 @@ from playwright.sync_api import sync_playwright
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
-STRICT_MODE = os.environ.get("LUNA_FRONTEND_PARITY_STRICT", "0") != "0"
+STRICT_MODE = os.environ.get("CASM_FRONTEND_PARITY_STRICT", "0") != "0"
 
 
 def fail(message: str, code: int = 2) -> int:

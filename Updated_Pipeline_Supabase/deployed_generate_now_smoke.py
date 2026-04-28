@@ -8,13 +8,13 @@ from requests import RequestException
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-POLL_SECONDS = int(os.environ.get("LUNA_SMOKE_POLL_SECONDS", "45"))
-POLL_INTERVAL = int(os.environ.get("LUNA_SMOKE_POLL_INTERVAL", "3"))
-MAX_CANDIDATES = int(os.environ.get("LUNA_SMOKE_MAX_CANDIDATES", "15"))
+POLL_SECONDS = int(os.environ.get("CASM_SMOKE_POLL_SECONDS", "45"))
+POLL_INTERVAL = int(os.environ.get("CASM_SMOKE_POLL_INTERVAL", "3"))
+MAX_CANDIDATES = int(os.environ.get("CASM_SMOKE_MAX_CANDIDATES", "15"))
 
 
 def get_violations(limit: int = 40):

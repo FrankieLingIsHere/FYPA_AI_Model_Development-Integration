@@ -7,13 +7,13 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-REPEATS = max(2, int(os.environ.get("LUNA_LIVE_DEDUP_REPEATS", "4")))
-MAX_ACCEPTED = max(1, int(os.environ.get("LUNA_LIVE_DEDUP_MAX_ACCEPTED", "1")))
-MIN_BLOCKED = max(1, int(os.environ.get("LUNA_LIVE_DEDUP_MIN_BLOCKED", "1")))
+REPEATS = max(2, int(os.environ.get("CASM_LIVE_DEDUP_REPEATS", "4")))
+MAX_ACCEPTED = max(1, int(os.environ.get("CASM_LIVE_DEDUP_MAX_ACCEPTED", "1")))
+MIN_BLOCKED = max(1, int(os.environ.get("CASM_LIVE_DEDUP_MIN_BLOCKED", "1")))
 
 
 def fail(msg: str, code: int = 2) -> int:

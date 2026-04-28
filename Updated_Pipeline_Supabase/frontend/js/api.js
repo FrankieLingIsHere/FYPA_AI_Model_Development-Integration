@@ -6,6 +6,50 @@ const API = {
         lastBatchAt: 0
     },
 
+    /**
+     * fetch() with a hard client-side timeout via AbortController. Used for
+     * cloud-touching endpoints where a stalled response would otherwise hang
+     * the UI forever (e.g. Local Mode Checkup → cloud provisioning).
+     */
+    async _fetchWithTimeout(url, init = {}, timeoutMs = 15000) {
+        // Refuse to issue requests when the page itself is in an invalid
+        // context (chrome-error://chromewebdata/, about:blank, data:URL).
+        // Browsers block such cross-origin requests and report the noisy
+        // "Unsafe attempt to load URL ... from frame with URL
+        // chrome-error://chromewebdata/" warning. Failing fast here gives
+        // callers a clear error to surface to the user instead.
+        const docProtocol = String((typeof window !== 'undefined' && window.location && window.location.protocol) || '').toLowerCase();
+        if (docProtocol === 'chrome-error:' || docProtocol === 'about:' || docProtocol === 'data:') {
+            const e = new Error(`Refusing to fetch ${url}: page is in an invalid context (${docProtocol}). Reload the tab from the backend URL.`);
+            e.name = 'InvalidContextError';
+            throw e;
+        }
+
+        const controller = new AbortController();
+        const externalSignal = init && init.signal;
+        if (externalSignal) {
+            if (externalSignal.aborted) {
+                controller.abort();
+            } else {
+                externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+            }
+        }
+        const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 15000));
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        } catch (err) {
+            if (controller.signal.aborted) {
+                const e = new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+                e.name = 'TimeoutError';
+                e.cause = err;
+                throw e;
+            }
+            throw err;
+        } finally {
+            clearTimeout(timer);
+        }
+    },
+
     canonicalViolationKey(rawKey) {
         if (!rawKey) return null;
 
@@ -681,9 +725,9 @@ const API = {
             const querySuffix = query.toString();
             const endpoint = `${API_CONFIG.BASE_URL}/api/reports/recovery/options${querySuffix ? `?${querySuffix}` : ''}`;
 
-            const response = await fetch(endpoint, {
+            const response = await this._fetchWithTimeout(endpoint, {
                 cache: 'no-store'
-            });
+            }, 12000);
             if (!response.ok) throw new Error('Failed to fetch recovery options');
             return await response.json();
         } catch (error) {
@@ -725,11 +769,11 @@ const API = {
                 pull_timeout_seconds: Number(options.pullTimeoutSeconds || 600)
             };
 
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/prepare`, {
+            const response = await this._fetchWithTimeout(`${API_CONFIG.BASE_URL}/api/local-mode/prepare`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
-            });
+            }, Math.max(15000, (Number(payload.pull_timeout_seconds) || 60) * 1000 + 5000));
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
@@ -753,11 +797,11 @@ const API = {
                 payload.cloud_url = String(options.cloudUrl).trim();
             }
 
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/auto`, {
+            const response = await this._fetchWithTimeout(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/auto`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
-            });
+            }, 20000);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
@@ -787,11 +831,11 @@ const API = {
                 };
             }
 
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/provision/request`, {
+            const response = await this._fetchWithTimeout(`${API_CONFIG.BASE_URL}/api/provision/request`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ machine_id: machineId })
-            });
+            }, 15000);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
@@ -849,17 +893,17 @@ const API = {
 
             let response;
             try {
-                response = await fetch(buildStatusUrl(false), {
+                response = await this._fetchWithTimeout(buildStatusUrl(false), {
                     cache: 'no-store',
                     headers: {
                         'X-Provision-Secret': provisionSecret
                     }
-                });
+                }, 12000);
             } catch (headerRequestError) {
                 // Fallback for environments where custom header preflight is blocked.
-                response = await fetch(buildStatusUrl(true), {
+                response = await this._fetchWithTimeout(buildStatusUrl(true), {
                     cache: 'no-store'
-                });
+                }, 12000);
             }
 
             const data = await response.json().catch(() => ({}));
@@ -909,9 +953,9 @@ const API = {
             const querySuffix = query.toString();
             const endpoint = `${API_CONFIG.BASE_URL}/api/local-mode/provisioning/status${querySuffix ? `?${querySuffix}` : ''}`;
 
-            const response = await fetch(endpoint, {
+            const response = await this._fetchWithTimeout(endpoint, {
                 cache: 'no-store'
-            });
+            }, 12000);
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 return {

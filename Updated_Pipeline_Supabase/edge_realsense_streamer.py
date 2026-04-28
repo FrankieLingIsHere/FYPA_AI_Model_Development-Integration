@@ -2,7 +2,7 @@
 Edge RealSense relay streamer.
 
 Captures frames from a local Intel RealSense camera and uploads them to a hosted
-LUNA backend so deployment mode can consume local hardware as a live source.
+CASM backend so deployment mode can consume local hardware as a live source.
 """
 
 import argparse
@@ -86,7 +86,7 @@ def main() -> int:
     ingest_url = f"{base_url}{endpoint_path}"
 
     print("=" * 72)
-    print("LUNA Edge RealSense Relay")
+    print("CASM Edge RealSense Relay")
     print("=" * 72)
     print(f"Backend ingest URL : {ingest_url}")
     print(f"Capture profile    : {args.width}x{args.height} @ {args.camera_fps}fps")

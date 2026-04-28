@@ -14,11 +14,13 @@ let runtimeApiBaseOverride = null;
 
 const API_CONFIG = {
     get BASE_URL() {
-        if (runtimeApiBaseOverride !== null) {
-            return runtimeApiBaseOverride;
-        }
+        // Offline check first — always takes priority over any cached override so
+        // the fallback to the local backend is never blocked by runtimeApiBaseOverride.
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
             return this.LOCAL_BACKEND_URL;
+        }
+        if (runtimeApiBaseOverride !== null) {
+            return runtimeApiBaseOverride;
         }
         return normalizeApiBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '');
     },

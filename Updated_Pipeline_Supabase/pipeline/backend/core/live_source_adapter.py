@@ -42,7 +42,7 @@ class LiveSourceAdapter:
         self.last_good_camera_index_path = Path(
             os.getenv(
                 'WEBCAM_LAST_GOOD_INDEX_FILE',
-                str(Path.home() / '.luna_local_state' / 'last_webcam_index.txt')
+                str(Path.home() / '.casm_local_state' / 'last_webcam_index.txt')
             )
         )
         self.active_camera_index = self._load_last_good_camera_index(default_index=self.active_camera_index)

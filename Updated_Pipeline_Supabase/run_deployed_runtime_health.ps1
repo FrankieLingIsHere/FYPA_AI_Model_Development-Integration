@@ -24,16 +24,16 @@ if (-not (Test-Path $nlpContractScript)) {
     exit 2
 }
 
-$env:LUNA_BASE_URL = $BaseUrl.TrimEnd('/')
+$env:CASM_BASE_URL = $BaseUrl.TrimEnd('/')
 if ($Strict) {
-    $env:LUNA_RUNTIME_HEALTH_STRICT = "1"
-    $env:LUNA_RUNTIME_NLP_CONTRACT_NON_BLOCKING = "0"
+    $env:CASM_RUNTIME_HEALTH_STRICT = "1"
+    $env:CASM_RUNTIME_NLP_CONTRACT_NON_BLOCKING = "0"
 } else {
-    $env:LUNA_RUNTIME_HEALTH_STRICT = "0"
-    $env:LUNA_RUNTIME_NLP_CONTRACT_NON_BLOCKING = "0"
+    $env:CASM_RUNTIME_HEALTH_STRICT = "0"
+    $env:CASM_RUNTIME_NLP_CONTRACT_NON_BLOCKING = "0"
 }
 
-Write-Output ("INFO: running deployed runtime health checks against " + $env:LUNA_BASE_URL)
+Write-Output ("INFO: running deployed runtime health checks against " + $env:CASM_BASE_URL)
 
 $overallCode = 0
 

@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 

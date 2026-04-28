@@ -5,10 +5,10 @@ import requests
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
-STRICT_FRONTEND_ASSETS = os.environ.get("LUNA_FRONTEND_ASSETS_STRICT", "0") != "0"
+STRICT_FRONTEND_ASSETS = os.environ.get("CASM_FRONTEND_ASSETS_STRICT", "0") != "0"
 
 
 def _looks_like_html(payload: str) -> bool:
@@ -217,7 +217,7 @@ def main() -> int:
 
         print(
             "WARN: deployed frontend assets do not yet include all required markers; "
-            "treating as non-blocking by default (set LUNA_FRONTEND_ASSETS_STRICT=1 to enforce)"
+            "treating as non-blocking by default (set CASM_FRONTEND_ASSETS_STRICT=1 to enforce)"
         )
         for line in missing:
             print(f" - {line}")

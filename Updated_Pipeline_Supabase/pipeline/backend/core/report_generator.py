@@ -10,7 +10,7 @@ Generates comprehensive safety violation reports combining:
 5. HTML report generation
 6. PDF conversion
 
-Based on NLP_Luna/llama3_variant implementation.
+Based on NLP_CASM/llama3_variant implementation.
 """
 
 import logging
@@ -115,9 +115,9 @@ class ReportGenerator:
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_nlp_completed_at = None
-        self.routing_profile = str(os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+        self.routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
-        self.strict_local_profile = self.enforce_strict_provider_split and self.routing_profile == 'local'
+        # strict_local_profile is now a computed property — see below; do not set it here
         self.sticky_nlp_provider = None
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
@@ -319,6 +319,17 @@ class ReportGenerator:
         
         ai_provider = ' -> '.join(self.nlp_provider_order)
         logger.info(f"Report Generator initialized (NLP provider order: {ai_provider})")
+
+    @property
+    def strict_local_profile(self) -> bool:
+        """Always derived from current routing_profile so it stays in sync after runtime profile switches."""
+        return bool(self.enforce_strict_provider_split and self.routing_profile == 'local')
+
+    @strict_local_profile.setter
+    def strict_local_profile(self, value):
+        # Ignored — value is always computed from routing_profile.
+        # Setter exists for backward compatibility with code that assigns to this attribute.
+        pass
 
     def get_runtime_provider_diagnostics(self) -> Dict[str, Any]:
         """Expose NLP routing runtime details for operator visibility."""
@@ -901,7 +912,7 @@ class ReportGenerator:
         dosh_context: List[Dict[str, Any]] = None
     ) -> str:
         """
-        Build enhanced prompt for Llama based on NLP_Luna template.
+        Build enhanced prompt for Llama based on NLP_CASM template.
         Includes environment-aware analysis and objective/subjective metrics.
         Now includes DOSH documentation context from Chroma DB.
         
@@ -1575,6 +1586,32 @@ RESPONSE FORMAT (JSON):
         self.last_gemini_budget_block_reason = None
         force_local_nlp = bool(report_data.get('force_local_nlp'))
         allow_forced_local_fallback = bool(report_data.get('allow_local_nlp_fallback'))
+
+        # ------------------------------------------------------------------
+        # Fast/Mock report mode (Local Test Mode)
+        # ------------------------------------------------------------------
+        # When CASM_MOCK_REPORTS=true (env) or report_data['mock'] is True,
+        # skip the LLM entirely and use the deterministic rule-based fallback.
+        # This is intended for verifying that the rest of the pipeline (queue,
+        # YOLO, image saving, HTML rendering) works without paying the LLM
+        # latency cost. Useful when Gemma/Ollama is slow or unavailable.
+        # ------------------------------------------------------------------
+        env_mock = str(os.getenv('CASM_MOCK_REPORTS', '') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+        request_mock = bool(report_data.get('mock') or report_data.get('mock_report'))
+        if env_mock or request_mock:
+            mock_source = 'request' if request_mock else 'env'
+            logger.info(
+                "MOCK REPORT MODE active (%s) for report %s \u2014 skipping LLM call",
+                mock_source, report_data.get('report_id')
+            )
+            nlp_analysis = self._generate_fallback_analysis(report_data)
+            self.last_nlp_provider = 'mock'
+            self.last_nlp_model = 'mock-fast-mode'
+            self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
+            if isinstance(nlp_analysis, dict):
+                nlp_analysis.setdefault('provider', 'mock')
+                nlp_analysis.setdefault('model', 'mock-fast-mode')
+                nlp_analysis['mock_mode'] = True
 
         effective_provider_order = _resolve_effective_nlp_provider_order(
             self.nlp_provider_order,
@@ -4010,7 +4047,7 @@ RESPONSE FORMAT (JSON):
         """
     
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
-        """Generate per-person analysis cards (inspired by NLP_Luna)."""
+        """Generate per-person analysis cards (inspired by NLP_CASM)."""
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
             persons = []

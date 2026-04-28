@@ -1,14 +1,14 @@
 #!/bin/bash
-# LUNA Supabase Edition - Startup Script
+# CASM Supabase Edition - Startup Script
 # ========================================
 # 
-# Quick start script for the LUNA PPE Safety Monitor with Supabase backend.
+# Quick start script for the CASM PPE Safety Monitor with Supabase backend.
 # 
 # Usage:
 #   ./start.sh
 
 echo "=========================================="
-echo "LUNA Supabase Edition - Starting..."
+echo "CASM Supabase Edition - Starting..."
 echo "=========================================="
 echo ""
 
@@ -50,7 +50,7 @@ fi
 echo "✓ Dependencies verified"
 
 echo ""
-echo "Starting LUNA application..."
+echo "Starting CASM application..."
 echo ""
 echo "Once started, open your browser to:"
 echo "  http://localhost:5000"
@@ -61,4 +61,4 @@ echo "=========================================="
 echo ""
 
 # Start the application
-python luna_app.py
+python casm_app.py

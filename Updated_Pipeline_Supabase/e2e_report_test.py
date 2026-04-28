@@ -8,11 +8,11 @@ import requests
 from requests import RequestException
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 IMAGE_PATH = os.environ.get(
-    "LUNA_TEST_IMAGE",
+    "CASM_TEST_IMAGE",
     str(Path("Updated_Pipeline_Supabase/static/images/handbook-live.png").resolve()),
 )
 

@@ -6,19 +6,19 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-EXPECTED_ROUTING_PROFILE = os.environ.get("LUNA_EXPECT_ROUTING_PROFILE", "cloud").strip().lower()
-EXPECTED_NLP_PROVIDER = os.environ.get("LUNA_EXPECT_NLP_PROVIDER", "gemini").strip().lower()
-STRICT_RUNTIME = str(os.environ.get("LUNA_RUNTIME_HEALTH_STRICT", "0")).strip().lower() in {
+EXPECTED_ROUTING_PROFILE = os.environ.get("CASM_EXPECT_ROUTING_PROFILE", "cloud").strip().lower()
+EXPECTED_NLP_PROVIDER = os.environ.get("CASM_EXPECT_NLP_PROVIDER", "gemini").strip().lower()
+STRICT_RUNTIME = str(os.environ.get("CASM_RUNTIME_HEALTH_STRICT", "0")).strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
-DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("LUNA_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
+DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("CASM_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
     "1",
     "true",
     "yes",

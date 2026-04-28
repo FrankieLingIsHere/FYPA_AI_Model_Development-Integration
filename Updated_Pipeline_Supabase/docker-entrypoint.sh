@@ -1,5 +1,5 @@
 #!/bin/bash
-# LUNA Docker Entrypoint Script
+# CASM Docker Entrypoint Script
 # Starts the Flask app
 
 set -e
@@ -23,6 +23,6 @@ if [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${RAILWAY_ENVIRONMENT:-}" ] || is_t
 	fi
 fi
 
-echo "Starting LUNA application on port ${PORT:-5000}..."
+echo "Starting CASM application on port ${PORT:-5000}..."
 # Use python directly
-exec python luna_app.py
+exec python casm_app.py

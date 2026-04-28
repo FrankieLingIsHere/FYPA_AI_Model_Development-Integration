@@ -7,11 +7,11 @@ from playwright.sync_api import sync_playwright
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
-MAX_NAV_LATENCY_MS = int(os.environ.get("LUNA_FRONTEND_MAX_NAV_LATENCY_MS", "12000"))
+MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "12000"))
 
 
 def fail(message: str, code: int = 2) -> int:
@@ -52,8 +52,8 @@ def install_metrics_hooks(page):
     page.evaluate(
         """
         () => {
-            if (!window.__LUNA_ACTION_METRICS) {
-                window.__LUNA_ACTION_METRICS = {
+            if (!window.__CASM_ACTION_METRICS) {
+                window.__CASM_ACTION_METRICS = {
                     mounts: { home: 0, reports: 0, analytics: 0, live: 0, about: 0 },
                     renders: 0,
                     timezoneEvents: 0,
@@ -63,39 +63,39 @@ def install_metrics_hooks(page):
                 };
             }
 
-            const m = window.__LUNA_ACTION_METRICS;
+            const m = window.__CASM_ACTION_METRICS;
 
             const wrapMethod = (obj, methodName, counterName) => {
                 if (!obj || typeof obj[methodName] !== 'function') return;
-                if (obj[methodName].__luna_wrapped) return;
+                if (obj[methodName].__casm_wrapped) return;
                 const original = obj[methodName].bind(obj);
                 const wrapped = function(...args) {
                     m[counterName] = (m[counterName] || 0) + 1;
                     return original(...args);
                 };
-                wrapped.__luna_wrapped = true;
+                wrapped.__casm_wrapped = true;
                 obj[methodName] = wrapped;
             };
 
             const wrapMount = (obj, pageKey) => {
                 if (!obj || typeof obj.mount !== 'function') return;
-                if (obj.mount.__luna_wrapped) return;
+                if (obj.mount.__casm_wrapped) return;
                 const original = obj.mount.bind(obj);
                 const wrapped = function(...args) {
                     m.mounts[pageKey] = (m.mounts[pageKey] || 0) + 1;
                     return original(...args);
                 };
-                wrapped.__luna_wrapped = true;
+                wrapped.__casm_wrapped = true;
                 obj.mount = wrapped;
             };
 
-            if (window.Router && typeof window.Router.render === 'function' && !window.Router.render.__luna_wrapped) {
+            if (window.Router && typeof window.Router.render === 'function' && !window.Router.render.__casm_wrapped) {
                 const originalRender = window.Router.render.bind(window.Router);
                 const wrappedRender = function(...args) {
                     m.renders += 1;
                     return originalRender(...args);
                 };
-                wrappedRender.__luna_wrapped = true;
+                wrappedRender.__casm_wrapped = true;
                 window.Router.render = wrappedRender;
             }
 
@@ -109,11 +109,11 @@ def install_metrics_hooks(page):
             wrapMethod(window.HomePage, 'refreshData', 'homeRefreshCalls');
             wrapMethod(window.AnalyticsPage, 'refreshData', 'analyticsRefreshCalls');
 
-            if (!window.__LUNA_ACTION_METRICS_EVENT_HOOKED) {
+            if (!window.__CASM_ACTION_METRICS_EVENT_HOOKED) {
                 window.addEventListener('ppe-timezone:changed', () => {
                     m.timezoneEvents += 1;
                 });
-                window.__LUNA_ACTION_METRICS_EVENT_HOOKED = true;
+                window.__CASM_ACTION_METRICS_EVENT_HOOKED = true;
             }
         }
         """
@@ -121,7 +121,7 @@ def install_metrics_hooks(page):
 
 
 def get_metrics(page):
-    return page.evaluate("() => window.__LUNA_ACTION_METRICS || null")
+    return page.evaluate("() => window.__CASM_ACTION_METRICS || null")
 
 
 def pick_different_timezone_value(page):

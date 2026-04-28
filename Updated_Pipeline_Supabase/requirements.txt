@@ -1,4 +1,4 @@
-# LUNA PPE Safety Monitor - Requirements
+# CASM PPE Safety Monitor - Requirements
 # =========================================
 # AI-powered PPE compliance monitoring system with YOLOv8, LLaVA (Ollama), and RAG
 

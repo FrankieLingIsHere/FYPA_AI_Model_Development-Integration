@@ -260,7 +260,10 @@ const LivePage = {
         const browserCameraSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const phoneCameraSupported = !!(isPhoneDevice && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
         const isAutomationContext = !!navigator.webdriver;
-        const isLikelyRemoteBackend = (() => {
+        // Defined as a function (not a const IIFE) so it re-evaluates API_CONFIG.BASE_URL
+        // on every call. This ensures that after switching to local mode the live stream
+        // correctly routes to the local backend instead of staying on the cloud URL.
+        const isLikelyRemoteBackend = () => {
             try {
                 if (!API_CONFIG.BASE_URL) return false;
                 const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
@@ -270,7 +273,7 @@ const LivePage = {
             } catch (error) {
                 return false;
             }
-        })();
+        };
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
         let useBrowserCaptureRuntime = false;
@@ -504,7 +507,7 @@ const LivePage = {
         const shouldPreferBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
             if (selectedSource === 'phone' && phoneCameraSupported) return true;
-            if (selectedSource === 'webcam' && (isLikelyRemoteBackend || !!selectedBrowserDeviceId)) return true;
+            if (selectedSource === 'webcam' && (isLikelyRemoteBackend() || !!selectedBrowserDeviceId)) return true;
             return false;
         };
 
@@ -652,7 +655,7 @@ const LivePage = {
         };
 
         const isAutomationWebcamFallbackAllowed = () => {
-            return !!(window && window.__LUNA_ALLOW_AUTOMATION_WEBCAM_FALLBACK === true);
+            return !!(window && window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK === true);
         };
 
         const startBrowserCaptureSession = async (usingPhoneSource, noticePrefix = '') => {
@@ -890,7 +893,7 @@ const LivePage = {
                 const reasonBadge = reasonText
                     ? `<span class="rs-cap-badge off"><i class="fas fa-info-circle"></i> ${reasonText}</span>`
                     : '';
-                const hostedBadge = isLikelyRemoteBackend
+                const hostedBadge = isLikelyRemoteBackend()
                     ? '<span class="rs-cap-badge off"><i class="fas fa-cloud"></i> Hosted backend cannot detect USB cameras on this PC</span>'
                     : '';
                 capabilitiesContainer.innerHTML = `

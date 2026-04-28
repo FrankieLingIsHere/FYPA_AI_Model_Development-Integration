@@ -3,11 +3,11 @@ import sys
 from contextlib import suppress
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
-MAX_WAIT_SECONDS = int(os.environ.get("LUNA_FRONTEND_VISUAL_MAX_WAIT_SECONDS", "120"))
+MAX_WAIT_SECONDS = int(os.environ.get("CASM_FRONTEND_VISUAL_MAX_WAIT_SECONDS", "120"))
 
 
 def fail(message: str, code: int = 2) -> int:

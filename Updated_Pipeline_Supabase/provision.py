@@ -21,7 +21,7 @@ def generate_machine_id():
 
 def main():
     print("=" * 60)
-    print(" LUNA Edge Node Provisioning ".center(60, '='))
+    print(" CASM Edge Node Provisioning ".center(60, '='))
     print("=" * 60)
     
     # Get cluster URL from environment or prompt if missing

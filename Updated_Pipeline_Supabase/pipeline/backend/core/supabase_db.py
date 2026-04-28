@@ -227,7 +227,7 @@ class SupabaseDatabaseManager:
                         normalized_device_id,
                         f"Camera {normalized_device_id}",
                         normalized_status,
-                        Json({'last_ingest_source': 'luna_backend'})
+                        Json({'last_ingest_source': 'casm_backend'})
                     ),
                 )
 

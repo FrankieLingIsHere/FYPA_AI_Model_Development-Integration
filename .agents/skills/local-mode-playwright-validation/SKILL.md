@@ -8,7 +8,7 @@ Use this skill when the user asks to simulate offline behavior, validate reconne
 ## Workflow
 
 1. Confirm the repository root is active and that local backend UI is reachable at http://127.0.0.1:5000 for local-mode checks.
-   - Before local-reconnect runs, clean stale `luna_app.py` listeners on port 5000 and launch a fresh backend from the project venv.
+   - Before local-reconnect runs, clean stale `casm_app.py` listeners on port 5000 and launch a fresh backend from the project venv.
    - A stale non-venv python process can bind 5000 and cause false Playwright startup/page timeouts.
 2. Run the skill runner script from the repository root:
 
@@ -60,7 +60,7 @@ Timezone-specific enforcement (Reports + sidebar timezone changes):
 - Any patch touching report timestamp rendering, timezone parsing, or sidebar timezone selector must keep this contract green.
 
 When patching installer/startup batch flows (
-`frontend/static/LUNA_LocalInstaller.bat`, `start.bat`, or `/api/bootstrap/installer` rendering),
+`frontend/static/CASM_LocalInstaller.bat`, `start.bat`, or `/api/bootstrap/installer` rendering),
 `deployed_provisioning_action_test.py` is mandatory because it now also asserts:
 
 - rendered installer assignment placeholders are replaced without mutating internal token maps,
@@ -227,7 +227,7 @@ Use this when users report "queue busy" during reprocess even though no report a
 
 5. Local-to-cloud migration interaction check:
    - inspect `GET /api/logs?limit=...` for repeated `local_cache_sync_queued` with reconnect reasons.
-   - avoid running multiple backend instances; confirm only one `luna_app.py` process owns port 5000.
+   - avoid running multiple backend instances; confirm only one `casm_app.py` process owns port 5000.
    - for auto reconnect sync, defer/limit sync enqueue when queue already has backlog.
 
 4. Patch guidance for manual reprocess/recovery actions:
@@ -254,10 +254,10 @@ Preferred behavior for local profile patches:
 
 When validating existing-install launch behavior, ensure launcher bootstrap does not regress to stale logic:
 
-1. Do not blindly overwrite `C:\LUNA_System\Start_LUNA_Local_Mode.bat` from an external/stale downloaded BAT.
+   1. Do not blindly overwrite `C:\CASM_System\Start_CASM_Local_Mode.bat` from an external/stale downloaded BAT.
 2. Preserve existing local launcher when running from non-local paths (for example Downloads).
 3. Even when user skips source update check, attempt launcher refresh from installed template so label/flow fixes still propagate.
-4. Preferred managed launcher name is `C:\LUNA_System\LUNA_LocalInstaller.bat`; keep `C:\LUNA_System\Start_LUNA_Local_Mode.bat` only as compatibility alias.
+4. Preferred managed launcher name is `C:\CASM_System\CASM_LocalInstaller.bat`; keep `C:\CASM_System\Start_CASM_Local_Mode.bat` only as compatibility alias.
 5. If launched from an external path (for example Downloads) and managed launcher already exists, hand off execution to the managed launcher to avoid stale-flow drift.
 
 ## Runtime Triage Addendum: Local Backend Process Hygiene
@@ -265,7 +265,7 @@ When validating existing-install launch behavior, ensure launcher bootstrap does
 When local reconnect tests fail early with page navigation timeouts, validate backend ownership before patching code:
 
 1. Check port 5000 listener process and command line.
-2. Stop any stale `python ... luna_app.py` process not started from the active project venv/session.
+2. Stop any stale `python ... casm_app.py` process not started from the active project venv/session.
 3. Start a clean backend from `Updated_Pipeline_Supabase` using the venv python executable.
 4. Verify both endpoints respond before Playwright execution:
    - http://127.0.0.1:5000/
@@ -276,16 +276,16 @@ When local reconnect tests fail early with page navigation timeouts, validate ba
 Use this when users report queue/reprocess drift and process ownership confusion on Windows.
 
 1. Snapshot active ownership and queue state first:
-   - list all `python` processes containing `luna_app.py`
+   - list all `python` processes containing `casm_app.py`
    - check port 5000 listener PID + executable path
    - query `GET /api/queue/status` and keep `queue_size`, `by_device`, and `queue_preview`
 
-2. Stop all existing `luna_app.py` python processes before restart:
-   - only target processes where command line contains `luna_app.py`
+2. Stop all existing `casm_app.py` python processes before restart:
+   - only target processes where command line contains `casm_app.py`
    - do not kill unrelated python tasks
 
 3. Start backend from project venv in `Updated_Pipeline_Supabase`:
-   - `"<repo>/.venv/Scripts/python.exe" luna_app.py`
+   - `"<repo>/.venv/Scripts/python.exe" casm_app.py`
    - prefer one dedicated foreground terminal for diagnostics to avoid silent detached failures
 
 4. Validate readiness immediately after start:

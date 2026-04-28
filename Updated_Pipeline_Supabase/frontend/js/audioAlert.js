@@ -2,10 +2,10 @@
 // Plays a single TTS warning when a new violation is detected.
 
 const AudioAlert = (function () {
-    const STORAGE_KEY_ENABLED = 'luna_voice_alerts_enabled';
-    const STORAGE_KEY_PLAYED = 'luna_voice_alerts_played';
-    const STORAGE_KEY_VOLUME = 'luna_voice_volume';
-    const STORAGE_KEY_VOICE = 'luna_voice_choice';
+    const STORAGE_KEY_ENABLED = 'casm_voice_alerts_enabled';
+    const STORAGE_KEY_PLAYED = 'casm_voice_alerts_played';
+    const STORAGE_KEY_VOLUME = 'casm_voice_volume';
+    const STORAGE_KEY_VOICE = 'casm_voice_choice';
 
     let enabled = false;
     let playedReports = new Set();

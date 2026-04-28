@@ -6,10 +6,10 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
-STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("LUNA_LOCAL_FAILOVER_SYNC_STRICT", "0") != "0"
+STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("CASM_LOCAL_FAILOVER_SYNC_STRICT", "0") != "0"
 
 
 
@@ -67,7 +67,7 @@ def main() -> int:
             print(
                 "WARN: sync-local-cache endpoint not deployed yet (404); "
                 "treating as non-blocking by default "
-                "(set LUNA_LOCAL_FAILOVER_SYNC_STRICT=1 to enforce)"
+                "(set CASM_LOCAL_FAILOVER_SYNC_STRICT=1 to enforce)"
             )
             print("PASS: deployed local failover/sync contracts (non-blocking mode)")
             return 0

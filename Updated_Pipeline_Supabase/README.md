@@ -1,4 +1,4 @@
-# 🌙 LUNA PPE Safety Monitor - Supabase Edition
+# 🌙 CASM PPE Safety Monitor - Supabase Edition
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-2.0+-green.svg)](https://flask.palletsprojects.com/)
@@ -43,7 +43,7 @@ EDGE_REALSENSE_STALE_SECONDS=4
 
 # Optional: strict routing profile (cloud=Gemini only, local=Ollama Gemma3 4B only)
 STRICT_PROVIDER_MODE_SPLIT=true
-LUNA_ROUTING_PROFILE=cloud
+CASM_ROUTING_PROFILE=cloud
 MODEL_API_ENABLED=false
 GEMINI_ENABLED=true
 NLP_PROVIDER_ORDER=gemini
@@ -323,7 +323,7 @@ The scripts will:
 - Check for `.env` file
 - Create virtual environment if needed
 - Install dependencies
-- Start the LUNA application
+- Start the CASM application
 
 ### Manual Start
 
@@ -332,7 +332,7 @@ The scripts will:
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Start main application
-python luna_app.py
+python casm_app.py
 ```
 
 Then open your browser to: `http://localhost:5000`
@@ -379,7 +379,7 @@ Then open: `http://localhost:5001`
 
 ## 🔌 API Endpoints
 
-All endpoints remain the same as the original LUNA system:
+All endpoints remain the same as the original CASM system:
 
 ### Violations
 - `GET /api/violations` - List violations (from Supabase Postgres)
@@ -519,7 +519,7 @@ A migration script is provided: `migrate_to_supabase.py`
 
 ## 🛡️ Safety Monitoring Guidelines (JKR/OSHA)
 
-LUNA is designed to support **JKR Safety Officers** in maintaining rigorous compliance with Malaysian construction standards:
+CASM is designed to support **JKR Safety Officers** in maintaining rigorous compliance with Malaysian construction standards:
 
 - **OSHA 1994 (Act 514)** - General Duty of Care
 - **BOWEC 1986** - Building Operations & Works of Engineering Construction
@@ -533,7 +533,7 @@ For a detailed guide on how the AI interprets scenes, PPE compliance (MS 183/MS 
 
 ## 🙏 Credits
 
-- **Original LUNA System** - FYP Team A
+- **Original CASM System** - FYP Team A
 - **YOLOv8** - Ultralytics
 - **LLaVA** - Visual instruction tuning
 - **Llama3** - Meta AI
@@ -547,6 +547,6 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 
 ---
 
-**🌙 LUNA Supabase Edition - Cloud-Powered PPE Safety Monitoring**
+**🌙 CASM Supabase Edition - Cloud-Powered PPE Safety Monitoring**
 
 *Your safety data, accessible anywhere!*

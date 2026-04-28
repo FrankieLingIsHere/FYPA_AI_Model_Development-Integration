@@ -8,17 +8,17 @@ import requests
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
 DEFAULT_RAILWAY_URL = "https://fypaaimodeldevelopment-integration-production.up.railway.app"
-RAILWAY_URL = os.environ.get("LUNA_BASE_URL", "").rstrip("/")
-STARTUP_WAIT_SECONDS = int(os.environ.get("LUNA_STARTUP_WAIT_SECONDS", "180"))
-STARTUP_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_STARTUP_POLL_INTERVAL_SECONDS", "6"))
-QUEUE_WAIT_SECONDS = int(os.environ.get("LUNA_QUEUE_WAIT_SECONDS", "90"))
-QUEUE_POLL_INTERVAL_SECONDS = int(os.environ.get("LUNA_QUEUE_POLL_INTERVAL_SECONDS", "6"))
-ALLOW_DEGRADED_STARTUP = os.environ.get("LUNA_ALLOW_DEGRADED_STARTUP", "0").strip().lower() in ("1", "true", "yes")
+RAILWAY_URL = os.environ.get("CASM_BASE_URL", "").rstrip("/")
+STARTUP_WAIT_SECONDS = int(os.environ.get("CASM_STARTUP_WAIT_SECONDS", "180"))
+STARTUP_POLL_INTERVAL_SECONDS = int(os.environ.get("CASM_STARTUP_POLL_INTERVAL_SECONDS", "6"))
+QUEUE_WAIT_SECONDS = int(os.environ.get("CASM_QUEUE_WAIT_SECONDS", "90"))
+QUEUE_POLL_INTERVAL_SECONDS = int(os.environ.get("CASM_QUEUE_POLL_INTERVAL_SECONDS", "6"))
+ALLOW_DEGRADED_STARTUP = os.environ.get("CASM_ALLOW_DEGRADED_STARTUP", "0").strip().lower() in ("1", "true", "yes")
 
 
 def fail(msg: str, code: int = 2) -> int:

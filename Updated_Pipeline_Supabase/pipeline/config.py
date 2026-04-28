@@ -79,7 +79,6 @@ VIOLATION_RULES = {
     'person_ppe_iou_threshold': 0.4,  # Increased from 0.3 to reduce false associations (pillows, lanterns near heads)
     'person_confidence_threshold': 0.25,
     'head_region_strict': True,  # Enable strict head-region validation for hardhat detection
-    'head_region_strict': True,  # Enable strict head-region validation for hardhat detection
     'critical': {
         # These are now treated as HIGH severity but tracked as critical violations
         'NO-Hardhat': True,
@@ -94,7 +93,7 @@ VIOLATION_RULES = {
 # =========================================================================
 
 YOLO_CONFIG = {
-    'model_path': 'Results/ppe_yolov86/weights/best.pt',
+    'model_path': os.getenv('YOLO_MODEL_PATH', 'Results/ppe_yolov86/weights/best.pt'),
     'conf_threshold': 0.10,
     'iou_threshold': 0.45,
     'imgsz': 640,
@@ -123,7 +122,7 @@ OLLAMA_CONFIG = {
     'api_url': os.getenv('OLLAMA_API_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/generate"),
     'embeddings_url': os.getenv('OLLAMA_EMBEDDINGS_URL', f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')}/api/embeddings"),
     'model': os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma3:4b')),
-    'timeout': int(os.getenv('OLLAMA_TIMEOUT', '1200')),  # 20 minutes (Practically unlimited, but prevents indefinite deadlocks)
+    'timeout': int(os.getenv('OLLAMA_TIMEOUT', '300')),  # 5 minutes — prevents queue worker from stalling on a hung Ollama call
     'use_local_model': os.getenv('USE_LOCAL_MODEL', 'false').lower() == 'true',
     'temperature': float(os.getenv('OLLAMA_TEMPERATURE', '0.7')),
     'max_tokens': int(os.getenv('OLLAMA_MAX_TOKENS', '800'))
@@ -162,7 +161,7 @@ def _split_csv(value: str) -> list:
 
 
 def _default_provider_orders() -> dict:
-    profile = str(os.getenv('LUNA_ROUTING_PROFILE', 'cloud')).strip().lower()
+    profile = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud')).strip().lower()
     if profile == 'local':
         return {
             'nlp_provider_order': 'ollama',
@@ -210,7 +209,7 @@ def _resolve_rag_data_source() -> Path:
 
     candidates = [
         BASE_DIR / 'pipeline' / 'backend' / 'integration' / 'safety_knowledge.txt',
-        BASE_DIR / 'NLP_Luna' / 'Trim1.csv',
+        BASE_DIR / 'NLP_CASM' / 'Trim1.csv',
     ]
 
     for candidate in candidates:
@@ -237,7 +236,7 @@ RAG_CONFIG = {
 # =========================================================================
 
 REPORT_CONFIG = {
-    'company_name': 'LUNA Safety Systems',
+    'company_name': 'CASM Safety Systems',
     'report_title': 'PPE Compliance Report',
     'include_recommendations': True,
     'include_severity': True,

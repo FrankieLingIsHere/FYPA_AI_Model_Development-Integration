@@ -45,7 +45,7 @@ Modern, responsive web application for viewing and managing PPE violation report
 - **FontAwesome** - Icon library
 
 ### Design
-- **Color Scheme** - Matches NLP_Luna branding
+- **Color Scheme** - Matches NLP_CASM branding
 - **Responsive** - Mobile, tablet, desktop
 - **Animations** - Smooth transitions
 - **Cards** - Modular component design

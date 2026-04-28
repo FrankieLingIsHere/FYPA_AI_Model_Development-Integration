@@ -8,12 +8,12 @@ from playwright.sync_api import sync_playwright
 
 
 VERCEL_URL = os.environ.get(
-    "LUNA_VERCEL_URL",
+    "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
-MAX_NAV_LATENCY_MS = int(os.environ.get("LUNA_FRONTEND_MAX_NAV_LATENCY_MS", "9000"))
-STRESS_CLICKS = int(os.environ.get("LUNA_FRONTEND_STRESS_CLICKS", "5"))
+MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "9000"))
+STRESS_CLICKS = int(os.environ.get("CASM_FRONTEND_STRESS_CLICKS", "5"))
 
 IGNORED_ERROR_PATTERNS = (
     "Cannot set properties of null (setting 'textContent')",
@@ -524,7 +524,7 @@ def main() -> int:
             context.add_init_script(
                 """
                 () => {
-                    window.__LUNA_ALLOW_AUTOMATION_WEBCAM_FALLBACK = true;
+                    window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK = true;
                     if (!navigator.mediaDevices) {
                         navigator.mediaDevices = {};
                     }

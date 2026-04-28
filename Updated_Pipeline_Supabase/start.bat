@@ -1,15 +1,15 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM LUNA Supabase Edition - Startup Script
+REM CASM Supabase Edition - Startup Script
 REM ========================================
 REM 
-REM Quick start script for the LUNA PPE Safety Monitor with Supabase backend.
+REM Quick start script for the CASM PPE Safety Monitor with Supabase backend.
 REM 
 REM Usage:
 REM   start.bat
 
 echo ==========================================
-echo LUNA Supabase Edition - Starting...
+echo CASM Supabase Edition - Starting...
 echo ==========================================
 echo.
 
@@ -37,7 +37,7 @@ if not exist .env (
 REM Normalize .env local defaults so stale cloud settings do not override local BAT startup.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
-    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma3:4b'; 'OLLAMA_MODEL'='gemma3:4b'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'LUNA_STATE_DIR'='C:\LUNA_System\LUNA_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info'; 'QUEUE_WORKER_WATCHDOG_ENABLED'='true'; 'QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS'='20'; 'QUEUE_WORKER_HEARTBEAT_STALE_SECONDS'='180'; 'QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_ENABLED'='true'; 'QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS'='20'; 'LOCAL_PENDING_RECOVERY_ENABLED'='true'; 'LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS'='180'; 'LOCAL_PENDING_RECOVERY_STALE_SECONDS'='240'; 'LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP'='2'; 'LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD'='8'; 'LOCAL_PENDING_RECOVERY_SCAN_LIMIT'='300' }; " ^
+    "$updates=[ordered]@{ 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma3:4b'; 'OLLAMA_MODEL'='gemma3:4b'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'CASM_STATE_DIR'='C:\CASM_System\CASM_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info'; 'QUEUE_WORKER_WATCHDOG_ENABLED'='true'; 'QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS'='20'; 'QUEUE_WORKER_HEARTBEAT_STALE_SECONDS'='180'; 'QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_ENABLED'='true'; 'QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS'='20'; 'LOCAL_PENDING_RECOVERY_ENABLED'='true'; 'LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS'='180'; 'LOCAL_PENDING_RECOVERY_STALE_SECONDS'='240'; 'LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP'='2'; 'LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD'='8'; 'LOCAL_PENDING_RECOVERY_SCAN_LIMIT'='300' }; " ^
     "foreach($entry in $updates.GetEnumerator()){ $key=$entry.Key; $value=$entry.Value; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) } }; " ^
     "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
     "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
@@ -91,15 +91,15 @@ echo Ollama auto-upgrade on pull fail: %OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL%
 echo.
 
 if not exist "pipeline\backend\integration\safety_knowledge.txt" (
-    if exist "NLP_Luna\Trim1.csv" (
-        copy /Y "NLP_Luna\Trim1.csv" "pipeline\backend\integration\safety_knowledge.txt" >nul
+    if exist "NLP_CASM\Trim1.csv" (
+        copy /Y "NLP_CASM\Trim1.csv" "pipeline\backend\integration\safety_knowledge.txt" >nul
         if errorlevel 1 (
-            echo Warning: Failed to restore safety knowledge file from NLP_Luna\Trim1.csv.
+            echo Warning: Failed to restore safety knowledge file from NLP_CASM\Trim1.csv.
         ) else (
-            echo Restored missing safety knowledge file from NLP_Luna\Trim1.csv.
+            echo Restored missing safety knowledge file from NLP_CASM\Trim1.csv.
         )
     ) else (
-        echo Warning: Could not find NLP_Luna\Trim1.csv to restore safety knowledge file.
+        echo Warning: Could not find NLP_CASM\Trim1.csv to restore safety knowledge file.
     )
 )
 echo.
@@ -216,7 +216,7 @@ echo.
 
 echo.
 echo ==========================================
-echo Starting LUNA Application...
+echo Starting CASM Application...
 echo ==========================================
 echo.
 echo Once started, open your browser to:
@@ -227,7 +227,7 @@ echo ==========================================
 echo.
 
 REM Start the application
-"%VENV_PYTHON%" luna_app.py
+"%VENV_PYTHON%" casm_app.py
 
 goto :eof
 
@@ -265,7 +265,7 @@ exit /b 1
 
 :pull_ollama_model_with_upgrade
 set "MODEL_TO_PULL=%~1"
-set "PULL_LOG=%TEMP%\luna_ollama_pull_%RANDOM%.log"
+set "PULL_LOG=%TEMP%\casm_ollama_pull_%RANDOM%.log"
 set "PULL_STATUS=1"
 
 "%OLLAMA_CMD%" pull "%MODEL_TO_PULL%" > "%PULL_LOG%" 2>&1

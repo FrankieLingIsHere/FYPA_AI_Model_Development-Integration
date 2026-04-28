@@ -1,5 +1,5 @@
 -- =============================================================================
--- LUNA PPE SAFETY MONITOR - SUPABASE DATABASE SCHEMA
+-- CASM PPE SAFETY MONITOR - SUPABASE DATABASE SCHEMA
 -- =============================================================================
 -- 
 -- This schema provides a comprehensive database structure for the PPE compliance

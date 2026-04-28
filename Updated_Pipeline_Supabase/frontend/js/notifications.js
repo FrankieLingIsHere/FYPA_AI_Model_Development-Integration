@@ -1,4 +1,4 @@
-// Notification System for LUNA PPE Monitor
+// Notification System for CASM PPE Monitor
 // ==========================================
 // Toast notifications for violation detection and report generation
 // Enhanced: Bottom-right positioning, grouped notifications, max 3 visible

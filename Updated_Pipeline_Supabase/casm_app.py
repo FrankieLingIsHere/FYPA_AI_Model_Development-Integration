@@ -1,5 +1,5 @@
 """
-LUNA PPE Safety Monitor - Unified Application Server
+CASM PPE Safety Monitor - Unified Application Server
 ====================================================
 
 Integrated Flask application that combines:
@@ -13,7 +13,7 @@ Integrated Flask application that combines:
 This is the SINGLE entry point for the entire system.
 
 Usage:
-    python luna_app.py
+    python casm_app.py
     
     Then open browser to: http://localhost:5000
 """
@@ -283,15 +283,51 @@ except (TypeError, ValueError):
     STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = 120
 STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = max(0, min(STARTUP_AUTO_PROVISION_MAX_ATTEMPTS, 100000))
 LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED = os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED', 'true').lower() == 'true'
+# Adaptive heartbeat: cycle starts at MIN interval after any state change or
+# error, and exponentially climbs to MAX interval while state is steady.
+# This keeps the "presence" signal alive while collapsing egress: at steady
+# state we send ~144 heartbeats/day instead of ~3,500.
 try:
-    LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = int(
-        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS', '25')
+    LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS', '60')
     )
 except (TypeError, ValueError):
-    LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = 25
-LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = max(
-    5,
-    min(LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS, 300),
+    LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = max(
+    15, min(LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS, 600)
+)
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS', '600')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = 600
+LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = max(
+    LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS, 3600),
+)
+# Backward-compat shim: legacy env var name still respected as the *initial*
+# interval, but it is no longer the only knob.
+try:
+    _legacy_hb_interval = int(os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS', '0'))
+except (TypeError, ValueError):
+    _legacy_hb_interval = 0
+if _legacy_hb_interval > 0:
+    LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = max(
+        15, min(_legacy_hb_interval, LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS)
+    )
+LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS  # legacy name, used elsewhere
+# How many consecutive "no-change" cycles before doing a full authoritative
+# status fetch (which is the hidden egress hog: it reads the cloud
+# device_provisioning row every cycle).
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N', '5')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = 5
+LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = max(
+    1, min(LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N, 100)
 )
 try:
     LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = int(
@@ -353,7 +389,7 @@ PROVIDER_PROFILE_PRESETS = {
 }
 
 if STRICT_PROVIDER_MODE_SPLIT:
-    _initial_profile_raw = str(os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+    _initial_profile_raw = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
     if _initial_profile_raw in ('local', 'cloud'):
         _initial_profile = _initial_profile_raw
     else:
@@ -364,7 +400,7 @@ if STRICT_PROVIDER_MODE_SPLIT:
     MODEL_API_CONFIG['nlp_provider_order'] = list(_initial_preset.get('nlp_provider_order', ['gemini']))
     MODEL_API_CONFIG['embedding_provider_order'] = list(_initial_preset.get('embedding_provider_order', ['model_api']))
     GEMINI_CONFIG['enabled'] = bool(_initial_preset.get('gemini_enabled', True))
-    os.environ['LUNA_ROUTING_PROFILE'] = _initial_profile
+    os.environ['CASM_ROUTING_PROFILE'] = _initial_profile
     os.environ['MODEL_API_ENABLED'] = 'true' if MODEL_API_CONFIG['enabled'] else 'false'
     os.environ['GEMINI_ENABLED'] = 'true' if GEMINI_CONFIG['enabled'] else 'false'
     os.environ['NLP_PROVIDER_ORDER'] = ','.join(MODEL_API_CONFIG['nlp_provider_order'])
@@ -479,7 +515,7 @@ def _ensure_startup_sequence_running():
 @app.before_request
 def _protect_installer_static_asset():
     """Prevent bypassing installer gating through direct static file access."""
-    if (request.path or '').strip() == '/static/LUNA_LocalInstaller.bat':
+    if (request.path or '').strip() == '/static/CASM_LocalInstaller.bat':
         return Response(
             "Installer download requires a signed one-time bootstrap token. "
             "Request it via /api/bootstrap/installer/request.",
@@ -994,6 +1030,10 @@ supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
 supabase_offline_backoff_error = ''
+# H3 — tracks consecutive Supabase connectivity failures.
+# db_manager / storage_manager are only wiped once this reaches >= 2 consecutive failures,
+# preventing a single transient error from knocking the whole pipeline offline.
+supabase_offline_failure_count = 0
 SUPABASE_OFFLINE_BACKOFF_SECONDS = max(
     10,
     int(os.getenv('SUPABASE_OFFLINE_BACKOFF_SECONDS', '90') or 90)
@@ -1052,12 +1092,15 @@ def _is_supabase_connectivity_failure(raw_error: Any) -> bool:
 
 def _clear_supabase_offline_backoff(reason: str = '') -> None:
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
+    global supabase_offline_failure_count
     with supabase_offline_backoff_lock:
         if supabase_offline_backoff_until_epoch <= 0:
             return
         supabase_offline_backoff_until_epoch = 0.0
         supabase_offline_backoff_context = ''
         supabase_offline_backoff_error = ''
+    # H3 — Reset failure counter on a confirmed successful Supabase connection.
+    supabase_offline_failure_count = 0
     if reason:
         logger.info(f"Supabase offline backoff cleared ({reason})")
 
@@ -1065,6 +1108,7 @@ def _clear_supabase_offline_backoff(reason: str = '') -> None:
 def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     global db_manager, storage_manager, report_generator
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
+    global supabase_offline_failure_count
 
     if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
         return
@@ -1074,6 +1118,8 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         return
 
     now_epoch = time.time()
+    supabase_offline_failure_count += 1
+
     with supabase_offline_backoff_lock:
         previous_until = float(supabase_offline_backoff_until_epoch or 0.0)
         new_until = now_epoch + float(SUPABASE_OFFLINE_BACKOFF_SECONDS)
@@ -1086,14 +1132,23 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
         supabase_offline_backoff_error = error_text[:300]
 
-    demoted_parts = []
-    if db_manager is not None:
-        db_manager = None
-        demoted_parts.append('db_manager')
+    # H3 — Only wipe managers after at least 2 consecutive failures so a single
+    # transient Supabase blip does not bring the whole pipeline offline.
+    if supabase_offline_failure_count >= 2:
+        demoted_parts = []
+        if db_manager is not None:
+            db_manager = None
+            demoted_parts.append('db_manager')
 
-    if storage_manager is not None:
-        storage_manager = None
-        demoted_parts.append('storage_manager')
+        if storage_manager is not None:
+            storage_manager = None
+            demoted_parts.append('storage_manager')
+    else:
+        demoted_parts = []
+        logger.warning(
+            f"Supabase connectivity failure #{supabase_offline_failure_count} "
+            f"(context={context!r}): managers preserved — need >= 2 consecutive failures to trigger offline demotion."
+        )
 
     if report_generator is not None and _is_supabase_report_generator_active():
         try:
@@ -1707,7 +1762,7 @@ def initialize_pipeline_components():
         if caption_generator is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing caption generator')
             logger.info("Initializing caption generator...")
-            caption_config = {'LLAVA_CONFIG': LLAVA_CONFIG}
+            caption_config = {'LLAVA_CONFIG': LLAVA_CONFIG, 'GEMINI_CONFIG': GEMINI_CONFIG}
             caption_generator = CaptionGenerator(caption_config)
         
         if db_manager is None:
@@ -1799,6 +1854,14 @@ def initialize_pipeline_components():
                 )
         
         # Initialize violation queue for handling multiple violations
+        # H4 — If violation_queue exists but its internal worker thread has died (e.g. after
+        # an unhandled exception inside the worker), reset it so the block below recreates it.
+        if violation_queue is not None and not _is_queue_worker_alive():
+            logger.warning(
+                "H4: violation_queue exists but worker thread is not alive — resetting queue to force re-creation."
+            )
+            violation_queue = None
+
         if violation_queue is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing violation queue manager')
             logger.info("Initializing violation queue manager...")
@@ -2547,7 +2610,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
     
     try:
         trigger_source = (trigger_source or 'live').strip().lower()
-        routing_profile = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE', ''))
+        routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         local_profile_active = routing_profile == 'local'
         force_local_scope = bool(
             local_profile_active
@@ -2834,7 +2897,12 @@ def _handle_local_cache_sync_job(
             annotated_image_path=annotated_path if annotated_path.exists() else None,
             report_html_path=local_report_path,
             report_pdf_path=local_pdf_path if local_pdf_path.exists() else None,
-            upsert=False,
+            # Local-cache sync is by definition a re-upload of artifacts that
+            # may already exist in cloud storage (previous partial sync,
+            # cross-machine). Use upsert=True so a 409 "object exists"
+            # response from Supabase Storage doesn't surface as a recurring
+            # SDK error in the logs.
+            upsert=True,
         ) or {}
     except Exception as upload_err:
         logger.warning(f"Local-cache cloud upload failed for {report_id}: {upload_err}")
@@ -3744,10 +3812,10 @@ def _build_api_only_redirect_page(frontend_url: str) -> str:
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <meta http-equiv=\"refresh\" content=\"0;url={safe_url}\" />
-    <title>LUNA PPE API</title>
+    <title>CASM PPE API</title>
 </head>
 <body>
-    <p>Frontend is deployed separately. Redirecting to <a href=\"{safe_url}\">LUNA PPE frontend</a>...</p>
+    <p>Frontend is deployed separately. Redirecting to <a href=\"{safe_url}\">CASM PPE frontend</a>...</p>
     <script>
         window.location.replace({json.dumps(frontend_url)});
     </script>
@@ -3766,7 +3834,7 @@ def index():
             response.headers['Expires'] = '0'
             return response
         return jsonify({
-            'service': 'LUNA PPE API',
+            'service': 'CASM PPE API',
             'status': 'ok',
             'frontend_served': False,
             'frontend_url': FRONTEND_APP_URL or None,
@@ -4466,7 +4534,7 @@ def api_system_timezone():
 
 
 # =========================================================================
-# API ENDPOINTS - STATUS & MONITORING (from Pipeline_Luna)
+# API ENDPOINTS - STATUS & MONITORING (from Pipeline_CASM)
 # =========================================================================
 
 @app.route('/api/violation/<report_id>')
@@ -4656,7 +4724,7 @@ def api_report_status(report_id):
                         age_seconds = (datetime.now(timezone.utc) - dt_obj).total_seconds()
                         if age_seconds > 120:
                             if STRICT_PROVIDER_MODE_SPLIT:
-                                local_preferred = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE')) == 'local'
+                                local_preferred = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE')) == 'local'
                             else:
                                 provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
                                 if not isinstance(provider_order, list):
@@ -5336,7 +5404,7 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
         os.environ['OLLAMA_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['OLLAMA_VISION_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
 
-    os.environ['LUNA_ROUTING_PROFILE'] = routing_profile
+    os.environ['CASM_ROUTING_PROFILE'] = routing_profile
     os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
     os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
     os.environ['NLP_PROVIDER_ORDER'] = ','.join(nlp_provider_order)
@@ -5676,14 +5744,14 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
 
 
 def _resolve_local_mode_state_dir() -> Path:
-    configured = os.path.expandvars(str(os.getenv('LUNA_STATE_DIR') or '').strip())
+    configured = os.path.expandvars(str(os.getenv('CASM_STATE_DIR') or '').strip())
     if not configured:
         fallback_candidates: List[Path] = []
         if os.name == 'nt':
-            fallback_candidates.append(Path(r'C:\LUNA_System\LUNA_LocalState'))
-            fallback_candidates.append(Path.home() / 'LUNA_LocalState')
+            fallback_candidates.append(Path(r'C:\CASM_System\CASM_LocalState'))
+            fallback_candidates.append(Path.home() / 'CASM_LocalState')
         else:
-            fallback_candidates.append(Path.home() / '.luna_local_state')
+            fallback_candidates.append(Path.home() / '.casm_local_state')
 
         fallback_candidates.append(Path('.'))
 
@@ -5701,7 +5769,7 @@ def _resolve_local_mode_state_dir() -> Path:
         state_dir.mkdir(parents=True, exist_ok=True)
         return state_dir
     except Exception as state_err:
-        logger.warning(f"Invalid LUNA_STATE_DIR '{configured}': {state_err}. Falling back to current directory.")
+        logger.warning(f"Invalid CASM_STATE_DIR '{configured}': {state_err}. Falling back to current directory.")
         return Path('.')
 
 
@@ -5797,7 +5865,7 @@ def _local_mode_normalize_machine_id(raw_machine_id: Any) -> str:
 
 
 def _local_mode_generate_deterministic_machine_id() -> str:
-    seed_override = str(os.getenv('LUNA_MACHINE_ID_SEED') or '').strip()
+    seed_override = str(os.getenv('CASM_MACHINE_ID_SEED') or '').strip()
     seed_parts: List[str] = []
 
     if seed_override:
@@ -5817,13 +5885,13 @@ def _local_mode_generate_deterministic_machine_id() -> str:
         except Exception:
             pass
 
-    seed_source = '|'.join(part for part in seed_parts if part) or 'luna-local-machine-seed'
+    seed_source = '|'.join(part for part in seed_parts if part) or 'casm-local-machine-seed'
     suffix = hashlib.sha256(seed_source.encode('utf-8')).hexdigest()[:12].upper()
     return f"Edge-{suffix}"
 
 
 def _local_mode_get_existing_machine_id() -> str:
-    configured = _local_mode_normalize_machine_id(os.getenv('LUNA_MACHINE_ID', ''))
+    configured = _local_mode_normalize_machine_id(os.getenv('CASM_MACHINE_ID', ''))
     if configured:
         _local_mode_write_machine_id(configured)
         return configured
@@ -6201,7 +6269,21 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
     }
 
 
-def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
+def _send_local_mode_cloud_heartbeat_once(
+    *,
+    skip_authoritative_fetch: bool = False,
+    lean_payload: bool = False,
+) -> Dict[str, Any]:
+    """Send one local-mode cloud heartbeat.
+
+    Egress-aware knobs:
+      - ``skip_authoritative_fetch=True`` skips the cloud GET that reads the
+        device_provisioning row. Use on most cycles; only fetch every Nth
+        cycle (set by ``LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N``) and
+        whenever local state is uncertain.
+      - ``lean_payload=True`` strips the diagnostics dict from the request
+        body. Use during steady state to keep the body well under 256B.
+    """
     if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
         return {'sent': False, 'reason': 'heartbeat_disabled'}
     if _is_hosted_runtime_environment():
@@ -6256,13 +6338,20 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
     if provision_status == 'idle' and credentials_present:
         provision_status = 'credentials_present'
 
-    cloud_state = _local_mode_fetch_authoritative_status(
-        cloud_url=cloud_url,
-        machine_id=machine_id,
-        provision_secret=provision_secret,
-        timeout_seconds=max(3, min(int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS), 8)),
-    )
-    authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
+    # Egress guard: only do the authoritative status round-trip when caller
+    # asked for it. Cloud-side fast-path (the heartbeat upsert) already
+    # echoes back the canonical provision_status when it changes, so most
+    # cycles can rely on the locally cached value.
+    if skip_authoritative_fetch:
+        authoritative_status = ''
+    else:
+        cloud_state = _local_mode_fetch_authoritative_status(
+            cloud_url=cloud_url,
+            machine_id=machine_id,
+            provision_secret=provision_secret,
+            timeout_seconds=max(3, min(int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS), 8)),
+        )
+        authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
         provision_status = authoritative_status
 
@@ -6274,15 +6363,16 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         'sent_at': datetime.now(timezone.utc).isoformat(),
         'source': 'local-backend-worker',
         'provision_status': provision_status,
-        'diagnostics': {
+    }
+    if not lean_payload:
+        heartbeat_payload['diagnostics'] = {
             'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
             'ollama_installed': bool(diagnostics.get('ollama_installed')),
             'ollama_running': bool(diagnostics.get('ollama_running')),
             'model_available': bool(diagnostics.get('model_available')),
             'ollama_model': str(diagnostics.get('ollama_model') or '').strip(),
             'error': str(diagnostics.get('error') or '').strip(),
-        },
-    }
+        }
 
     try:
         response = requests.post(
@@ -6356,6 +6446,8 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
                             'sent': True,
                             'status_code': int(retry_response.status_code),
                             'machine_id': machine_id,
+                            'provision_status': provision_status,
+                            'authoritative_fetched': not skip_authoritative_fetch,
                         }
 
                     response_error = str(
@@ -6378,26 +6470,71 @@ def _send_local_mode_cloud_heartbeat_once() -> Dict[str, Any]:
         'sent': True,
         'status_code': int(response.status_code),
         'machine_id': machine_id,
+        'provision_status': provision_status,
+        'authoritative_fetched': not skip_authoritative_fetch,
     }
 
 
 def _local_mode_cloud_heartbeat_worker() -> None:
     logger.info(
         'Local-mode cloud heartbeat worker started '
-        f'(interval={LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS}s)'
+        f'(min_interval={LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS}s, '
+        f'max_interval={LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS}s, '
+        f'auth_fetch_every={LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N})'
     )
     failure_count = 0
+    cycle_index = 0
+    last_status: str = ''
+    steady_streak = 0
+    current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
 
     while True:
-        result = _send_local_mode_cloud_heartbeat_once()
+        cycle_index += 1
+        # Decide whether this cycle includes the authoritative status fetch.
+        # Always do it on the first cycle, every Nth cycle, and after any error.
+        force_full = (
+            cycle_index == 1
+            or failure_count > 0
+            or (cycle_index % LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N) == 0
+            or last_status in ('', 'pending_approval', 'idle', 'credentials_present')
+        )
+        # Lean payload (no diagnostics) once we've been steady for a couple of
+        # cycles. The diagnostics dict is only useful to the admin UI when it
+        # changes; on a healthy steady backend it adds ~250B per request.
+        lean = (steady_streak >= 2 and not force_full)
+
+        result = _send_local_mode_cloud_heartbeat_once(
+            skip_authoritative_fetch=not force_full,
+            lean_payload=lean,
+        )
         sent = bool(result.get('sent'))
 
         if sent:
             if failure_count > 0:
                 logger.info('Local-mode cloud heartbeat recovered after temporary failures.')
             failure_count = 0
+
+            current_status = str(result.get('provision_status') or '').strip().lower()
+            if current_status and current_status == last_status:
+                steady_streak += 1
+            else:
+                steady_streak = 0
+                last_status = current_status
+
+            # Adaptive backoff: double interval up to MAX while steady; reset
+            # to MIN whenever status changes, an error happens, or we're not
+            # yet provisioned.
+            if steady_streak >= 1 and current_status in ('approved', 'provisioned'):
+                current_interval = min(
+                    LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS,
+                    max(current_interval * 2, LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS),
+                )
+            else:
+                current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
         else:
             failure_count += 1
+            steady_streak = 0
+            current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
             reason = str(result.get('reason') or '').strip().lower()
             error_text = str(result.get('error') or '').strip()
 
@@ -6429,7 +6566,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                     f"(reason={reason or 'unknown'}, error={error_text or 'none'})"
                 )
 
-        time.sleep(LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS)
+        time.sleep(current_interval)
 
 
 def _ensure_local_mode_cloud_heartbeat_worker() -> None:
@@ -6438,6 +6575,17 @@ def _ensure_local_mode_cloud_heartbeat_worker() -> None:
     if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
         return
     if _is_hosted_runtime_environment():
+        return
+
+    # Egress guard: if no Supabase cloud credentials are configured (pure
+    # local install), the heartbeat loop would just no-op every interval
+    # and burn CPU + DNS lookups for nothing. Skip the worker entirely.
+    # Re-evaluated whenever provisioning runs (callers call this again).
+    routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud') or 'cloud').strip().lower()
+    if routing_profile == 'local' and not _local_mode_has_supabase_credentials():
+        logger.info(
+            'Local-mode cloud heartbeat worker not started: pure-local profile with no Supabase credentials.'
+        )
         return
 
     with local_mode_heartbeat_thread_lock:
@@ -6654,10 +6802,64 @@ def api_local_mode_provisioning_status():
     return response
 
 
+@app.route('/api/local-mode/installer/redirect', methods=['GET'])
+def api_local_mode_installer_redirect():
+    """Server-side proxy that redirects the browser to the cloud installer
+    download URL using credentials persisted in local provision state.
+
+    The browser's sessionStorage gets cleared frequently (tab close,
+    cache wipes, hard refresh in some browsers), so the JS Re-download
+    Installer button has no reliable way to obtain the provision_secret.
+    The local backend keeps it on disk in
+    LOCAL_MODE_PROVISION_STATE_FILE; this endpoint reads it there and
+    issues a 302 to the cloud, so the browser never needs to know the
+    secret.
+    """
+    state = _local_mode_load_provision_state() or {}
+    machine_id = str(state.get('machine_id') or '').strip()
+    provision_secret = str(state.get('provision_secret') or '').strip()
+    status = str(state.get('status') or '').strip().lower()
+
+    cloud_url = _local_mode_normalize_cloud_url(
+        os.getenv('CLOUD_URL', '').strip()
+        or str(state.get('cloud_url') or '').strip()
+    )
+
+    if not machine_id or not provision_secret:
+        return jsonify({
+            'error': 'Local provisioning state is empty. Run Local Mode Checkup to provision this device first.'
+        }), 409
+
+    if not cloud_url:
+        return jsonify({
+            'error': 'CLOUD_URL is not configured. Set CLOUD_URL in the backend .env and restart.'
+        }), 503
+
+    if status not in ('approved', 'provisioned'):
+        return jsonify({
+            'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
+        }), 403
+
+    target = (
+        f"{cloud_url.rstrip('/')}/api/bootstrap/installer/request"
+        f"?machine_id={quote(machine_id)}"
+        f"&provision_secret={quote(provision_secret)}"
+        f"&_ts={int(time.time() * 1000)}"
+    )
+    response = redirect(target, code=302)
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
 @app.route('/api/local-mode/provisioning/auto', methods=['GET', 'POST'])
 def api_local_mode_auto_provisioning():
     with local_mode_auto_provision_lock:
         return _api_local_mode_auto_provisioning_impl()
+
+
+
 
 
 def _api_local_mode_auto_provisioning_impl():
@@ -6871,6 +7073,28 @@ def _api_local_mode_auto_provisioning_impl():
         }), 502
 
     if status_response.status_code in (401, 404):
+        # PRV3 — If a provision_secret is already stored locally and the cloud no longer
+        # recognises it (404) or rejects it (401), the admin has explicitly deleted or
+        # rejected the device record.  Re-registering would let a revoked device sneak
+        # back into the approval queue, so we treat this as a definitive rejection.
+        if state.get('provision_secret'):
+            state.update({
+                'machine_id': machine_id,
+                'cloud_url': cloud_url,
+                'status': 'rejected',
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'rejection_reason': 'Device record removed by administrator (secret no longer recognised).',
+            })
+            _local_mode_save_provision_state(state)
+            return jsonify({
+                'success': False,
+                'status': 'rejected',
+                'error': 'Device was removed by the administrator. Contact your admin to re-provision.',
+                'machine_id': machine_id,
+                'admin_portal_url': admin_portal_url,
+                'cloud_url': cloud_url,
+            }), 403
+
         retry_ok, retry_secret, retry_error = _request_new_secret()
         if not retry_ok:
             return jsonify({
@@ -7131,7 +7355,7 @@ def api_prepare_local_mode():
                 'applied': False,
                 'order': MODEL_API_CONFIG.get(
                     'nlp_provider_order',
-                    _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['ollama'])
+                    _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['ollama'])
                     if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
                 )
             }
@@ -7204,7 +7428,7 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
         canvas = np.full((720, 1280, 3), (28, 35, 44), dtype=np.uint8)
         cv2.rectangle(canvas, (24, 24), (1256, 696), (64, 78, 97), thickness=2)
 
-        header = 'LUNA Reprocess Placeholder'
+        header = 'CASM Reprocess Placeholder'
         subtitle = f'Report ID: {report_id}'
         reason_text = str(reason or 'Original artifact unavailable in runtime storage').strip()
         if len(reason_text) > 120:
@@ -7317,7 +7541,7 @@ def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
 def _current_provider_settings():
     """Return current runtime provider routing settings."""
     routing_profile = _normalize_provider_profile(
-        os.getenv('LUNA_ROUTING_PROFILE')
+        os.getenv('CASM_ROUTING_PROFILE')
         or _infer_provider_profile_from_order(MODEL_API_CONFIG.get('nlp_provider_order', []))
     )
     profile_preset = _get_provider_profile_preset(routing_profile)
@@ -7363,7 +7587,7 @@ def _current_provider_settings():
 def _get_provider_runtime_snapshot() -> Dict[str, Any]:
     """Collect runtime provider diagnostics from NLP + vision modules."""
     default_nlp_order = (
-        list(_get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini']))
+        list(_get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini']))
         if STRICT_PROVIDER_MODE_SPLIT
         else ['model_api', 'gemini', 'ollama', 'local']
     )
@@ -7596,7 +7820,7 @@ def api_provider_routing_settings():
         # Persist to environment for module consumers
         os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
         os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
-        os.environ['LUNA_ROUTING_PROFILE'] = routing_profile
+        os.environ['CASM_ROUTING_PROFILE'] = routing_profile
         os.environ['GEMINI_DAILY_BUDGET_USD'] = str(gemini_daily_budget_usd)
         os.environ['GEMINI_MONTHLY_BUDGET_USD'] = str(gemini_monthly_budget_usd)
         os.environ['GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT'] = str(gemini_max_output_tokens_per_report)
@@ -7615,6 +7839,7 @@ def api_provider_routing_settings():
             os.environ['OLLAMA_VISION_MODEL'] = OLLAMA_CONFIG['model']
 
         # Update captioning module runtime routing without restart
+        caption_settings_warning = None
         try:
             from caption_image import update_runtime_provider_settings
             update_runtime_provider_settings({
@@ -7626,6 +7851,8 @@ def api_provider_routing_settings():
             })
         except Exception as caption_err:
             logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
+            # M2 — surface the warning to the caller so the UI can show it
+            caption_settings_warning = f"Caption provider settings could not be applied: {caption_err}"
 
         # Apply to active report generator immediately
         if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
@@ -7643,12 +7870,12 @@ def api_provider_routing_settings():
             report_generator.model_api_enabled = MODEL_API_CONFIG.get('enabled', False)
             report_generator.nlp_provider_order = MODEL_API_CONFIG.get(
                 'nlp_provider_order',
-                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
+                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
                 if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
             )
             report_generator.embedding_provider_order = MODEL_API_CONFIG.get(
                 'embedding_provider_order',
-                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('embedding_provider_order', ['model_api'])
+                _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('embedding_provider_order', ['model_api'])
                 if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
             )
 
@@ -7689,11 +7916,14 @@ def api_provider_routing_settings():
                     gemini_max_output_tokens_per_report
                 )
 
-        return jsonify({
+        resp_body = {
             'success': True,
             'message': 'Provider routing settings updated',
             'settings': _current_provider_settings()
-        })
+        }
+        if caption_settings_warning:
+            resp_body['caption_settings_warning'] = caption_settings_warning
+        return jsonify(resp_body)
 
     except Exception as e:
         logger.error(f"Error updating provider routing settings: {e}")
@@ -7746,7 +7976,7 @@ def api_report_recovery_options():
         },
         'current_nlp_provider_order': MODEL_API_CONFIG.get(
             'nlp_provider_order',
-            _get_provider_profile_preset(_normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
+            _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
             if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
         )
     })
@@ -8449,7 +8679,7 @@ def api_pending_reports():
         return 'Cloud'
 
     # Always include local filesystem state for immediate queue/generation visibility.
-    active_profile = _normalize_provider_profile(os.getenv('LUNA_ROUTING_PROFILE', ''))
+    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     local_seed_device_id = 'local_cache' if (db_manager is None or active_profile == 'local') else None
     local_rows = _collect_local_report_state_rows(limit=300)
     completed_local_report_ids = set()
@@ -9975,10 +10205,11 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
 
     with camera_lock:
         if not _is_active_live_source_locked():
-            start_result = _start_live_source_locked(_get_default_live_source())
-            if not start_result.get('success'):
-                logger.error(start_result.get('message') or 'Failed to initialize live source')
-                return
+            # Do NOT auto-start the camera here. The camera must be explicitly started
+            # via POST /api/live/start (i.e., the user must click Start). This prevents
+            # the camera from opening on page load or any accidental stream URL access.
+            logger.info("Stream requested but no live source is active — ignoring (use /api/live/start)")
+            return
         source_name = live_source_adapter.current_source
     
     logger.info(f"Starting live frame generation from source: {source_name}")
@@ -10096,7 +10327,9 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
     except Exception as e:
         logger.error(f"Stream error: {e}")
     finally:
-        logger.info("Frame generation stopped")
+        logger.info("Frame generation stopped — releasing camera")
+        with camera_lock:
+            _stop_live_source_locked()
 
 
 @app.route('/api/live/stream')
@@ -10758,6 +10991,127 @@ def system_info():
     return jsonify(info)
 
 
+@app.route('/api/llm/ping', methods=['GET', 'POST'])
+def api_llm_ping():
+    """
+    Quick LLM (Gemma/Ollama) round-trip health check.
+
+    Sends a tiny prompt to the configured local LLM and returns whether it
+    responded, the latency, the model used, and a short echo of the reply.
+    Use this to verify in seconds whether Gemma is actually working.
+
+    Response shape:
+      {
+        "ok": true|false,
+        "ollama_running": bool,
+        "model": "gemma3:4b",
+        "base_url": "http://localhost:11434",
+        "latency_ms": 842,
+        "response_preview": "Hello.",
+        "error": null|string
+      }
+    """
+    diag = _get_local_mode_diagnostics()
+    base_url = diag.get('ollama_base_url') or 'http://localhost:11434'
+    model = diag.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL
+
+    payload = {
+        'ok': False,
+        'ollama_running': bool(diag.get('ollama_running')),
+        'model_available': bool(diag.get('model_available')),
+        'model': model,
+        'base_url': base_url,
+        'latency_ms': None,
+        'response_preview': None,
+        'error': None,
+    }
+
+    if not diag.get('ollama_running'):
+        payload['error'] = 'Ollama service is not reachable at ' + base_url
+        return jsonify(payload), 503
+
+    if not diag.get('model_available'):
+        payload['error'] = f"Model '{model}' is not pulled. Run: ollama pull {model}"
+        return jsonify(payload), 503
+
+    prompt = (request.get_json(silent=True) or {}).get('prompt') if request.method == 'POST' else None
+    prompt = (prompt or 'Reply with the single word: PONG').strip()
+
+    start = time.monotonic()
+    try:
+        resp = requests.post(
+            f"{base_url.rstrip('/')}/api/generate",
+            json={
+                'model': model,
+                'prompt': prompt,
+                'stream': False,
+                'options': {'temperature': 0.0, 'num_predict': 32},
+            },
+            timeout=20,
+        )
+        latency_ms = int((time.monotonic() - start) * 1000)
+        payload['latency_ms'] = latency_ms
+
+        if not resp.ok:
+            payload['error'] = f"LLM HTTP {resp.status_code}: {resp.text[:200]}"
+            return jsonify(payload), 502
+
+        body = resp.json() if resp.content else {}
+        text = str(body.get('response') or '').strip()
+        payload['response_preview'] = text[:200]
+        payload['ok'] = True
+        return jsonify(payload), 200
+    except requests.exceptions.Timeout:
+        payload['latency_ms'] = int((time.monotonic() - start) * 1000)
+        payload['error'] = 'LLM request timed out (20s)'
+        return jsonify(payload), 504
+    except Exception as exc:
+        payload['latency_ms'] = int((time.monotonic() - start) * 1000)
+        payload['error'] = str(exc)
+        return jsonify(payload), 500
+
+
+@app.route('/api/system/local-mode-snapshot', methods=['GET'])
+def api_system_local_mode_snapshot():
+    """
+    Compact runtime visibility for offline / local mode.
+
+    Tells the operator whether the backend is running in pure-local mode
+    (no Supabase dependency), where reports are being saved, and whether
+    mock-report mode is active. Intended as a single endpoint to answer
+    "is my local install actually independent from Supabase?".
+    """
+    routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud') or 'cloud').strip().lower()
+    allow_offline = ALLOW_OFFLINE_LOCAL_MODE
+    has_creds = _local_mode_has_supabase_credentials()
+    db_active = db_manager is not None
+    mock_env = str(os.getenv('CASM_MOCK_REPORTS', '') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+    try:
+        local_reports_dir = Path(__file__).resolve().parent / 'pipeline' / 'reports'
+        local_report_count = (
+            sum(1 for child in local_reports_dir.iterdir() if child.is_dir())
+            if local_reports_dir.exists() else 0
+        )
+        local_reports_path = str(local_reports_dir)
+    except Exception:
+        local_reports_path = None
+        local_report_count = 0
+
+    snapshot = {
+        'routing_profile': routing_profile,
+        'is_strict_local': routing_profile == 'local',
+        'allow_offline_local_mode': bool(allow_offline),
+        'supabase_credentials_present': bool(has_creds),
+        'supabase_db_active': bool(db_active),
+        'pure_offline_active': bool(allow_offline and not db_active and routing_profile == 'local'),
+        'mock_reports_enabled': mock_env,
+        'local_reports_dir': local_reports_path,
+        'local_report_count': local_report_count,
+    }
+    return jsonify(snapshot), 200
+
+
 @app.route('/api/health/summary')
 def api_health_summary():
     """Return a compact operational health snapshot for the full pipeline."""
@@ -10910,6 +11264,11 @@ PROVISIONING_STATE_SCHEMA_LOCK = Lock()
 PROVISIONING_STATE_SCHEMA_READY = False
 
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
+# ADMIN_USERNAME — when non-empty, Basic-Auth username is also validated on all admin endpoints.
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '')
+# When False (default), /api/provision/request requires an X-Admin-Token header matching ADMIN_PASSWORD.
+# Set to '1'/'true'/'yes' only in isolated trusted networks where unauthenticated self-registration is acceptable.
+PROVISION_ALLOW_SELF_REGISTER = os.getenv('PROVISION_ALLOW_SELF_REGISTER', 'false').lower() in ('1', 'true', 'yes', 'on')
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = int(os.getenv('PROVISION_EXCHANGE_TOKEN_TTL_SECONDS', '300'))
 INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv('INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS', '600'))
 BOOTSTRAP_JTI_RETENTION_SECONDS = int(os.getenv('BOOTSTRAP_JTI_RETENTION_SECONDS', '86400'))
@@ -11930,7 +12289,7 @@ def _get_bootstrap_signing_secret() -> str:
 
     # This fallback keeps local development functional, but should never be used in production.
     logger.warning('BOOTSTRAP_TOKEN_SECRET is not set; using insecure fallback secret')
-    return 'luna-insecure-bootstrap-secret'
+    return 'casm-insecure-bootstrap-secret'
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -12225,14 +12584,14 @@ def _resolve_installer_template_context(
         installer_supabase_service_key = _sanitize_batch_template_value(server_credentials.get('SUPABASE_SERVICE_ROLE_KEY', ''))
 
     return {
-        '__LUNA_REPO_ZIP_URL__': repo_zip_url,
-        '__LUNA_SOURCE_ROOT__': source_root,
-        '__LUNA_CLOUD_URL__': cloud_url,
-        '__LUNA_INSTALLER_VERSION__': installer_version,
-        '__LUNA_MACHINE_ID__': machine_id,
-        '__LUNA_SUPABASE_URL__': installer_supabase_url,
-        '__LUNA_SUPABASE_DB_URL__': installer_supabase_db_url,
-        '__LUNA_SUPABASE_SERVICE_ROLE_KEY__': installer_supabase_service_key,
+        '__CASM_REPO_ZIP_URL__': repo_zip_url,
+        '__CASM_SOURCE_ROOT__': source_root,
+        '__CASM_CLOUD_URL__': cloud_url,
+        '__CASM_INSTALLER_VERSION__': installer_version,
+        '__CASM_MACHINE_ID__': machine_id,
+        '__CASM_SUPABASE_URL__': installer_supabase_url,
+        '__CASM_SUPABASE_DB_URL__': installer_supabase_db_url,
+        '__CASM_SUPABASE_SERVICE_ROLE_KEY__': installer_supabase_service_key,
     }
 
 
@@ -12253,7 +12612,7 @@ def _render_installer_batch_script(
         source_line = f'set "{var_name}={token}"'
         target_line = f'set "{var_name}={replacement}"'
         content = content.replace(source_line, target_line)
-    return content, context.get('__LUNA_INSTALLER_VERSION__', 'unknown')
+    return content, context.get('__CASM_INSTALLER_VERSION__', 'unknown')
 
 
 import smtplib
@@ -12367,7 +12726,7 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
                 smtp_timeout_seconds = 8
 
             msg = MIMEMultipart()
-            msg['From'] = smtp_user or 'luna-system@localhost'
+            msg['From'] = smtp_user or 'casm-system@localhost'
             msg['To'] = admin_email
             msg['Subject'] = subject
             msg.attach(MIMEText(message_plain, 'plain'))
@@ -12441,6 +12800,13 @@ def notify_admin(machine_id, status='pending', token=None):
 
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
+    # PRV1 — Require admin authorisation unless the operator has explicitly opted into
+    # unauthenticated self-registration via PROVISION_ALLOW_SELF_REGISTER=true.
+    if not PROVISION_ALLOW_SELF_REGISTER:
+        token_header = request.headers.get('X-Admin-Token', '').strip()
+        if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
+            return jsonify({'error': 'Unauthorized'}), 401
+
     data = request.get_json() or {}
     machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
@@ -12688,11 +13054,11 @@ def request_bootstrap_installer():
         if current_status not in ('approved', 'provisioned'):
             return _json_error('Device is not approved for installer access', 403)
 
+        # PRV4 — provision_secret is mandatory for device-initiated installer requests.
+        # Removing the "recovery convenience path" prevents unauthenticated callers who
+        # only know a machine_id from downloading the installer package.
         if not provision_secret:
-            logger.info(
-                f"Issuing installer token for approved/provisioned machine_id={resolved_machine_id} "
-                "without provision_secret (recovery convenience path)."
-            )
+            return _json_error('provision_secret is required to download the installer', 401)
 
         return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id))
 
@@ -12704,7 +13070,7 @@ def request_bootstrap_installer():
         return _apply_no_cache_headers(response)
 
     auth = request.authorization
-    if not auth or auth.password != ADMIN_PASSWORD:
+    if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
         response = Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials to issue an installer token',
@@ -12732,7 +13098,7 @@ def download_bootstrap_installer():
 
     installer_machine_id = str((token_payload or {}).get('machine_id') or '').strip()
 
-    installer_name = 'LUNA_LocalInstaller.bat'
+    installer_name = 'CASM_LocalInstaller.bat'
     installer_dir = Path(app.static_folder or 'frontend') / 'static'
     installer_path = installer_dir / installer_name
     if not installer_path.exists():
@@ -12753,8 +13119,8 @@ def download_bootstrap_installer():
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers['X-Luna-Installer-Version'] = installer_version
-    response.headers['X-Luna-Installer-SHA256'] = hashlib.sha256(
+    response.headers['X-Casm-Installer-Version'] = installer_version
+    response.headers['X-Casm-Installer-SHA256'] = hashlib.sha256(
         installer_content.encode('utf-8')
     ).hexdigest()
     return response
@@ -12766,7 +13132,7 @@ def admin_devices():
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
 
     auth = request.authorization
-    if not auth or auth.password != ADMIN_PASSWORD:
+    if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
         return Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials',
@@ -12834,7 +13200,7 @@ def admin_devices():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="theme-color" content="#e09c2e">
-        <title>LUNA Admin - Device Provisioning</title>
+        <title>CASM Admin - Device Provisioning</title>
         <link rel="stylesheet" href="/static/css/style.css">
         <style>
             .admin-page {
@@ -12933,7 +13299,7 @@ def admin_devices():
         <main class="main-content admin-shell">
             <section class="card admin-hero">
                 <div class="card-header">
-                    <span>LUNA Admin Portal - Device Provisioning Queue</span>
+                    <span>CASM Admin Portal - Device Provisioning Queue</span>
                     <span class="badge badge-info">Cloud Records</span>
                 </div>
                 <div class="card-content">
@@ -13018,7 +13384,7 @@ def admin_devices_quick_approve():
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
 
     auth = request.authorization
-    if not auth or auth.password != ADMIN_PASSWORD:
+    if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
         return Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials to approve this device',
@@ -13059,7 +13425,7 @@ def admin_devices_quick_approve():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="theme-color" content="#e09c2e">
-        <title>LUNA Admin - Device Approved</title>
+        <title>CASM Admin - Device Approved</title>
         <link rel="stylesheet" href="/static/css/style.css">
         <style>
             .admin-page {
@@ -13089,7 +13455,7 @@ def admin_devices_quick_approve():
     <body class="admin-page">
         <main class="main-content admin-shell">
             <section class="card">
-                <div class="card-header">LUNA Admin Portal - Device Approved</div>
+                <div class="card-header">CASM Admin Portal - Device Approved</div>
                 <div class="card-content">
                     <p class="approval-message">
                         Machine <strong>{{ machine_id }}</strong> has been granted access.
@@ -13120,7 +13486,7 @@ if __name__ == '__main__':
     atexit.register(cleanup)
     
     logger.info("=" * 80)
-    logger.info("LUNA PPE SAFETY MONITOR - Unified Application Server")
+    logger.info("CASM PPE SAFETY MONITOR - Unified Application Server")
     logger.info("=" * 80)
     logger.info("")
     port = int(os.getenv('PORT', '5000'))

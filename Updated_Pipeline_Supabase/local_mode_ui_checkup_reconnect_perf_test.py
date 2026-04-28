@@ -8,11 +8,11 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
-BASE_URL = os.environ.get("LUNA_LOCAL_UI_URL", "http://127.0.0.1:5000").rstrip("/")
-AUTO_SYNC_START_TIMEOUT_MS = int(os.environ.get("LUNA_AUTO_SYNC_START_TIMEOUT_MS", "30000"))
-AUTO_SYNC_COMPLETE_TIMEOUT_MS = int(os.environ.get("LUNA_AUTO_SYNC_COMPLETE_TIMEOUT_MS", "150000"))
+BASE_URL = os.environ.get("CASM_LOCAL_UI_URL", "http://127.0.0.1:5000").rstrip("/")
+AUTO_SYNC_START_TIMEOUT_MS = int(os.environ.get("CASM_AUTO_SYNC_START_TIMEOUT_MS", "30000"))
+AUTO_SYNC_COMPLETE_TIMEOUT_MS = int(os.environ.get("CASM_AUTO_SYNC_COMPLETE_TIMEOUT_MS", "150000"))
 ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK = os.environ.get(
-    "LUNA_ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK",
+    "CASM_ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK",
     "0",
 ) != "0"
 
@@ -149,8 +149,8 @@ def main() -> int:
             page.evaluate(
                 """
                 (forcedBaseUrl) => {
-                    if (window.__LUNA_PERF_HOOKS_INSTALLED) return;
-                    window.__LUNA_PERF_HOOKS_INSTALLED = true;
+                    if (window.__CASM_PERF_HOOKS_INSTALLED) return;
+                    window.__CASM_PERF_HOOKS_INSTALLED = true;
 
                     const resolvedLocalOrigin = (() => {
                         try {
@@ -169,7 +169,7 @@ def main() -> int:
                         // No-op
                     }
 
-                    window.__LUNA_PERF = {
+                    window.__CASM_PERF = {
                         fetchCalls: [],
                         startedCalls: [],
                         notes: [],
@@ -239,7 +239,7 @@ def main() -> int:
 
                         const startedAt = performance.now();
                         const startedWallClock = Date.now();
-                        window.__LUNA_PERF.startedCalls.push({
+                        window.__CASM_PERF.startedCalls.push({
                             url: rewritten ? rewrittenUrl : originalUrl,
                             original_url: originalUrl,
                             rewritten_url: rewrittenUrl,
@@ -250,7 +250,7 @@ def main() -> int:
                         try {
                             const response = await originalFetch(requestInfo, requestInit);
                             const duration = performance.now() - startedAt;
-                            window.__LUNA_PERF.fetchCalls.push({
+                            window.__CASM_PERF.fetchCalls.push({
                                 url: rewritten ? rewrittenUrl : originalUrl,
                                 original_url: originalUrl,
                                 rewritten_url: rewrittenUrl,
@@ -264,7 +264,7 @@ def main() -> int:
                             return response;
                         } catch (error) {
                             const duration = performance.now() - startedAt;
-                            window.__LUNA_PERF.fetchCalls.push({
+                            window.__CASM_PERF.fetchCalls.push({
                                 url: rewritten ? rewrittenUrl : originalUrl,
                                 original_url: originalUrl,
                                 rewritten_url: rewrittenUrl,
@@ -281,7 +281,7 @@ def main() -> int:
                     };
 
                     window.confirm = (message) => {
-                        window.__LUNA_PERF.notes.push({
+                        window.__CASM_PERF.notes.push({
                             kind: 'confirm',
                             message: String(message || ''),
                             at: Date.now()
@@ -813,7 +813,7 @@ def main() -> int:
                 page.wait_for_function(
                     """
                     (sinceTs) => {
-                        const started = (window.__LUNA_PERF && window.__LUNA_PERF.startedCalls) || [];
+                        const started = (window.__CASM_PERF && window.__CASM_PERF.startedCalls) || [];
                         return started.some((entry) => {
                             const u = String(entry.url || entry.rewritten_url || entry.original_url || '');
                             return entry.at >= sinceTs && u.includes('/api/reports/sync-local-cache');
@@ -832,7 +832,7 @@ def main() -> int:
                     page.wait_for_function(
                         """
                         (sinceTs) => {
-                            const completed = (window.__LUNA_PERF && window.__LUNA_PERF.fetchCalls) || [];
+                            const completed = (window.__CASM_PERF && window.__CASM_PERF.fetchCalls) || [];
                             return completed.some((entry) => {
                                 const u = String(entry.url || entry.rewritten_url || entry.original_url || '');
                                 return entry.at >= sinceTs && u.includes('/api/reports/sync-local-cache');
@@ -901,7 +901,7 @@ def main() -> int:
                     page.wait_for_function(
                         """
                         (sinceTs) => {
-                            const logs = (window.__LUNA_PERF && window.__LUNA_PERF.fetchCalls) || [];
+                            const logs = (window.__CASM_PERF && window.__CASM_PERF.fetchCalls) || [];
                             return logs.some((entry) => {
                                 const u = String(entry.url || entry.rewritten_url || entry.original_url || '');
                                 return entry.at >= sinceTs && u.includes('/api/reports/sync-local-cache');
@@ -943,7 +943,7 @@ def main() -> int:
             perf_extract = page.evaluate(
                 """
                 (reconnectSince) => {
-                    const logs = (window.__LUNA_PERF && window.__LUNA_PERF.fetchCalls) || [];
+                    const logs = (window.__CASM_PERF && window.__CASM_PERF.fetchCalls) || [];
                     const key = logs.filter((entry) => {
                         const u = String(entry.url || entry.rewritten_url || entry.original_url || '');
                         return (
@@ -961,7 +961,7 @@ def main() -> int:
                         return entry.at >= reconnectSince && u.includes('/api/reports/sync-local-cache');
                     });
 
-                    const startedLogs = (window.__LUNA_PERF && window.__LUNA_PERF.startedCalls) || [];
+                    const startedLogs = (window.__CASM_PERF && window.__CASM_PERF.startedCalls) || [];
                     const syncStartedAfterReconnect = startedLogs.filter((entry) => {
                         const u = String(entry.url || entry.rewritten_url || entry.original_url || '');
                         return entry.at >= reconnectSince && u.includes('/api/reports/sync-local-cache');
@@ -1007,11 +1007,11 @@ def main() -> int:
                         total_key_calls: key.length,
                         rewritten_key_calls: rewrittenKeyCalls,
                         total_rewritten_calls: logs.filter((entry) => !!entry.rewritten).length,
-                        force_local_origin: (window.__LUNA_PERF && window.__LUNA_PERF.force_local_origin) || '',
+                        force_local_origin: (window.__CASM_PERF && window.__CASM_PERF.force_local_origin) || '',
                         endpoint_summary: endpointSummary,
                         sync_after_reconnect_calls: syncAfterReconnect,
                         sync_after_reconnect_started_calls: syncStartedAfterReconnect,
-                        confirms_seen: (window.__LUNA_PERF && window.__LUNA_PERF.notes) || []
+                        confirms_seen: (window.__CASM_PERF && window.__CASM_PERF.notes) || []
                     };
                 }
                 """,

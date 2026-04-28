@@ -6,7 +6,7 @@ import json
 import re
 from unittest.mock import patch, Mock
 
-# Ensure we can import luna_app
+# Ensure we can import casm_app
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Test environment setup
@@ -18,7 +18,7 @@ os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
 os.environ['SUPABASE_URL'] = 'https://projtest123.supabase.co'
 os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'
 
-from luna_app import (
+from casm_app import (
     app,
     _load_pending_devices,
     _save_pending_devices,
@@ -196,13 +196,13 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(payload.get('bootstrap_exchange_ready'))
         self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
 
-    @patch('luna_app.notify_admin')
+    @patch('casm_app.notify_admin')
     def test_re_request_pending_device_respects_notification_cooldown(self, mock_notify_admin):
         machine_id = 'TEST-EDGE-PENDING-COOLDOWN-001'
         _ = self._request_device(machine_id)
         mock_notify_admin.reset_mock()
 
-        with patch('luna_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 3600):
+        with patch('casm_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 3600):
             reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
 
         self.assertEqual(reissue.status_code, 200)
@@ -213,7 +213,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('notification_reason'), 'pending_rerequest_cooldown')
         mock_notify_admin.assert_not_called()
 
-    @patch('luna_app.notify_admin')
+    @patch('casm_app.notify_admin')
     def test_re_request_pending_device_notifies_after_cooldown(self, mock_notify_admin):
         machine_id = 'TEST-EDGE-PENDING-COOLDOWN-002'
         _ = self._request_device(machine_id)
@@ -224,7 +224,7 @@ class ProvisioningActionTest(unittest.TestCase):
         devices[machine_id]['requested_at'] = '2020-01-01T00:00:00+00:00'
         _save_pending_devices(devices)
 
-        with patch('luna_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 60):
+        with patch('casm_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 60):
             reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
 
         self.assertEqual(reissue.status_code, 200)
@@ -341,7 +341,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('/api/bootstrap/installer?token=', location)
         request_auth.close()
 
-        direct_static = self.client.get('/static/LUNA_LocalInstaller.bat')
+        direct_static = self.client.get('/static/CASM_LocalInstaller.bat')
         self.assertEqual(direct_static.status_code, 403)
         direct_static.close()
 
@@ -365,21 +365,21 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn(b'ZERO-TOUCH LOCAL INSTALLER', installer_download.data)
         rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
         # Assignment placeholders must be replaced in rendered downloads.
-        self.assertNotIn('set "LUNA_REPO_ZIP_URL=__LUNA_REPO_ZIP_URL__"', rendered_installer)
-        self.assertNotIn('set "LUNA_SOURCE_ROOT=__LUNA_SOURCE_ROOT__"', rendered_installer)
-        self.assertNotIn('set "LUNA_CLOUD_URL=__LUNA_CLOUD_URL__"', rendered_installer)
-        self.assertNotIn('set "LUNA_INSTALLER_VERSION=__LUNA_INSTALLER_VERSION__"', rendered_installer)
-        self.assertNotIn('set "LUNA_MACHINE_ID=__LUNA_MACHINE_ID__"', rendered_installer)
-        self.assertNotIn('set "LUNA_SUPABASE_URL=__LUNA_SUPABASE_URL__"', rendered_installer)
-        self.assertNotIn('set "LUNA_SUPABASE_DB_URL=__LUNA_SUPABASE_DB_URL__"', rendered_installer)
-        self.assertNotIn('set "LUNA_SUPABASE_SERVICE_ROLE_KEY=__LUNA_SUPABASE_SERVICE_ROLE_KEY__"', rendered_installer)
+        self.assertNotIn('set "CASM_REPO_ZIP_URL=__CASM_REPO_ZIP_URL__"', rendered_installer)
+        self.assertNotIn('set "CASM_SOURCE_ROOT=__CASM_SOURCE_ROOT__"', rendered_installer)
+        self.assertNotIn('set "CASM_CLOUD_URL=__CASM_CLOUD_URL__"', rendered_installer)
+        self.assertNotIn('set "CASM_INSTALLER_VERSION=__CASM_INSTALLER_VERSION__"', rendered_installer)
+        self.assertNotIn('set "CASM_MACHINE_ID=__CASM_MACHINE_ID__"', rendered_installer)
+        self.assertNotIn('set "CASM_SUPABASE_URL=__CASM_SUPABASE_URL__"', rendered_installer)
+        self.assertNotIn('set "CASM_SUPABASE_DB_URL=__CASM_SUPABASE_DB_URL__"', rendered_installer)
+        self.assertNotIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=__CASM_SUPABASE_SERVICE_ROLE_KEY__"', rendered_installer)
 
         # Internal guard checks and self-update token maps must preserve placeholders
         # so launcher self-refresh can re-render from template safely.
-        self.assertIn('if /I "!LUNA_CLOUD_URL!"=="__LUNA_CLOUD_URL__"', rendered_installer)
-        self.assertIn("'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'", rendered_installer)
+        self.assertIn('if /I "!CASM_CLOUD_URL!"=="__CASM_CLOUD_URL__"', rendered_installer)
+        self.assertIn("'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'", rendered_installer)
         self.assertGreaterEqual(
-            rendered_installer.count("'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'"),
+            rendered_installer.count("'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"),
             2,
         )
 
@@ -387,13 +387,13 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(rendered_installer, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
-        self.assertIn('set "LUNA_REPO_ZIP_URL=', rendered_installer)
-        self.assertIn('set "LUNA_SOURCE_ROOT=', rendered_installer)
-        self.assertIn('set "LUNA_CLOUD_URL=', rendered_installer)
-        self.assertIn('set "LUNA_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
-        self.assertIn('set "LUNA_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
-        self.assertIn('set "LUNA_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
-        self.assertTrue(str(installer_download.headers.get('X-Luna-Installer-Version') or '').strip())
+        self.assertIn('set "CASM_REPO_ZIP_URL=', rendered_installer)
+        self.assertIn('set "CASM_SOURCE_ROOT=', rendered_installer)
+        self.assertIn('set "CASM_CLOUD_URL=', rendered_installer)
+        self.assertIn('set "CASM_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
+        self.assertIn('set "CASM_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
+        self.assertIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
+        self.assertTrue(str(installer_download.headers.get('X-Casm-Installer-Version') or '').strip())
         self.assertEqual(
             installer_download.headers.get('Cache-Control'),
             'no-store, no-cache, must-revalidate, max-age=0',
@@ -407,7 +407,7 @@ class ProvisioningActionTest(unittest.TestCase):
     def test_batch_templates_have_required_label_targets(self):
         script_dir = os.path.abspath(os.path.dirname(__file__))
         start_bat_path = os.path.join(script_dir, 'start.bat')
-        installer_bat_path = os.path.join(script_dir, 'frontend', 'static', 'LUNA_LocalInstaller.bat')
+        installer_bat_path = os.path.join(script_dir, 'frontend', 'static', 'CASM_LocalInstaller.bat')
 
         with open(start_bat_path, 'r', encoding='utf-8') as f:
             start_bat = f.read()
@@ -430,7 +430,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
 
-        token_map_key = "'__LUNA_REPO_ZIP_URL__'='LUNA_REPO_ZIP_URL'"
+        token_map_key = "'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"
         self.assertGreaterEqual(installer_bat.count(token_map_key), 2)
         self.assertGreaterEqual(installer_bat.count('$lineMap = [ordered]@{}'), 2)
 
@@ -585,8 +585,8 @@ class ProvisioningActionTest(unittest.TestCase):
             if previous_cloud_url is not None:
                 os.environ['CLOUD_URL'] = previous_cloud_url
 
-    @patch('luna_app.requests.get')
-    @patch('luna_app.requests.post')
+    @patch('casm_app.requests.get')
+    @patch('casm_app.requests.post')
     def test_local_auto_provision_pending_approval(self, mock_post, mock_get):
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
 
@@ -599,7 +599,7 @@ class ProvisioningActionTest(unittest.TestCase):
             {'status': 'pending'},
         )
 
-        with patch('luna_app._local_mode_has_supabase_credentials', return_value=False):
+        with patch('casm_app._local_mode_has_supabase_credentials', return_value=False):
             response = self.client.post('/api/local-mode/provisioning/auto', json={})
         self.assertEqual(response.status_code, 200)
 
@@ -624,12 +624,12 @@ class ProvisioningActionTest(unittest.TestCase):
             f'Expected a heartbeat upload POST call, got: {all_post_urls}'
         )
 
-    @patch('luna_app.requests.post')
-    @patch('luna_app._local_mode_fetch_authoritative_status')
-    @patch('luna_app._run_local_mode_auto_provision_once')
-    @patch('luna_app._local_mode_collect_cloud_heartbeat_submission')
-    @patch('luna_app._local_mode_has_supabase_credentials')
-    @patch('luna_app._local_mode_load_provision_state')
+    @patch('casm_app.requests.post')
+    @patch('casm_app._local_mode_fetch_authoritative_status')
+    @patch('casm_app._run_local_mode_auto_provision_once')
+    @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
+    @patch('casm_app._local_mode_has_supabase_credentials')
+    @patch('casm_app._local_mode_load_provision_state')
     def test_cloud_heartbeat_recovers_missing_provision_secret(
         self,
         mock_load_state,
@@ -676,9 +676,9 @@ class ProvisioningActionTest(unittest.TestCase):
         heartbeat_url = str(mock_post.call_args.args[0])
         self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
 
-    @patch('luna_app._local_mode_apply_supabase_credentials')
-    @patch('luna_app.requests.get')
-    @patch('luna_app.requests.post')
+    @patch('casm_app._local_mode_apply_supabase_credentials')
+    @patch('casm_app.requests.get')
+    @patch('casm_app.requests.post')
     def test_local_auto_provision_approved_auto_exchanges_and_applies_credentials(
         self,
         mock_post,
@@ -714,7 +714,7 @@ class ProvisioningActionTest(unittest.TestCase):
             'reinit_error': None,
         }
 
-        with patch('luna_app._local_mode_has_supabase_credentials', return_value=False):
+        with patch('casm_app._local_mode_has_supabase_credentials', return_value=False):
             response = self.client.post('/api/local-mode/provisioning/auto', json={})
         self.assertEqual(response.status_code, 200)
 

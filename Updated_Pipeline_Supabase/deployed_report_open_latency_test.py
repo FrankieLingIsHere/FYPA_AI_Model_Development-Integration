@@ -8,26 +8,26 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-MAX_SCAN = max(10, int(os.environ.get("LUNA_REPORT_LATENCY_MAX_SCAN", "120")))
-MAX_CANDIDATES = max(1, int(os.environ.get("LUNA_REPORT_LATENCY_MAX_CANDIDATES", "6")))
-WARM_TARGET_SECONDS = float(os.environ.get("LUNA_REPORT_OPEN_WARM_TARGET_SECONDS", "1.0"))
-WARM_SAMPLE_COUNT = max(1, int(os.environ.get("LUNA_REPORT_OPEN_WARM_SAMPLES", "3")))
-REQUEST_TIMEOUT = max(5, int(os.environ.get("LUNA_REPORT_OPEN_TIMEOUT", "30")))
+MAX_SCAN = max(10, int(os.environ.get("CASM_REPORT_LATENCY_MAX_SCAN", "120")))
+MAX_CANDIDATES = max(1, int(os.environ.get("CASM_REPORT_LATENCY_MAX_CANDIDATES", "6")))
+WARM_TARGET_SECONDS = float(os.environ.get("CASM_REPORT_OPEN_WARM_TARGET_SECONDS", "1.0"))
+WARM_SAMPLE_COUNT = max(1, int(os.environ.get("CASM_REPORT_OPEN_WARM_SAMPLES", "3")))
+REQUEST_TIMEOUT = max(5, int(os.environ.get("CASM_REPORT_OPEN_TIMEOUT", "30")))
 MAX_ALLOWED_SAMPLE_SECONDS = float(
-    os.environ.get("LUNA_REPORT_OPEN_MAX_SAMPLE_SECONDS", str(max(2.0, WARM_TARGET_SECONDS * 2.0)))
+    os.environ.get("CASM_REPORT_OPEN_MAX_SAMPLE_SECONDS", str(max(2.0, WARM_TARGET_SECONDS * 2.0)))
 )
-MEAN_MULTIPLIER = float(os.environ.get("LUNA_REPORT_OPEN_MEAN_MULTIPLIER", "1.15"))
-RETRY_ATTEMPTS = max(1, int(os.environ.get("LUNA_REPORT_OPEN_RETRY_ATTEMPTS", "2")))
-RETRY_BACKOFF_SECONDS = max(1.0, float(os.environ.get("LUNA_REPORT_OPEN_RETRY_BACKOFF_SECONDS", "3")))
-NETWORK_BASELINE_SAMPLES = max(1, int(os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_SAMPLES", "3")))
-NETWORK_BASELINE_PATH = os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_PATH", "/api/health")
-NETWORK_BASELINE_FREE_S = max(0.0, float(os.environ.get("LUNA_REPORT_OPEN_NETWORK_BASELINE_FREE_S", "0.20")))
-NETWORK_ALLOWANCE_CAP_S = max(0.0, float(os.environ.get("LUNA_REPORT_OPEN_NETWORK_ALLOWANCE_CAP_S", "0.60")))
-MAX_SPIKE_SAMPLES = max(0, int(os.environ.get("LUNA_REPORT_OPEN_MAX_SPIKE_SAMPLES", "1")))
+MEAN_MULTIPLIER = float(os.environ.get("CASM_REPORT_OPEN_MEAN_MULTIPLIER", "1.15"))
+RETRY_ATTEMPTS = max(1, int(os.environ.get("CASM_REPORT_OPEN_RETRY_ATTEMPTS", "2")))
+RETRY_BACKOFF_SECONDS = max(1.0, float(os.environ.get("CASM_REPORT_OPEN_RETRY_BACKOFF_SECONDS", "3")))
+NETWORK_BASELINE_SAMPLES = max(1, int(os.environ.get("CASM_REPORT_OPEN_NETWORK_BASELINE_SAMPLES", "3")))
+NETWORK_BASELINE_PATH = os.environ.get("CASM_REPORT_OPEN_NETWORK_BASELINE_PATH", "/api/health")
+NETWORK_BASELINE_FREE_S = max(0.0, float(os.environ.get("CASM_REPORT_OPEN_NETWORK_BASELINE_FREE_S", "0.20")))
+NETWORK_ALLOWANCE_CAP_S = max(0.0, float(os.environ.get("CASM_REPORT_OPEN_NETWORK_ALLOWANCE_CAP_S", "0.60")))
+MAX_SPIKE_SAMPLES = max(0, int(os.environ.get("CASM_REPORT_OPEN_MAX_SPIKE_SAMPLES", "1")))
 
 
 def fail(msg: str, code: int = 2) -> int:

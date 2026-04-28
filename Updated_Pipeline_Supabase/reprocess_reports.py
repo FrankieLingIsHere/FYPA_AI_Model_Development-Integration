@@ -109,7 +109,7 @@ def initialize_managers():
         db_manager = create_db_manager_from_env()
         storage_manager = create_storage_manager_from_env()
         
-        # Create report config dictionary (same as luna_app.py)
+        # Create report config dictionary (same as casm_app.py)
         report_config = {
             'OLLAMA_CONFIG': OLLAMA_CONFIG,
             'RAG_CONFIG': RAG_CONFIG,

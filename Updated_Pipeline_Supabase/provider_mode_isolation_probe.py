@@ -14,13 +14,13 @@ OUTAGE_MARKERS = (
     "nlp analysis failed",
     "max retries exceeded",
 )
-DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("LUNA_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
+DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("CASM_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
-DEFAULT_STATUS_POLL_TIMEOUT_SECONDS = max(45, int(os.environ.get("LUNA_GENERATE_POLL_TIMEOUT_SECONDS", "150") or 150))
+DEFAULT_STATUS_POLL_TIMEOUT_SECONDS = max(45, int(os.environ.get("CASM_GENERATE_POLL_TIMEOUT_SECONDS", "150") or 150))
 
 
 def _as_text(value: Any) -> str:
@@ -408,12 +408,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Probe strict cloud/local provider isolation")
     parser.add_argument(
         "--cloud-base-url",
-        default=os.environ.get("LUNA_CLOUD_BASE_URL", "https://fypaaimodeldevelopment-integration-production.up.railway.app"),
+        default=os.environ.get("CASM_CLOUD_BASE_URL", "https://fypaaimodeldevelopment-integration-production.up.railway.app"),
         help="Cloud backend base URL",
     )
     parser.add_argument(
         "--local-base-url",
-        default=os.environ.get("LUNA_LOCAL_BASE_URL", "http://127.0.0.1:5000"),
+        default=os.environ.get("CASM_LOCAL_BASE_URL", "http://127.0.0.1:5000"),
         help="Local backend base URL",
     )
     parser.add_argument(

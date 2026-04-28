@@ -8,13 +8,20 @@ Provides signed URLs for secure access to private buckets.
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import timedelta
 
+import requests
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+# When Supabase returns a project-level restriction (HTTP 402 "exceed_egress_quota",
+# project paused, billing block), every subsequent upload will fail the same way.
+# We short-circuit for this many seconds before re-probing, so the log isn't spammed.
+_RESTRICTION_BACKOFF_SECONDS = 300
 
 
 class SupabaseStorageManager:
@@ -44,11 +51,15 @@ class SupabaseStorageManager:
             reports_bucket: Name of reports bucket (default: 'reports')
             signed_url_ttl: TTL for signed URLs in seconds (default: 3600 = 1 hour)
         """
-        self.supabase_url = supabase_url
+        self.supabase_url = (supabase_url or '').rstrip('/')
         self.supabase_key = supabase_key
         self.images_bucket = images_bucket
         self.reports_bucket = reports_bucket
         self.signed_url_ttl = signed_url_ttl
+        # Circuit breaker: if Supabase returns 402 / project restricted,
+        # remember that for a short window so we don't keep retrying.
+        self._restricted_until_ts: float = 0.0
+        self._restriction_reason: str = ''
         
         # Initialize Supabase client
         try:
@@ -95,7 +106,48 @@ class SupabaseStorageManager:
         except Exception as e:
             logger.debug(f"Storage existence check failed for {bucket_name}/{storage_key}: {e}")
             return False
-    
+
+    def _restriction_active(self) -> bool:
+        return time.time() < self._restricted_until_ts
+
+    def _trip_restriction(self, reason: str) -> None:
+        self._restricted_until_ts = time.time() + _RESTRICTION_BACKOFF_SECONDS
+        self._restriction_reason = reason
+        logger.error(
+            "Supabase project is restricted (%s). Suppressing further upload "
+            "attempts for %ds. Visit your Supabase dashboard / billing.",
+            reason, _RESTRICTION_BACKOFF_SECONDS,
+        )
+
+    def _probe_restriction(self, bucket_name: str, storage_key: str) -> bool:
+        """After an opaque SDK error, do a direct REST probe to learn the real
+        HTTP status. If Supabase responds with 402 / project restriction, trip
+        the breaker and return True."""
+        if not self.supabase_url or not self.supabase_key:
+            return False
+        try:
+            url = f"{self.supabase_url}/storage/v1/object/{bucket_name}/{storage_key}"
+            resp = requests.post(
+                url,
+                headers={
+                    'Authorization': f'Bearer {self.supabase_key}',
+                    'apikey': self.supabase_key,
+                    'Content-Type': 'application/octet-stream',
+                    'x-upsert': 'true',
+                },
+                data=b'',
+                timeout=10,
+            )
+        except Exception as probe_err:
+            logger.debug(f"Restriction probe failed: {probe_err}")
+            return False
+
+        body = (resp.text or '')[:300]
+        if resp.status_code == 402 or 'exceed_egress_quota' in body or 'project is restricted' in body.lower():
+            self._trip_restriction(f"HTTP {resp.status_code}: {body}")
+            return True
+        return False
+
     def upload_image(
         self,
         local_path: Path,
@@ -123,6 +175,10 @@ class SupabaseStorageManager:
         storage_key = f"{report_id}/{filename}"
         full_key = f"{self.images_bucket}/{storage_key}"
 
+        if self._restriction_active():
+            logger.debug(f"Skip image upload (project restricted): {full_key}")
+            return None
+
         if not upsert and self._object_exists(self.images_bucket, storage_key):
             logger.info(f"Image already exists in storage, reusing key: {full_key}")
             return full_key
@@ -142,6 +198,22 @@ class SupabaseStorageManager:
             return full_key
             
         except Exception as e:
+            # Known supabase-py / storage3 quirk: when the storage backend
+            # returns a JSON error body (e.g. 409 "resource already exists",
+            # 402 "project restricted"), the SDK's error parser tries
+            # response.text on what is already a parsed dict, raising
+            # AttributeError("'dict' object has no attribute 'text'").
+            # Probe directly to find out the real cause.
+            err_text = str(e)
+            if "'dict' object has no attribute 'text'" in err_text or 'already exists' in err_text.lower():
+                if self._object_exists(self.images_bucket, storage_key):
+                    logger.info(
+                        f"Image upload reported duplicate; treating as already-uploaded: {full_key}"
+                    )
+                    return full_key
+                # Not a duplicate — find out what Supabase actually returned.
+                if self._probe_restriction(self.images_bucket, storage_key):
+                    return None
             logger.error(f"Failed to upload image {storage_key}: {e}")
             return None
     
@@ -173,6 +245,10 @@ class SupabaseStorageManager:
         storage_key = f"{report_id}/{filename}"
         full_key = f"{self.reports_bucket}/{storage_key}"
 
+        if self._restriction_active():
+            logger.debug(f"Skip report upload (project restricted): {full_key}")
+            return None
+
         if not upsert and self._object_exists(self.reports_bucket, storage_key):
             logger.info(f"Report already exists in storage, reusing key: {full_key}")
             return full_key
@@ -192,6 +268,17 @@ class SupabaseStorageManager:
             return full_key
             
         except Exception as e:
+            # See upload_image: storage3 raises AttributeError on opaque
+            # error responses (409 duplicate, 402 project restricted, ...).
+            err_text = str(e)
+            if "'dict' object has no attribute 'text'" in err_text or 'already exists' in err_text.lower():
+                if self._object_exists(self.reports_bucket, storage_key):
+                    logger.info(
+                        f"Report upload reported duplicate; treating as already-uploaded: {full_key}"
+                    )
+                    return full_key
+                if self._probe_restriction(self.reports_bucket, storage_key):
+                    return None
             logger.error(f"Failed to upload report {storage_key}: {e}")
             return None
     

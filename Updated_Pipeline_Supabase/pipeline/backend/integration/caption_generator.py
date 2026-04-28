@@ -141,7 +141,7 @@ class CaptionGenerator:
                     logger.warning(f"Gemini captioning failed, trying legacy: {caption}")
             
             # Fallback to legacy (Qwen2.5-VL via llama.cpp)
-            if LEGACY_CAPTION_AVAILABLE:
+            if self.backend == 'legacy' and LEGACY_CAPTION_AVAILABLE:
                 logger.info("Using legacy caption backend (Qwen2.5-VL)...")
                 for attempt in range(max_retries):
                     try:

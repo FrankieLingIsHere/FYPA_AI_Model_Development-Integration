@@ -9,7 +9,7 @@ import requests
 
 
 BASE_URL = os.environ.get(
-    "LUNA_BASE_URL",
+    "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
@@ -17,16 +17,16 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _DEFAULT_IMAGE_PATH = (_SCRIPT_DIR / "static" / "images" / "handbook-live.png").resolve()
 
 IMAGE_PATH = os.environ.get(
-    "LUNA_FLOOD_TEST_IMAGE",
+    "CASM_FLOOD_TEST_IMAGE",
     str(_DEFAULT_IMAGE_PATH),
 )
 
-TOTAL_REQUESTS = max(3, int(os.environ.get("LUNA_FLOOD_TOTAL_REQUESTS", "12")))
-MAX_WORKERS = max(2, int(os.environ.get("LUNA_FLOOD_WORKERS", "6")))
-P95_LATENCY_LIMIT_MS = max(1000, int(os.environ.get("LUNA_FLOOD_P95_MS", "9000")))
-MIN_SUCCESS_RATIO = float(os.environ.get("LUNA_FLOOD_MIN_SUCCESS_RATIO", "0.90"))
-MAX_UNIQUE_QUEUED_REPORTS = max(1, int(os.environ.get("LUNA_FLOOD_MAX_UNIQUE_REPORTS", "1")))
-RETRY_GATEWAY_ERROR_RATIO = float(os.environ.get("LUNA_FLOOD_RETRY_GATEWAY_RATIO", "0.50"))
+TOTAL_REQUESTS = max(3, int(os.environ.get("CASM_FLOOD_TOTAL_REQUESTS", "12")))
+MAX_WORKERS = max(2, int(os.environ.get("CASM_FLOOD_WORKERS", "6")))
+P95_LATENCY_LIMIT_MS = max(1000, int(os.environ.get("CASM_FLOOD_P95_MS", "9000")))
+MIN_SUCCESS_RATIO = float(os.environ.get("CASM_FLOOD_MIN_SUCCESS_RATIO", "0.90"))
+MAX_UNIQUE_QUEUED_REPORTS = max(1, int(os.environ.get("CASM_FLOOD_MAX_UNIQUE_REPORTS", "1")))
+RETRY_GATEWAY_ERROR_RATIO = float(os.environ.get("CASM_FLOOD_RETRY_GATEWAY_RATIO", "0.50"))
 
 
 def fail(message: str, code: int = 2) -> int:

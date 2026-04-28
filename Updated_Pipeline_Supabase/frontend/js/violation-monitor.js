@@ -15,7 +15,7 @@ const ViolationMonitor = {
     lastVisitTime: null,              // From localStorage
 
     // LocalStorage key for tracking last visit
-    STORAGE_KEY: 'luna_last_visit_time',
+    STORAGE_KEY: 'casm_last_visit_time',
 
     start() {
         if (this.isMonitoring) return;
@@ -32,10 +32,38 @@ const ViolationMonitor = {
         // Initial check - will show summary notification only
         this.checkForNewViolations();
 
-        // Check every 3 seconds for new violations during session
-        this.checkInterval = setInterval(() => {
-            this.checkForNewViolations();
-        }, 3000);
+        // Egress guard:
+        //  - Default polling cadence raised from 3s -> 15s (5x reduction in API hits).
+        //  - When the Realtime websocket is connected, the server already pushes
+        //    new violations, so timed polling is purely a fallback and can run far
+        //    less aggressively (60s).
+        //  - When the tab is hidden (background tab), suspend polling entirely;
+        //    the next checkForNewViolations() runs on visibilitychange.
+        const POLL_INTERVAL_ACTIVE_MS = 15000;
+        const POLL_INTERVAL_REALTIME_MS = 60000;
+        const computePollInterval = () => {
+            if (typeof document !== 'undefined' && document.hidden) return null;
+            const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
+            return realtimeConnected ? POLL_INTERVAL_REALTIME_MS : POLL_INTERVAL_ACTIVE_MS;
+        };
+        const armPolling = () => {
+            if (this.checkInterval) {
+                clearInterval(this.checkInterval);
+                this.checkInterval = null;
+            }
+            const intervalMs = computePollInterval();
+            if (!intervalMs) return;
+            this.checkInterval = setInterval(() => {
+                this.checkForNewViolations();
+            }, intervalMs);
+        };
+        armPolling();
+
+        this._pollAdjustHandler = () => armPolling();
+        window.addEventListener('ppe-realtime:connection', this._pollAdjustHandler);
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', this._pollAdjustHandler);
+        }
 
         // Save visit time when user leaves
         window.addEventListener('beforeunload', () => this._saveVisitTime());
@@ -54,6 +82,14 @@ const ViolationMonitor = {
         if (this.checkInterval) {
             clearInterval(this.checkInterval);
             this.checkInterval = null;
+        }
+
+        if (this._pollAdjustHandler) {
+            window.removeEventListener('ppe-realtime:connection', this._pollAdjustHandler);
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('visibilitychange', this._pollAdjustHandler);
+            }
+            this._pollAdjustHandler = null;
         }
 
         console.log('[ViolationMonitor] Stopped monitoring');

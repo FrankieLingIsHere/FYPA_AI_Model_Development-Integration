@@ -26,5 +26,5 @@ processor = AutoProcessor.from_pretrained('llava-hf/llava-1.5-7b-hf')
 print("✓ Processor downloaded!")
 
 print("\n" + "="*80)
-print("SUCCESS! LLaVA is ready. Restart LUNA and captions will work.")
+print("SUCCESS! LLaVA is ready. Restart CASM and captions will work.")
 print("="*80)

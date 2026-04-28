@@ -26,7 +26,7 @@ OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip(
 OLLAMA_API_URL = os.getenv('OLLAMA_API_URL', f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_TAGS_URL = os.getenv('OLLAMA_TAGS_URL', f"{OLLAMA_BASE_URL}/api/tags")
 OLLAMA_MODEL_NAME = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL', 'gemma3:4b')))
-DEFAULT_ROUTING_PROFILE = str(os.getenv('LUNA_ROUTING_PROFILE', 'cloud')).strip().lower()
+DEFAULT_ROUTING_PROFILE = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud')).strip().lower()
 DEFAULT_VISION_PROVIDER_ORDER = 'ollama' if DEFAULT_ROUTING_PROFILE == 'local' else 'gemini'
 
 
@@ -57,7 +57,7 @@ def _strict_vision_order_for_profile(profile: str):
 
 
 if STRICT_PROVIDER_MODE_SPLIT:
-    profile_order = _strict_vision_order_for_profile(os.getenv('LUNA_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE))
+    profile_order = _strict_vision_order_for_profile(os.getenv('CASM_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE))
     if profile_order:
         VISION_PROVIDER_ORDER = profile_order
 
@@ -214,7 +214,7 @@ def update_runtime_provider_settings(settings: dict):
             if provider in allowed and provider not in normalized:
                 normalized.append(provider)
         if STRICT_PROVIDER_MODE_SPLIT:
-            requested_profile = str(settings.get('routing_profile') or os.getenv('LUNA_ROUTING_PROFILE', '')).strip().lower()
+            requested_profile = str(settings.get('routing_profile') or os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
             strict_order = _strict_vision_order_for_profile(requested_profile)
             if strict_order:
                 VISION_PROVIDER_ORDER = strict_order

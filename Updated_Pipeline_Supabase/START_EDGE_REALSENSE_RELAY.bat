@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ==========================================
-echo LUNA Edge RealSense Relay
+echo CASM Edge RealSense Relay
 echo ==========================================
 
 if not exist "venv\Scripts\activate.bat" (

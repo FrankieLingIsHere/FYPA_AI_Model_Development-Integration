@@ -3788,6 +3788,15 @@ body {
     margin: 0 !important;
     transition: all 0.18s ease !important;
     font-size: 0.9rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* When sidebar expands on hover, left-align so text lines up properly */
+.sidebar:hover .sidebar-link,
+.sidebar:focus-within .sidebar-link {
+    justify-content: flex-start !important;
 }
 
 .sidebar-link i {

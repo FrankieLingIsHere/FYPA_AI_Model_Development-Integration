@@ -5743,6 +5743,52 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
     return normalized
 
 
+def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
+    """One-shot migration: if a fresh CASM install lands on a machine that was
+    previously provisioned under the old LUNA branding, copy the legacy state
+    files (provision secret, machine_id) so the operator does not have to
+    request approval again. Safe to call repeatedly — only copies files that
+    do not already exist in the new location.
+    """
+    try:
+        legacy_candidates: List[Path] = []
+        if os.name == 'nt':
+            legacy_candidates.append(Path(r'C:\LUNA_System\LUNA_LocalState'))
+            legacy_candidates.append(Path.home() / 'LUNA_LocalState')
+        else:
+            legacy_candidates.append(Path.home() / '.luna_local_state')
+
+        legacy_files = ('local_mode_provision_state.json', 'machine_id.txt')
+
+        for legacy_dir in legacy_candidates:
+            try:
+                if not legacy_dir.exists() or not legacy_dir.is_dir():
+                    continue
+                copied_any = False
+                for fname in legacy_files:
+                    src = legacy_dir / fname
+                    dst = target_dir / fname
+                    if src.exists() and not dst.exists():
+                        try:
+                            shutil.copy2(src, dst)
+                            copied_any = True
+                            logger.info(
+                                f"Migrated legacy LUNA state file '{fname}' from "
+                                f"{legacy_dir} -> {target_dir} (preserves prior approval)."
+                            )
+                        except Exception as copy_err:
+                            logger.warning(
+                                f"Failed to migrate legacy LUNA state file '{fname}' "
+                                f"from {legacy_dir}: {copy_err}"
+                            )
+                if copied_any:
+                    return
+            except Exception:
+                continue
+    except Exception as migrate_err:
+        logger.warning(f"Legacy LUNA state migration skipped due to error: {migrate_err}")
+
+
 def _resolve_local_mode_state_dir() -> Path:
     configured = os.path.expandvars(str(os.getenv('CASM_STATE_DIR') or '').strip())
     if not configured:
@@ -5758,6 +5804,7 @@ def _resolve_local_mode_state_dir() -> Path:
         for candidate in fallback_candidates:
             try:
                 candidate.mkdir(parents=True, exist_ok=True)
+                _migrate_legacy_luna_state_dir(candidate)
                 return candidate
             except Exception:
                 continue
@@ -5767,6 +5814,7 @@ def _resolve_local_mode_state_dir() -> Path:
     try:
         state_dir = Path(configured).expanduser()
         state_dir.mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_luna_state_dir(state_dir)
         return state_dir
     except Exception as state_err:
         logger.warning(f"Invalid CASM_STATE_DIR '{configured}': {state_err}. Falling back to current directory.")

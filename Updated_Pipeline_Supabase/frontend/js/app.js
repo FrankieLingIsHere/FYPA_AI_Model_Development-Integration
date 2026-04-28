@@ -1456,39 +1456,28 @@ function setupResponsiveMobileUX() {
     const applyMobileUX = () => {
         const { phoneDevice, tabletDevice } = getDeviceProfile();
         const portrait = isPortrait();
-        const locked = phoneDevice && portrait;
 
         body.classList.toggle('is-phone-device', phoneDevice);
+        body.classList.toggle('is-portrait', portrait);
         // Tablets keep desktop layout. Only landscape tablet gets a small spacing optimization.
         body.classList.remove('is-tablet-device');
         body.classList.toggle('is-tablet-landscape', tabletDevice && !portrait);
-        body.classList.toggle('mobile-portrait-locked', locked);
+        // Forced-landscape lock removed: portrait mobile is now fully supported via responsive CSS.
+        body.classList.remove('mobile-portrait-locked');
 
         if (!phoneDevice) {
             body.classList.remove('nav-open');
+            body.classList.remove('mobile-drawer-open');
             closePhoneMoreMenu();
         }
 
         if (overlay) {
-            overlay.setAttribute('aria-hidden', locked ? 'false' : 'true');
+            overlay.setAttribute('aria-hidden', 'true');
         }
 
-        if (locked && !state.wasLocked && !state.alertShownForCurrentPortrait) {
-            state.alertShownForCurrentPortrait = true;
-            window.alert('Please rotate your phone to landscape mode to use PPE Safety Monitor.');
-        }
-
-        if (!locked) {
-            state.alertShownForCurrentPortrait = false;
-        }
-
-        if (locked) {
-            body.classList.remove('nav-open');
-            closePhoneMoreMenu();
-            window.scrollTo({ top: 0, behavior: 'auto' });
-        }
-
-        state.wasLocked = locked;
+        // Reset legacy state (alert no longer shown).
+        state.alertShownForCurrentPortrait = false;
+        state.wasLocked = false;
     };
 
     if (navToggle) {
@@ -1543,6 +1532,45 @@ function setupResponsiveMobileUX() {
     applyMobileUX();
 }
 
+
+// ===== Mobile drawer (hamburger -> slide-in sidebar) =====
+document.addEventListener('DOMContentLoaded', () => {
+    const drawerToggle = document.getElementById('mobileDrawerToggle');
+    const drawerBackdrop = document.getElementById('mobileDrawerBackdrop');
+    const body = document.body;
+
+    const closeDrawer = () => {
+        body.classList.remove('mobile-drawer-open');
+        if (drawerToggle) drawerToggle.setAttribute('aria-expanded', 'false');
+    };
+
+    if (drawerToggle) {
+        drawerToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const open = !body.classList.contains('mobile-drawer-open');
+            body.classList.toggle('mobile-drawer-open', open);
+            drawerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+    }
+
+    if (drawerBackdrop) {
+        drawerBackdrop.addEventListener('click', closeDrawer);
+    }
+
+    // Close drawer when any nav link inside it is tapped.
+    document.addEventListener('click', (e) => {
+        const link = e.target.closest('.sidebar-link, .mobile-bottom-nav-link');
+        if (!link) return;
+        if (body.classList.contains('mobile-drawer-open')) closeDrawer();
+    });
+
+    // Close drawer on Esc.
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && body.classList.contains('mobile-drawer-open')) {
+            closeDrawer();
+        }
+    });
+});
 
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('handbookModal');

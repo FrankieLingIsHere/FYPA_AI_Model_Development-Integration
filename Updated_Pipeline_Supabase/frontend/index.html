@@ -41,8 +41,25 @@
         </div>
     </div>
 
+    <!-- Mobile Top App-bar (visible on phones only) -->
+    <header class="mobile-app-bar" role="banner">
+        <button id="mobileDrawerToggle" class="mobile-drawer-toggle" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+            <i class="fas fa-bars" aria-hidden="true"></i>
+        </button>
+        <a href="#home" class="mobile-app-bar-brand">
+            <i class="fas fa-hard-hat" aria-hidden="true"></i>
+            <span>CASM</span>
+        </a>
+        <a href="#settings" class="mobile-app-bar-action sidebar-link" data-page="settings" aria-label="Settings">
+            <i class="fas fa-gear" aria-hidden="true"></i>
+        </a>
+    </header>
+
+    <!-- Mobile drawer backdrop (visible when sidebar drawer is open on phones) -->
+    <div id="mobileDrawerBackdrop" class="mobile-drawer-backdrop" aria-hidden="true"></div>
+
     <!-- Sidebar Navigation -->
-    <nav class="sidebar">
+    <nav class="sidebar" id="sidebar">
         <a href="#home" class="sidebar-header" style="text-decoration: none; color: inherit; cursor: pointer;">
             <i class="fas fa-hard-hat sidebar-logo"></i>
             <span class="sidebar-title">CASM</span>
@@ -129,6 +146,30 @@
             <!-- Pages will be dynamically loaded here -->
         </div>
     </main>
+
+    <!-- Mobile Bottom Navigation (visible on phones only) -->
+    <nav class="mobile-bottom-nav" role="navigation" aria-label="Primary">
+        <a href="#home" class="mobile-bottom-nav-link sidebar-link active" data-page="home">
+            <i class="fas fa-home" aria-hidden="true"></i>
+            <span>Home</span>
+        </a>
+        <a href="#live" class="mobile-bottom-nav-link sidebar-link" data-page="live">
+            <i class="fas fa-video" aria-hidden="true"></i>
+            <span>Live</span>
+        </a>
+        <a href="#reports" class="mobile-bottom-nav-link sidebar-link" data-page="reports">
+            <i class="fas fa-file-alt" aria-hidden="true"></i>
+            <span>Reports</span>
+        </a>
+        <a href="#analytics" class="mobile-bottom-nav-link sidebar-link" data-page="analytics">
+            <i class="fas fa-chart-line" aria-hidden="true"></i>
+            <span>Analytics</span>
+        </a>
+        <a href="#about" class="mobile-bottom-nav-link sidebar-link" data-page="about">
+            <i class="fas fa-info-circle" aria-hidden="true"></i>
+            <span>About</span>
+        </a>
+    </nav>
 
     <!-- Mobile Orientation Guard -->
     <div id="mobileOrientationOverlay" class="mobile-orientation-overlay" aria-hidden="true">

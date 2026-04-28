@@ -2560,3 +2560,368 @@ body.is-phone-device .network-badge {
 body.is-phone-device .handbook-content {
     padding: 0.75rem;
 }
+
+/* =====================================================================
+   MOBILE-FIRST RESPONSIVE OVERHAUL (portrait-friendly)
+   - Removes the forced-landscape orientation lock
+   - Hides the fixed sidebar on phones (slides in as drawer instead)
+   - Adds a top app-bar (brand + hamburger + settings)
+   - Adds a bottom navigation bar (5 main pages)
+   - Honors iOS safe-area-insets for notched devices
+   - Fluid typography via clamp() and fluid grids via auto-fit/minmax
+   ===================================================================== */
+
+/* Kill horizontal overflow everywhere on small screens */
+@media (max-width: 900px) {
+    html, body {
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    img, video, canvas, svg, table {
+        max-width: 100%;
+        height: auto;
+    }
+
+    /* Fluid base typography */
+    html {
+        font-size: clamp(14px, 2.6vw, 16px);
+    }
+}
+
+/* The orientation overlay is now legacy — never show it. */
+.mobile-orientation-overlay,
+body.mobile-portrait-locked .mobile-orientation-overlay {
+    display: none !important;
+}
+
+/* ---------- Mobile Top App-bar ---------- */
+.mobile-app-bar {
+    display: none;
+}
+
+.mobile-drawer-backdrop {
+    display: none;
+}
+
+.mobile-bottom-nav {
+    display: none;
+}
+
+/* Phone-only structural changes */
+body.is-phone-device .sidebar,
+body.is-phone-device .footer {
+    /* Hide footer on phones (info already in About). Sidebar is hidden by default
+       and shown as a drawer when the user opens it. */
+}
+
+@media (max-width: 900px) {
+    /* --- Top app-bar --- */
+    .mobile-app-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: calc(56px + env(safe-area-inset-top, 0px));
+        padding: env(safe-area-inset-top, 0px) 0.85rem 0 0.85rem;
+        background: var(--primary-color, #1f2937);
+        color: #fff;
+        z-index: 1100;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    }
+
+    .mobile-drawer-toggle {
+        background: transparent;
+        border: none;
+        color: #fff;
+        font-size: 1.35rem;
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 0.2s ease;
+    }
+
+    .mobile-drawer-toggle:hover,
+    .mobile-drawer-toggle:focus-visible {
+        background: rgba(255, 255, 255, 0.12);
+        outline: none;
+    }
+
+    .mobile-app-bar-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: #fff;
+        text-decoration: none;
+        letter-spacing: 0.02em;
+    }
+
+    .mobile-app-bar-brand i {
+        font-size: 1.25rem;
+        color: #ffd27a;
+    }
+
+    .mobile-app-bar-action {
+        margin-left: auto;
+        background: transparent;
+        border: none;
+        color: #fff;
+        font-size: 1.2rem;
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        transition: background 0.2s ease;
+    }
+
+    .mobile-app-bar-action:hover,
+    .mobile-app-bar-action:focus-visible {
+        background: rgba(255, 255, 255, 0.12);
+        outline: none;
+    }
+
+    /* --- Sidebar becomes a slide-in drawer --- */
+    .sidebar {
+        width: 280px !important;
+        transform: translateX(-100%);
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        z-index: 1200;
+        padding-top: env(safe-area-inset-top, 0px);
+        height: 100dvh;
+    }
+
+    .sidebar:hover { width: 280px !important; }
+
+    body.mobile-drawer-open .sidebar {
+        transform: translateX(0);
+    }
+
+    /* Show all sidebar labels in drawer mode */
+    body.mobile-drawer-open .sidebar-title,
+    .sidebar .sidebar-title {
+        opacity: 1 !important;
+        transform: translateX(0) !important;
+    }
+
+    /* Drawer backdrop */
+    .mobile-drawer-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+        z-index: 1150;
+    }
+
+    body.mobile-drawer-open .mobile-drawer-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* --- Main content: full-width, room for app-bar + bottom-nav --- */
+    .main-content {
+        margin-left: 0 !important;
+        padding: calc(56px + env(safe-area-inset-top, 0px) + 0.75rem) 0.85rem
+                 calc(72px + env(safe-area-inset-bottom, 0px) + 0.5rem) 0.85rem !important;
+        max-width: 100%;
+    }
+
+    /* Status bar slot already at top of main; nudge below the app-bar */
+    .main-content-statusbar {
+        top: 0;
+    }
+
+    /* --- Bottom navigation --- */
+    .mobile-bottom-nav {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--container-bg, #ffffff);
+        border-top: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+        box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+        padding: 0.35rem 0.25rem calc(0.35rem + env(safe-area-inset-bottom, 0px)) 0.25rem;
+        z-index: 1100;
+        justify-content: space-around;
+        align-items: stretch;
+    }
+
+    .mobile-bottom-nav-link {
+        flex: 1 1 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.18rem;
+        padding: 0.45rem 0.25rem;
+        min-height: 56px;
+        text-decoration: none;
+        color: var(--text-secondary, #6b7280);
+        font-size: 0.7rem;
+        font-weight: 500;
+        border-radius: 10px;
+        transition: color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .mobile-bottom-nav-link i {
+        font-size: 1.15rem;
+        line-height: 1;
+    }
+
+    .mobile-bottom-nav-link.active {
+        color: var(--primary-color, #1f2937);
+        background: rgba(224, 156, 46, 0.12);
+    }
+
+    .mobile-bottom-nav-link:active {
+        transform: scale(0.96);
+    }
+
+    /* Hide footer on phones (visual noise; copyright is in About) */
+    body.is-phone-device .footer {
+        display: none;
+    }
+
+    /* --- Fluid grids: stack everything sensibly --- */
+    .grid-2,
+    .grid-3,
+    .grid-4 {
+        grid-template-columns: 1fr !important;
+    }
+
+    .home-grid,
+    .summary-grid {
+        grid-template-columns: 1fr !important;
+        gap: 0.85rem;
+    }
+
+    .report_card,
+    .reports-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)) !important;
+        gap: 0.85rem;
+    }
+
+    /* Card spacing slimmer on phones */
+    .card {
+        border-radius: 14px;
+    }
+
+    .card-header {
+        padding: 0.85rem 1rem;
+        font-size: 1rem;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .card-content {
+        padding: 0.95rem;
+    }
+
+    /* Ensure tables don't blow out the layout */
+    .card table,
+    table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Touch-friendly buttons: min 44px tap target */
+    .btn,
+    button {
+        min-height: 44px;
+    }
+
+    .btn {
+        padding: 0.65rem 1rem;
+        font-size: 0.95rem;
+    }
+
+    /* Inputs full width on phones */
+    input[type="text"],
+    input[type="number"],
+    input[type="email"],
+    input[type="password"],
+    input[type="search"],
+    select,
+    textarea {
+        width: 100%;
+        min-height: 44px;
+        font-size: 16px; /* prevents iOS zoom-on-focus */
+    }
+
+    /* Modals: full-screen on phones */
+    .modal,
+    .modal-content {
+        max-width: 100vw;
+        width: 100%;
+    }
+}
+
+/* ---------- Tablet sweet spot (small tablets / large phones) ---------- */
+@media (min-width: 901px) and (max-width: 1100px) {
+    .main-content {
+        padding: 18px;
+    }
+
+    .grid-3,
+    .grid-4 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ---------- Very small phones ---------- */
+@media (max-width: 380px) {
+    .mobile-bottom-nav-link {
+        font-size: 0.62rem;
+    }
+
+    .mobile-bottom-nav-link i {
+        font-size: 1.05rem;
+    }
+
+    .mobile-app-bar-brand span {
+        display: none;
+    }
+}
+
+/* ---------- Landscape phones: shrink chrome to maximize content ---------- */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 480px) {
+    .mobile-app-bar {
+        height: calc(48px + env(safe-area-inset-top, 0px));
+    }
+
+    .mobile-bottom-nav {
+        padding: 0.2rem 0.25rem calc(0.2rem + env(safe-area-inset-bottom, 0px)) 0.25rem;
+    }
+
+    .mobile-bottom-nav-link {
+        min-height: 44px;
+        padding: 0.3rem 0.2rem;
+    }
+
+    .mobile-bottom-nav-link span {
+        display: none;
+    }
+
+    .main-content {
+        padding-top: calc(48px + env(safe-area-inset-top, 0px) + 0.5rem) !important;
+        padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 0.4rem) !important;
+    }
+}

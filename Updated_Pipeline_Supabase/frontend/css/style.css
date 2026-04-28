@@ -3782,21 +3782,18 @@ body {
 
 .sidebar-link {
     color: #1a1a1a !important;
-    padding: 0.7rem 0.75rem !important;
+    padding: 0.7rem 1.1rem !important;
     border-left: 3px solid transparent !important;
     border-radius: 0 !important;
     margin: 0 !important;
     transition: all 0.18s ease !important;
     font-size: 0.9rem !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
 }
 
-/* When sidebar expands on hover, left-align so text lines up properly */
+/* When sidebar expands on hover, restore normal padding */
 .sidebar:hover .sidebar-link,
 .sidebar:focus-within .sidebar-link {
-    justify-content: flex-start !important;
+    padding: 0.7rem 0.75rem !important;
 }
 
 .sidebar-link i {

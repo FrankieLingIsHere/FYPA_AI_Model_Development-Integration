@@ -4585,3 +4585,167 @@ body {
     transform: translateY(1px) !important;
 }
 
+
+/* =============================================================
+   v23 PREMIUM POLISH — depth, gradients, refined typography
+   ============================================================= */
+
+/* Page bg: warm paper with subtle dot grid for depth */
+body, .main-content, .page-content {
+    background-color: #f5f0e8 !important;
+    background-image: radial-gradient(rgba(17, 24, 39, 0.04) 1px, transparent 1px) !important;
+    background-size: 22px 22px !important;
+}
+
+/* Stat numbers use mono for industrial precision */
+.summary-block .value,
+.trust-metric .num,
+#safety-score {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace !important;
+    font-feature-settings: "tnum" 1, "ss01" 1 !important;
+}
+
+/* Hero: layered gradient instead of flat orange + soft glow */
+.ops-hero {
+    background: linear-gradient(135deg, #f5b133 0%, #f4aa1c 45%, #e89407 100%) !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.4) inset,
+        0 -2px 0 rgba(0, 0, 0, 0.06) inset,
+        0 14px 40px rgba(244, 170, 28, 0.32),
+        0 4px 12px rgba(0, 0, 0, 0.08) !important;
+    border-radius: 18px !important;
+}
+.ops-hero h1 {
+    font-weight: 900 !important;
+    letter-spacing: -0.035em !important;
+    line-height: 1.05 !important;
+}
+.ops-hero p {
+    color: rgba(17, 24, 39, 0.78) !important;
+    font-weight: 500 !important;
+}
+.ops-kicker {
+    background: rgba(17, 24, 39, 0.92) !important;
+    color: #ffd97a !important;
+    backdrop-filter: blur(6px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18) !important;
+}
+
+/* Buttons: real depth */
+.btn-primary {
+    background: linear-gradient(180deg, #1f2937 0%, #111827 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.4) inset,
+        0 6px 16px rgba(17, 24, 39, 0.28) !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.01em !important;
+}
+.btn-primary:hover {
+    background: linear-gradient(180deg, #111827 0%, #000000 100%) !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.4) inset,
+        0 10px 22px rgba(17, 24, 39, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid rgba(17, 24, 39, 0.12) !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.6) inset,
+        0 4px 12px rgba(17, 24, 39, 0.08) !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+}
+.btn-secondary:hover {
+    background: #ffffff !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.6) inset,
+        0 6px 18px rgba(17, 24, 39, 0.14) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Cards: subtle gradient + layered shadow + crisper accent */
+.card {
+    background: linear-gradient(180deg, #ffffff 0%, #fbfaf7 100%) !important;
+    border: 1px solid rgba(17, 24, 39, 0.06) !important;
+    border-top: 3px solid var(--brand) !important;
+    border-radius: 14px !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.9) inset,
+        0 1px 2px rgba(17, 24, 39, 0.04),
+        0 8px 24px rgba(17, 24, 39, 0.06) !important;
+}
+.card:hover {
+    border-color: rgba(244, 170, 28, 0.4) !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.9) inset,
+        0 4px 8px rgba(17, 24, 39, 0.06),
+        0 18px 40px rgba(17, 24, 39, 0.12),
+        0 4px 8px rgba(244, 170, 28, 0.18) !important;
+}
+.card-header {
+    border-bottom: 1px solid rgba(17, 24, 39, 0.06) !important;
+    padding-bottom: 0.85rem !important;
+    margin-bottom: 0.85rem !important;
+}
+.card-header span {
+    font-weight: 800 !important;
+    letter-spacing: -0.01em !important;
+    color: #111827 !important;
+}
+
+/* Trust strip: deeper gradient */
+.trust-strip {
+    background: linear-gradient(135deg, #1f2937 0%, #111827 60%, #0b1220 100%) !important;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.05) inset,
+        0 12px 32px rgba(17, 24, 39, 0.28),
+        0 4px 8px rgba(0, 0, 0, 0.12) !important;
+}
+.trust-metric .num {
+    background: linear-gradient(180deg, #ffd97a 0%, #f4aa1c 100%) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 2.1rem !important;
+}
+
+/* Summary block stat values: brand glow */
+.summary-block .value {
+    background: linear-gradient(180deg, #f5b133 0%, #d68706 100%) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+}
+
+/* Section labels: stronger hierarchy */
+.dashboard-section-label {
+    text-transform: uppercase !important;
+    letter-spacing: 0.18em !important;
+    font-weight: 800 !important;
+    font-size: 0.72rem !important;
+    color: #6b7280 !important;
+    padding: 0.5rem 0.75rem !important;
+}
+.dashboard-section-label i {
+    color: var(--brand) !important;
+}
+
+/* Page command bar: glass feel */
+.page-command-bar {
+    background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(255,255,255,0.85)) !important;
+    backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(17, 24, 39, 0.06) !important;
+    border-left: 4px solid var(--brand) !important;
+    box-shadow: 0 6px 20px rgba(17, 24, 39, 0.08) !important;
+}
+
+/* Headings everywhere - tighter, more confident */
+h1, h2, h3, .recent-header span, .card-header span {
+    letter-spacing: -0.015em !important;
+}

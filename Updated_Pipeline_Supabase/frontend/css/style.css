@@ -3688,7 +3688,7 @@ body.mobile-portrait-locked .main-content {
     --nav-border:     rgba(255, 255, 255, 0.07);
 
     /* Page */
-    --page-bg:        #f1f4f8;
+    --page-bg:        #f5f0e8;
     --card-bg:        #ffffff;
     --card-border:    #e3e8f0;
     --card-shadow:    0 2px 8px rgba(17,24,39,0.06), 0 1px 3px rgba(17,24,39,0.04);
@@ -3822,13 +3822,13 @@ body {
 /* Timezone selector in sidebar */
 .tz-selected,
 .nav-timezone {
-    color: var(--nav-text) !important;
+    color: #1a1a1a !important;
     font-size: 0.85rem !important;
 }
 
 .tz-selected:hover {
-    background: var(--nav-bg-hover) !important;
-    color: var(--nav-text-hover) !important;
+    background: rgba(0,0,0,0.1) !important;
+    color: #000000 !important;
 }
 
 .tz-options {
@@ -3859,15 +3859,15 @@ body {
 
 /* Voice/test buttons in sidebar */
 .sidebar-voice-btn {
-    color: var(--nav-text) !important;
+    color: #1a1a1a !important;
     background: transparent !important;
     font-size: 0.85rem !important;
     padding: 0.7rem 0.75rem !important;
 }
 
 .sidebar-voice-btn:hover {
-    background: rgba(239, 68, 68, 0.12) !important;
-    color: #fca5a5 !important;
+    background: rgba(0,0,0,0.12) !important;
+    color: #000000 !important;
 }
 
 .sidebar-voice-btn span {
@@ -3955,6 +3955,7 @@ body {
 .card {
     background: var(--card-bg) !important;
     border: 1px solid var(--card-border) !important;
+    border-top: 3px solid var(--brand) !important;
     border-radius: var(--r-lg) !important;
     box-shadow: var(--card-shadow) !important;
     overflow: hidden !important;
@@ -4015,11 +4016,11 @@ body {
 }
 
 .ops-hero h1 {
-    color: #1a0f00 !important;
-    font-size: clamp(1.6rem, 2.5vw, 2.4rem) !important;
+    color: #111827 !important;
+    font-size: clamp(1.9rem, 3vw, 2.8rem) !important;
     font-weight: 900 !important;
-    letter-spacing: -0.02em !important;
-    text-shadow: 0 1px 0 rgba(255,255,255,0.2) !important;
+    letter-spacing: -0.03em !important;
+    text-shadow: none !important;
 }
 
 .ops-kicker {
@@ -4120,12 +4121,12 @@ body {
 }
 
 .summary-block .value {
-    font-size: 2.4rem !important;
+    font-size: 2.8rem !important;
     font-weight: 900 !important;
-    color: var(--text-primary) !important;
+    color: var(--brand) !important;
     line-height: 1 !important;
     display: block !important;
-    letter-spacing: -0.02em !important;
+    letter-spacing: -0.03em !important;
 }
 
 .summary-block .delta {

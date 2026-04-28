@@ -4587,7 +4587,7 @@ body {
 
 
 /* =============================================================
-   v23 PREMIUM POLISH — depth, gradients, refined typography
+   v23 PREMIUM POLISH ï¿½ depth, gradients, refined typography
    ============================================================= */
 
 /* Page bg: warm paper with subtle dot grid for depth */
@@ -4748,4 +4748,237 @@ body, .main-content, .page-content {
 /* Headings everywhere - tighter, more confident */
 h1, h2, h3, .recent-header span, .card-header span {
     letter-spacing: -0.015em !important;
+}
+
+/* =============================================================
+   v24 RESPONSIVE ï¿½ phone, tablet, desktop dynamic behavior
+   Tablet (=1024px) | Mobile (=768px) | Small phone (=480px)
+   ============================================================= */
+
+/* ----- TABLET (iPad, narrow laptops) ----- */
+@media (max-width: 1024px) {
+    .home-grid {
+        grid-template-columns: 1fr !important;
+        gap: 1rem !important;
+    }
+    .trust-strip {
+        padding: 0.85rem 1rem !important;
+    }
+    .trust-metric .num {
+        font-size: 1.6rem !important;
+    }
+    .trust-metric .lbl {
+        font-size: 0.62rem !important;
+    }
+    .ops-hero {
+        border-radius: 14px !important;
+        padding: 1.5rem !important;
+    }
+    .ops-hero h1 {
+        font-size: clamp(1.6rem, 4.5vw, 2.4rem) !important;
+    }
+    .hero-live-badge {
+        top: 0.75rem !important;
+        right: 0.75rem !important;
+        font-size: 0.65rem !important;
+        padding: 0.35rem 0.65rem !important;
+    }
+}
+
+/* ----- MOBILE (phones in portrait) ----- */
+@media (max-width: 768px) {
+    /* Background dots smaller for less visual noise */
+    body, .main-content, .page-content {
+        background-size: 16px 16px !important;
+    }
+
+    /* Hide desktop sidebar on mobile (mobile bottom nav already exists in index.html) */
+    .sidebar {
+        display: none !important;
+    }
+    .main-content {
+        margin-left: 0 !important;
+        padding-bottom: 80px !important; /* room for mobile-bottom-nav */
+    }
+
+    /* Hero: stacks naturally; tighten paddings + radius */
+    .ops-hero {
+        border-radius: 12px !important;
+        padding: 1.25rem !important;
+        margin: 0 0.25rem !important;
+    }
+    .ops-hero h1 {
+        font-size: clamp(1.5rem, 6vw, 2rem) !important;
+        letter-spacing: -0.02em !important;
+    }
+    .ops-hero p {
+        font-size: 0.9rem !important;
+    }
+    .ops-hero-actions {
+        flex-direction: column !important;
+        gap: 0.5rem !important;
+        width: 100% !important;
+    }
+    .ops-hero-actions .btn {
+        width: 100% !important;
+        justify-content: center !important;
+    }
+    .hero-live-badge {
+        position: static !important;
+        margin-bottom: 0.85rem !important;
+        align-self: flex-start !important;
+    }
+
+    /* Trust strip: stack vertically */
+    .trust-strip {
+        grid-template-columns: 1fr !important;
+        gap: 0.85rem !important;
+        padding: 1rem 1.25rem !important;
+    }
+    .trust-metric {
+        border-right: none !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+        padding: 0.5rem 0 !important;
+    }
+    .trust-metric:last-child {
+        border-bottom: none !important;
+    }
+    .trust-metric .num {
+        font-size: 1.85rem !important;
+    }
+
+    /* Cards: slimmer */
+    .card {
+        border-radius: 12px !important;
+        padding: 1rem !important;
+    }
+    .card:hover {
+        transform: none !important;
+    }
+
+    /* Stat values smaller on phone */
+    .summary-block .value {
+        font-size: 2rem !important;
+    }
+    #safety-score {
+        font-size: 3rem !important;
+    }
+
+    /* Recent violations list: tighter */
+    .recent-content {
+        padding: 0.5rem 0.75rem !important;
+    }
+
+    /* Page command bar: full width, smaller padding */
+    .page-command-bar {
+        padding: 0.75rem 1rem !important;
+        border-radius: 10px !important;
+        flex-wrap: wrap !important;
+    }
+
+    /* Cooldown row in live page: stack */
+    #cooldownSettingRow {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.5rem !important;
+    }
+}
+
+/* ----- SMALL PHONE (=480px) ----- */
+@media (max-width: 480px) {
+    .ops-hero {
+        padding: 1rem !important;
+    }
+    .ops-hero h1 {
+        font-size: 1.4rem !important;
+    }
+    .ops-hero p {
+        font-size: 0.85rem !important;
+    }
+    .ops-kicker {
+        font-size: 0.65rem !important;
+        padding: 0.3rem 0.6rem !important;
+    }
+    .ppe-standards-strip {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 0.5rem !important;
+    }
+    .summary-grid {
+        grid-template-columns: 1fr 1fr !important;
+        gap: 0.5rem !important;
+    }
+    .summary-block .value {
+        font-size: 1.75rem !important;
+    }
+    .trust-metric .num {
+        font-size: 1.65rem !important;
+    }
+    .dashboard-section-label {
+        font-size: 0.65rem !important;
+        letter-spacing: 0.14em !important;
+    }
+}
+
+/* ----- LANDSCAPE PHONE ----- */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+    .ops-hero {
+        padding: 1rem !important;
+    }
+    .ops-hero h1 {
+        font-size: 1.5rem !important;
+    }
+    .hero-live-badge {
+        top: 0.5rem !important;
+        right: 0.5rem !important;
+    }
+    .trust-strip {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+}
+
+/* ----- TOUCH DEVICE: disable hover-only effects ----- */
+@media (hover: none) and (pointer: coarse) {
+    .card:hover {
+        transform: none !important;
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.9) inset,
+            0 1px 2px rgba(17, 24, 39, 0.04),
+            0 8px 24px rgba(17, 24, 39, 0.06) !important;
+        border-color: rgba(17, 24, 39, 0.06) !important;
+    }
+    .btn-primary:hover, .btn-secondary:hover {
+        transform: none !important;
+    }
+    /* Sidebar should not auto-expand on touch - it would block content */
+    .sidebar:hover {
+        width: 64px !important;
+    }
+    .sidebar:hover .sidebar-link span,
+    .sidebar:hover .sidebar-title {
+        display: none !important;
+    }
+    .sidebar:hover .sidebar-link,
+    .sidebar:hover .sidebar-link.active {
+        padding: 0.7rem 0 !important;
+        justify-content: center !important;
+        gap: 0 !important;
+    }
+    .sidebar:hover .sidebar-header {
+        padding: 1.25rem 0 !important;
+        justify-content: center !important;
+    }
+}
+
+/* ----- REDUCED MOTION ----- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    .hero-live-badge .dot {
+        animation: none !important;
+    }
 }

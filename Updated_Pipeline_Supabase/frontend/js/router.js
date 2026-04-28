@@ -129,6 +129,8 @@ const Router = {
 
                 e.preventDefault();
                 const page = link.dataset.page;
+                // Blur the link so the sidebar doesn't keep focus and stay distorted after collapse
+                if (typeof link.blur === 'function') link.blur();
                 this.navigate(page);
             }
         });

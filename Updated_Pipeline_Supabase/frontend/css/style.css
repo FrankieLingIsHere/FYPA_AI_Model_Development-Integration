@@ -3761,8 +3761,7 @@ body {
     justify-content: center !important;
 }
 
-.sidebar:hover .sidebar-header,
-.sidebar:focus-within .sidebar-header {
+.sidebar:hover .sidebar-header {
     padding: 1.25rem 1rem !important;
     justify-content: flex-start !important;
 }
@@ -3785,8 +3784,7 @@ body {
     transform: none !important;
 }
 
-.sidebar:hover .sidebar-title,
-.sidebar:focus-within .sidebar-title {
+.sidebar:hover .sidebar-title {
     display: inline !important;
     opacity: 1 !important;
 }
@@ -3818,15 +3816,13 @@ body {
 }
 
 /* When sidebar expands on hover, restore normal padding and label */
-.sidebar:hover .sidebar-link,
-.sidebar:focus-within .sidebar-link {
+.sidebar:hover .sidebar-link {
     padding: 0.7rem 0.95rem !important;
     justify-content: flex-start !important;
     gap: 0.85rem !important;
 }
 
-.sidebar:hover .sidebar-link span,
-.sidebar:focus-within .sidebar-link span {
+.sidebar:hover .sidebar-link span {
     display: inline !important;
     visibility: visible !important;
     width: auto !important;
@@ -3859,8 +3855,7 @@ body {
     justify-content: center !important;
 }
 
-.sidebar:hover .sidebar-link.active,
-.sidebar:focus-within .sidebar-link.active {
+.sidebar:hover .sidebar-link.active {
     padding: 0.7rem 0.95rem !important;
     justify-content: flex-start !important;
 }

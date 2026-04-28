@@ -3810,14 +3810,18 @@ body {
 }
 
 .sidebar-link.active {
-    background: rgba(0,0,0,0.18) !important;
-    color: #000000 !important;
-    border-left-color: #000000 !important;
-    font-weight: 600 !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    border-left-color: var(--brand) !important;
+    font-weight: 700 !important;
+    border-radius: 6px !important;
+    margin: 0 6px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
 }
 
 .sidebar-link.active i {
-    filter: drop-shadow(0 0 4px rgba(244, 170, 28, 0.5)) !important;
+    color: var(--brand) !important;
+    filter: none !important;
 }
 
 .sidebar-bottom {
@@ -3998,6 +4002,29 @@ body {
 /* ---- Page Section Headers ---- */
 .page-command-bar {
     border-radius: var(--r-lg) !important;
+    border-left: 4px solid var(--brand) !important;
+    padding-left: 1.5rem !important;
+    background: #ffffff !important;
+    box-shadow: var(--card-shadow) !important;
+}
+
+/* ---- Dashboard Section Label ---- */
+.dashboard-section-label {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.6rem !important;
+    margin-bottom: 0.75rem !important;
+    padding-left: 0.75rem !important;
+    border-left: 4px solid var(--brand) !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    color: var(--text-muted) !important;
+}
+
+.dashboard-section-label i {
+    color: var(--brand) !important;
 }
 
 /* ---- Hero Banner ---- */

@@ -26,6 +26,9 @@ const HomePage = {
                             <i class="fas fa-clipboard-check"></i> Review Reports
                         </button>
                     </div>
+                    <div id="hero-datetime" style="margin-top:1rem; font-size:0.85rem; font-weight:600; color:rgba(26,15,0,0.7); letter-spacing:0.02em;">
+                        <i class="fas fa-clock" style="margin-right:0.4rem;"></i><span id="hero-clock"></span>
+                    </div>
                 </div>
                 <div class="ppe-standards-strip" aria-label="PPE standards visual reference">
                     <figure>
@@ -46,6 +49,10 @@ const HomePage = {
                     </figure>
                 </div>
             </section>
+
+            <div class="dashboard-section-label">
+                <span><i class="fas fa-th-large"></i> Dashboard Overview</span>
+            </div>
 
             <div class="home-grid">
 
@@ -200,6 +207,19 @@ const HomePage = {
         this._timezoneChangeHandler = () => this.refreshData();
         window.addEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
 
+        // Live clock in hero
+        const heroClock = document.getElementById('hero-clock');
+        const updateClock = () => {
+            if (!heroClock) return;
+            const now = new Date();
+            heroClock.textContent = now.toLocaleString('en-MY', {
+                weekday: 'short', year: 'numeric', month: 'short',
+                day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        };
+        updateClock();
+        this._clockInterval = setInterval(updateClock, 1000);
+
         this._provisioningHandler = (event) => {
             this.renderProvisioningStatus((event && event.detail) || null);
         };
@@ -256,6 +276,10 @@ const HomePage = {
     },
 
     unmount() {
+        if (this._clockInterval) {
+            clearInterval(this._clockInterval);
+            this._clockInterval = null;
+        }
         if (this._realtimeHandler) {
             window.removeEventListener('ppe-realtime:update', this._realtimeHandler);
             this._realtimeHandler = null;

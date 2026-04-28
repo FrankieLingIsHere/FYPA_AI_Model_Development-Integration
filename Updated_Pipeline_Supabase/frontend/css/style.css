@@ -3749,6 +3749,7 @@ body {
     background: var(--brand) !important;
     border-right: 1px solid rgba(0,0,0,0.15) !important;
     box-shadow: 2px 0 12px rgba(0,0,0,0.15) !important;
+    overflow-x: hidden !important;
 }
 
 .sidebar-header {
@@ -3810,6 +3811,10 @@ body {
 /* Hide label completely when collapsed so icon can truly center */
 .sidebar-link span {
     display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
 }
 
 /* When sidebar expands on hover, restore normal padding and label */
@@ -3823,6 +3828,9 @@ body {
 .sidebar:hover .sidebar-link span,
 .sidebar:focus-within .sidebar-link span {
     display: inline !important;
+    visibility: visible !important;
+    width: auto !important;
+    overflow: visible !important;
     opacity: 1 !important;
 }
 

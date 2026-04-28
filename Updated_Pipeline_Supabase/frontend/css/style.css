@@ -3822,15 +3822,14 @@ body {
     border-left-color: var(--brand) !important;
     font-weight: 700 !important;
     border-radius: 6px !important;
-    margin: 0 8px !important;
+    margin: 0 6px !important;
     box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
-    justify-content: center !important;
+    padding: 0.7rem 1.1rem !important;
 }
 
 .sidebar:hover .sidebar-link.active,
 .sidebar:focus-within .sidebar-link.active {
-    justify-content: flex-start !important;
-    margin: 0 6px !important;
+    padding: 0.7rem 0.75rem !important;
 }
 
 .sidebar-link.active i {

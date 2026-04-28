@@ -3760,7 +3760,7 @@ body {
 }
 
 .sidebar-logo {
-    color: var(--brand) !important;
+    color: #1a1a1a !important;
     font-size: 1.5rem !important;
     min-width: 28px !important;
     text-align: center !important;

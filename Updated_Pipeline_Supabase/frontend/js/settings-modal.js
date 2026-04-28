@@ -900,9 +900,13 @@ const GlobalSettingsModal = {
         const status = this.normalizeLocalProvisionStatus(statusRaw);
         const machineId = String(machineIdRaw || '').trim();
         if (!machineId) return false;
-        // Only allow re-download for explicitly admin-approved or provisioned devices.
-        // credentials_present is NOT sufficient — those credentials may not be admin-authorised.
-        return status === 'approved' || status === 'provisioned';
+        // Allow re-download for admin-approved/provisioned devices, AND when
+        // credentials are already present locally — the status banner itself
+        // instructs the user to use this button to refresh launcher linkage
+        // while heartbeat sync catches up. The cloud endpoint will reject
+        // unauthorised callers (it requires a valid provision_secret), so
+        // exposing the button here cannot bypass server-side authorisation.
+        return status === 'approved' || status === 'provisioned' || status === 'credentials_present';
     },
 
     updateInstallerRedownloadButton() {

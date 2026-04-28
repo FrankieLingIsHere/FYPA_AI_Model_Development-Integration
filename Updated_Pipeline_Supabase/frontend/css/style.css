@@ -3771,7 +3771,7 @@ body {
     font-size: 1.5rem !important;
     min-width: 28px !important;
     text-align: center !important;
-    filter: drop-shadow(0 0 6px rgba(244, 170, 28, 0.35)) !important;
+    filter: none !important;
 }
 
 .sidebar-title {
@@ -3780,6 +3780,14 @@ body {
     font-weight: 800 !important;
     letter-spacing: 0.04em !important;
     text-transform: uppercase !important;
+    display: none !important;
+    transform: none !important;
+}
+
+.sidebar:hover .sidebar-title,
+.sidebar:focus-within .sidebar-title {
+    display: inline !important;
+    opacity: 1 !important;
 }
 
 .sidebar-menu {

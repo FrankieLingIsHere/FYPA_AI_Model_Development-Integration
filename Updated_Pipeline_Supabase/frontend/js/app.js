@@ -1514,43 +1514,9 @@ function setupResponsiveMobileUX() {
 
 
 // ===== Mobile drawer (hamburger -> slide-in sidebar) =====
-document.addEventListener('DOMContentLoaded', () => {
-    const drawerToggle = document.getElementById('mobileDrawerToggle');
-    const drawerBackdrop = document.getElementById('mobileDrawerBackdrop');
-    const body = document.body;
-
-    const closeDrawer = () => {
-        body.classList.remove('mobile-drawer-open');
-        if (drawerToggle) drawerToggle.setAttribute('aria-expanded', 'false');
-    };
-
-    if (drawerToggle) {
-        drawerToggle.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const open = !body.classList.contains('mobile-drawer-open');
-            body.classList.toggle('mobile-drawer-open', open);
-            drawerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        });
-    }
-
-    if (drawerBackdrop) {
-        drawerBackdrop.addEventListener('click', closeDrawer);
-    }
-
-    // Close drawer when any nav link inside it is tapped.
-    document.addEventListener('click', (e) => {
-        const link = e.target.closest('.sidebar-link, .mobile-bottom-nav-link');
-        if (!link) return;
-        if (body.classList.contains('mobile-drawer-open')) closeDrawer();
-    });
-
-    // Close drawer on Esc.
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && body.classList.contains('mobile-drawer-open')) {
-            closeDrawer();
-        }
-    });
-});
+// NOTE: The actual binding lives inline in index.html (runs early so it works
+// even if any other script throws). This block intentionally left empty to
+// avoid double-binding (which previously caused open + immediate close).
 
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('handbookModal');

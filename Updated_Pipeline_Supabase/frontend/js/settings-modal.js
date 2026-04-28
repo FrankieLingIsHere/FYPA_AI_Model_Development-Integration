@@ -1878,37 +1878,85 @@ const GlobalSettingsModal = {
                     return;
                 }
 
-                // The local backend has the provision_secret persisted on
-                // disk in LOCAL_MODE_PROVISION_STATE_FILE, and the cloud URL
-                // in its .env. Hand off the redirect entirely to the backend
-                // via /api/local-mode/installer/redirect — that way the
-                // browser never needs to know the secret and we don't have
-                // to fight sessionStorage being cleared between tab opens.
-                const localBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
-                const proxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+                // Two scenarios:
+                //   (A) Page is hosted on the local backend (localhost). The local
+                //       backend has provision_secret on disk and can issue a
+                //       302 to cloud via /api/local-mode/installer/redirect.
+                //   (B) Page is hosted on the cloud frontend (Vercel) OR the
+                //       local backend is offline. We must call the cloud
+                //       installer endpoint directly using the machine_id +
+                //       provision_secret that the checkup persisted into
+                //       sessionStorage (see saveRemoteProvisionState).
+                const apiBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
+                const isRemoteBackend = this.isLikelyRemoteBackend();
 
-                // Preflight the local backend so we abort cleanly instead of
-                // navigating into a chrome-error page if it's down.
-                try {
-                    const probeController = new AbortController();
-                    const probeTimer = setTimeout(() => probeController.abort(), 4000);
-                    const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
-                        cache: 'no-store',
-                        signal: probeController.signal
-                    }).finally(() => clearTimeout(probeTimer));
-                    if (!probeResp || (probeResp.status >= 500 && probeResp.status !== 503)) {
-                        throw new Error(`Backend probe returned ${probeResp ? probeResp.status : 'no response'}`);
+                // Helper: perform direct cloud installer download using stored
+                // provision_secret. Returns true on success (navigation issued),
+                // false if credentials are missing.
+                const tryDirectCloudDownload = () => {
+                    const stored = this.loadRemoteProvisionState() || {};
+                    const machineIdStored = String(stored.machineId || this.localProvisionState.machineId || '').trim();
+                    const provisionSecretStored = String(stored.provisionSecret || '').trim();
+
+                    if (!machineIdStored || !provisionSecretStored) {
+                        return false;
                     }
-                } catch (probeErr) {
-                    console.warn('GlobalSettingsModal: local backend probe failed before installer download', probeErr);
-                    this.showNotification(
-                        'Local backend is not reachable. Run ./start.bat and try again.',
-                        'error'
-                    );
+
+                    // Resolve cloud URL. When the page is already pointed at the
+                    // cloud, API_CONFIG.BASE_URL is the cloud. Otherwise fall
+                    // back to a stored cloud URL hint or window.location.origin.
+                    let cloudBase = '';
+                    if (isRemoteBackend) {
+                        cloudBase = apiBase;
+                    } else {
+                        cloudBase = String(stored.cloudUrl || window.CLOUD_URL || '').replace(/\/+$/, '');
+                    }
+
+                    if (!cloudBase) {
+                        return false;
+                    }
+
+                    const params = new URLSearchParams({
+                        machine_id: machineIdStored,
+                        provision_secret: provisionSecretStored,
+                        _ts: String(Date.now())
+                    });
+                    const cloudUrl = `${cloudBase}/api/bootstrap/installer/request?${params.toString()}`;
+                    window.location.assign(cloudUrl);
+                    return true;
+                };
+
+                // Path A — page is served by the local backend. Try the local
+                // proxy redirect first (no need to expose secret in URL bar).
+                if (!isRemoteBackend) {
+                    const proxyUrl = `${apiBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+                    try {
+                        const probeController = new AbortController();
+                        const probeTimer = setTimeout(() => probeController.abort(), 4000);
+                        const probeResp = await fetch(`${apiBase}/api/system/startup-status`, {
+                            cache: 'no-store',
+                            signal: probeController.signal
+                        }).finally(() => clearTimeout(probeTimer));
+                        if (probeResp && (probeResp.status < 500 || probeResp.status === 503)) {
+                            window.location.assign(proxyUrl);
+                            return;
+                        }
+                    } catch (probeErr) {
+                        console.warn('GlobalSettingsModal: local backend probe failed; falling back to direct cloud download', probeErr);
+                    }
+                }
+
+                // Path B — direct cloud download with stored credentials.
+                if (tryDirectCloudDownload()) {
                     return;
                 }
 
-                window.location.assign(proxyUrl);
+                this.showNotification(
+                    isRemoteBackend
+                        ? 'Provisioning credentials not found in this browser session. Run Local Mode Checkup first, then re-download.'
+                        : 'Local backend is offline and stored cloud credentials are missing. Run Local Mode Checkup, then try again.',
+                    'error'
+                );
             });
         }
 

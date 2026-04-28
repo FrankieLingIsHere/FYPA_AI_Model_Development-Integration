@@ -3974,7 +3974,7 @@ body {
 
 .card:hover {
     box-shadow: var(--card-hover-shadow) !important;
-    transform: translateY(-1px) !important;
+    transform: none !important;
 }
 
 .card-header {
@@ -4188,7 +4188,8 @@ body {
 }
 
 .recent-content {
-    padding: 0.5rem 0 !important;
+    padding: 0.75rem 1rem !important;
+    overflow-x: hidden !important;
 }
 
 /* ---- Buttons ---- */

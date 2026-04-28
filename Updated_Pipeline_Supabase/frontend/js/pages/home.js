@@ -560,7 +560,7 @@ const HomePage = {
         }
 
         container.innerHTML = `
-            <div class="recent-list" style="display:flex; flex-direction:column; gap:0.5rem;">
+            <div class="recent-list" style="display:flex; flex-direction:column; gap:0.65rem;">
                 ${violations.map(v => `
                     <div class="recent-item" 
                          onclick="window.location.href = API.getReportUrl('${v.report_id}')"
@@ -568,15 +568,16 @@ const HomePage = {
                             display:flex; 
                             justify-content:space-between; 
                             align-items:center;
-                            padding:1rem;
+                            padding:0.9rem 1rem;
                             background:var(--background-color);
                             border-radius:8px;
                             cursor:pointer;
                             border-left: 4px solid ${v.severity === 'HIGH' ? 'var(--error-color)' : 'var(--warning-color)'};
-                            transition: transform 0.2s;
+                            transition: background 0.18s;
+                            min-width: 0;
                          "
-                         onmouseover="this.style.transform='translateX(4px)'"
-                         onmouseout="this.style.transform='translateX(0)'">
+                         onmouseover="this.style.background='var(--card-border)'"
+                         onmouseout="this.style.background='var(--background-color)'">
                         
                         <div>
                             <h5 style="margin:0 0 0.25rem 0;color:var(--text-color);">#${v.report_id}</h5>

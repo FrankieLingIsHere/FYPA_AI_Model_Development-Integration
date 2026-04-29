@@ -243,6 +243,8 @@
                     <button class="handbook-link" data-page="ppe">PPE Guidelines</button>
                     <button class="handbook-link" data-page="live">Live Monitoring</button>
                     <button class="handbook-link" data-page="alerts">Voice Alerts</button>
+                    <button class="handbook-link" data-page="notifications">Notifications</button>
+                    <button class="handbook-link" data-page="admin">Admin &amp; Devices</button>
                     <button class="handbook-link" data-page="faq">FAQ</button>
                 </div>
                 <div class="handbook-content">
@@ -300,6 +302,35 @@
                     <div class="handbook-page" id="handbook-alerts">
                         <h3>Voice Alerts</h3>
                         <p>Voice alerts notify users audibly when PPE violations are detected. Toggle them on or off using the <strong>Voice Alerts</strong> button in the sidebar, and use <strong>Test Voice</strong> to verify your output device.</p>
+                    </div>
+                    <div class="handbook-page" id="handbook-notifications">
+                        <h3>Notification Center</h3>
+                        <p>Every toast notification is now persisted to a private history. Open it from the floating <i class="fas fa-bell"></i> bell at the bottom-left of the screen.</p>
+                        <ul style="line-height:1.8;">
+                            <li><strong>Unread badge</strong> shows how many alerts you have not yet seen.</li>
+                            <li><strong>Categories</strong>: Detection, Report, Sync, Admin, System.</li>
+                            <li><strong>Priorities</strong>: high (errors / violations), medium (warnings), low (info).</li>
+                            <li><strong>Mark all read</strong> clears the badge; <strong>Clear</strong> empties the history.</li>
+                            <li>History is stored locally in your browser only — nothing is uploaded.</li>
+                        </ul>
+                    </div>
+                    <div class="handbook-page" id="handbook-admin">
+                        <h3>Admin &amp; Device Provisioning</h3>
+                        <p>The cloud admin portal at <code>/admin/devices</code> (Basic Auth protected) lets approved staff manage local-mode hardware.</p>
+                        <h4>Actions</h4>
+                        <ul style="line-height:1.8;">
+                            <li><strong>Approve</strong> a pending device to allow bootstrap exchange.</li>
+                            <li><strong>Reject</strong> removes a pending request.</li>
+                            <li><strong>Revoke Access</strong> (new) immediately invalidates an already-provisioned device. The device's stored credentials become useless and it must re-request approval.</li>
+                            <li><strong>Issue One-Time Installer Download</strong> generates a single-use installer signed for the target machine.</li>
+                            <li><strong>View Audit Log</strong> shows the append-only history of every request, approval, rejection, revocation, and provisioning event with timestamps and actor.</li>
+                        </ul>
+                        <h4>Security</h4>
+                        <ul style="line-height:1.8;">
+                            <li>Provision secrets are stored hashed; raw secrets never leave the device on subsequent requests.</li>
+                            <li>Bootstrap tokens are single-use (JTI replay protection).</li>
+                            <li>Each request captures IP and user-agent into the audit log.</li>
+                        </ul>
                     </div>
                     <div class="handbook-page" id="handbook-faq">
                         <h3>Frequently Asked Questions</h3>

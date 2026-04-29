@@ -59,6 +59,9 @@ const ReportsPage = {
                         <button class="btn btn-primary reports-header-refresh" onclick="ReportsPage.refreshReports()" style="padding: 0.5rem 1rem;">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
+                        <button class="btn btn-secondary reports-header-export" onclick="ReportsPage.exportFilteredCsv()" style="padding: 0.5rem 1rem; margin-left: 0.5rem;" title="Export currently filtered reports as CSV">
+                            <i class="fas fa-file-csv"></i> Export CSV
+                        </button>
                     </div>
                     <div class="card-content">
                         <!-- Filters -->
@@ -585,6 +588,69 @@ const ReportsPage = {
         }
 
         return filtered;
+    },
+
+    exportFilteredCsv() {
+        try {
+            const rows = this.getFilteredViolations();
+            if (!rows.length) {
+                if (typeof notifyApp === 'function') {
+                    notifyApp('No reports match the current filters.', 'warning');
+                } else {
+                    alert('No reports match the current filters.');
+                }
+                return;
+            }
+
+            const escapeCell = (v) => {
+                if (v === null || v === undefined) return '';
+                let s = String(v);
+                // Strip line breaks for CSV row safety
+                s = s.replace(/\r?\n/g, ' ');
+                if (/[",]/.test(s)) {
+                    s = '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            };
+
+            const headers = [
+                'report_id', 'timestamp', 'status', 'severity',
+                'device_id', 'violation_count', 'missing_ppe',
+                'source_scope', 'source_label', 'violation_summary'
+            ];
+
+            const lines = [headers.join(',')];
+            rows.forEach((r) => {
+                const missing = Array.isArray(r.missing_ppe) ? r.missing_ppe.join('; ') : '';
+                lines.push([
+                    r.report_id, r.timestamp, r.status, r.severity,
+                    r.device_id, r.violation_count, missing,
+                    r.source_scope, r.source_label, r.violation_summary
+                ].map(escapeCell).join(','));
+            });
+
+            // Prepend BOM so Excel detects UTF-8
+            const csv = '\uFEFF' + lines.join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `casm-reports-${ts}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            if (typeof notifyApp === 'function') {
+                notifyApp(`Exported ${rows.length} report${rows.length === 1 ? '' : 's'} to CSV.`, 'success');
+            }
+        } catch (err) {
+            console.error('CSV export failed:', err);
+            if (typeof notifyApp === 'function') {
+                notifyApp('CSV export failed. See console for details.', 'error');
+            }
+        }
     },
 
     normalizeStatusValue(status, hasReport = false) {

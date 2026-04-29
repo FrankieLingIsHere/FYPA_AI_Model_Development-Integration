@@ -12859,6 +12859,82 @@ def notify_admin(machine_id, status='pending', token=None):
         _notify_admin_sync(machine_id, status=status, token=token)
 
 
+# ---------------------------------------------------------------------------
+# Device audit log (append-only history of admin actions and device events)
+# ---------------------------------------------------------------------------
+DEVICE_AUDIT_LOG_FILE = APP_DIR / 'device_audit_log.json'
+DEVICE_AUDIT_LOG_LOCK = Lock()
+DEVICE_AUDIT_LOG_MAX_ENTRIES = 5000
+
+
+def _load_device_audit_log() -> list:
+    with DEVICE_AUDIT_LOG_LOCK:
+        if not DEVICE_AUDIT_LOG_FILE.exists():
+            return []
+        try:
+            with open(DEVICE_AUDIT_LOG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to load device audit log: {e}")
+        return []
+
+
+def _append_device_audit_event(machine_id: str, event: str, actor: str = 'system', metadata: Optional[Dict[str, Any]] = None) -> None:
+    """Append an audit log entry. Best-effort, non-blocking on failure."""
+    try:
+        with DEVICE_AUDIT_LOG_LOCK:
+            entries = []
+            if DEVICE_AUDIT_LOG_FILE.exists():
+                try:
+                    with open(DEVICE_AUDIT_LOG_FILE, 'r', encoding='utf-8') as f:
+                        loaded = json.load(f)
+                        if isinstance(loaded, list):
+                            entries = loaded
+                except Exception:
+                    entries = []
+
+            entry = {
+                'ts': datetime.now(timezone.utc).isoformat(),
+                'machine_id': str(machine_id or '').strip(),
+                'event': str(event or '').strip(),
+                'actor': str(actor or 'system').strip(),
+            }
+            if metadata and isinstance(metadata, dict):
+                # Strip None/empty and limit to safe scalar fields
+                safe_meta = {}
+                for k, v in metadata.items():
+                    if v in (None, ''):
+                        continue
+                    if isinstance(v, (str, int, float, bool)):
+                        safe_meta[str(k)[:64]] = (str(v)[:512] if isinstance(v, str) else v)
+                if safe_meta:
+                    entry['metadata'] = safe_meta
+
+            entries.append(entry)
+            # Cap log size to prevent unbounded growth
+            if len(entries) > DEVICE_AUDIT_LOG_MAX_ENTRIES:
+                entries = entries[-DEVICE_AUDIT_LOG_MAX_ENTRIES:]
+
+            _atomic_write_json(DEVICE_AUDIT_LOG_FILE, entries)
+    except Exception as audit_err:
+        logger.debug(f"Failed to append device audit event: {audit_err}")
+
+
+def _capture_request_metadata() -> Dict[str, Any]:
+    """Capture safe-to-log metadata about the incoming request for audit/risk view."""
+    try:
+        ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or ''
+        ua = request.headers.get('User-Agent', '')[:256]
+        return {
+            'ip': ip,
+            'user_agent': ua,
+        }
+    except Exception:
+        return {}
+
+
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
     # Parse body up-front so we can branch on whether this is a re-request for
@@ -12953,6 +13029,23 @@ def provision_request():
     }
     if not _save_pending_devices(devices):
         return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
+
+    # Capture request metadata for admin risk view + audit log
+    request_meta = _capture_request_metadata()
+    audit_event = (
+        'request_existing' if preserve_status
+        else ('request_repeat_pending' if repeated_pending_request else 'request_new')
+    )
+    _append_device_audit_event(
+        machine_id,
+        audit_event,
+        actor='device',
+        metadata={
+            **request_meta,
+            'status': effective_status,
+            'reason': notification_reason,
+        },
+    )
 
     if notify_pending_request:
         notify_admin(machine_id, 'pending', token=approval_token)
@@ -13074,6 +13167,13 @@ def provision_bootstrap_exchange():
     devices[machine_id] = device
     if not _save_pending_devices(devices):
         return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
+
+    _append_device_audit_event(
+        machine_id,
+        'provisioned',
+        actor='device',
+        metadata=_capture_request_metadata(),
+    )
 
     return jsonify({
         'status': 'provisioned',
@@ -13253,8 +13353,10 @@ def admin_devices():
                 devices[machine_id]['approved_at'] = datetime.now(timezone.utc).isoformat()
                 if not _save_pending_devices(devices):
                     return 'Provisioning shared-state backend unavailable', 503
+                _append_device_audit_event(machine_id, 'approved', actor=auth.username or 'admin')
                 notify_admin(machine_id, 'approved')
             elif action == 'reject':
+                _append_device_audit_event(machine_id, 'rejected', actor=auth.username or 'admin')
                 deleted = _delete_pending_device(machine_id)
                 if deleted:
                     devices.pop(machine_id, None)
@@ -13262,6 +13364,17 @@ def admin_devices():
                     del devices[machine_id]
                     if not _save_pending_devices(devices):
                         return 'Provisioning shared-state backend unavailable', 503
+            elif action == 'revoke':
+                # Revoke an already-provisioned device: mark rejected so it can
+                # no longer exchange/refresh credentials, and rotate the
+                # provision_secret so any cached client copy stops working.
+                devices[machine_id]['status'] = 'rejected'
+                devices[machine_id]['revoked_at'] = datetime.now(timezone.utc).isoformat()
+                devices[machine_id]['provision_secret_hash'] = _hash_provision_secret(secrets.token_urlsafe(48))
+                if not _save_pending_devices(devices):
+                    return 'Provisioning shared-state backend unavailable', 503
+                _append_device_audit_event(machine_id, 'revoked', actor=auth.username or 'admin')
+                logger.warning(f"Admin revoked device {machine_id}")
 
         return redirect('/admin/devices')
 
@@ -13395,6 +13508,7 @@ def admin_devices():
                             class="btn btn-danger"
                             onclick="return confirm('Reset ALL provisioning records and one-time bootstrap tokens? This affects cloud-side admin records.')"
                         >Reset All Provisioning Records</button>
+                        <a href="/admin/devices/audit-log" class="btn btn-secondary" style="text-decoration:none;">View Audit Log</a>
                     </form>
                     {% if reset_all %}
                         <div class="reset-notice">
@@ -13429,8 +13543,14 @@ def admin_devices():
                                     <button type="submit" name="action" value="approve" class="btn btn-success">Approve Device</button>
                                     <button type="submit" name="action" value="reject" class="btn btn-danger">Reject Device</button>
                                 </form>
-                                {% else %}
+                                {% elif status in ['approved', 'provisioned'] %}
                                 <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Issue One-Time Installer Download</a>
+                                <form method="POST" style="display:inline;" onsubmit="return confirm('Revoke this device? It will no longer be able to refresh credentials and will need to re-request approval.');">
+                                    <input type="hidden" name="machine_id" value="{{ m_id }}">
+                                    <button type="submit" name="action" value="revoke" class="btn btn-danger">Revoke Access</button>
+                                </form>
+                                {% else %}
+                                <span class="badge badge-pill badge-rejected">Access revoked / rejected</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -13459,6 +13579,88 @@ def admin_devices():
         cleared_devices=cleared_devices,
         cleared_tokens=cleared_tokens,
     )
+
+
+@app.route('/admin/devices/audit-log', methods=['GET'])
+def admin_devices_audit_log():
+    """Append-only audit history of provisioning events. Basic-Auth gated."""
+    if not ADMIN_PASSWORD:
+        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
+    auth = request.authorization
+    if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
+        return Response(
+            'Unauthorized',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'},
+        )
+
+    limit = max(1, min(int(request.args.get('limit', 200) or 200), 5000))
+    machine_filter = (request.args.get('machine_id') or '').strip()
+    event_filter = (request.args.get('event') or '').strip().lower()
+
+    entries = _load_device_audit_log()
+    # Most recent first
+    entries = list(reversed(entries))
+    if machine_filter:
+        entries = [e for e in entries if str(e.get('machine_id') or '') == machine_filter]
+    if event_filter:
+        entries = [e for e in entries if str(e.get('event') or '').lower() == event_filter]
+    entries = entries[:limit]
+
+    if request.args.get('format') == 'json':
+        return jsonify({'count': len(entries), 'entries': entries})
+
+    from flask import render_template_string
+    html = """
+    <!DOCTYPE html><html lang="en"><head>
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>CASM Admin - Device Audit Log</title>
+      <link rel="stylesheet" href="/static/css/style.css">
+      <style>
+        body{background:#f1f3f7;padding:1.5rem;}
+        .audit-shell{max-width:1200px;margin:0 auto;}
+        table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;
+              box-shadow:0 1px 2px rgba(17,24,39,.06),0 4px 12px -6px rgba(17,24,39,.1);}
+        th{background:#0f172a;color:#fff;text-align:left;padding:.6rem .8rem;font-size:.75rem;
+           text-transform:uppercase;letter-spacing:.06em;}
+        td{padding:.55rem .8rem;border-top:1px solid #eef0f4;font-size:.85rem;color:#334155;}
+        tr:hover td{background:#fafbfc;}
+        .ev{display:inline-block;padding:.18rem .55rem;border-radius:999px;font-size:.7rem;
+            font-weight:700;text-transform:uppercase;letter-spacing:.05em;}
+        .ev-approved{background:#dcfce7;color:#166534;}
+        .ev-rejected,.ev-revoked{background:#fee2e2;color:#991b1b;}
+        .ev-provisioned{background:#dbeafe;color:#1e40af;}
+        .ev-request_new,.ev-request_repeat_pending,.ev-request_existing{background:#fef3c7;color:#92400e;}
+        .meta{font-family:ui-monospace,monospace;font-size:.7rem;color:#64748b;}
+        h1{margin:0 0 1rem;color:#0f172a;}
+        .topbar{display:flex;gap:.5rem;justify-content:space-between;align-items:center;margin-bottom:1rem;}
+        .btn{display:inline-block;padding:.45rem .9rem;background:#0f172a;color:#fff;
+             text-decoration:none;border-radius:8px;font-weight:600;font-size:.82rem;}
+      </style>
+    </head><body><div class="audit-shell">
+      <div class="topbar">
+        <h1>Device Audit Log <span style="color:#94a3b8;font-size:.7em;">({{count}} entries)</span></h1>
+        <a class="btn" href="/admin/devices">&larr; Back to devices</a>
+      </div>
+      <table>
+        <thead><tr><th>Timestamp (UTC)</th><th>Machine ID</th><th>Event</th><th>Actor</th><th>Metadata</th></tr></thead>
+        <tbody>
+        {% for e in entries %}
+          <tr>
+            <td><code>{{ e.ts }}</code></td>
+            <td><code>{{ e.machine_id }}</code></td>
+            <td><span class="ev ev-{{ e.event }}">{{ e.event }}</span></td>
+            <td>{{ e.actor }}</td>
+            <td class="meta">{% if e.metadata %}{% for k,v in e.metadata.items() %}{{k}}={{v}} {% endfor %}{% endif %}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:2rem;">No audit events yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div></body></html>
+    """
+    return render_template_string(html, entries=entries, count=len(entries))
 
 
 @app.route('/admin/devices/quick-approve', methods=['GET'])

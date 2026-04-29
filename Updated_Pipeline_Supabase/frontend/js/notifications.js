@@ -10,6 +10,261 @@ const NotificationManager = {
     groupedCount: 0,  // Count of hidden notifications
     recentByKey: new Map(),
 
+    // ---- History center (S3) ----
+    HISTORY_STORAGE_KEY: 'ppe.notifications.history.v1',
+    HISTORY_MAX: 200,
+    history: [],
+    unreadCount: 0,
+    historyListeners: [],
+
+    loadHistory() {
+        try {
+            const raw = localStorage.getItem(this.HISTORY_STORAGE_KEY);
+            if (!raw) {
+                this.history = [];
+                this.unreadCount = 0;
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.entries)) {
+                this.history = parsed.entries.slice(-this.HISTORY_MAX);
+                this.unreadCount = this.history.reduce((acc, e) => acc + (e.read ? 0 : 1), 0);
+            }
+        } catch (e) {
+            console.warn('Failed to load notification history:', e);
+            this.history = [];
+            this.unreadCount = 0;
+        }
+    },
+
+    persistHistory() {
+        try {
+            localStorage.setItem(
+                this.HISTORY_STORAGE_KEY,
+                JSON.stringify({ entries: this.history.slice(-this.HISTORY_MAX) })
+            );
+        } catch (e) {
+            // Storage quota exceeded; trim and try once more
+            this.history = this.history.slice(-Math.floor(this.HISTORY_MAX / 2));
+            try {
+                localStorage.setItem(
+                    this.HISTORY_STORAGE_KEY,
+                    JSON.stringify({ entries: this.history })
+                );
+            } catch (_) { /* give up */ }
+        }
+    },
+
+    addToHistory(entry) {
+        const record = {
+            id: entry.id,
+            ts: Date.now(),
+            type: entry.type || 'info',
+            category: entry.category || this.inferCategory(entry.type, entry.title, entry.message),
+            priority: entry.priority || this.inferPriority(entry.type),
+            title: entry.title || '',
+            message: entry.message || '',
+            read: false
+        };
+        this.history.push(record);
+        if (this.history.length > this.HISTORY_MAX) {
+            this.history = this.history.slice(-this.HISTORY_MAX);
+        }
+        this.unreadCount += 1;
+        this.persistHistory();
+        this.updateBellBadge();
+        this.notifyHistoryListeners();
+    },
+
+    inferCategory(type, title, message) {
+        const t = String(title || '').toLowerCase();
+        const m = String(message || '').toLowerCase();
+        if (type === 'violation' || t.includes('violation') || m.includes('violation')) return 'detection';
+        if (type === 'report' || t.includes('report') || m.includes('report')) return 'report';
+        if (m.includes('sync') || m.includes('cloud') || m.includes('supabase')) return 'sync';
+        if (m.includes('admin') || m.includes('approval') || m.includes('provision')) return 'admin';
+        if (type === 'error' || m.includes('failed') || m.includes('error')) return 'system';
+        return 'system';
+    },
+
+    inferPriority(type) {
+        if (type === 'error' || type === 'violation') return 'high';
+        if (type === 'warning') return 'medium';
+        return 'low';
+    },
+
+    notifyHistoryListeners() {
+        this.historyListeners.forEach((fn) => {
+            try { fn(this.history, this.unreadCount); } catch (_) { /* swallow */ }
+        });
+    },
+
+    markAllRead() {
+        this.history.forEach((e) => { e.read = true; });
+        this.unreadCount = 0;
+        this.persistHistory();
+        this.updateBellBadge();
+        this.notifyHistoryListeners();
+    },
+
+    clearHistory() {
+        this.history = [];
+        this.unreadCount = 0;
+        this.persistHistory();
+        this.updateBellBadge();
+        this.notifyHistoryListeners();
+    },
+
+    updateBellBadge() {
+        const badge = document.getElementById('notif-bell-badge');
+        if (badge) {
+            if (this.unreadCount > 0) {
+                badge.textContent = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
+                badge.style.display = 'inline-flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    },
+
+    openHistoryCenter() {
+        this.ensureHistoryModal();
+        const modal = document.getElementById('notif-history-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        this.renderHistoryList();
+    },
+
+    closeHistoryCenter() {
+        const modal = document.getElementById('notif-history-modal');
+        if (modal) modal.style.display = 'none';
+    },
+
+    ensureHistoryModal() {
+        if (document.getElementById('notif-history-modal')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'notif-history-modal';
+        overlay.style.cssText = `
+            position: fixed; inset: 0; background: rgba(15,23,42,0.55);
+            z-index: 10050; display: none; align-items: center; justify-content: center;
+            padding: 1rem;
+        `;
+        overlay.innerHTML = `
+            <div style="background:#fff; border-radius:14px; max-width:560px; width:100%;
+                        max-height:78vh; display:flex; flex-direction:column; overflow:hidden;
+                        box-shadow:0 20px 60px rgba(0,0,0,.25);">
+                <div style="display:flex; align-items:center; justify-content:space-between;
+                            padding:1rem 1.1rem; border-bottom:1px solid #e5e7eb; gap:.5rem;">
+                    <div style="display:flex; align-items:center; gap:.55rem;">
+                        <i class="fas fa-bell" style="color:#3498db;"></i>
+                        <strong style="font-size:1rem; color:#0f172a;">Notification History</strong>
+                    </div>
+                    <div style="display:flex; gap:.4rem;">
+                        <button id="notif-history-mark-read" class="btn btn-secondary" style="padding:.35rem .7rem; font-size:.78rem;">Mark all read</button>
+                        <button id="notif-history-clear" class="btn btn-secondary" style="padding:.35rem .7rem; font-size:.78rem;">Clear</button>
+                        <button id="notif-history-close" class="btn btn-secondary" style="padding:.35rem .7rem; font-size:.78rem;" aria-label="Close">&times;</button>
+                    </div>
+                </div>
+                <div id="notif-history-filters" style="display:flex; flex-wrap:wrap; gap:.4rem; padding:.6rem 1.1rem;
+                            border-bottom:1px solid #f1f5f9; background:#f8fafc;">
+                    ${['all','detection','report','sync','admin','system'].map((c) => `
+                        <button class="notif-cat-chip" data-cat="${c}" style="
+                            padding:.25rem .65rem; border-radius:999px; border:1px solid #cbd5e1;
+                            background:#fff; cursor:pointer; font-size:.72rem; text-transform:uppercase;
+                            letter-spacing:.04em; color:#475569;">${c}</button>
+                    `).join('')}
+                </div>
+                <div id="notif-history-list" style="overflow-y:auto; flex:1; padding:.4rem 0;"></div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) this.closeHistoryCenter();
+        });
+        document.getElementById('notif-history-close').addEventListener('click', () => this.closeHistoryCenter());
+        document.getElementById('notif-history-mark-read').addEventListener('click', () => {
+            this.markAllRead();
+            this.renderHistoryList();
+        });
+        document.getElementById('notif-history-clear').addEventListener('click', () => {
+            if (confirm('Clear all notification history?')) {
+                this.clearHistory();
+                this.renderHistoryList();
+            }
+        });
+        overlay.querySelectorAll('.notif-cat-chip').forEach((chip) => {
+            chip.addEventListener('click', () => {
+                overlay.querySelectorAll('.notif-cat-chip').forEach((c) => {
+                    c.style.background = '#fff';
+                    c.style.color = '#475569';
+                    c.style.borderColor = '#cbd5e1';
+                });
+                chip.style.background = '#0f172a';
+                chip.style.color = '#fff';
+                chip.style.borderColor = '#0f172a';
+                this._historyCategoryFilter = chip.dataset.cat;
+                this.renderHistoryList();
+            });
+        });
+
+        // Default selection: all
+        const allChip = overlay.querySelector('.notif-cat-chip[data-cat="all"]');
+        if (allChip) {
+            allChip.style.background = '#0f172a';
+            allChip.style.color = '#fff';
+            allChip.style.borderColor = '#0f172a';
+        }
+        this._historyCategoryFilter = 'all';
+    },
+
+    renderHistoryList() {
+        const list = document.getElementById('notif-history-list');
+        if (!list) return;
+
+        const cat = this._historyCategoryFilter || 'all';
+        const filtered = (cat === 'all' ? this.history : this.history.filter((e) => e.category === cat));
+        const ordered = filtered.slice().reverse();
+
+        if (!ordered.length) {
+            list.innerHTML = `
+                <div style="text-align:center; color:#94a3b8; padding:2rem 1rem;">
+                    <i class="fas fa-inbox" style="font-size:1.6rem; margin-bottom:.5rem;"></i>
+                    <div>No notifications in history.</div>
+                </div>`;
+            return;
+        }
+
+        const colors = { high: '#e74c3c', medium: '#f39c12', low: '#3498db' };
+        const catIcons = {
+            detection: 'fa-hard-hat', report: 'fa-file-alt', sync: 'fa-cloud',
+            admin: 'fa-user-shield', system: 'fa-cog'
+        };
+
+        list.innerHTML = ordered.map((e) => {
+            const ts = new Date(e.ts);
+            const tsStr = ts.toLocaleString();
+            const unreadDot = e.read ? '' : `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3498db; margin-right:.4rem;"></span>`;
+            return `
+                <div style="display:flex; align-items:flex-start; gap:.65rem; padding:.65rem 1.1rem; border-bottom:1px solid #f1f5f9;">
+                    <div style="flex-shrink:0; width:32px; height:32px; border-radius:8px; background:${colors[e.priority] || colors.low}1a; color:${colors[e.priority] || colors.low}; display:flex; align-items:center; justify-content:center;">
+                        <i class="fas ${catIcons[e.category] || 'fa-bell'}"></i>
+                    </div>
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:.82rem; color:#0f172a; font-weight:600;">
+                            ${unreadDot}${e.title || e.category || 'Notification'}
+                        </div>
+                        <div style="font-size:.78rem; color:#475569; margin-top:.15rem; word-wrap:break-word;">${e.message}</div>
+                        <div style="font-size:.68rem; color:#94a3b8; margin-top:.3rem; display:flex; gap:.6rem;">
+                            <span><i class="far fa-clock"></i> ${tsStr}</span>
+                            <span style="text-transform:uppercase; letter-spacing:.04em;">${e.category} &middot; ${e.priority}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    },
+
     init() {
         if (this.container) return;
 
@@ -55,6 +310,41 @@ const NotificationManager = {
         `;
         this.summaryBadge.addEventListener('click', () => this.dismissAll());
         this.container.appendChild(this.summaryBadge);
+
+        // History bell (floating, bottom-left of viewport, unread badge)
+        this.loadHistory();
+        if (!document.getElementById('notif-bell-btn')) {
+            const bell = document.createElement('button');
+            bell.id = 'notif-bell-btn';
+            bell.setAttribute('aria-label', 'Notification history');
+            bell.title = 'Notification history';
+            bell.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                left: 20px;
+                z-index: 9999;
+                width: 44px; height: 44px; border-radius: 50%;
+                border: none; cursor: pointer;
+                background: #0f172a; color: #fff;
+                box-shadow: 0 6px 18px rgba(15,23,42,.25);
+                display: flex; align-items: center; justify-content: center;
+                font-size: 16px;
+            `;
+            bell.innerHTML = `
+                <i class="fas fa-bell"></i>
+                <span id="notif-bell-badge" style="
+                    position:absolute; top:-4px; right:-4px;
+                    background:#e74c3c; color:#fff; border-radius:999px;
+                    min-width:18px; height:18px; padding:0 5px;
+                    font-size:10px; font-weight:700;
+                    display:none; align-items:center; justify-content:center;
+                    line-height:1; box-shadow:0 0 0 2px #fff;
+                "></span>
+            `;
+            bell.addEventListener('click', () => this.openHistoryCenter());
+            document.body.appendChild(bell);
+        }
+        this.updateBellBadge();
     },
 
     updateSummaryBadge() {
@@ -232,6 +522,22 @@ const NotificationManager = {
                 ts: nowTs,
                 ttlMs: dedupeTtlMs
             });
+        }
+
+        // Persist to history center (S3) — skip very low-value transients
+        if (options.persistHistory !== false) {
+            try {
+                this.addToHistory({
+                    id,
+                    type,
+                    title: options.title || '',
+                    message,
+                    category: options.category,
+                    priority: options.priority
+                });
+            } catch (e) {
+                console.warn('Failed to add notification to history:', e);
+            }
         }
 
         this.updateSummaryBadge();

@@ -6453,9 +6453,21 @@ def _send_local_mode_cloud_heartbeat_once(
 
         if invalid_secret_rejected:
             try:
+                # Include the existing (possibly stale) secret so the cloud can
+                # authenticate the rotation. If it doesn't match either, the
+                # cloud will reject hard and the operator must re-approve.
+                refresh_body_payload = {'machine_id': machine_id}
+                if provision_secret:
+                    refresh_body_payload['current_provision_secret'] = provision_secret
+                refresh_headers = {}
+                _local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
+                if _local_admin_token:
+                    refresh_headers['X-Admin-Token'] = _local_admin_token
+
                 refresh_response = requests.post(
                     f"{cloud_url}/api/provision/request",
-                    json={'machine_id': machine_id},
+                    json=refresh_body_payload,
+                    headers=refresh_headers,
                     timeout=12,
                 )
                 refresh_body = refresh_response.json() if refresh_response.content else {}
@@ -6868,6 +6880,32 @@ def api_local_mode_installer_redirect():
     provision_secret = str(state.get('provision_secret') or '').strip()
     status = str(state.get('status') or '').strip().lower()
 
+    # SEC: This endpoint hands out a 302 to the cloud installer URL with the
+    # PC's stored provision_secret embedded. Without this loopback gate, any
+    # device on the LAN (e.g. a phone on the same Wi-Fi) could fetch the
+    # installer for the host PC by hitting http://<PC-IP>:5000/api/local-mode/
+    # installer/redirect. Restrict to loopback only — this endpoint is
+    # intended exclusively for the host PC's own browser.
+    _client_ip_raw = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or (request.remote_addr or '')
+    _client_ip = _client_ip_raw.lower()
+    _loopback_ips = {'127.0.0.1', '::1', 'localhost'}
+    if _client_ip not in _loopback_ips and not _client_ip.startswith('127.'):
+        try:
+            logger.warning(
+                f"Blocked non-loopback access to /api/local-mode/installer/redirect from {_client_ip_raw}"
+            )
+            _append_device_audit_event(
+                machine_id or 'unknown',
+                'installer_redirect_blocked_non_loopback',
+                actor='device',
+                metadata=_capture_request_metadata(),
+            )
+        except Exception:
+            pass
+        return jsonify({
+            'error': 'This endpoint is restricted to the host PC. Open the dashboard on the PC running the local backend and retry.'
+        }), 403
+
     cloud_url = _local_mode_normalize_cloud_url(
         os.getenv('CLOUD_URL', '').strip()
         or str(state.get('cloud_url') or '').strip()
@@ -7012,9 +7050,24 @@ def _api_local_mode_auto_provisioning_impl():
 
     def _request_new_secret() -> Tuple[bool, str, str]:
         try:
+            # Include the current provision_secret (if any) so the cloud can
+            # authenticate the rotation as a legitimate re-request without
+            # admin involvement. For brand-new installs with no stored
+            # secret, the operator must approve via /admin/devices.
+            request_body = {'machine_id': machine_id}
+            existing_local_secret = str(state.get('provision_secret') or '').strip()
+            if existing_local_secret:
+                request_body['current_provision_secret'] = existing_local_secret
+
+            request_headers = {}
+            local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
+            if local_admin_token:
+                request_headers['X-Admin-Token'] = local_admin_token
+
             response = requests.post(
                 f"{cloud_url}/api/provision/request",
-                json={'machine_id': machine_id},
+                json=request_body,
+                headers=request_headers,
                 timeout=12,
             )
             body = response.json() if response.content else {}
@@ -12938,9 +12991,9 @@ def _capture_request_metadata() -> Dict[str, Any]:
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
     # Parse body up-front so we can branch on whether this is a re-request for
-    # an already-approved device (allowed without admin token — the device was
-    # vetted at the time of original approval) versus a brand-new machine_id
-    # (still requires admin auth unless self-register is explicitly enabled).
+    # an already-approved device (must prove prior trust by presenting the
+    # current provision_secret OR a valid X-Admin-Token) versus a brand-new
+    # machine_id (still requires admin auth unless self-register is enabled).
     data = request.get_json() or {}
     machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
@@ -12948,6 +13001,17 @@ def provision_request():
 
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
         return jsonify({'error': 'Invalid machine_id format'}), 400
+
+    # Optional proof-of-prior-trust: a re-request for an existing approved
+    # device may present its CURRENT provision_secret (in body or header) to
+    # rotate to a fresh one without admin involvement. Without this, anyone
+    # who simply guesses the machine_id could otherwise force a rotation.
+    presented_existing_secret = str(
+        data.get('current_provision_secret')
+        or data.get('provision_secret')
+        or request.headers.get('X-Provision-Secret', '')
+        or ''
+    ).strip()
 
     # Look up whether this machine already has a record. We need this to
     # decide whether the call is a privileged "first-time registration"
@@ -12962,16 +13026,40 @@ def provision_request():
     _existing_status_for_auth = str((_existing_for_auth or {}).get('status') or '').strip().lower()
     is_rerequest_for_known_device = _existing_status_for_auth in ('approved', 'provisioned')
 
-    # PRV1 — Require admin authorisation unless either:
-    #   (a) the operator has explicitly opted into unauthenticated
-    #       self-registration via PROVISION_ALLOW_SELF_REGISTER=true; or
-    #   (b) this is a re-request for an already approved/provisioned device
-    #       (the original approval already established trust; we must allow
-    #       the device to recover its provision_secret after the local
-    #       backend was reinstalled or the browser session was cleared).
-    if not PROVISION_ALLOW_SELF_REGISTER and not is_rerequest_for_known_device:
+    # Validate proof-of-prior-trust if presented. Both the secret-bearer path
+    # and the admin-token path are accepted; either is sufficient.
+    rerequest_authenticated_by_secret = False
+    if is_rerequest_for_known_device and presented_existing_secret:
+        if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
+            rerequest_authenticated_by_secret = True
+        else:
+            # Wrong secret on a known approved device → log and reject hard.
+            _append_device_audit_event(
+                machine_id,
+                'request_rejected_bad_secret',
+                actor='device',
+                metadata=_capture_request_metadata(),
+            )
+            return jsonify({'error': 'Invalid provision_secret for this machine_id'}), 401
+
+    # PRV1 (hardened) — Require admin authorisation unless either:
+    #   (a) PROVISION_ALLOW_SELF_REGISTER=true (operator opt-in); or
+    #   (b) this is a re-request for an approved/provisioned device AND the
+    #       caller proved prior trust by presenting the current
+    #       provision_secret. Approval status alone is no longer sufficient,
+    #       because machine_id is deterministic and therefore guessable.
+    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret:
         token_header = request.headers.get('X-Admin-Token', '').strip()
         if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
+            _append_device_audit_event(
+                machine_id,
+                'request_unauthorized',
+                actor='device',
+                metadata={
+                    **_capture_request_metadata(),
+                    'existing_status': _existing_status_for_auth or 'none',
+                },
+            )
             return jsonify({'error': 'Unauthorized'}), 401
 
     provision_secret = secrets.token_urlsafe(48)

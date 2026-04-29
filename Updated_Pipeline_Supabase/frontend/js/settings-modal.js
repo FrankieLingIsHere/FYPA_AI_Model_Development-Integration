@@ -576,7 +576,13 @@ const GlobalSettingsModal = {
         const hasStoredProvisionSecret = !!provisionSecret;
 
         if (allowRequest && (!provisionSecret || options.forceRequest === true)) {
-            const requestResult = await API.requestCloudProvisioningApproval({ machineId });
+            const requestResult = await API.requestCloudProvisioningApproval({
+                machineId,
+                // Pass the stored secret (if any) so the backend can authenticate
+                // a rotation without an admin token. Brand-new devices have no
+                // stored secret and must be admin-approved out-of-band.
+                currentProvisionSecret: provisionSecret || ''
+            });
             if (!requestResult || requestResult.success === false) {
                 return {
                     success: false,
@@ -635,7 +641,10 @@ const GlobalSettingsModal = {
             const refreshedError = String((statusResult && statusResult.error) || '').toLowerCase();
             const shouldRetryRequest = invalidSecret || (!hasStoredProvisionSecret && refreshedError.includes('not_found'));
             if ((statusResult && statusResult.success === false) && shouldRetryRequest) {
-                const retryRequest = await API.requestCloudProvisioningApproval({ machineId });
+                const retryRequest = await API.requestCloudProvisioningApproval({
+                    machineId,
+                    currentProvisionSecret: provisionSecret || ''
+                });
                 if (retryRequest && retryRequest.success) {
                     machineId = String(retryRequest.machine_id || machineId).trim() || machineId;
                     provisionSecret = String(retryRequest.provision_secret || provisionSecret).trim();

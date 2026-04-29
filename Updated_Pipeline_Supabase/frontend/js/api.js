@@ -831,10 +831,24 @@ const API = {
                 };
             }
 
+            // Proof-of-prior-trust: if the caller already holds the current
+            // provision_secret (from a prior approved registration), include it
+            // so the backend can authenticate the rotation without an admin
+            // token. Brand-new devices simply omit this field and must be
+            // approved out-of-band.
+            const currentSecret = String(
+                (options && (options.currentProvisionSecret || options.provisionSecret || options.provision_secret)) || ''
+            ).trim();
+
+            const body = { machine_id: machineId };
+            if (currentSecret) {
+                body.current_provision_secret = currentSecret;
+            }
+
             const response = await this._fetchWithTimeout(`${API_CONFIG.BASE_URL}/api/provision/request`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ machine_id: machineId })
+                body: JSON.stringify(body)
             }, 15000);
 
             const data = await response.json().catch(() => ({}));

@@ -468,9 +468,31 @@ const HomePage = {
             badgeEl.textContent = 'Provisioned';
             messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
         } else if (status === 'credentials_present') {
-            badgeEl.className = 'badge badge-success';
-            badgeEl.textContent = 'Credentials Detected';
+            // `credentials_present` is a property of the *backend instance*
+            // (does it have SUPABASE_* env vars set), not of the *device*
+            // currently viewing the page. On the cloud Railway deployment
+            // this is always true, so reporting "Credentials Detected" to a
+            // phone or any visitor that has not been admin-approved is
+            // misleading — it makes them think they're partially provisioned.
+            //
+            // When viewed through the cloud frontend, downgrade this to the
+            // honest "Not Requested" state so the user sees the real
+            // approval workflow. Only show "Credentials Detected" when we're
+            // actually talking to a local backend (loopback) where it
+            // genuinely means "this PC has Supabase keys but isn't approved
+            // by the admin yet".
+            const viewingThroughCloud = (typeof isLikelyRemoteBackend === 'function')
+                ? isLikelyRemoteBackend()
+                : false;
+            if (viewingThroughCloud) {
+                badgeEl.className = 'badge badge-info';
+                badgeEl.textContent = 'Not Requested';
+                messageEl.textContent = 'No approval request from this device yet. Cloud mode is available now; to enable local mode, run Local Mode Checkup from the host PC.';
+            } else {
+                badgeEl.className = 'badge badge-success';
+                badgeEl.textContent = 'Credentials Detected';
                 messageEl.textContent = 'Cloud credentials are present on this backend, but this machine is not approved/provisioned yet.';
+            }
         } else if (status === 'pending_approval') {
             badgeEl.className = 'badge badge-warning';
             badgeEl.textContent = 'Pending Approval';

@@ -6804,6 +6804,32 @@ def api_local_mode_provisioning_status():
     )
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
 
+    # Fallback: when this backend is the cloud authority itself (no
+    # provision_secret stored on disk because Railway has no per-device
+    # state), `_local_mode_fetch_authoritative_status` returns
+    # `provision_secret_missing` and authoritative_status stays empty.
+    # In that case do a direct DB lookup of the device record by
+    # machine_id so we can still return the real per-device status
+    # ('provisioned' / 'pending_approval' / 'rejected') instead of
+    # falling back to the misleading host-level 'credentials_present'.
+    if not authoritative_status and machine_id:
+        try:
+            _public_devices = _load_pending_devices() or {}
+            _public_device = _public_devices.get(machine_id) if isinstance(_public_devices, dict) else None
+            if isinstance(_public_device, dict):
+                _public_status = str(_public_device.get('status') or '').strip().lower()
+                if _public_status in ('pending_approval', 'pending', 'approved', 'provisioned', 'rejected'):
+                    if _public_status == 'pending':
+                        _public_status = 'pending_approval'
+                    authoritative_status = _public_status
+                    cloud_state['checked'] = True
+                    cloud_state['status'] = _public_status
+                    cloud_state['raw_status'] = _public_status
+        except Exception as _public_lookup_err:
+            logger.debug(
+                f"Public device-status fallback lookup failed for machine_id={machine_id}: {_public_lookup_err}"
+            )
+
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
         normalized_status = authoritative_status
     elif credentials_present:

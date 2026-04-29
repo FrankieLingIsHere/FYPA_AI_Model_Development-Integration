@@ -1385,7 +1385,20 @@ const GlobalSettingsModal = {
                     //        info-level inline status only — do NOT toast it
                     //        as a warning, since nothing is broken.
                     const provisionStatus = String((this.localProvisionState && this.localProvisionState.status) || '').toLowerCase();
-                    const isProvisioned = provisionStatus === 'provisioned' || provisionStatus === 'approved';
+                    // Also consult the canonical global tracker, because
+                    // settings.localProvisionState lags behind it on first
+                    // mount until syncLocalProvisionStateFromPayload runs.
+                    const globalProvisionStatus = String(
+                        (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.get === 'function'
+                            && (window.PPEProvisioningStatus.get() || {}).status)
+                        || ''
+                    ).toLowerCase();
+                    const isProvisioned = (
+                        provisionStatus === 'provisioned'
+                        || provisionStatus === 'approved'
+                        || globalProvisionStatus === 'provisioned'
+                        || globalProvisionStatus === 'approved'
+                    );
 
                     if (heartbeatRecent) {
                         const remoteHint = `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`;

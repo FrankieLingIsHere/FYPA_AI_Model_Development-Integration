@@ -470,17 +470,21 @@ const HomePage = {
         } else if (status === 'credentials_present') {
             // `credentials_present` is a property of the *backend instance*
             // (does it have SUPABASE_* env vars set), not of the *device*
-            // currently viewing the page. On the cloud Railway deployment
+            // currently viewing the page. On the deployed Railway backend
             // this is always true, so reporting "Credentials Detected" to a
             // phone or any visitor that has not been admin-approved is
-            // misleading — it makes them think they're partially provisioned.
+            // misleading.
             //
-            // When viewed through the cloud frontend, downgrade this to the
-            // honest "Not Requested" state so the user sees the real
-            // approval workflow. Only show "Credentials Detected" when we're
-            // actually talking to a local backend (loopback) where it
-            // genuinely means "this PC has Supabase keys but isn't approved
-            // by the admin yet".
+            // The cloud backend now does a public DB lookup by machine_id
+            // and should return the device's real status ('provisioned',
+            // 'pending_approval', 'rejected') instead of credentials_present
+            // when a machine_id is provided. So if we still see
+            // credentials_present here on the cloud, this device genuinely
+            // has no per-device record yet → downgrade to "Not Requested".
+            //
+            // Only show "Credentials Detected" when we're actually talking
+            // to a local backend (loopback) where it correctly means "this
+            // PC has Supabase keys but isn't admin-approved yet".
             const viewingThroughCloud = (typeof isLikelyRemoteBackend === 'function')
                 ? isLikelyRemoteBackend()
                 : false;

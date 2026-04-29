@@ -467,24 +467,14 @@ const HomePage = {
             badgeEl.className = 'badge badge-success';
             badgeEl.textContent = 'Provisioned';
             messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
+        } else if (status === 'approved') {
+            // Admin has approved this device. Treat as a green
+            // success state — the only difference vs. 'provisioned'
+            // is that the launcher hasn't reported full handoff yet.
+            badgeEl.className = 'badge badge-success';
+            badgeEl.textContent = 'Approved';
+            messageEl.textContent = 'Approved by admin. Cloud sync is active.';
         } else if (status === 'credentials_present') {
-            // `credentials_present` is a property of the *backend instance*
-            // (does it have SUPABASE_* env vars set), not of the *device*
-            // currently viewing the page. On the deployed Railway backend
-            // this is always true, so reporting "Credentials Detected" to a
-            // phone or any visitor that has not been admin-approved is
-            // misleading.
-            //
-            // The cloud backend now does a public DB lookup by machine_id
-            // and should return the device's real status ('provisioned',
-            // 'pending_approval', 'rejected') instead of credentials_present
-            // when a machine_id is provided. So if we still see
-            // credentials_present here on the cloud, this device genuinely
-            // has no per-device record yet → downgrade to "Not Requested".
-            //
-            // Only show "Credentials Detected" when we're actually talking
-            // to a local backend (loopback) where it correctly means "this
-            // PC has Supabase keys but isn't admin-approved yet".
             const viewingThroughCloud = (typeof isLikelyRemoteBackend === 'function')
                 ? isLikelyRemoteBackend()
                 : false;

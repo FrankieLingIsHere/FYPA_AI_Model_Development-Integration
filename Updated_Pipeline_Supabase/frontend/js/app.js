@@ -315,6 +315,25 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         if (!machineId && cloudHeartbeat.machineId) {
             machineId = String(cloudHeartbeat.machineId || '').trim();
         }
+
+        // Downgrade protection: once we've resolved this device as
+        // 'approved' or 'provisioned' in the current session (typically
+        // via the per-device cached provision_secret in the settings
+        // modal), don't let a later weak/secretless poll demote it
+        // back to 'credentials_present' or 'idle'. The cloud frontend
+        // is shared across all visitors and the secretless fallback
+        // can return weaker statuses for transient reasons (DB lookup
+        // miss, machine_id hint not yet sent, etc).
+        const fallbackStatus = String(fallback.status || '').toLowerCase();
+        const previousIsApprovedLike = fallbackStatus === 'approved' || fallbackStatus === 'provisioned';
+        const incomingIsWeaker = (
+            status === 'idle'
+            || status === 'credentials_present'
+            || status === 'error'
+        );
+        if (previousIsApprovedLike && incomingIsWeaker) {
+            status = fallbackStatus;
+        }
     }
 
     const error = String(input.error ?? fallback.error ?? '').trim();

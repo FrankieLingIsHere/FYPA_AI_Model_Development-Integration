@@ -151,6 +151,10 @@
                 <i class="fas fa-bullhorn"></i>
                 <span>Test Voice</span>
             </button>
+            <a class="sidebar-link sidebar-handbook-link" id="openHandbook" role="button" tabindex="0">
+                <i class="fas fa-book"></i>
+                <span>Manual Handbook</span>
+            </a>
             <a href="#settings" class="sidebar-link sidebar-settings-link" data-page="settings">
                 <i class="fas fa-gear"></i>
                 <span>Settings</span>
@@ -223,6 +227,112 @@
     <script src="/static/js/pages/about.js"></script>
     <script src="/static/js/app.js"></script>
     <script src="/static/js/ui-animations.js"></script>
+
+    <!-- Manual Handbook Modal -->
+    <div id="handbookModal" class="handbook-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="handbookTitle">
+        <div class="handbook-modal">
+            <div class="handbook-header">
+                <h2 id="handbookTitle"><i class="fas fa-book"></i> Safety Manual Handbook</h2>
+                <button id="closeHandbook" class="handbook-close" aria-label="Close handbook">&times;</button>
+            </div>
+            <div class="handbook-body">
+                <div class="handbook-nav">
+                    <button class="handbook-link active" data-page="intro">Introduction</button>
+                    <button class="handbook-link" data-page="ppe">PPE Guidelines</button>
+                    <button class="handbook-link" data-page="live">Live Monitoring</button>
+                    <button class="handbook-link" data-page="alerts">Voice Alerts</button>
+                    <button class="handbook-link" data-page="faq">FAQ</button>
+                </div>
+                <div class="handbook-content">
+                    <div class="handbook-page active" id="handbook-intro">
+                        <h3>Welcome</h3>
+                        <p>Welcome to the CASM PPE Safety Monitor Manual Handbook. This handbook explains how to operate the safety monitoring system and answers common questions.</p>
+                    </div>
+                    <div class="handbook-page" id="handbook-ppe">
+                        <h3>PPE Guidelines</h3>
+                        <ul>
+                            <li>Helmet must be worn at all times on site</li>
+                            <li>High-visibility safety vest required</li>
+                            <li>Safety boots for floor work</li>
+                            <li>Respirator mask in dusty / hazardous environments</li>
+                        </ul>
+                    </div>
+                    <div class="handbook-page" id="handbook-live">
+                        <h3>Live Monitoring</h3>
+                        <p>The live monitoring feature performs real-time PPE detection using your camera and the YOLO model. Bounding boxes are drawn around detected PPE items, and violations are logged automatically.</p>
+                        <h3>Instructions</h3>
+                        <p>To start live monitoring, open the Live page and click the <strong>Start</strong> button.</p>
+                        <img src="/static/images/handbook-live.png" alt="Live monitor handbook screenshot" style="width:100%;margin:1rem 0;border-radius:8px;">
+                        <ol style="margin-left:1.5rem;line-height:2;">
+                            <li>Click <strong>Start</strong> to begin live monitoring</li>
+                            <li>Your camera will activate and show the live feed</li>
+                            <li>YOLO detects PPE in real-time with bounding boxes</li>
+                            <li>Detected violations are logged automatically</li>
+                            <li>Click <strong>Stop</strong> to end the monitoring session</li>
+                        </ol>
+                        <h3 style="margin-top:2rem;">Detection Features</h3>
+                        <div class="grid grid-3">
+                            <div class="card" style="background:var(--background-color);">
+                                <div class="card-content text-center">
+                                    <i class="fas fa-bolt" style="font-size:2rem;color:var(--warning-color);"></i>
+                                    <h4 style="margin-top:0.5rem;">Real-Time</h4>
+                                    <p>Instant PPE detection</p>
+                                </div>
+                            </div>
+                            <div class="card" style="background:var(--background-color);">
+                                <div class="card-content text-center">
+                                    <i class="fas fa-brain" style="font-size:2rem;color:var(--primary-color);"></i>
+                                    <h4 style="margin-top:0.5rem;">AI-Powered</h4>
+                                    <p>YOLO trained on PPE classes</p>
+                                </div>
+                            </div>
+                            <div class="card" style="background:var(--background-color);">
+                                <div class="card-content text-center">
+                                    <i class="fas fa-check-circle" style="font-size:2rem;color:var(--success-color);"></i>
+                                    <h4 style="margin-top:0.5rem;">Accurate</h4>
+                                    <p>High detection accuracy</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="handbook-page" id="handbook-alerts">
+                        <h3>Voice Alerts</h3>
+                        <p>Voice alerts notify users audibly when PPE violations are detected. Toggle them on or off using the <strong>Voice Alerts</strong> button in the sidebar, and use <strong>Test Voice</strong> to verify your output device.</p>
+                    </div>
+                    <div class="handbook-page" id="handbook-faq">
+                        <h3>Frequently Asked Questions</h3>
+                        <div class="faq-item">
+                            <div class="faq-question">
+                                <span>Can I disable voice alerts?</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </div>
+                            <div class="faq-answer">
+                                <p>Yes. Toggle voice alerts using the button in the sidebar.</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <div class="faq-question">
+                                <span>What PPE does the system detect?</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </div>
+                            <div class="faq-answer">
+                                <p>The system detects helmets, safety vests, boots, and masks.</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <div class="faq-question">
+                                <span>Where are reports stored?</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </div>
+                            <div class="faq-answer">
+                                <p>Reports are stored in Supabase and accessible from the Reports page.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 

@@ -95,6 +95,126 @@ const AboutPage = {
                     </div>
                 </section>
 
+                <section class="card architecture-card">
+                    <div class="card-header">
+                        <span><i class="fas fa-sitemap"></i> System Architecture</span>
+                    </div>
+                    <div class="card-content">
+                        <p class="architecture-lede">CASM is a hybrid edge + cloud system. The frontend runs in the browser, the inference pipeline runs locally or in the cloud, and Supabase is the single source of truth for evidence and reports.</p>
+                        <div class="architecture-grid">
+                            <div class="arch-tier">
+                                <div class="arch-tier-head"><i class="fas fa-display"></i><strong>Client</strong></div>
+                                <ul>
+                                    <li>Vanilla JS SPA (hash router)</li>
+                                    <li>PWA service worker (offline-first)</li>
+                                    <li>WebRTC camera capture</li>
+                                    <li>Voice alert engine</li>
+                                </ul>
+                            </div>
+                            <div class="arch-arrow"><i class="fas fa-arrow-right"></i></div>
+                            <div class="arch-tier">
+                                <div class="arch-tier-head"><i class="fas fa-server"></i><strong>Backend API</strong></div>
+                                <ul>
+                                    <li>Flask REST endpoints</li>
+                                    <li>Provider router (LOCAL / CLOUD)</li>
+                                    <li>Adaptive failover &amp; queue</li>
+                                    <li>Report generator (PDF / JSON)</li>
+                                </ul>
+                            </div>
+                            <div class="arch-arrow"><i class="fas fa-arrow-right"></i></div>
+                            <div class="arch-tier">
+                                <div class="arch-tier-head"><i class="fas fa-microchip"></i><strong>Inference</strong></div>
+                                <ul>
+                                    <li>YOLO PPE detector</li>
+                                    <li>Moondream / LLaVA captioning</li>
+                                    <li>Llama 3 NLP summary</li>
+                                    <li>Gemini cloud fallback</li>
+                                </ul>
+                            </div>
+                            <div class="arch-arrow"><i class="fas fa-arrow-right"></i></div>
+                            <div class="arch-tier">
+                                <div class="arch-tier-head"><i class="fas fa-database"></i><strong>Storage</strong></div>
+                                <ul>
+                                    <li>Supabase Postgres (reports)</li>
+                                    <li>Supabase Storage (evidence)</li>
+                                    <li>Realtime subscriptions</li>
+                                    <li>Local cache &amp; sync</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="card techstack-card">
+                    <div class="card-header">
+                        <span><i class="fas fa-layer-group"></i> Technology Stack</span>
+                    </div>
+                    <div class="card-content">
+                        <div class="tech-stack-grid">
+                            <div class="tech-group">
+                                <h4><i class="fas fa-code"></i> Frontend</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">HTML5</span>
+                                    <span class="tech-chip">CSS3</span>
+                                    <span class="tech-chip">JavaScript</span>
+                                    <span class="tech-chip">PWA</span>
+                                    <span class="tech-chip">Service Worker</span>
+                                    <span class="tech-chip">WebRTC</span>
+                                    <span class="tech-chip">Web Speech API</span>
+                                </div>
+                            </div>
+                            <div class="tech-group">
+                                <h4><i class="fas fa-gears"></i> Backend</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">Python 3.11</span>
+                                    <span class="tech-chip">Flask</span>
+                                    <span class="tech-chip">Gunicorn</span>
+                                    <span class="tech-chip">OpenCV</span>
+                                    <span class="tech-chip">NumPy</span>
+                                    <span class="tech-chip">Pillow</span>
+                                </div>
+                            </div>
+                            <div class="tech-group">
+                                <h4><i class="fas fa-brain"></i> AI / ML</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">YOLOv8 (Ultralytics)</span>
+                                    <span class="tech-chip">Moondream</span>
+                                    <span class="tech-chip">LLaVA</span>
+                                    <span class="tech-chip">Llama 3</span>
+                                    <span class="tech-chip">Google Gemini</span>
+                                    <span class="tech-chip">ChromaDB</span>
+                                </div>
+                            </div>
+                            <div class="tech-group">
+                                <h4><i class="fas fa-database"></i> Data &amp; Cloud</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">Supabase Postgres</span>
+                                    <span class="tech-chip">Supabase Storage</span>
+                                    <span class="tech-chip">Supabase Realtime</span>
+                                    <span class="tech-chip">Vercel</span>
+                                    <span class="tech-chip">Railway</span>
+                                </div>
+                            </div>
+                            <div class="tech-group">
+                                <h4><i class="fas fa-camera"></i> Hardware</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">Intel RealSense</span>
+                                    <span class="tech-chip">USB / IP cameras</span>
+                                    <span class="tech-chip">Edge relay</span>
+                                </div>
+                            </div>
+                            <div class="tech-group">
+                                <h4><i class="fas fa-vial"></i> Quality</h4>
+                                <div class="tech-chips">
+                                    <span class="tech-chip">Playwright</span>
+                                    <span class="tech-chip">Selenium</span>
+                                    <span class="tech-chip">Pytest</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="card credits-card">
                     <div class="card-content">
                         <span class="ops-kicker"><i class="fas fa-graduation-cap"></i> Final Year Project</span>

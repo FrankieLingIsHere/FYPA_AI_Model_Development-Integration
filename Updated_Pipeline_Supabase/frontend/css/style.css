@@ -6451,3 +6451,147 @@ body.mobile-drawer-open .sidebar-voice-group {
 body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     display: inline !important;
 }
+
+/* =============================================================
+   v36 ABOUT: Architecture + Tech Stack sections
+   ============================================================= */
+.architecture-card .architecture-lede {
+    color: #475569 !important;
+    margin-bottom: 1.5rem !important;
+    font-size: 0.95rem !important;
+    line-height: 1.6 !important;
+}
+.architecture-grid {
+    display: flex !important;
+    align-items: stretch !important;
+    gap: 0.75rem !important;
+    flex-wrap: wrap !important;
+}
+.arch-tier {
+    flex: 1 1 200px !important;
+    min-width: 180px !important;
+    background: linear-gradient(180deg, #fbfbfa 0%, #f4f5f8 100%) !important;
+    border: 1px solid rgba(17, 24, 39, 0.08) !important;
+    border-radius: 12px !important;
+    padding: 1rem 0.9rem !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+.arch-tier::before {
+    content: "" !important;
+    position: absolute !important;
+    top: 0; left: 0; right: 0;
+    height: 3px !important;
+    background: linear-gradient(90deg, #f4aa1c, #e89407) !important;
+}
+.arch-tier-head {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    margin-bottom: 0.65rem !important;
+    padding-bottom: 0.55rem !important;
+    border-bottom: 1px solid rgba(17, 24, 39, 0.06) !important;
+    color: #0f172a !important;
+}
+.arch-tier-head i {
+    color: #e89407 !important;
+    font-size: 1.05rem !important;
+}
+.arch-tier-head strong {
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    color: #0f172a !important;
+}
+.arch-tier ul {
+    list-style: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.arch-tier ul li {
+    padding: 0.3rem 0 0.3rem 1rem !important;
+    font-size: 0.82rem !important;
+    color: #334155 !important;
+    position: relative !important;
+}
+.arch-tier ul li::before {
+    content: "" !important;
+    position: absolute !important;
+    left: 0; top: 0.7rem !important;
+    width: 5px; height: 5px !important;
+    border-radius: 50% !important;
+    background: #f4aa1c !important;
+    opacity: 0.7 !important;
+}
+.arch-arrow {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #cbd5e1 !important;
+    font-size: 1rem !important;
+    flex: 0 0 auto !important;
+    padding: 0 0.25rem !important;
+}
+
+/* Tech stack */
+.tech-stack-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) !important;
+    gap: 1rem !important;
+}
+.tech-group {
+    background: #ffffff !important;
+    border: 1px solid rgba(17, 24, 39, 0.07) !important;
+    border-radius: 12px !important;
+    padding: 0.95rem 0.95rem 1rem !important;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.03) !important;
+}
+.tech-group h4 {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    margin: 0 0 0.7rem !important;
+    padding-bottom: 0.5rem !important;
+    border-bottom: 1px solid rgba(17, 24, 39, 0.06) !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    color: #0f172a !important;
+    font-weight: 700 !important;
+}
+.tech-group h4 i {
+    color: #e89407 !important;
+    font-size: 0.95rem !important;
+}
+.tech-chips {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.4rem !important;
+}
+.tech-chip {
+    display: inline-flex !important;
+    align-items: center !important;
+    padding: 0.32rem 0.7rem !important;
+    font-size: 0.74rem !important;
+    font-weight: 600 !important;
+    color: #334155 !important;
+    background: linear-gradient(180deg, #fafbfc 0%, #f1f3f7 100%) !important;
+    border: 1px solid rgba(17, 24, 39, 0.08) !important;
+    border-radius: 999px !important;
+    transition: all 0.15s ease !important;
+}
+.tech-chip:hover {
+    border-color: rgba(244, 170, 28, 0.45) !important;
+    background: linear-gradient(180deg, #fffaf0 0%, #fef3df 100%) !important;
+    color: #b45309 !important;
+}
+
+@media (max-width: 768px) {
+    .architecture-grid {
+        flex-direction: column !important;
+    }
+    .arch-arrow {
+        transform: rotate(90deg) !important;
+        padding: 0.25rem 0 !important;
+    }
+}

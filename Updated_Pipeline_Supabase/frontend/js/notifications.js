@@ -311,9 +311,18 @@ const NotificationManager = {
         this.summaryBadge.addEventListener('click', () => this.dismissAll());
         this.container.appendChild(this.summaryBadge);
 
-        // History bell (floating, bottom-left of viewport, unread badge)
+        // History bell — preferred mount: dedicated host in the top status
+        // bar (#notifBellHost). That avoids overlapping the sidebar voice
+        // controls at the bottom-left. Fallback: float at bottom-left, but
+        // raised above the voice buttons so it never covers them.
         this.loadHistory();
-        if (!document.getElementById('notif-bell-btn')) {
+        const statusbarHost = document.getElementById('notifBellHost');
+        if (statusbarHost && !statusbarHost.dataset.notifBound) {
+            statusbarHost.dataset.notifBound = '1';
+            // The host already contains <i.fa-bell> and <span#notif-bell-badge>
+            // from index.html — just wire the click handler.
+            statusbarHost.addEventListener('click', () => this.openHistoryCenter());
+        } else if (!document.getElementById('notif-bell-btn') && !statusbarHost) {
             const bell = document.createElement('button');
             bell.id = 'notif-bell-btn';
             bell.setAttribute('aria-label', 'Notification history');
@@ -325,8 +334,8 @@ const NotificationManager = {
                 z-index: 9999;
                 width: 44px; height: 44px; border-radius: 50%;
                 border: none; cursor: pointer;
-                background: #0f172a; color: #fff;
-                box-shadow: 0 6px 18px rgba(15,23,42,.25);
+                background: #d17508; color: #fff;
+                box-shadow: 0 6px 18px rgba(209,117,8,.35);
                 display: flex; align-items: center; justify-content: center;
                 font-size: 16px;
             `;

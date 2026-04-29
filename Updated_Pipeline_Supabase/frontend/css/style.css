@@ -1855,6 +1855,8 @@ body.is-phone-device .handbook-content {
 .main-content-statusbar {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 0.55rem;
     position: sticky;
     top: 0.45rem;
     z-index: 95;
@@ -1865,6 +1867,68 @@ body.is-phone-device .handbook-content {
 .main-content-statusbar .network-badge {
     pointer-events: auto;
     box-shadow: var(--shadow-sm);
+}
+
+/* Statusbar notification bell — replaces the old floating bottom-left bell
+ * which was overlapping the sidebar voice-alert controls. Keeps the
+ * orange brand theme and pulses the badge when there are unread items. */
+.statusbar-bell {
+    pointer-events: auto;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: 1px solid rgba(209, 117, 8, 0.35);
+    background: linear-gradient(180deg, #ffffff 0%, #fff7ec 100%);
+    color: var(--primary-color, #d17508);
+    cursor: pointer;
+    font-size: 1rem;
+    box-shadow: 0 4px 14px rgba(209, 117, 8, 0.18), 0 1px 2px rgba(0, 0, 0, 0.05);
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.statusbar-bell:hover {
+    background: var(--primary-color, #d17508);
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(209, 117, 8, 0.35);
+}
+
+.statusbar-bell:focus-visible {
+    outline: 2px solid var(--primary-color, #d17508);
+    outline-offset: 2px;
+}
+
+.statusbar-bell:active {
+    transform: translateY(0);
+}
+
+.statusbar-bell-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #e74c3c;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 2px #fff;
+    animation: statusbarBellPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes statusbarBellPulse {
+    0%, 100% { box-shadow: 0 0 0 2px #fff, 0 0 0 0 rgba(231, 76, 60, 0.55); }
+    70%       { box-shadow: 0 0 0 2px #fff, 0 0 0 8px rgba(231, 76, 60, 0); }
 }
 
 .mb-4 {

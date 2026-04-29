@@ -6220,3 +6220,181 @@ h1, h2, h3, .recent-header span, .card-header span {
         pointer-events: none !important;
     }
 }
+
+/* =============================================================
+   v34 MOBILE ALIGNMENT WITH PRO DESKTOP LOOK
+   Mirrors v33 dashboard polish on mobile, scaled appropriately.
+   ============================================================= */
+@media (max-width: 768px) {
+
+    /* ---------- Card chrome: dot accent on header titles ---------- */
+    .card {
+        position: relative !important;
+        overflow: hidden !important;
+        background: #ffffff !important;
+        border: 1px solid rgba(17, 24, 39, 0.06) !important;
+        border-radius: 14px !important;
+        box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04),
+                    0 4px 12px -6px rgba(17, 24, 39, 0.08) !important;
+    }
+    .card-header > span,
+    .recent-header > span {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
+        position: relative !important;
+        padding-left: 0.8rem !important;
+    }
+    .card-header > span::before,
+    .recent-header > span::before {
+        content: "" !important;
+        position: absolute !important;
+        left: 0 !important;
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        width: 4px !important;
+        height: 4px !important;
+        border-radius: 50% !important;
+        background: #f4aa1c !important;
+        box-shadow: 0 0 0 3px rgba(244, 170, 28, 0.18) !important;
+    }
+
+    /* ---------- Stat tile cards (mirror desktop, smaller) ---------- */
+    .home-summary-card .summary-grid,
+    .home-reports-card .summary-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 0.7rem !important;
+    }
+    .home-summary-card .summary-block,
+    .home-reports-card .summary-block {
+        position: relative !important;
+        background: linear-gradient(180deg, #fbfbfa 0%, #f7f7f4 100%) !important;
+        border: 1px solid rgba(17, 24, 39, 0.06) !important;
+        border-radius: 12px !important;
+        padding: 0.9rem 0.6rem !important;
+        overflow: hidden !important;
+        text-align: center !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .home-summary-card .summary-block::before,
+    .home-reports-card .summary-block::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 0 auto 0 !important;
+        height: 3px !important;
+        background: linear-gradient(90deg, #f4aa1c, #e89407) !important;
+        opacity: 0.85 !important;
+    }
+    .home-summary-card .summary-block .label,
+    .home-reports-card .summary-block .label {
+        font-size: 0.6rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.1em !important;
+        text-transform: uppercase !important;
+        color: #94a3b8 !important;
+    }
+    .home-summary-card .summary-block .value,
+    .home-reports-card .summary-block .value {
+        font-size: 2rem !important;
+        font-weight: 800 !important;
+        color: #0f172a !important;
+        margin: 0.25rem 0 0.1rem !important;
+        line-height: 1 !important;
+        font-variant-numeric: tabular-nums !important;
+        font-feature-settings: "tnum" 1 !important;
+    }
+    .home-summary-card .summary-block .delta,
+    .home-reports-card .summary-block .delta {
+        font-size: 0.65rem !important;
+        font-weight: 700 !important;
+    }
+    .summary-block .delta:empty {
+        display: none !important;
+    }
+
+    /* Color-coded mobile tiles */
+    .home-summary-card .summary-block:has(#highSeverityCount)::before {
+        background: linear-gradient(90deg, #f43f5e, #dc2626) !important;
+    }
+    .home-summary-card .summary-block:has(#highSeverityCount) .value {
+        color: #dc2626 !important;
+    }
+    .home-reports-card .summary-block:has(#pendingCount)::before {
+        background: linear-gradient(90deg, #f59e0b, #d97706) !important;
+    }
+    .home-reports-card .summary-block:has(#pendingCount) .value {
+        color: #d97706 !important;
+    }
+    .home-reports-card .summary-block:has(#processingCount)::before {
+        background: linear-gradient(90deg, #3b82f6, #2563eb) !important;
+    }
+    .home-reports-card .summary-block:has(#processingCount) .value {
+        color: #2563eb !important;
+    }
+
+    /* ---------- Safety Score: glow halo (smaller) ---------- */
+    .home-score-card .card-content {
+        position: relative !important;
+        padding: 1.5rem 0.5rem 1.25rem !important;
+    }
+    #safety-score {
+        position: relative !important;
+        display: inline-block !important;
+        font-size: 3.6rem !important;
+        font-weight: 800 !important;
+        color: #0f172a !important;
+        background: none !important;
+        -webkit-text-fill-color: initial !important;
+        line-height: 1 !important;
+        letter-spacing: -0.04em !important;
+        padding: 1rem 1.75rem !important;
+        border-radius: 20px !important;
+        margin-bottom: 1rem !important;
+        font-variant-numeric: tabular-nums !important;
+    }
+    #safety-score::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 !important;
+        border-radius: inherit !important;
+        background: radial-gradient(circle at 50% 50%, rgba(244, 170, 28, 0.18) 0%, transparent 70%) !important;
+        z-index: -1 !important;
+    }
+    #safety-bar {
+        background: linear-gradient(90deg, #f59e0b 0%, #f4aa1c 50%, #fbbf24 100%) !important;
+        border-radius: 999px !important;
+        box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset,
+                    0 0 10px rgba(244, 170, 28, 0.4) !important;
+    }
+    .home-score-card div[style*="background:var(--background-color)"],
+    .home-score-card div[style*="background: var(--background-color)"] {
+        background: rgba(17, 24, 39, 0.06) !important;
+        border-radius: 999px !important;
+        height: 10px !important;
+        max-width: 100% !important;
+    }
+
+    /* ---------- Recent Violations header polish ---------- */
+    .home-recent-violations-card .recent-header {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        margin-bottom: 0.9rem !important;
+        padding-bottom: 0.8rem !important;
+        border-bottom: 1px solid rgba(17, 24, 39, 0.06) !important;
+        font-size: 0.7rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.06em !important;
+        text-transform: uppercase !important;
+        color: #475569 !important;
+    }
+
+    /* ---------- Background: match desktop cool grey for contrast ---------- */
+    body, .main-content {
+        background: #f1f3f7 !important;
+    }
+}

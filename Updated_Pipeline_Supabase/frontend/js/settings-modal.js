@@ -903,6 +903,36 @@ const GlobalSettingsModal = {
         this.updateLocalModeCheckupStatus();
         this.updateInstallerRedownloadButton();
         this.updateHeartbeatBadge();
+
+        // Propagate the resolved per-device status into the global
+        // PPEProvisioningStatus tracker so the home page badge and any
+        // other listeners reflect the same state. This is critical when
+        // the user is viewing the cloud frontend: refreshRemoteProvisioningStatus
+        // (which uses the per-device provision_secret stored in localStorage)
+        // and runLocalModeCheckup both update settings.localProvisionState
+        // directly, but without this push the global tracker stays at the
+        // host-level 'credentials_present' and the home badge keeps showing
+        // "Not Requested" / "Credentials Detected" even though the device
+        // is actually provisioned.
+        try {
+            if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.update === 'function') {
+                const pushPayload = {
+                    status: this.localProvisionState.status,
+                    machineId: this.localProvisionState.machineId,
+                    machine_id: this.localProvisionState.machineId,
+                    adminPortalUrl: this.localProvisionState.adminPortalUrl,
+                    admin_portal_url: this.localProvisionState.adminPortalUrl,
+                    cloudHeartbeat: this.localProvisionState.cloudHeartbeat,
+                    cloud_local_heartbeat: this.localProvisionState.cloudHeartbeat
+                };
+                window.PPEProvisioningStatus.update(pushPayload, {
+                    source: 'settings-modal-sync',
+                    notify: false
+                });
+            }
+        } catch (publishErr) {
+            console.warn('GlobalSettingsModal: failed to publish provisioning state to global tracker', publishErr);
+        }
     },
 
     canIssueInstallerRedownload(statusRaw, machineIdRaw) {

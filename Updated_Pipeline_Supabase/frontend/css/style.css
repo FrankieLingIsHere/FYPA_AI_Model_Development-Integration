@@ -5917,3 +5917,28 @@ h1, h2, h3, .recent-header span, .card-header span {
             0 1px 3px rgba(17, 24, 39, 0.05) !important;
     }
 }
+
+/* =============================================================
+   v32 HOME STAT NUMBERS CENTERED (desktop + mobile)
+   ============================================================= */
+.home-summary-card .summary-grid,
+.home-reports-card .summary-grid {
+    text-align: center !important;
+}
+.home-summary-card .summary-block,
+.home-reports-card .summary-block {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+}
+.home-summary-card .summary-block .label,
+.home-summary-card .summary-block .value,
+.home-summary-card .summary-block .delta,
+.home-reports-card .summary-block .label,
+.home-reports-card .summary-block .value,
+.home-reports-card .summary-block .delta {
+    text-align: center !important;
+    width: 100% !important;
+}

@@ -1373,11 +1373,33 @@ const GlobalSettingsModal = {
 
             if (!ready) {
                 if (isLikelyRemoteBackend) {
-                    const remoteHint = heartbeatRecent
-                        ? `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`
-                        : `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start CASM_LOCALINSTALLER, wait for first sync/provisioning request, then rerun checkup.`;
-                    this.setProviderStatus(remoteHint, 'warning');
-                    this.showNotification(remoteHint, 'warning');
+                    // Distinguish three cases so the message reflects reality:
+                    //  (a) heartbeat arrived but local mode itself isn't ready yet
+                    //      → genuine local-mode problem, warn.
+                    //  (b) no recent heartbeat AND device was never provisioned
+                    //      → genuine setup problem, warn + show installer hint.
+                    //  (c) no recent heartbeat BUT device IS provisioned
+                    //      → the host PC's local backend simply isn't running
+                    //        right now. That's expected when the user is on
+                    //        cloud mode from another browser/device. Show an
+                    //        info-level inline status only — do NOT toast it
+                    //        as a warning, since nothing is broken.
+                    const provisionStatus = String((this.localProvisionState && this.localProvisionState.status) || '').toLowerCase();
+                    const isProvisioned = provisionStatus === 'provisioned' || provisionStatus === 'approved';
+
+                    if (heartbeatRecent) {
+                        const remoteHint = `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`;
+                        this.setProviderStatus(remoteHint, 'warning');
+                        this.showNotification(remoteHint, 'warning');
+                    } else if (isProvisioned) {
+                        const idleHint = `Local backend on the host PC is not running right now${heartbeatMachineId ? ` (last paired as ${heartbeatMachineId})` : ''}. Cloud mode continues to work normally. To use local mode, start CASM_LOCALINSTALLER (or start.bat) on the host PC and rerun checkup.`;
+                        this.setProviderStatus(idleHint, 'info');
+                        // Intentionally no toast — this is a normal state, not an error.
+                    } else {
+                        const remoteHint = `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start CASM_LOCALINSTALLER on the host PC, wait for the first sync/provisioning request, then rerun checkup.`;
+                        this.setProviderStatus(remoteHint, 'warning');
+                        this.showNotification(remoteHint, 'warning');
+                    }
                 } else {
                     const configuredWaitSeconds = Number(
                         (window && (window.CASM_LOCAL_CHECKUP_WAIT_SECONDS ?? window.__CASM_LOCAL_CHECKUP_WAIT_SECONDS)) ?? 8

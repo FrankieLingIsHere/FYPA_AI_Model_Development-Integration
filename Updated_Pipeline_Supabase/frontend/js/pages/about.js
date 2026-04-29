@@ -51,8 +51,8 @@ const AboutPage = {
                                 <figcaption>Boots</figcaption>
                             </figure>
                             <figure>
-                                <img src="/static/images/standards/bowec_harness.jpg" alt="Harness PPE reference" loading="lazy" decoding="async">
-                                <figcaption>Harness</figcaption>
+                                <img src="/static/images/standards/ms2323_mask.png" alt="Respirator mask PPE reference" loading="lazy" decoding="async">
+                                <figcaption>Mask</figcaption>
                             </figure>
                         </div>
                     </article>

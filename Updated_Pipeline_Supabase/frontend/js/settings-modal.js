@@ -535,6 +535,22 @@ const GlobalSettingsModal = {
             return hint;
         }
 
+        // Prefer the global per-device localStorage ID set by app.js so the
+        // home-page poll and the settings-modal request agree on a single
+        // identity per browser/device. This guarantees that the phone and
+        // the laptop are seen as DIFFERENT devices by the backend, and
+        // therefore receive their own approval status.
+        try {
+            if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.getDeviceMachineId === 'function') {
+                const deviceId = String(window.PPEProvisioningStatus.getDeviceMachineId() || '').trim();
+                if (/^[A-Za-z0-9._:-]{3,120}$/.test(deviceId)) {
+                    return deviceId;
+                }
+            }
+        } catch (deviceLookupErr) {
+            // fall through to legacy generation below
+        }
+
         const stored = this.loadRemoteProvisionState();
         const storedMachineId = String((stored && stored.machineId) || '').trim();
         if (/^[A-Za-z0-9._:-]{3,120}$/.test(storedMachineId)) {

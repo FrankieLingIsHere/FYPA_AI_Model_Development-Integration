@@ -14,6 +14,48 @@ const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v2'
 const LEGACY_LOCAL_MODE_PROVISIONING_STATUS_KEYS = [
     'ppe.localMode.provisioningStatus.v1'
 ];
+// Stable per-device machine ID. Persisted in localStorage so each
+// browser/device that views the cloud frontend gets its OWN identity
+// (and therefore its own provisioning status) instead of inheriting the
+// host laptop's machine_id from the polling response. Devices that have
+// never been admin-approved will correctly show 'idle' / 'Not Requested'.
+const LOCAL_MODE_DEVICE_MACHINE_ID_KEY = 'ppe.localMode.deviceMachineId.v1';
+
+function _generateDeviceMachineId() {
+    let suffix = '';
+    try {
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+            const bytes = new Uint8Array(6);
+            window.crypto.getRandomValues(bytes);
+            suffix = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch (error) {
+        suffix = '';
+    }
+    if (!suffix) {
+        suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const generated = `Web-${suffix}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 120);
+    return generated.length >= 3 ? generated : `Web-${Date.now().toString(36)}`;
+}
+
+function getOrCreateDeviceMachineId() {
+    try {
+        const existing = String(localStorage.getItem(LOCAL_MODE_DEVICE_MACHINE_ID_KEY) || '').trim();
+        if (/^[A-Za-z0-9._:-]{3,120}$/.test(existing)) {
+            return existing;
+        }
+        const generated = _generateDeviceMachineId();
+        try {
+            localStorage.setItem(LOCAL_MODE_DEVICE_MACHINE_ID_KEY, generated);
+        } catch (writeErr) {
+            // ignore quota / privacy mode failures
+        }
+        return generated;
+    } catch (error) {
+        return _generateDeviceMachineId();
+    }
+}
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
 // Cache lifetime is intentionally short. Provisioning status can flip
 // (admin revoke, secret rotation) without the cache being notified, and
@@ -454,8 +496,14 @@ async function refreshProvisioningStatus(options = {}) {
 
     try {
         const source = String(options.source || 'poll').trim() || 'poll';
+        // On the cloud frontend, ALWAYS pass the per-device localStorage ID
+        // so the backend reports this device's status (not the host laptop's).
+        // On a local backend, fall back to whatever the state already knows.
+        const remote = isLikelyRemoteBackend();
+        const deviceId = remote ? getOrCreateDeviceMachineId() : '';
         const machineIdHint = String(
             options.machineId
+            || deviceId
             || provisioningStatusState.machineId
             || (provisioningStatusState.cloudHeartbeat && provisioningStatusState.cloudHeartbeat.machineId)
             || ''
@@ -492,6 +540,7 @@ function initializeProvisioningStatusTracker() {
 
     window.PPEProvisioningStatus = {
         get: () => ({ ...provisioningStatusState }),
+        getDeviceMachineId: () => getOrCreateDeviceMachineId(),
         refresh: (options = {}) => refreshProvisioningStatus(options || {}),
         update: (nextState = {}, options = {}) => publishProvisioningState({
             ...nextState,

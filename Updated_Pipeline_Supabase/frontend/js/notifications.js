@@ -305,21 +305,23 @@ const NotificationManager = {
     init() {
         if (this.container) return;
 
-        // Create notification container - BOTTOM RIGHT to avoid blocking controls.
-        // On mobile (<=640px) the container becomes a single full-width bar at
-        // the bottom so toasts never cover more than one row of content.
+        // Create notification container.
+        // - Desktop: bottom-right floating column.
+        // - Mobile (<=640px): full-width bar pinned to the TOP of the
+        //   viewport, just under the mobile app-bar (~56px) so toasts
+        //   slide in from above instead of covering the bottom nav.
         this.container = document.createElement('div');
         this.container.id = 'notification-container';
         const isMobile = this.isMobileViewport();
         this.container.style.cssText = isMobile
             ? `
                 position: fixed;
-                bottom: 12px;
+                top: calc(56px + env(safe-area-inset-top, 0px) + 8px);
                 left: 12px;
                 right: 12px;
                 z-index: 10000;
                 display: flex;
-                flex-direction: column-reverse;
+                flex-direction: column;
                 gap: 6px;
                 max-width: 100%;
                 max-height: 60vh;
@@ -826,6 +828,25 @@ style.textContent = `
         to {
             transform: translateY(100px);
             opacity: 0;
+        }
+    }
+
+    /* Mobile: container is anchored to the TOP of the viewport, so toasts
+       should slide DOWN into view rather than up from the bottom. */
+    @media (max-width: 640px) {
+        #notification-container .notification {
+            animation: slideInDown 0.28s ease-out !important;
+        }
+    }
+
+    @keyframes slideInDown {
+        from {
+            transform: translateY(-120%);
+            opacity: 0;
+        }
+        to {
+            transform: translateY(0);
+            opacity: 1;
         }
     }
 

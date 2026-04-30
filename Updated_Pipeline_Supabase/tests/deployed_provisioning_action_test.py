@@ -6,8 +6,8 @@ import json
 import re
 from unittest.mock import patch, Mock
 
-# Ensure we can import casm_app
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+# Ensure we can import casm_app (file is in tests/, project root is parent)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Test environment setup
 os.environ['FLASK_DEBUG'] = 'false'

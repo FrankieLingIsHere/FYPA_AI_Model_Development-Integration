@@ -42,7 +42,7 @@ fi
 
 echo ""
 echo "Running dependency preflight check..."
-python preflight_check.py --install
+python tests/preflight_check.py --install
 if [ $? -ne 0 ]; then
     echo "❌ Dependency preflight failed"
     exit 1

@@ -7,9 +7,10 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
+$testsDir = Join-Path $repoRoot "tests"
 $pythonExe = Join-Path $repoRoot ".venv/Scripts/python.exe"
-$cloudHealthScript = Join-Path $scriptDir "deployed_runtime_cloud_health_check.py"
-$nlpContractScript = Join-Path $scriptDir "deployed_runtime_nlp_metrics_contract_test.py"
+$cloudHealthScript = Join-Path $testsDir "deployed_runtime_cloud_health_check.py"
+$nlpContractScript = Join-Path $testsDir "deployed_runtime_nlp_metrics_contract_test.py"
 
 if (-not (Test-Path $pythonExe)) {
     Write-Output ("FAIL: python executable not found at " + $pythonExe)

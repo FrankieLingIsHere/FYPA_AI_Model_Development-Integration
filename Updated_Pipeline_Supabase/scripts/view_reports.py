@@ -22,6 +22,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Add project root to path so we can import pipeline modules
+# (file is in scripts/, project root is parent dir)
+import sys
+import os as _os
+sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), '..')))
+
 # Import Supabase managers
 from pipeline.backend.core.supabase_db import create_db_manager_from_env
 from pipeline.backend.core.supabase_storage import create_storage_manager_from_env

@@ -15,12 +15,17 @@ Options:
 
 import argparse
 import logging
+import os
 import sqlite3
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
 import json
 from dotenv import load_dotenv
+
+# Add project root to path (file is in setup/, project root is parent dir)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
 from pipeline.backend.core.supabase_db import create_db_manager_from_env

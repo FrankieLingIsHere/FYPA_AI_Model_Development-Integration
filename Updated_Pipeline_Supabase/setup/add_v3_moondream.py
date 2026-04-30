@@ -11,8 +11,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-# Setup paths
-sys.path.append(os.getcwd())
+# Add project root to path (file is in setup/, project root is parent dir)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pipeline.backend.core.supabase_db import create_db_manager_from_env
 from pipeline.backend.core.supabase_storage import create_storage_manager_from_env

@@ -1,10 +1,14 @@
 import argparse
 import json
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+# Add project root to path (file is in tests/, project root is parent dir)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pipeline.backend.core.report_generator import _resolve_effective_nlp_provider_order
 

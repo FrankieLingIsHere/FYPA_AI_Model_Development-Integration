@@ -26,6 +26,10 @@ import sys
 import time
 import os
 
+# Add project root to path so we can import pipeline / caption_image / infer_image
+# (file is in scripts/, project root is parent dir)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # Load environment variables BEFORE importing any project modules
 from dotenv import load_dotenv
 load_dotenv()

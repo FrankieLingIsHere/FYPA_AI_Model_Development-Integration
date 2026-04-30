@@ -9,9 +9,14 @@ This is a simplified example showing the key integration points.
 """
 
 import logging
+import os
+import sys
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Add project root to path (file is in setup/, project root is parent dir)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Load environment variables
 load_dotenv()

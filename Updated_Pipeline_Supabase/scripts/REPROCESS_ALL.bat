@@ -1,16 +1,17 @@
 @echo off
-REM Reprocess Recent Reports (This Week)
-REM =====================================
+REM Reprocess All Reports with Latest Pipeline
+REM ============================================
 
-cd /d "%~dp0"
+REM Move to project root (this .bat lives in scripts/, root is parent dir)
+cd /d "%~dp0.."
 
 echo.
 echo ========================================
-echo  Reprocess Recent Reports
+echo  Reprocess All Reports Utility
 echo ========================================
 echo.
-echo This will reprocess reports from the
-echo current week with the latest pipeline.
+echo This will reprocess ALL existing reports
+echo with the latest pipeline configuration.
 echo.
 echo Press Ctrl+C to cancel, or
 pause
@@ -48,16 +49,10 @@ if not exist ".env" (
     exit /b 1
 )
 
-REM Get Monday of current week as YYYY-MM-DD
-REM Use Python to calculate Monday date properly
-echo Calculating this week's start date...
-for /f "delims=" %%i in ('python -c "from datetime import datetime, timedelta; d = datetime.now(); monday = d - timedelta(days=d.weekday()); print(monday.strftime('%%Y-%%m-%%d'))"') do set monday_date=%%i
-
-echo Reprocessing reports since: %monday_date%
+REM Run reprocessing script (now in scripts/ subfolder)
+echo Running scripts\reprocess_reports.py --all
 echo.
-
-REM Run reprocessing script for this week
-python reprocess_reports.py --since %monday_date%
+python scripts\reprocess_reports.py --all
 
 if errorlevel 1 (
     echo.

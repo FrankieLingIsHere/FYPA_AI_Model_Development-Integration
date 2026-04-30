@@ -320,10 +320,17 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         // 'approved' or 'provisioned' in the current session (typically
         // via the per-device cached provision_secret in the settings
         // modal), don't let a later weak/secretless poll demote it
-        // back to 'credentials_present' or 'idle'. The cloud frontend
-        // is shared across all visitors and the secretless fallback
-        // can return weaker statuses for transient reasons (DB lookup
-        // miss, machine_id hint not yet sent, etc).
+        // back to 'credentials_present' or 'idle'.
+        //
+        // Important: this protection MUST be time-bounded. Otherwise a
+        // stale localStorage cache from a previous session (or from
+        // before an admin revoke) keeps the badge stuck on
+        // "Approved/Provisioned" even though the backend is now
+        // legitimately reporting otherwise. We only honour the
+        // protection if the prior approved state was measured very
+        // recently (e.g. the settings-modal-sync that just confirmed
+        // the secret), or it came from a trusted source in this
+        // session.
         const fallbackStatus = String(fallback.status || '').toLowerCase();
         const previousIsApprovedLike = fallbackStatus === 'approved' || fallbackStatus === 'provisioned';
         const incomingIsWeaker = (
@@ -331,7 +338,19 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             || status === 'credentials_present'
             || status === 'error'
         );
-        if (previousIsApprovedLike && incomingIsWeaker) {
+        const fallbackSource = String(fallback.source || '').toLowerCase();
+        const fallbackMeasuredAt = Number(fallback.measuredAt || 0);
+        const fallbackAgeMs = Date.now() - (Number.isFinite(fallbackMeasuredAt) ? fallbackMeasuredAt : 0);
+        const PROTECTION_WINDOW_MS = 60 * 1000; // 60 seconds
+        const trustedSource = fallbackSource === 'settings-modal-sync'
+            || fallbackSource === 'settings-modal'
+            || fallbackSource === 'ui';
+        const protectionStillFresh = previousIsApprovedLike
+            && incomingIsWeaker
+            && fallbackAgeMs >= 0
+            && fallbackAgeMs < PROTECTION_WINDOW_MS
+            && trustedSource;
+        if (protectionStillFresh) {
             status = fallbackStatus;
         }
     }

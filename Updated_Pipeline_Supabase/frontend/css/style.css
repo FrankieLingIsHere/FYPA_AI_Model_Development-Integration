@@ -6884,3 +6884,13 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
         display: inline !important;
     }
 }
+
+/* v77: Hide the Local Mode Approval card on phones. The card is
+   intended for the host PC running local mode, not for phones that
+   are viewing through the cloud frontend, where the badge state can
+   be confusing. */
+@media (max-width: 640px) {
+    .home-local-mode-card {
+        display: none !important;
+    }
+}

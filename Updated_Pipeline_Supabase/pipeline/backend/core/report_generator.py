@@ -2938,7 +2938,7 @@ RESPONSE FORMAT (JSON):
 <body>
     <div class="container">
         <div class="header">
-            <h1>âš ï¸ PPE Safety Violation Report</h1>
+            <h1><i class="fas fa-exclamation-triangle"></i> PPE Safety Violation Report</h1>
             <p class="report-id">Report ID: {report_id}</p>
             <p>Generated: {timestamp_display}</p>
         </div>
@@ -2948,7 +2948,7 @@ RESPONSE FORMAT (JSON):
                 <div class="report-split-top">
                     <!-- Images Section -->
                     <div class="section">
-                        <h2 class="section-title">ðŸ“¸ Visual Evidence</h2>
+                        <h2 class="section-title"><i class="fas fa-camera"></i> Visual Evidence</h2>
                         <div class="grid">
                             <div class="card">
                                 <div class="card-header">Original Image (1920x1080)</div>
@@ -2967,7 +2967,7 @@ RESPONSE FORMAT (JSON):
 
                     <!-- Violation Details -->
                     <div class="section">
-                        <h2 class="section-title">ðŸ“‹ Violation Details</h2>
+                        <h2 class="section-title"><i class="fas fa-clipboard-list"></i> Violation Details</h2>
                         <div class="info-grid">
                             <div class="info-item">
                                 <span class="info-label">Report ID:</span>
@@ -2994,7 +2994,7 @@ RESPONSE FORMAT (JSON):
 
                     <!-- AI Scene Analysis -->
                     <div class="section">
-                        <h2 class="section-title">ðŸ¤– AI Scene Description</h2>
+                        <h2 class="section-title"><i class="fas fa-robot"></i> AI Scene Description</h2>
                         <div class="card">
                             <div class="card-content">
                                 <p>{nlp_analysis.get('visual_evidence') or report_data.get('caption') or 'No description available'}</p>
@@ -3004,10 +3004,10 @@ RESPONSE FORMAT (JSON):
 
                     <!-- NLP Analysis -->
                     <div class="section" style="margin-bottom: 1rem;">
-                        <h2 class="section-title">ðŸ“Š Safety Analysis</h2>
+                        <h2 class="section-title"><i class="fas fa-chart-line"></i> Safety Analysis</h2>
 
                         <div class="environment-badge">
-                            <span>ðŸ—ï¸</span>
+                            <span><i class="fas fa-building"></i></span>
                             <span>Environment: {nlp_analysis.get('environment_type', 'Unknown')}</span>
                         </div>
 
@@ -3361,7 +3361,7 @@ RESPONSE FORMAT (JSON):
         return f"""
         <div class="card" style="border-left: 5px solid #e74c3c;">
             <div class="card-header" style="background: #c0392b; color: white; display: flex; justify-content: space-between;">
-                <strong>ðŸš¨ EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</strong>
+                <strong><i class="fas fa-exclamation-circle"></i> EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</strong>
                 <span class="badge" style="background: white; color: #c0392b;">{env_type}</span>
             </div>
             <div class="card-content" style="padding: 0;">
@@ -3968,7 +3968,7 @@ RESPONSE FORMAT (JSON):
             
         return f"""
             <div class="section">
-                <h2 class="section-title">ðŸ“œ Caption Development History</h2>
+                <h2 class="section-title"><i class="fas fa-history"></i> Caption Development History</h2>
                 <div style="background: rgba(52, 152, 219, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                      <p style="margin: 0; color: #2980b9; font-weight: 600;">
                         <i class="fas fa-info-circle"></i> Tracking AI scene description evolution (v1, v2, v3...)
@@ -3987,7 +3987,7 @@ RESPONSE FORMAT (JSON):
         items = "".join([f"<li style=\"white-space: normal; word-break: break-word;\">{self._to_safe_html_text(h)}</li>" for h in hazards if str(h).strip()])
         return f"""
             <div class="section">
-                <h2 class="section-title">âš ï¸ Hazards Detected</h2>
+                <h2 class="section-title"><i class="fas fa-exclamation-triangle"></i> Hazards Detected</h2>
                 <ul class="list">
                     {items}
                 </ul>
@@ -4067,7 +4067,7 @@ RESPONSE FORMAT (JSON):
                     <div class="card-content">
                         {f'<p style="margin-bottom: 0; white-space: normal; word-break: break-word;"><strong>Requirement:</strong> {safe_requirement}</p>' if safe_requirement else ''}
                         {explanation_block}
-                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong>ðŸ“– Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
+                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong><i class="fas fa-gavel"></i> Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
                     </div>
                 </div>
             """)
@@ -4075,7 +4075,7 @@ RESPONSE FORMAT (JSON):
         
         return f"""
             <div class="section">
-                <h2 class="section-title">ðŸ“š Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
+                <h2 class="section-title"><i class="fas fa-book-open"></i> Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
                 <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                     <p style="margin: 0; color: #e67e22; font-weight: 600;">
                         <i class="fas fa-info-circle"></i> The following official JKR/DOSH regulations may apply to observed scene violations (PPE and non-PPE):
@@ -4104,7 +4104,15 @@ RESPONSE FORMAT (JSON):
         caption_text = str(report_data.get('caption') or '')
         violation_summary_text = str(report_data.get('violation_summary') or '')
         inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
-        target_count = max(target_count, inferred_from_caption, len(persons))
+        # Use caption/yolo as the authoritative upper bound.
+        # DON'T include len(persons) in max — if Gemini returned MORE persons
+        # than the caption says, we truncate rather than show extra cards.
+        target_count = max(target_count, inferred_from_caption)
+        if target_count == 0:
+            target_count = len(persons)  # fallback: show whatever Gemini returned
+        # Truncate if Gemini over-generated
+        if len(persons) > target_count:
+            persons = persons[:target_count]
 
         if target_count > len(persons):
             # Identify what the first fully-analysed person looks like so
@@ -4145,7 +4153,7 @@ RESPONSE FORMAT (JSON):
         if not persons:
             return """
             <div class="section">
-                <h2 class="section-title">ðŸ‘¥ Individual Analysis</h2>
+                <h2 class="section-title"><i class="fas fa-users"></i> Individual Analysis</h2>
                 <div class="card">
                     <div class="card-content">
                         <p>No person-level analysis returned by model.</p>
@@ -4318,9 +4326,9 @@ RESPONSE FORMAT (JSON):
             # Determine compliance badge style
             comp_lower = compliance.lower()
             if 'non' in comp_lower or 'fail' in comp_lower:
-                comp_badge = '<span class="badge badge-danger">âœ— Non-Compliant</span>'
+                comp_badge = '<span class="badge badge-danger"><i class="fas fa-times-circle"></i> Non-Compliant</span>'
             elif 'compliant' in comp_lower or 'pass' in comp_lower:
-                comp_badge = '<span class="badge badge-success">âœ“ Compliant</span>'
+                comp_badge = '<span class="badge badge-success"><i class="fas fa-check-circle"></i> Compliant</span>'
             else:
                 comp_badge = f'<span class="badge badge-warning">{self._to_safe_html_text(compliance)}</span>'
 
@@ -4383,7 +4391,7 @@ RESPONSE FORMAT (JSON):
         
         return f"""
             <div class="section">
-                <h2 class="section-title">ðŸ‘¥ Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
+                <h2 class="section-title"><i class="fas fa-users"></i> Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
                 <div class="persons-grid">
                     {''.join(person_cards)}
                 </div>
@@ -4402,7 +4410,7 @@ RESPONSE FORMAT (JSON):
         ])
         return f"""
             <div class="section">
-                <h2 class="section-title">âœ… Recommended Actions</h2>
+                <h2 class="section-title"><i class="fas fa-tasks"></i> Recommended Actions</h2>
                 <ul class="list">
                     {items}
                 </ul>

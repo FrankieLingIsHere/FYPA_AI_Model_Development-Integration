@@ -102,17 +102,21 @@ _PERSON_NUMBER_WORDS = {
     'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
     'eleven': 11, 'twelve': 12,
 }
+# Allow up to 3 optional adjective/descriptor words between the number and
+# the person noun so captions like "three construction workers",
+# "two site workers", "3 male workers without PPE" are matched correctly.
 _PERSON_NOUNS = r"(?:people|persons?|workers?|individuals?|men|women|guys|crew(?:\s*members?)?)"
+_OPT_ADJ = r"(?:(?:\w+\s+){0,3})"  # 0-3 optional intermediate words
 
 
 def infer_people_count_from_text(*texts: str) -> int:
     """Best-effort person count extraction from caption / summary text.
 
-    Looks for explicit numerals ("3 workers"), spelled-out numbers
-    ("three people"), and ordinal-person mentions ("first person",
-    "second person") so the report UI can reconcile the per-person card
-    grid with the scene description even when YOLO under-counts.
-    Returns 0 when nothing can be inferred.
+    Handles:
+    - Explicit digits: "3 workers", "3 construction workers"
+    - Spelled-out numbers: "three people", "three male workers"
+    - Ordinal mentions: "first person", "second worker"
+    Returns the highest number found, or 0 if nothing can be inferred.
     """
     combined = " ".join(str(t or "") for t in texts).lower()
     if not combined.strip():
@@ -120,20 +124,24 @@ def infer_people_count_from_text(*texts: str) -> int:
 
     candidates: List[int] = []
 
+    # Numeric: "3 workers", "3 construction workers", "3 site workers"
     candidates.extend(
         int(m.group(1))
-        for m in re.finditer(rf"\b(\d{{1,2}})\s+{_PERSON_NOUNS}\b", combined)
+        for m in re.finditer(rf"\b(\d{{1,2}})\s+{_OPT_ADJ}{_PERSON_NOUNS}\b", combined)
     )
 
+    # Word: "three workers", "three construction workers", "two male workers"
     for word, value in _PERSON_NUMBER_WORDS.items():
-        if re.search(rf"\b{word}\s+{_PERSON_NOUNS}\b", combined):
+        if re.search(rf"\b{word}\s+{_OPT_ADJ}{_PERSON_NOUNS}\b", combined):
             candidates.append(value)
 
     if candidates:
         return max(candidates)
 
+    # Ordinal fallback: "first person … second person" → 2
     ordinal_hits = re.findall(
-        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:person|worker|individual)\b",
+        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+"
+        r"(?:\w+\s+){0,2}(?:person|worker|individual)\b",
         combined,
     )
     if ordinal_hits:

@@ -269,7 +269,16 @@ class ReportGenerator:
         self.api_url = ollama_config.get('api_url', 'http://localhost:11434/api/generate')
         self.embeddings_url = ollama_config.get('embeddings_url', 'http://localhost:11434/api/embeddings')
         self.model = ollama_config.get('model', 'llama3')
-        self.temperature = ollama_config.get('temperature', 0.7)
+        # NLP report generation needs LOW temperature to produce consistent,
+        # factual JSON. Default 0.7 was producing creative/inconsistent output
+        # vs Gemini's capped 0.2 path. Use 0.2 to match Gemini's discipline.
+        # Override via OLLAMA_NLP_TEMPERATURE if a different model needs higher.
+        try:
+            self.temperature = float(os.getenv('OLLAMA_NLP_TEMPERATURE', '') or ollama_config.get('temperature', 0.2))
+        except (TypeError, ValueError):
+            self.temperature = 0.2
+        # Hard cap to prevent runaway creativity even if config sets it high.
+        self.temperature = min(max(0.0, self.temperature), 0.4)
         self.cloud_api_timeout = max(30, int(os.getenv('CLOUD_API_TIMEOUT_SECONDS', '120') or 120))
         self.ollama_connect_timeout = max(1, int(os.getenv('OLLAMA_CONNECT_TIMEOUT_SECONDS', '8') or 8))
         try:
@@ -1457,10 +1466,16 @@ RESPONSE FORMAT (JSON):
                 'stream': False,
                 'format': 'json',
                 'options': {
+                    # Match Gemini's discipline for structured JSON output.
+                    # Gemma at temp=0.7 produces inconsistent / "creative" descriptions
+                    # while Gemini is capped at 0.2. Use the same low temperature here
+                    # so local-mode reports look like cloud-mode reports.
                     'temperature': self.temperature,
-                    'num_predict': 1500,
-                    'top_k': 40,
-                    'top_p': 0.9
+                    'num_predict': 2048,         # was 1500 — avoid mid-JSON truncation on multi-person scenes
+                    'top_k': 20,                 # was 40 — tighter token selection
+                    'top_p': 0.7,                # was 0.9 — less wandering
+                    'repeat_penalty': 1.15,      # discourage repetitive phrasing
+                    'seed': 42,                  # deterministic output for the same prompt
                 }
             }
 

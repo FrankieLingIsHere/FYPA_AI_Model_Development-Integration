@@ -396,18 +396,21 @@
     <div id="handbookModal" class="handbook-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="handbookTitle">
         <div class="handbook-modal">
             <div class="handbook-header">
-                <h2 id="handbookTitle"><i class="fas fa-book"></i> Safety Manual Handbook</h2>
+                <div class="handbook-header-text">
+                    <h2 id="handbookTitle"><i class="fas fa-book-open"></i> Safety Manual</h2>
+                    <p class="handbook-subtitle">Everything you need to operate the CASM PPE Safety Monitor</p>
+                </div>
                 <button id="closeHandbook" class="handbook-close" aria-label="Close handbook">&times;</button>
             </div>
             <div class="handbook-body">
-                <div class="handbook-nav">
-                    <button class="handbook-link active" data-page="intro">Introduction</button>
-                    <button class="handbook-link" data-page="ppe">PPE Guidelines</button>
-                    <button class="handbook-link" data-page="live">Live Monitoring</button>
-                    <button class="handbook-link" data-page="alerts">Voice Alerts</button>
-                    <button class="handbook-link" data-page="notifications">Notifications</button>
-                    <button class="handbook-link" data-page="admin">Admin &amp; Devices</button>
-                    <button class="handbook-link" data-page="faq">FAQ</button>
+                <div class="handbook-nav" role="tablist" aria-label="Handbook sections">
+                    <button class="handbook-link active" data-page="intro" role="tab"><i class="fas fa-flag"></i><span>Introduction</span></button>
+                    <button class="handbook-link" data-page="ppe" role="tab"><i class="fas fa-hard-hat"></i><span>PPE Guidelines</span></button>
+                    <button class="handbook-link" data-page="live" role="tab"><i class="fas fa-video"></i><span>Live Monitoring</span></button>
+                    <button class="handbook-link" data-page="alerts" role="tab"><i class="fas fa-volume-up"></i><span>Voice Alerts</span></button>
+                    <button class="handbook-link" data-page="notifications" role="tab"><i class="fas fa-bell"></i><span>Notifications</span></button>
+                    <button class="handbook-link" data-page="admin" role="tab"><i class="fas fa-user-shield"></i><span>Admin &amp; Devices</span></button>
+                    <button class="handbook-link" data-page="faq" role="tab"><i class="fas fa-circle-question"></i><span>FAQ</span></button>
                 </div>
                 <div class="handbook-content">
                     <div class="handbook-page active" id="handbook-intro">

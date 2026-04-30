@@ -6899,3 +6899,269 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
 
 /* v78: badge removed; card stays on all viewports so any PC can
    still run the Local Mode Checkup. */
+
+
+/* =====================================================================
+   v84: HANDBOOK MODAL — modern visual overhaul.
+   Appended last so it overrides all earlier handbook rules.
+   ===================================================================== */
+.handbook-overlay {
+    background: rgba(15, 23, 42, 0.55) !important;
+    backdrop-filter: blur(6px) saturate(120%);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+    z-index: 1500 !important;
+    padding: 2vh 2vw;
+}
+
+.handbook-modal {
+    width: min(96vw, 1000px) !important;
+    height: min(88vh, 720px) !important;
+    max-width: 96vw !important;
+    border-radius: 16px !important;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.18) !important;
+    background: #ffffff;
+    animation: handbookPop 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes handbookPop {
+    from { opacity: 0; transform: translateY(8px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.handbook-header {
+    background: linear-gradient(135deg, #d17508 0%, #b15f00 60%, #8a4a00 100%) !important;
+    color: #fff !important;
+    padding: 1.05rem 1.4rem !important;
+    border-top-left-radius: 16px !important;
+    border-top-right-radius: 16px !important;
+    align-items: flex-start !important;
+}
+
+.handbook-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.handbook-header h2 {
+    font-size: 1.2rem;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    margin: 0;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.handbook-header h2 i { font-size: 1.1rem; opacity: 0.95; }
+
+.handbook-subtitle {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.82);
+    line-height: 1.35;
+}
+
+.handbook-close {
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 10px !important;
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #fff !important;
+    font-size: 1.6rem !important;
+    line-height: 1 !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    transition: background 160ms ease, transform 160ms ease;
+}
+.handbook-close:hover { background: rgba(255, 255, 255, 0.22) !important; transform: scale(1.05); }
+.handbook-close:active { transform: scale(0.96); }
+
+.handbook-body {
+    background: #f8fafc;
+}
+
+.handbook-nav {
+    width: 230px !important;
+    background: #ffffff !important;
+    border-right: 1px solid #e5e7eb !important;
+    padding: 0.85rem 0.6rem !important;
+    gap: 0.18rem !important;
+}
+
+.handbook-link {
+    display: flex !important;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.62rem 0.8rem !important;
+    font-size: 0.9rem !important;
+    font-weight: 600;
+    color: #475569 !important;
+    background: transparent !important;
+    border: none;
+    border-radius: 10px !important;
+    text-align: left;
+    position: relative;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.handbook-link i {
+    width: 20px;
+    font-size: 0.95rem;
+    color: #94a3b8;
+    transition: color 140ms ease;
+}
+
+.handbook-link:hover {
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+    transform: none !important;
+}
+.handbook-link:hover i { color: #d17508; }
+
+.handbook-link.active {
+    background: linear-gradient(135deg, rgba(209, 117, 8, 0.12), rgba(209, 117, 8, 0.04)) !important;
+    color: #b15f00 !important;
+}
+.handbook-link.active i { color: #d17508; }
+.handbook-link.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: #d17508;
+}
+
+.handbook-content {
+    background: #ffffff;
+    padding: 1.6rem 1.9rem !important;
+    line-height: 1.65;
+    color: #1f2937;
+}
+
+.handbook-page h3 {
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0 0 0.6rem 0;
+    padding-bottom: 0.55rem;
+    border-bottom: 2px solid #f1f5f9;
+}
+.handbook-page h3 + h3 { margin-top: 1.6rem; }
+.handbook-page h4 { font-size: 1rem; font-weight: 700; color: #334155; margin: 1.2rem 0 0.4rem; }
+.handbook-page p  { color: #475569; margin: 0 0 0.85rem; }
+.handbook-page ul, .handbook-page ol { color: #475569; margin: 0 0 1rem 1.25rem; line-height: 1.85; }
+.handbook-page strong { color: #0f172a; }
+.handbook-page code {
+    background: #f1f5f9;
+    color: #b15f00;
+    padding: 0.1rem 0.4rem;
+    border-radius: 5px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.handbook-content::-webkit-scrollbar { width: 8px; }
+.handbook-content::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+.handbook-content::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* FAQ as cards */
+.handbook-page .faq-item {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 10px !important;
+    margin-bottom: 0.6rem !important;
+    background: #ffffff;
+    overflow: hidden;
+    transition: box-shadow 160ms ease, border-color 160ms ease;
+}
+.handbook-page .faq-item:hover { border-color: #d17508; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06); }
+.handbook-page .faq-question {
+    padding: 0.9rem 1rem !important;
+    background: #f8fafc !important;
+    color: #0f172a;
+    font-weight: 600;
+    cursor: pointer;
+}
+.handbook-page .faq-item.active .faq-question {
+    background: linear-gradient(135deg, #d17508, #b15f00) !important;
+    color: #fff !important;
+}
+.handbook-page .faq-answer { padding: 0 1rem; color: #475569; }
+.handbook-page .faq-item.active .faq-answer { padding: 0.85rem 1rem 1rem !important; }
+
+/* ----- Mobile (<= 900px): top horizontal pill nav, full-screen sheet ----- */
+@media (max-width: 900px) {
+    .handbook-overlay { padding: 0 !important; align-items: stretch !important; }
+    .handbook-modal {
+        width: 100% !important;
+        height: 100dvh !important;
+        max-width: none !important;
+        border-radius: 0 !important;
+        animation: handbookSlideUp 240ms ease-out;
+    }
+    @keyframes handbookSlideUp {
+        from { transform: translateY(100%); }
+        to   { transform: translateY(0); }
+    }
+    .handbook-header {
+        padding: calc(0.85rem + env(safe-area-inset-top, 0px)) 1rem 0.85rem !important;
+        border-radius: 0 !important;
+    }
+    .handbook-header h2 { font-size: 1.05rem; }
+    .handbook-subtitle { font-size: 0.75rem; }
+    .handbook-close {
+        min-width: 44px;
+        min-height: 44px;
+        font-size: 1.9rem !important;
+    }
+    .handbook-body { flex-direction: column !important; }
+    .handbook-nav {
+        width: 100% !important;
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 0.4rem !important;
+        overflow-x: auto !important;
+        overflow-y: hidden;
+        scroll-snap-type: x proximity;
+        padding: 0.6rem 0.75rem !important;
+        border-right: none !important;
+        border-bottom: 1px solid #e5e7eb !important;
+        background: #ffffff !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    .handbook-nav::-webkit-scrollbar { display: none; }
+    .handbook-link {
+        flex: 0 0 auto !important;
+        scroll-snap-align: start;
+        padding: 0.5rem 0.85rem !important;
+        font-size: 0.82rem !important;
+        border-radius: 999px !important;
+        background: #f1f5f9 !important;
+        color: #475569 !important;
+        white-space: nowrap;
+    }
+    .handbook-link span { display: inline; }
+    .handbook-link.active {
+        background: linear-gradient(135deg, #d17508, #b15f00) !important;
+        color: #ffffff !important;
+    }
+    .handbook-link.active i { color: #ffffff !important; }
+    .handbook-link.active::before { display: none !important; }
+    .handbook-content {
+        padding: 1.05rem 1rem calc(1.4rem + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    .handbook-page h3 { font-size: 1.15rem; }
+}
+
+/* Make sure the legacy phone-device "page picker" select stays hidden — we use pills now. */
+.handbook-page-picker { display: none !important; }

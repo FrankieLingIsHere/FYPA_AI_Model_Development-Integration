@@ -454,8 +454,6 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
     } else if (nextState.status === 'approved') {
         notifyApp('Local mode request is approved. You can re-issue installer access for this machine.', 'success');
-    } else if (nextState.status === 'credentials_present') {
-        notifyApp('Cloud credentials are present locally, but this machine is not marked approved/provisioned in the admin dashboard.', 'warning');
     } else if (nextState.status === 'rejected') {
         notifyApp('Local mode approval request was rejected. Contact admin and rerun checkup.', 'error');
     } else if (nextState.status === 'pending_approval') {

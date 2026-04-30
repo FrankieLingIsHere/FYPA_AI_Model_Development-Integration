@@ -2321,6 +2321,9 @@ RESPONSE FORMAT (JSON):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Safety Violation Report - {report_id}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+          integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw=="
+          crossorigin="anonymous" referrerpolicy="no-referrer">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         
@@ -4096,23 +4099,39 @@ RESPONSE FORMAT (JSON):
         target_count = max(target_count, inferred_from_caption, len(persons))
 
         if target_count > len(persons):
-            placeholder_template = {
-                'description': (
-                    'This person is referenced in the scene description but the '
-                    'model did not return a dedicated per-person breakdown. '
-                    'Apply the same site-wide PPE requirements and corrective '
-                    'actions listed for the analysed persons above.'
-                ),
-                'compliance_status': 'Review Required',
-                'ppe': {},
-                'hazards_faced': [],
-                'risks': [],
-                'corrective_actions': [],
-                '__placeholder__': True,
-            }
+            # Identify what the first fully-analysed person looks like so
+            # placeholders inherit real scene context (PPE, hazards, risks,
+            # corrective actions) rather than being completely empty.
+            reference_person = persons[0] if persons else {}
+            ref_ppe = reference_person.get('ppe') or {}
+            if not isinstance(ref_ppe, dict):
+                ref_ppe = {}
+            ref_hazards = list(reference_person.get('hazards_faced') or [])
+            ref_risks = list(reference_person.get('risks') or [])
+            ref_actions = list(
+                reference_person.get('corrective_actions') or
+                reference_person.get('actions') or
+                []
+            )
+
             for idx in range(len(persons), target_count):
-                ph = dict(placeholder_template)
-                ph['id'] = f'Person {idx + 1}'
+                ph = {
+                    'id': f'Person {idx + 1}',
+                    'description': (
+                        'This person is visible in the scene and is subject to the same '
+                        'site-wide PPE requirements and hazard exposure as the other '
+                        'workers shown. A dedicated individual breakdown was not returned '
+                        'by the model; the scene-wide analysis below applies equally.'
+                    ),
+                    'compliance_status': reference_person.get('compliance_status') or 'Review Required',
+                    # Inherit PPE status from the analysed person so the
+                    # grid is populated rather than blank.
+                    'ppe': dict(ref_ppe),
+                    'hazards_faced': list(ref_hazards),
+                    'risks': list(ref_risks),
+                    'corrective_actions': list(ref_actions),
+                    '__placeholder__': True,
+                }
                 persons.append(ph)
 
         if not persons:
@@ -4301,39 +4320,51 @@ RESPONSE FORMAT (JSON):
             person_id_display = self._to_safe_html_text(
                 person_id_raw.replace('Person ', '').replace('Personnel ', '').strip() or str(i + 1)
             )
+            is_placeholder = bool(person.get('__placeholder__'))
+            placeholder_banner = (
+                '<div style="margin-bottom:0.75rem; padding:0.55rem 0.75rem; '
+                'background:#fff3cd; border-left:4px solid #f0ad4e; border-radius:4px; '
+                'font-size:0.85rem; color:#856404;">'
+                '<i class="fas fa-info-circle"></i>&nbsp;'
+                '<strong>Scene-level data shown.</strong> The model analysed this scene as a group — '
+                'the PPE status, hazards and risks below are the same scene-wide findings '
+                'that apply to all personnel in the frame. '
+                'Regenerate the report for a full per-person breakdown.</div>'
+            ) if is_placeholder else ''
             person_cards.append(f"""
                 <div class="person-card">
                     <div class="person-header">
                         <div>
-                            <h3>ðŸ‘¤ Person {person_id_display}</h3>
+                            <h3>&#x1F464; Person {person_id_display}</h3>
                             <p style="white-space: normal; word-break: break-word;">{description or 'No description provided by model'}</p>
                         </div>
                         {comp_badge}
                     </div>
                     <div class="person-content">
+                        {placeholder_banner}
                         <div class="person-section">
-                            <h4>ðŸ¦º PPE Status</h4>
+                            <h4>&#x1F9BA; PPE Status</h4>
                             <div class="ppe-grid">
                                 {"".join(ppe_items)}
                             </div>
                         </div>
-                        
+
                         <div class="person-section">
-                            <h4>âš ï¸ Hazards Faced</h4>
+                            <h4>&#x26A0;&#xFE0F; Hazards Faced</h4>
                             <div class="risk-grid">
                                 {hazards_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>âš•ï¸ Potential Risks &amp; Likelihood</h4>
+                            <h4>&#x2695;&#xFE0F; Potential Risks &amp; Likelihood</h4>
                             <div class="risk-list">
                                 {risks_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>ðŸƒ Recommended Actions</h4>
+                            <h4>&#x1F3C3; Recommended Actions</h4>
                             <div class="action-grid">
                                 {actions_html}
                             </div>

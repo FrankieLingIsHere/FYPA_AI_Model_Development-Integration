@@ -4537,6 +4537,266 @@ def api_system_timezone():
 # API ENDPOINTS - STATUS & MONITORING (from Pipeline_CASM)
 # =========================================================================
 
+def _gather_report_for_batch_doc(report_id: str) -> Optional[Dict[str, Any]]:
+    """Collect the canonical fields needed to render an NCR / JKKP-7 doc.
+
+    Returns a flat dict (or None when the report cannot be located).
+    Pulls from Supabase first, then falls back to the local violations
+    folder so the endpoint also works in offline / standalone mode.
+    """
+    rid = str(report_id or '').strip()
+    if not rid:
+        return None
+
+    record: Dict[str, Any] = {}
+    try:
+        if db_manager is not None and hasattr(db_manager, 'get_violation'):
+            row = db_manager.get_violation(rid)
+            if row:
+                ts = row.get('timestamp')
+                record.update({
+                    'report_id': row.get('report_id') or rid,
+                    'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else (ts or ''),
+                    'severity': row.get('severity') or 'UNKNOWN',
+                    'status': row.get('status') or 'unknown',
+                    'device_id': row.get('device_id') or '',
+                    'person_count': row.get('person_count') or 0,
+                    'violation_count': row.get('violation_count') or 0,
+                    'violation_summary': row.get('violation_summary') or '',
+                    'caption': row.get('caption') or '',
+                    'environment_type': row.get('environment_type') or '',
+                    'missing_ppe': row.get('missing_ppe') or [],
+                    'dosh_regulations_cited': row.get('dosh_regulations_cited') or [],
+                })
+    except Exception as exc:
+        logger.debug(f"batch-docs: Supabase lookup failed for {rid}: {exc}")
+
+    # Local filesystem fallback / enrichment.
+    try:
+        violation_dir = VIOLATIONS_DIR / rid
+        metadata_file = violation_dir / 'metadata.json'
+        if metadata_file.exists():
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                meta = json.load(f) or {}
+            for key in (
+                'severity', 'status', 'device_id', 'person_count', 'violation_count',
+                'violation_summary', 'caption', 'environment_type', 'missing_ppe',
+                'dosh_regulations_cited', 'timestamp'
+            ):
+                if not record.get(key) and meta.get(key) is not None:
+                    record[key] = meta.get(key)
+            if not record.get('report_id'):
+                record['report_id'] = rid
+    except Exception as exc:
+        logger.debug(f"batch-docs: local metadata read failed for {rid}: {exc}")
+
+    if not record:
+        return None
+    record.setdefault('report_id', rid)
+    record.setdefault('timestamp', '')
+    record.setdefault('severity', 'UNKNOWN')
+    record.setdefault('missing_ppe', [])
+    record.setdefault('dosh_regulations_cited', [])
+    return record
+
+
+def _render_ncr_block(rec: Dict[str, Any]) -> str:
+    rid = html.escape(str(rec.get('report_id') or ''))
+    ts = html.escape(str(rec.get('timestamp') or ''))
+    env = html.escape(str(rec.get('environment_type') or 'Construction Site'))
+    severity = html.escape(str(rec.get('severity') or 'UNKNOWN'))
+    summary = html.escape(str(rec.get('violation_summary') or 'PPE non-compliance detected by CASM Safety Monitor.'))
+    missing_ppe_list = rec.get('missing_ppe') or []
+    if isinstance(missing_ppe_list, str):
+        missing_ppe_list = [missing_ppe_list]
+    missing_html = ''.join(
+        f'<li>{html.escape(str(p))}</li>' for p in missing_ppe_list if str(p).strip()
+    ) or '<li>See attached safety report for full details.</li>'
+    regs = rec.get('dosh_regulations_cited') or []
+    reg_rows = []
+    for r in regs:
+        if isinstance(r, dict):
+            reg_name = html.escape(str(r.get('regulation') or r.get('technical_standard') or ''))
+            requirement = html.escape(str(r.get('requirement') or ''))
+            penalty = html.escape(str(r.get('penalty') or r.get('legal_regulatory_consequences') or ''))
+        else:
+            reg_name = html.escape(str(r))
+            requirement = ''
+            penalty = ''
+        if reg_name:
+            reg_rows.append(
+                f'<tr><td><strong>{reg_name}</strong></td>'
+                f'<td>{requirement or "—"}</td>'
+                f'<td>{penalty or "—"}</td></tr>'
+            )
+    reg_table = (
+        '<table class="reg-table"><thead><tr><th>Regulation</th><th>Requirement</th>'
+        '<th>Penalty</th></tr></thead><tbody>' + ''.join(reg_rows) + '</tbody></table>'
+    ) if reg_rows else '<p><em>No specific regulation citations stored for this report.</em></p>'
+
+    return f"""
+    <article class="doc-block ncr">
+        <header>
+            <h1>NON-CONFORMANCE REPORT (NCR)</h1>
+            <p class="ref">NCR No: NCR-{rid}</p>
+        </header>
+        <section>
+            <h2>Incident Details</h2>
+            <table class="kv">
+                <tr><th>Report ID</th><td>{rid}</td></tr>
+                <tr><th>Date / Time</th><td>{ts}</td></tr>
+                <tr><th>Location Type</th><td>{env}</td></tr>
+                <tr><th>Severity</th><td>{severity}</td></tr>
+            </table>
+        </section>
+        <section>
+            <h2>Description of Non-Conformance</h2>
+            <p>{summary}</p>
+        </section>
+        <section>
+            <h2>Missing PPE</h2>
+            <ul>{missing_html}</ul>
+        </section>
+        <section>
+            <h2>Regulations Violated</h2>
+            {reg_table}
+        </section>
+        <section>
+            <h2>Corrective Action Required</h2>
+            <p>Stop work in the affected zone until all missing PPE listed above is issued, fitted and verified by the site supervisor. Schedule a follow-up audit within 48 hours.</p>
+        </section>
+        <section class="signatures">
+            <div><div class="sig-line"></div><p>Issued by (Safety Officer)</p></div>
+            <div><div class="sig-line"></div><p>Acknowledged by (Contractor)</p></div>
+        </section>
+    </article>
+    """
+
+
+def _render_jkkp7_block(rec: Dict[str, Any]) -> str:
+    rid = html.escape(str(rec.get('report_id') or ''))
+    ts = html.escape(str(rec.get('timestamp') or ''))
+    summary = html.escape(str(rec.get('violation_summary') or 'PPE non-compliance detected by CASM Safety Monitor.'))
+    person_count = html.escape(str(rec.get('person_count') or '—'))
+    device_id = html.escape(str(rec.get('device_id') or '—'))
+    severity = html.escape(str(rec.get('severity') or 'UNKNOWN'))
+    return f"""
+    <article class="doc-block jkkp7">
+        <header>
+            <h1>BORANG JKKP 7</h1>
+            <p>NOTIS KEMALANGAN, KEJADIAN BERBAHAYA, KERACUNAN PEKERJAAN ATAU PENYAKIT PEKERJAAN</p>
+            <p class="ref">Reference: {rid}</p>
+        </header>
+        <section>
+            <h2>Bahagian A — Butir-butir Majikan</h2>
+            <table class="kv">
+                <tr><th>Nama Majikan</th><td>____________________________</td></tr>
+                <tr><th>Alamat Tempat Kerja</th><td>____________________________</td></tr>
+                <tr><th>Jenis Industri</th><td>Pembinaan / Construction</td></tr>
+                <tr><th>Device ID (sumber)</th><td>{device_id}</td></tr>
+            </table>
+        </section>
+        <section>
+            <h2>Bahagian B — Butir-butir Kejadian</h2>
+            <table class="kv">
+                <tr><th>Tarikh &amp; Masa</th><td>{ts}</td></tr>
+                <tr><th>Bilangan Pekerja Terlibat</th><td>{person_count}</td></tr>
+                <tr><th>Tahap Severiti</th><td>{severity}</td></tr>
+                <tr><th>Perihal Kejadian</th><td>{summary}</td></tr>
+            </table>
+        </section>
+        <section>
+            <h2>Bahagian C — Pengesahan</h2>
+            <table class="kv">
+                <tr><th>Tandatangan Majikan / Wakil</th><td style="height:50px;"></td></tr>
+                <tr><th>Nama &amp; Jawatan</th><td>____________________________</td></tr>
+                <tr><th>Tarikh</th><td>____________________________</td></tr>
+            </table>
+        </section>
+    </article>
+    """
+
+
+def _render_batch_docs_html(records: List[Dict[str, Any]], fmt: str) -> str:
+    parts = []
+    for rec in records:
+        if fmt in ('ncr', 'both'):
+            parts.append(_render_ncr_block(rec))
+        if fmt in ('jkkp7', 'both'):
+            parts.append(_render_jkkp7_block(rec))
+        parts.append('<div class="page-break"></div>')
+    body = ''.join(parts) or '<p>No reports were resolved for the selected IDs.</p>'
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Batch Documentation — CASM Safety Monitor</title>
+<style>
+  body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 24px; color:#1f2933; }}
+  .toolbar {{ position: sticky; top: 0; background: #fff; padding: 8px 0 16px; border-bottom: 1px solid #e1e5eb; margin-bottom: 16px; }}
+  .toolbar button {{ background:#0d6efd; color:#fff; border:none; padding: 8px 16px; border-radius: 4px; cursor:pointer; }}
+  .doc-block {{ border:1px solid #ced4da; padding: 24px; margin-bottom: 24px; border-radius: 4px; page-break-after: always; }}
+  .doc-block h1 {{ margin: 0 0 4px; font-size: 20px; }}
+  .doc-block h2 {{ font-size: 14px; background:#1f2933; color:#fff; padding: 6px 10px; border-radius: 2px; margin: 18px 0 8px; }}
+  .doc-block .ref {{ background:#fff3cd; display:inline-block; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-top: 4px; }}
+  .doc-block table.kv {{ width: 100%; border-collapse: collapse; }}
+  .doc-block table.kv th, .doc-block table.kv td {{ border: 1px solid #ced4da; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 13px; }}
+  .doc-block table.kv th {{ width: 35%; background:#f8f9fa; }}
+  .doc-block table.reg-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+  .doc-block table.reg-table th, .doc-block table.reg-table td {{ border: 1px solid #ced4da; padding: 6px 8px; text-align: left; vertical-align: top; }}
+  .doc-block .signatures {{ display: flex; gap: 24px; margin-top: 32px; }}
+  .doc-block .signatures > div {{ flex:1; text-align:center; }}
+  .doc-block .sig-line {{ height: 50px; border-bottom: 1px solid #1f2933; margin-bottom: 6px; }}
+  .page-break {{ page-break-after: always; }}
+  @media print {{ .toolbar {{ display:none; }} .page-break {{ page-break-after: always; }} }}
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>CASM Batch Documentation</strong> — {len(records)} report(s), format: {html.escape(fmt)}
+    <button onclick="window.print()" style="float:right;">🖨️ Print / Save as PDF</button>
+  </div>
+  {body}
+</body>
+</html>"""
+
+
+@app.route('/api/reports/batch-docs', methods=['POST'])
+def api_reports_batch_docs():
+    """Generate NCR and/or JKKP-7 documentation for a batch of reports."""
+    try:
+        payload = request.get_json(silent=True) or {}
+    except Exception:
+        payload = {}
+    raw_ids = payload.get('report_ids') or []
+    if not isinstance(raw_ids, list):
+        return jsonify({'error': 'report_ids must be an array'}), 400
+    fmt = str(payload.get('format') or 'both').strip().lower()
+    if fmt not in ('ncr', 'jkkp7', 'both'):
+        return jsonify({'error': "format must be 'ncr', 'jkkp7' or 'both'"}), 400
+
+    ids = [str(x).strip() for x in raw_ids if str(x).strip()]
+    if not ids:
+        return jsonify({'error': 'At least one report_id is required'}), 400
+    if len(ids) > 200:
+        return jsonify({'error': 'A maximum of 200 reports can be batched at once'}), 400
+
+    records: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for rid in ids:
+        rec = _gather_report_for_batch_doc(rid)
+        if rec is None:
+            missing.append(rid)
+        else:
+            records.append(rec)
+
+    if not records:
+        return jsonify({'error': 'None of the requested reports could be located.', 'missing': missing}), 404
+
+    html_doc = _render_batch_docs_html(records, fmt)
+    return Response(html_doc, mimetype='text/html')
+
+
 @app.route('/api/violation/<report_id>')
 def api_get_violation(report_id):
     """Get a specific violation with full details and status."""
@@ -10215,44 +10475,42 @@ def _normalize_report_footer_branding(html_content: str) -> str:
 
 
 def _repair_report_documentation_block(html_content: str, report_id: str) -> str:
-        """Repair malformed Generate Documentation script blocks and bind robust button handlers."""
+        """Strip the legacy in-report NCR / JKKP-7 button block.
+
+        Official documentation is now generated from the dedicated Batch Docs
+        page so officers can export multiple reports at once. For older
+        reports that still embed the per-report buttons (and the malformed
+        generator scripts) we simply remove them on the way out so the page
+        renders cleanly.
+        """
         if not html_content:
                 return html_content
 
+        # Drop the entire "Generate Official Documentation" callout if present.
         html_content = re.sub(
-                r'<script>\s*function\s+generateNCR\s*\(\)\s*\{[\s\S]*?(?=<div\s+class="footer")',
-                '',
-                html_content,
-                flags=re.IGNORECASE,
-        )
-        html_content = re.sub(
-                r';\s*const\s+ncrWindow\s*=\s*window\.open[\s\S]*?(?=<div\s+class="footer")',
+                r'<div class="section"[^>]*>\s*<h3[^>]*>\s*[^<]*Generate Official Documentation[\s\S]*?</div>\s*',
                 '',
                 html_content,
                 flags=re.IGNORECASE,
         )
 
-        html_content = html_content.replace('onclick="generateNCR()"', 'id="btn-generate-ncr"')
-        html_content = html_content.replace('onclick="generateJKKP7()"', 'id="btn-generate-jkkp7"')
-
-        report_id_js = json.dumps(str(report_id or 'UNKNOWN'))
-        safe_doc_script = (
-                "<script>(function(){"
-                "const reportId=" + report_id_js + ";"
-                "const openDoc=(title,body)=>{const w=window.open('','_blank');if(!w){alert('Popup was blocked. Please allow popups for this site.');return;}w.document.open();w.document.write('<!DOCTYPE html><html><head><meta charset=\\\"UTF-8\\\"><title>'+title+'</title></head><body style=\\\"font-family:Arial,sans-serif;max-width:860px;margin:0 auto;padding:18px;line-height:1.45;\\\">'+body+'</body></html>');w.document.close();};"
-                "const openNCR=()=>openDoc('NCR - '+reportId,'<button onclick=\\\"window.print()\\\" style=\\\"margin:8px 0;padding:8px 12px;\\\">Print</button><h1 style=\\\"margin-bottom:6px;\\\">NON-CONFORMANCE REPORT (NCR)</h1><p><b>Report ID:</b> '+reportId+'</p><p><b>Generated:</b> '+new Date().toISOString()+'</p><table border=\\\"1\\\" cellpadding=\\\"8\\\" cellspacing=\\\"0\\\" style=\\\"width:100%;border-collapse:collapse;margin-top:10px;\\\"><tr><th align=\\\"left\\\">Issue</th><td>PPE non-compliance detected by CASM Safety Monitor</td></tr><tr><th align=\\\"left\\\">Immediate Action</th><td>Stop work and restore PPE compliance before continuation</td></tr></table>');"
-                "const openJKKP7=()=>openDoc('JKKP-7 - '+reportId,'<button onclick=\\\"window.print()\\\" style=\\\"margin:8px 0;padding:8px 12px;\\\">Print</button><h1 style=\\\"margin-bottom:6px;\\\">BORANG JKKP 7</h1><p><b>Report ID:</b> '+reportId+'</p><p><b>Generated:</b> '+new Date().toISOString()+'</p><table border=\\\"1\\\" cellpadding=\\\"8\\\" cellspacing=\\\"0\\\" style=\\\"width:100%;border-collapse:collapse;margin-top:10px;\\\"><tr><th align=\\\"left\\\">Case</th><td>Workplace PPE non-compliance</td></tr><tr><th align=\\\"left\\\">Reference</th><td>Auto-generated from CASM report</td></tr></table>');"
-            "const bind=()=>{const n=document.getElementById('btn-generate-ncr');const j=document.getElementById('btn-generate-jkkp7');if(n)n.onclick=(e)=>{e.preventDefault();openNCR();};if(j)j.onclick=(e)=>{e.preventDefault();openJKKP7();};"
-            "const card=document.getElementById('reportSplitCard');const t=document.getElementById('reportExpandToggle');const x=document.getElementById('reportExpandedContext');"
-            "if(card&&t&&x){const setExpanded=(expanded)=>{card.classList.toggle('expanded',expanded);t.setAttribute('aria-expanded',String(expanded));x.setAttribute('aria-hidden',String(!expanded));t.textContent=expanded?'Collapse Full Report Context':'Show Full Report Context';};setExpanded(false);t.onclick=(e)=>{e.preventDefault();setExpanded(!card.classList.contains('expanded'));};}};"
-                "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',bind);}else{bind();}"
-                "})();</script>"
+        # Drop the inline generateNCR / generateJKKP7 JS blocks if any remain.
+        html_content = re.sub(
+                r'function\s+generateNCR\s*\(\)\s*\{[\s\S]*?\}\s*\}\s*',
+                '',
+                html_content,
+                flags=re.IGNORECASE,
+        )
+        html_content = re.sub(
+                r'function\s+generateJKKP7\s*\(\)\s*\{[\s\S]*?\}\s*\}\s*',
+                '',
+                html_content,
+                flags=re.IGNORECASE,
         )
 
-        if re.search(r'</body\s*>', html_content, flags=re.IGNORECASE):
-                html_content = re.sub(r'</body\s*>', safe_doc_script + '\n</body>', html_content, count=1, flags=re.IGNORECASE)
-        else:
-                html_content += safe_doc_script
+        # Strip any orphaned onclick handlers that point at the removed funcs.
+        html_content = html_content.replace('onclick="generateNCR()"', '')
+        html_content = html_content.replace('onclick="generateJKKP7()"', '')
 
         return html_content
 

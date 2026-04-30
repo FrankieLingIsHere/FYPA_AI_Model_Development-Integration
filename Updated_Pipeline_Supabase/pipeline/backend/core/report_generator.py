@@ -45,7 +45,7 @@ try:
 except ImportError:
     LOCAL_LLAMA_AVAILABLE = False
 
-# Try to import Chroma DB (legacy RAG — only used if Gemini disabled)
+# Try to import Chroma DB (legacy RAG â€” only used if Gemini disabled)
 try:
     import chromadb
     from chromadb.config import Settings
@@ -94,6 +94,54 @@ def _resolve_effective_nlp_provider_order(
     return ['ollama'] if active_profile == 'local' else ['gemini']
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+_PERSON_NUMBER_WORDS = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12,
+}
+_PERSON_NOUNS = r"(?:people|persons?|workers?|individuals?|men|women|guys|crew(?:\s*members?)?)"
+
+
+def infer_people_count_from_text(*texts: str) -> int:
+    """Best-effort person count extraction from caption / summary text.
+
+    Looks for explicit numerals ("3 workers"), spelled-out numbers
+    ("three people"), and ordinal-person mentions ("first person",
+    "second person") so the report UI can reconcile the per-person card
+    grid with the scene description even when YOLO under-counts.
+    Returns 0 when nothing can be inferred.
+    """
+    combined = " ".join(str(t or "") for t in texts).lower()
+    if not combined.strip():
+        return 0
+
+    candidates: List[int] = []
+
+    candidates.extend(
+        int(m.group(1))
+        for m in re.finditer(rf"\b(\d{{1,2}})\s+{_PERSON_NOUNS}\b", combined)
+    )
+
+    for word, value in _PERSON_NUMBER_WORDS.items():
+        if re.search(rf"\b{word}\s+{_PERSON_NOUNS}\b", combined):
+            candidates.append(value)
+
+    if candidates:
+        return max(candidates)
+
+    ordinal_hits = re.findall(
+        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:person|worker|individual)\b",
+        combined,
+    )
+    if ordinal_hits:
+        return len(set(ordinal_hits))
+
+    return 0
+
+
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
@@ -117,7 +165,7 @@ class ReportGenerator:
         self.last_nlp_completed_at = None
         self.routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
-        # strict_local_profile is now a computed property — see below; do not set it here
+        # strict_local_profile is now a computed property â€” see below; do not set it here
         self.sticky_nlp_provider = None
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
@@ -182,7 +230,7 @@ class ReportGenerator:
                             self.gemini_client.max_tokens,
                             self.gemini_max_output_tokens_per_report
                         )
-                    logger.info("✓ Gemini client initialized for NLP report generation")
+                    logger.info("âœ“ Gemini client initialized for NLP report generation")
                 else:
                     logger.warning("Gemini client not available, falling back to Ollama")
                     self.gemini_client = None
@@ -193,7 +241,7 @@ class ReportGenerator:
                 self.use_gemini = False
         
         # =====================================================================
-        # REGULATION DATA (Direct injection — replaces ChromaDB RAG)
+        # REGULATION DATA (Direct injection â€” replaces ChromaDB RAG)
         # =====================================================================
         self.regulations_data = {}
         rag_config = config.get('RAG_CONFIG', {})
@@ -202,7 +250,7 @@ class ReportGenerator:
         if GEMINI_AVAILABLE:
             try:
                 self.regulations_data = load_regulations(str(regulations_file) if regulations_file else None)
-                logger.info(f"✓ Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
+                logger.info(f"âœ“ Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
             except Exception as e:
                 logger.error(f"Failed to load regulations: {e}")
         
@@ -279,7 +327,7 @@ class ReportGenerator:
                 self.local_llama = None
         
         # =====================================================================
-        # RAG settings (legacy — used only when Gemini is disabled)
+        # RAG settings (legacy â€” used only when Gemini is disabled)
         # =====================================================================
         self.rag_enabled = rag_config.get('enabled', True)
         self.use_chroma = rag_config.get('use_chroma', False) and not self.use_gemini
@@ -327,7 +375,7 @@ class ReportGenerator:
 
     @strict_local_profile.setter
     def strict_local_profile(self, value):
-        # Ignored — value is always computed from routing_profile.
+        # Ignored â€” value is always computed from routing_profile.
         # Setter exists for backward compatibility with code that assigns to this attribute.
         pass
 
@@ -765,7 +813,7 @@ class ReportGenerator:
         #   - JKR (Jabatan Kerja Raya) classifications
         #   - OSHA 29 CFR 1926 (construction) / 1910 (general industry)
         #   - ISO 45001 hazard identification categories
-        # Order: most specific → least specific (first match wins)
+        # Order: most specific â†’ least specific (first match wins)
         # =====================================================================
         ENVIRONMENT_KEYWORDS = {
             # --- High-specificity outdoor work zones ---
@@ -827,7 +875,7 @@ class ReportGenerator:
             ]
         }
         
-        # Check for environment keywords (first match wins — order above matters)
+        # Check for environment keywords (first match wins â€” order above matters)
         for env_type, keywords in ENVIRONMENT_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in caption_lower:
@@ -835,7 +883,7 @@ class ReportGenerator:
                     return env_type
         
         # Default fallback
-        logger.info("No specific environment detected from caption — defaulting to 'General Workspace'")
+        logger.info("No specific environment detected from caption â€” defaulting to 'General Workspace'")
         return 'General Workspace'
     
     def _build_scene_description(
@@ -929,14 +977,38 @@ class ReportGenerator:
         detections = report_data.get('detections', [])
         violation_summary = report_data.get('violation_summary', '')
         person_count = report_data.get('person_count', 0)
-        
-        # Smart Logic: If YOLO missed people but we have violations or caption mentions people, assume at least 1
+
+        # Reconcile person count with the caption text. Vision-language
+        # captions ("three workers on the scaffold") often see people that
+        # YOLO miscounts because of pose / occlusion / partial bodies. We
+        # take MAX(yolo, caption) so the prompt â€” and therefore the
+        # per-person card grid generated downstream â€” line up with what
+        # the user can read in the scene description.
         video_caption_lower = caption.lower()
+        caption_inferred_people = infer_people_count_from_text(caption, violation_summary)
+        if caption_inferred_people > person_count:
+            logger.info(
+                f"Reconciling person_count: yolo={person_count} -> caption={caption_inferred_people}"
+            )
+            person_count = caption_inferred_people
+
         if person_count == 0:
             if len(detections) > 0:
-                person_count = 1 # Assume at least one person committed the violation
+                person_count = 1  # Assume at least one person committed the violation
             elif any(word in video_caption_lower for word in ['man', 'men', 'woman', 'women', 'person', 'people', 'worker', 'workers']):
                 person_count = 1
+
+        # Persist the reconciled count back onto the report data so any
+        # downstream renderer (per-person cards, summary chip, doc export)
+        # sees the same value the LLM was asked about.
+        try:
+            report_data['person_count'] = person_count
+            report_data['person_count_source'] = (
+                'caption' if caption_inferred_people and caption_inferred_people == person_count
+                else ('yolo' if report_data.get('person_count') else 'inferred')
+            )
+        except Exception:
+            pass
         
         # Build detection description and identify missing PPE
         detection_desc = []
@@ -1050,11 +1122,31 @@ Generate a JSON report following this logic:
     - Do NOT limit citations to PPE-only rules; include non-PPE breaches (e.g., traffic control, fall protection, unsafe stacking, excavation controls) when evidenced by caption/detections.
 3. **WEIGHTED SEVERITY**:
    - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
-4. **NEGATIVE CONSTRAINTS**:
+4. **WRITE-UP DEPTH (MANDATORY)**:
+   Reports are read by safety officers preparing legal paperwork â€” short
+   one-line answers are unacceptable. For every regulation, risk and
+   corrective action you MUST produce a *paragraph-style* explanation
+   that ties back to THIS specific scene (people, PPE, environment
+   type), not generic boilerplate. Concretely:
+     - `dosh_regulations_cited[].requirement` and `[].explanation` MUST
+       each be at least 2 full sentences (35+ words combined) and must
+       name the specific PPE or hazard observed in this frame.
+     - `persons[].risks[].risk` MUST be at least 2 sentences explaining
+       *what could happen, to whom, and why this scene makes it likely*.
+     - `persons[].risks[].mitigation_steps` MUST be 2â€“4 concrete site
+       actions (engineering / admin / PPE controls), each phrased as a
+       full sentence the safety officer can hand to a foreman.
+     - `persons[].corrective_actions` MUST be at least 3 entries; each
+       entry is a full instruction sentence (e.g. "Halt work in the
+       affected zone until every operative on the scaffold platform is
+       wearing a DOSH-approved Class E hardhat and a fall-arrest
+       harness anchored to the guard rail.") â€” never a 1-2 word chip.
+5. **NEGATIVE CONSTRAINTS**:
    - NO vague terms ("scattered", "some").
    - NO "Chemical masks" unless chemicals visible.
    - NO "1." numbering prefixes in the description text.
     - ONLY cite regulations from the provided JKR/DOSH regulation context. Do not invent regulation titles.
+   - NO single-word or filler responses for `requirement`, `explanation`, `risk`, `mitigation_steps`, `corrective_actions`. Reject any answer shorter than 35 words and rewrite it longer.
 
 {dosh_text if dosh_text else ""}{context_text if context_text else ""}
 
@@ -1079,18 +1171,33 @@ RESPONSE FORMAT (JSON):
                  {{ "type": "Hazard type", "source": "Source", "severity": "HIGH/MEDIUM/LOW" }}
             ],
             "risks": [
-                 {{ 
-                    "risk": "Risk description", 
-                    "likelihood": "HIGH/MEDIUM/LOW", 
-                    "regulation_citation": "Most relevant official regulation for this risk (PPE or non-PPE)", 
-                    "legal_regulatory_consequences": "Consequence" 
+                 {{
+                    "risk": "TWO-SENTENCE explanation of what could happen, to whom, and why THIS scene makes it likely.",
+                    "likelihood": "HIGH/MEDIUM/LOW",
+                    "regulation_citation": "Most relevant official regulation for this risk (PPE or non-PPE)",
+                    "legal_regulatory_consequences": "Cite the exact penalty / fine / enforcement notice that would follow under that regulation.",
+                    "mitigation_steps": [
+                        "Full-sentence engineering control specific to this scene.",
+                        "Full-sentence administrative control specific to this scene.",
+                        "Full-sentence PPE control specific to this scene."
+                    ]
                  }}
+            ],
+            "corrective_actions": [
+                "First detailed action sentence the safety officer can hand to the foreman right now.",
+                "Second detailed action sentence covering verification / sign-off.",
+                "Third detailed action sentence covering follow-up training or audit."
             ]
         }}
     ],
-    "summary": "• **SCENE CLASS**: [Environment Type]...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
+    "summary": "â€¢ **SCENE CLASS**: [Environment Type]...\\nâ€¢ **CRITICAL RISK**: ...\\nâ€¢ **LEGAL ORDER**: ...",
     "dosh_regulations_cited": [
-        {{ "regulation": "Official JKR/DOSH regulation name", "requirement": "Specific breached requirement in this scene" }}
+        {{
+            "regulation": "Official JKR/DOSH regulation name",
+            "requirement": "TWO-SENTENCE description of the breached requirement, naming the specific PPE / hazard / control observed in THIS scene.",
+            "explanation": "TWO-SENTENCE plain-language explanation of WHY this regulation applies to the people and environment shown in the caption.",
+            "penalty": "Specific enforcement consequence (fine amount, stop-work order, criminal liability, etc.) if breach continues."
+        }}
     ]
 }}
 """
@@ -1174,7 +1281,7 @@ RESPONSE FORMAT (JSON):
                         logger.warning(detail)
                         return None
 
-                logger.info("✓ Gemini NLP analysis completed")
+                logger.info("âœ“ Gemini NLP analysis completed")
                 self.last_nlp_error = None
                 return result
             else:
@@ -2820,7 +2927,7 @@ RESPONSE FORMAT (JSON):
 <body>
     <div class="container">
         <div class="header">
-            <h1>⚠️ PPE Safety Violation Report</h1>
+            <h1>âš ï¸ PPE Safety Violation Report</h1>
             <p class="report-id">Report ID: {report_id}</p>
             <p>Generated: {timestamp_display}</p>
         </div>
@@ -2830,7 +2937,7 @@ RESPONSE FORMAT (JSON):
                 <div class="report-split-top">
                     <!-- Images Section -->
                     <div class="section">
-                        <h2 class="section-title">📸 Visual Evidence</h2>
+                        <h2 class="section-title">ðŸ“¸ Visual Evidence</h2>
                         <div class="grid">
                             <div class="card">
                                 <div class="card-header">Original Image (1920x1080)</div>
@@ -2849,7 +2956,7 @@ RESPONSE FORMAT (JSON):
 
                     <!-- Violation Details -->
                     <div class="section">
-                        <h2 class="section-title">📋 Violation Details</h2>
+                        <h2 class="section-title">ðŸ“‹ Violation Details</h2>
                         <div class="info-grid">
                             <div class="info-item">
                                 <span class="info-label">Report ID:</span>
@@ -2876,7 +2983,7 @@ RESPONSE FORMAT (JSON):
 
                     <!-- AI Scene Analysis -->
                     <div class="section">
-                        <h2 class="section-title">🤖 AI Scene Description</h2>
+                        <h2 class="section-title">ðŸ¤– AI Scene Description</h2>
                         <div class="card">
                             <div class="card-content">
                                 <p>{nlp_analysis.get('visual_evidence') or report_data.get('caption') or 'No description available'}</p>
@@ -2886,10 +2993,10 @@ RESPONSE FORMAT (JSON):
 
                     <!-- NLP Analysis -->
                     <div class="section" style="margin-bottom: 1rem;">
-                        <h2 class="section-title">📊 Safety Analysis</h2>
+                        <h2 class="section-title">ðŸ“Š Safety Analysis</h2>
 
                         <div class="environment-badge">
-                            <span>🏗️</span>
+                            <span>ðŸ—ï¸</span>
                             <span>Environment: {nlp_analysis.get('environment_type', 'Unknown')}</span>
                         </div>
 
@@ -2910,17 +3017,10 @@ RESPONSE FORMAT (JSON):
                     <!-- Individual Person Analysis -->
                     {self._generate_person_cards_section(nlp_analysis, report_data)}
 
-                    <!-- Functional NCR Generation Section -->
-                    <div class="section" style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); border: 2px solid #495057; padding: 1.5rem; margin: 1rem 0; border-radius: 8px; text-align: center;">
-                        <h3 style="color: #495057; margin-bottom: 0.5rem;">📋 Generate Official Documentation</h3>
-                        <p style="color: #6c757d; margin-bottom: 1rem;">Create formal documentation for regulatory compliance and incident reporting.</p>
-                        <button onclick="generateNCR()" style="background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                            📄 Generate Non-Conformance Report (NCR)
-                        </button>
-                        <button onclick="generateJKKP7()" style="background: linear-gradient(135deg, #007bff, #0056b3); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                            ⚠️ Generate JKKP-7 Incident Form
-                        </button>
-                    </div>
+                    <!-- Official documentation (NCR / JKKP-7) is now generated
+                         from the dedicated Batch Docs page so officers can
+                         export multiple reports in one go with proper
+                         filtering by timeline / status / violation type. -->
                 </div>
 
                 <div class="report-split-bottom">
@@ -2934,198 +3034,7 @@ RESPONSE FORMAT (JSON):
         </div>
         
         <script>
-        function generateNCR() {{
-            const reportId = {safe_report_id_js};
-            const timestamp = {safe_timestamp_js};
-            const environment = {safe_environment_js};
-            const severity = {safe_severity_js};
-            const summary = {safe_summary_js};
-            
-            // Collect violations from the page
-            const violations = [];
-            document.querySelectorAll('.card-header').forEach(el => {{
-                if (el.textContent.includes('Reg.') || el.textContent.includes('OSHA') || el.textContent.includes('BOWEC')) {{
-                    violations.push(el.textContent.trim());
-                }}
-            }});
-            
-            const ncrHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>NCR - ${{reportId}}</title>
-    <style>
-        @media print {{ @page {{ margin: 1.5cm; }} }}
-        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.4; }}
-        .header {{ text-align: center; border-bottom: 3px solid #000; padding-bottom: 15px; margin-bottom: 20px; }}
-        .header h1 {{ margin: 0; color: #c00; font-size: 24px; }}
-        .header h2 {{ margin: 5px 0; font-size: 18px; }}
-        .ncr-number {{ background: #f0f0f0; padding: 10px; font-size: 16px; font-weight: bold; margin: 10px 0; }}
-        .section {{ margin: 15px 0; }}
-        .section-title {{ background: #333; color: white; padding: 8px 12px; font-weight: bold; margin-bottom: 10px; }}
-        .field {{ display: flex; border-bottom: 1px solid #ccc; padding: 8px 0; }}
-        .field-label {{ width: 180px; font-weight: bold; }}
-        .field-value {{ flex: 1; }}
-        .violations-list {{ background: #fff8e1; padding: 10px; border-left: 4px solid #ffc107; }}
-        .signature-block {{ display: flex; justify-content: space-between; margin-top: 40px; }}
-        .signature-box {{ width: 45%; text-align: center; }}
-        .signature-line {{ border-top: 1px solid #000; margin-top: 60px; padding-top: 5px; }}
-        .checkbox {{ display: inline-block; width: 15px; height: 15px; border: 1px solid #000; margin-right: 10px; vertical-align: middle; }}
-        .footer {{ text-align: center; margin-top: 30px; font-size: 12px; color: #666; border-top: 1px solid #ccc; padding-top: 10px; }}
-        .print-btn {{ background: #28a745; color: white; border: none; padding: 10px 20px; cursor: pointer; font-size: 16px; margin: 20px; }}
-        @media print {{ .print-btn {{ display: none; }} }}
-    </style>
-</head>
-<body>
-    <button class="print-btn" onclick="window.print()">🖨️ Print NCR</button>
-    
-    <div class="header">
-        <h1>⚠️ NON-CONFORMANCE REPORT (NCR)</h1>
-        <h2>Workplace Safety & Health Violation</h2>
-        <div class="ncr-number">NCR No: NCR-${{reportId.replace('violation_', '')}}</div>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">📍 INCIDENT DETAILS</div>
-        <div class="field"><span class="field-label">Report ID:</span><span class="field-value">${{reportId}}</span></div>
-        <div class="field"><span class="field-label">Date/Time:</span><span class="field-value">${{timestamp}}</span></div>
-        <div class="field"><span class="field-label">Location Type:</span><span class="field-value">${{environment}}</span></div>
-        <div class="field"><span class="field-label">Severity Level:</span><span class="field-value" style="color: ${{severity === 'HIGH' ? '#c00' : '#f90'}}; font-weight: bold;">${{severity}}</span></div>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">📝 DESCRIPTION OF NON-CONFORMANCE</div>
-        <p>${{summary}}</p>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">⚖️ REGULATIONS VIOLATED</div>
-        <div class="violations-list">
-            ${{violations.map(v => '<div>• ' + v + '</div>').join('') || '<div>• See attached violation report for full details</div>'}}
-        </div>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">✅ CORRECTIVE ACTION REQUIRED</div>
-        <div class="field"><span class="field-label">Immediate Action:</span><span class="field-value">Stop work until PPE compliance is achieved</span></div>
-        <div class="field"><span class="field-label">Deadline:</span><span class="field-value">Immediate / Before resuming work</span></div>
-        <div class="field"><span class="field-label">Responsible Party:</span><span class="field-value">Site Supervisor / Contractor</span></div>
-    </div>
-    
-    <div class="section">
-        <div class="section-title">📋 FOLLOW-UP VERIFICATION</div>
-        <p><span class="checkbox"></span> Corrective action implemented</p>
-        <p><span class="checkbox"></span> Re-inspection completed</p>
-        <p><span class="checkbox"></span> NCR closed</p>
-    </div>
-    
-    <div class="signature-block">
-        <div class="signature-box">
-            <div class="signature-line">Issued By (Safety Officer)</div>
-            <p>Name: _______________________</p>
-            <p>Date: _______________________</p>
-        </div>
-        <div class="signature-box">
-            <div class="signature-line">Acknowledged By (Contractor)</div>
-            <p>Name: _______________________</p>
-            <p>Date: _______________________</p>
-        </div>
-    </div>
-    
-    <div class="footer">
-        <p>This NCR was auto-generated by CASM PPE Safety Monitor System</p>
-        <p>Reference: OSHA 1994 | BOWEC 1986 | DOSH Guidelines</p>
-    </div>
-</body>
-</html>`;
-            
-            const ncrWindow = window.open('', '_blank');
-            ncrWindow.document.write(ncrHtml);
-            ncrWindow.document.close();
-        }}
-        
-        function generateJKKP7() {{
-            const reportId = {safe_report_id_js};
-            const timestamp = {safe_timestamp_js};
-            
-            const jkkpHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>JKKP-7 Form - ${{reportId}}</title>
-    <style>
-        @media print {{ @page {{ margin: 1cm; }} }}
-        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; font-size: 12px; }}
-        .header {{ text-align: center; border: 2px solid #000; padding: 10px; margin-bottom: 15px; }}
-        .header h1 {{ margin: 0; font-size: 16px; }}
-        .header h2 {{ margin: 5px 0; font-size: 14px; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-        td, th {{ border: 1px solid #000; padding: 8px; text-align: left; vertical-align: top; }}
-        th {{ background: #f0f0f0; width: 30%; }}
-        .section-header {{ background: #333; color: white; text-align: center; font-weight: bold; }}
-        .checkbox {{ display: inline-block; width: 12px; height: 12px; border: 1px solid #000; margin-right: 5px; }}
-        .signature-row td {{ height: 60px; }}
-        .print-btn {{ background: #007bff; color: white; border: none; padding: 10px 20px; cursor: pointer; font-size: 14px; margin: 15px; }}
-        @media print {{ .print-btn {{ display: none; }} }}
-        .note {{ font-size: 10px; color: #666; margin-top: 10px; }}
-    </style>
-</head>
-<body>
-    <button class="print-btn" onclick="window.print()">🖨️ Print JKKP-7 Form</button>
-    
-    <div class="header">
-        <h1>BORANG JKKP 7</h1>
-        <h2>NOTIS KEMALANGAN, KEJADIAN BERBAHAYA, KERACUNAN PEKERJAAN ATAU PENYAKIT PEKERJAAN</h2>
-        <p style="font-size: 10px;">[Peraturan 8, Peraturan-Peraturan Keselamatan dan Kesihatan Pekerjaan (Pemberitahuan Kemalangan, Kejadian Berbahaya, Keracunan Pekerjaan dan Penyakit Pekerjaan) 2004]</p>
-    </div>
-    
-    <table>
-        <tr class="section-header"><td colspan="2">BAHAGIAN A: BUTIR-BUTIR MAJIKAN</td></tr>
-        <tr><th>1. Nama Majikan:</th><td></td></tr>
-        <tr><th>2. Alamat Tempat Kerja:</th><td></td></tr>
-        <tr><th>3. No. Telefon:</th><td></td></tr>
-        <tr><th>4. Jenis Industri:</th><td>Pembinaan / Construction</td></tr>
-    </table>
-    
-    <table>
-        <tr class="section-header"><td colspan="2">BAHAGIAN B: BUTIR-BUTIR KEMALANGAN/KEJADIAN</td></tr>
-        <tr><th>5. Tarikh & Masa:</th><td>${{timestamp}}</td></tr>
-        <tr><th>6. Tempat Kejadian:</th><td></td></tr>
-        <tr><th>7. Jenis Kejadian:</th><td>
-            <span class="checkbox"></span> Kemalangan Maut<br>
-            <span class="checkbox"></span> Kemalangan Tidak Maut<br>
-            <span class="checkbox">☑</span> Kejadian Berbahaya (PPE Non-Compliance)<br>
-            <span class="checkbox"></span> Keracunan Pekerjaan
-        </td></tr>
-        <tr><th>8. Perihal Kejadian:</th><td>PPE safety violation detected. Ref: ${{reportId}}</td></tr>
-    </table>
-    
-    <table>
-        <tr class="section-header"><td colspan="2">BAHAGIAN C: BUTIR-BUTIR ORANG YANG TERLIBAT</td></tr>
-        <tr><th>9. Nama Pekerja:</th><td></td></tr>
-        <tr><th>10. No. K/P:</th><td></td></tr>
-        <tr><th>11. Jantina:</th><td><span class="checkbox"></span> Lelaki <span class="checkbox"></span> Perempuan</td></tr>
-        <tr><th>12. Warganegara:</th><td></td></tr>
-    </table>
-    
-    <table>
-        <tr class="section-header"><td colspan="2">BAHAGIAN D: PENGESAHAN</td></tr>
-        <tr class="signature-row">
-            <th>Tandatangan Majikan/Wakil:</th>
-            <td></td>
-        </tr>
-        <tr><th>Nama & Jawatan:</th><td></td></tr>
-        <tr><th>Tarikh:</th><td></td></tr>
-    </table>
-    
-    <p class="note"><strong>Nota:</strong> Borang ini perlu dihantar kepada Jabatan Keselamatan dan Kesihatan Pekerjaan (DOSH) dalam tempoh yang ditetapkan. Auto-generated reference from CASM Safety Report: ${{reportId}}</p>
-</body>
-</html>`;
-            
-            const jkkpWindow = window.open('', '_blank');
-            jkkpWindow.document.write(jkkpHtml);
-            jkkpWindow.document.close();
-        }}
+        // (NCR / JKKP-7 generators removed; superseded by Batch Docs page.)
 
         (function initReportExpandToggle() {{
             const splitCard = document.getElementById('reportSplitCard');
@@ -3149,7 +3058,7 @@ RESPONSE FORMAT (JSON):
         <div class="footer">
             <p>CASM PPE Safety Monitor - FYPA AI Model Development & Integration</p>
             <p style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">
-                Powered by YOLO PPE Detection • Local + Cloud AI Routing • Supabase-backed Report Pipeline
+                Powered by YOLO PPE Detection â€¢ Local + Cloud AI Routing â€¢ Supabase-backed Report Pipeline
             </p>
         </div>
     </div>
@@ -3254,7 +3163,7 @@ RESPONSE FORMAT (JSON):
             else:
                 detail = 'PPE/risk observation recorded by model'
 
-            model_person_rows.append(f"• {person_id}: {detail}")
+            model_person_rows.append(f"â€¢ {person_id}: {detail}")
 
         model_person_count = len(model_person_rows)
 
@@ -3262,47 +3171,7 @@ RESPONSE FORMAT (JSON):
         detected_violation_items = int((report_data or {}).get('violation_count', 0) or 0)
 
         def _infer_people_count_from_text(*texts: str) -> int:
-            combined = " ".join(str(t or "") for t in texts)
-            lower = combined.lower()
-
-            # Prefer explicit numeric phrases like "6 people".
-            digit_hits = [
-                int(m.group(1))
-                for m in re.finditer(r"\b(\d{1,2})\s+(?:people|persons?|workers?|individuals?|men|women)\b", lower)
-            ]
-
-            number_words = {
-                "one": 1,
-                "two": 2,
-                "three": 3,
-                "four": 4,
-                "five": 5,
-                "six": 6,
-                "seven": 7,
-                "eight": 8,
-                "nine": 9,
-                "ten": 10,
-                "eleven": 11,
-                "twelve": 12,
-            }
-            word_hits = []
-            for word, value in number_words.items():
-                if re.search(rf"\b{word}\s+(?:people|persons?|workers?|individuals?|men|women)\b", lower):
-                    word_hits.append(value)
-
-            candidates = digit_hits + word_hits
-            if candidates:
-                return max(candidates)
-
-            # Last-resort heuristic: count ordinal-person mentions (e.g., "first person", "second person").
-            ordinal_hits = re.findall(
-                r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+person\b",
-                lower,
-            )
-            if ordinal_hits:
-                return len(set(ordinal_hits))
-
-            return 0
+            return infer_people_count_from_text(*texts)
 
         inferred_person_count = 0
         if model_person_count == 0 and detected_person_count == 0:
@@ -3316,7 +3185,7 @@ RESPONSE FORMAT (JSON):
         if model_person_count > 0:
             preview_rows = model_person_rows[:4]
             if model_person_count > 4:
-                preview_rows.append(f"• +{model_person_count - 4} more model-identified person entries")
+                preview_rows.append(f"â€¢ +{model_person_count - 4} more model-identified person entries")
 
             who_header = (
                 f"Model identified {model_person_count} person(s), "
@@ -3446,7 +3315,7 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
-            hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+            hazard_text = '<br>'.join(f"â€¢ {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
 
         if not reg_names:
             inferred_regs: List[str] = []
@@ -3469,19 +3338,19 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
-            reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
+            reg_text = '<br>'.join(f"â€¢ {self._inject_interactive_tooltips(name)}" for name in reg_names)
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>
         parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', what_text)
-        # 2. Lists/Newlines: • or - -> <br>•
+        # 2. Lists/Newlines: â€¢ or - -> <br>â€¢
         parsed_summary = parsed_summary.replace('\n', '<br>')
 
 
         return f"""
         <div class="card" style="border-left: 5px solid #e74c3c;">
             <div class="card-header" style="background: #c0392b; color: white; display: flex; justify-content: space-between;">
-                <strong>🚨 EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</strong>
+                <strong>ðŸš¨ EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</strong>
                 <span class="badge" style="background: white; color: #c0392b;">{env_type}</span>
             </div>
             <div class="card-content" style="padding: 0;">
@@ -3526,6 +3395,133 @@ RESPONSE FORMAT (JSON):
             return [data]
             
         return [str(data)]
+
+    # =========================================================================
+    # Scenario-aware fallback expanders
+    # -------------------------------------------------------------------------
+    # When the LLM returns a tiny stub for a regulation requirement, a risk
+    # description, or a corrective action, the report ends up looking
+    # hard-coded ("Stop Work", "Issue PPE"). The helpers below expand those
+    # stubs into full-sentence, environment-aware paragraphs so the safety
+    # officer always has enough context to act on, regardless of whether
+    # the LLM was generous or terse on a given run.
+    # =========================================================================
+
+    _SHORT_TEXT_THRESHOLD = 35  # chars; below this we treat the model output as "too terse"
+
+    def _is_text_too_short(self, value: str) -> bool:
+        return len(str(value or '').strip()) < self._SHORT_TEXT_THRESHOLD
+
+    def _format_missing_ppe_phrase(self, missing_ppe: List[str]) -> str:
+        items = [str(p).strip() for p in (missing_ppe or []) if str(p).strip()]
+        if not items:
+            return 'the required personal protective equipment for this scene'
+        if len(items) == 1:
+            return items[0]
+        if len(items) == 2:
+            return f"{items[0]} and {items[1]}"
+        return ', '.join(items[:-1]) + f", and {items[-1]}"
+
+    def _expand_requirement_text(self, base_text: str, regulation: str,
+                                  environment_type: str, missing_ppe: List[str]) -> str:
+        base_text = str(base_text or '').strip()
+        env = (environment_type or 'work').strip() or 'work'
+        ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
+        addendum = (
+            f" In the observed {env.lower()} setting, this regulation requires every "
+            f"operative within the affected zone to wear {ppe_phrase} at all times "
+            f"while exposed to the hazard, and the site supervisor must verify "
+            f"compliance before work resumes."
+        )
+        if not base_text:
+            return (
+                f"{regulation} establishes the baseline duty of care for this category "
+                f"of work."
+            ).strip() + addendum
+        if self._is_text_too_short(base_text):
+            return base_text + addendum
+        return base_text
+
+    def _expand_penalty_text(self, base_text: str, regulation: str) -> str:
+        base_text = str(base_text or '').strip()
+        addendum = (
+            " Continued non-compliance can lead to a stop-work order, monetary "
+            "penalties under the Occupational Safety and Health Act 1994 (OSHA), "
+            "and personal liability for the site supervisor under section 19 of OSHA."
+        )
+        if not base_text:
+            return (
+                f"Breach of {regulation} is enforceable by DOSH inspectors."
+            ).strip() + addendum
+        if self._is_text_too_short(base_text):
+            return base_text + addendum
+        return base_text
+
+    def _expand_risk_text(self, base_text: str, environment_type: str,
+                           missing_ppe: List[str], hazards: List[str]) -> str:
+        base_text = str(base_text or '').strip()
+        env = (environment_type or 'work').strip().lower() or 'work'
+        ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
+        hazard_phrase = ''
+        hazards_clean = [str(h).strip() for h in (hazards or []) if str(h).strip()]
+        if hazards_clean:
+            hazard_phrase = f" combined with the {hazards_clean[0].lower()} hazard already present in the scene"
+        addendum = (
+            f" In a {env} environment, working without {ppe_phrase}{hazard_phrase} "
+            f"materially increases the chance of a recordable injury (head trauma, "
+            f"laceration, fall-from-height, struck-by) that would trigger a JKKP-7 "
+            f"incident notification within seven days."
+        )
+        if not base_text:
+            return ("This person is exposed to an immediate safety risk." + addendum)
+        if self._is_text_too_short(base_text):
+            return base_text + addendum
+        return base_text
+
+    def _expand_mitigation_steps(self, steps: List[str], environment_type: str,
+                                  missing_ppe: List[str]) -> List[str]:
+        existing = [str(s).strip() for s in (steps or []) if str(s).strip()]
+        if len(existing) >= 3:
+            return existing
+        env = (environment_type or 'work').strip().lower() or 'work'
+        ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
+        defaults = [
+            f"Halt the activity in the affected zone and isolate the area until {ppe_phrase} is issued, fitted, and inspected by the site supervisor.",
+            f"Brief every operative entering the {env} zone on the specific hazard observed and require them to sign a toolbox-talk attendance sheet before resuming.",
+            f"Schedule a follow-up audit within 48 hours and capture photographic evidence of the corrected PPE compliance for the safety file."
+        ]
+        for d in defaults:
+            if d not in existing:
+                existing.append(d)
+            if len(existing) >= 3:
+                break
+        return existing
+
+    def _default_corrective_actions_for(self, environment_type: str,
+                                         missing_ppe: List[str]) -> List[str]:
+        env = (environment_type or 'work').strip().lower() or 'work'
+        ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
+        return [
+            f"Immediately stop work in the {env} zone shown in the scene and remove the exposed person(s) from the hazard.",
+            f"Issue and verify the correct fitting of {ppe_phrase} before any operative re-enters the affected area.",
+            f"Record the incident in the site safety log, brief the crew during the next toolbox talk, and schedule a 48-hour follow-up audit to confirm sustained compliance."
+        ]
+
+    def _expand_corrective_actions(self, actions: List[str], environment_type: str,
+                                    missing_ppe: List[str]) -> List[str]:
+        existing = [str(a).strip() for a in (actions or []) if str(a).strip()]
+        # Treat trivial chip-style answers ("Stop Work", "Issue PPE") as missing.
+        substantive = [a for a in existing if len(a) >= self._SHORT_TEXT_THRESHOLD]
+        if len(substantive) >= 3:
+            return substantive
+        defaults = self._default_corrective_actions_for(environment_type, missing_ppe)
+        out = list(substantive)
+        for d in defaults:
+            if d not in out:
+                out.append(d)
+            if len(out) >= 3:
+                break
+        return out
 
     def _sanitize_nlp_analysis(self, nlp_analysis: Any) -> Dict[str, Any]:
         """Normalize model output into a stable schema for robust rendering."""
@@ -3865,12 +3861,12 @@ RESPONSE FORMAT (JSON):
             issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
 
         summary_parts = [
-            f"• **SCENE CLASS**: {env}",
-            f"• **CRITICAL OBSERVATION**: {issue_text}",
+            f"â€¢ **SCENE CLASS**: {env}",
+            f"â€¢ **CRITICAL OBSERVATION**: {issue_text}",
         ]
         if context_sentence:
-            summary_parts.append(f"• **VISUAL CONTEXT**: {context_sentence}")
-        summary_parts.append("• **LEGAL ORDER**: enforce compliant PPE before work resumes")
+            summary_parts.append(f"â€¢ **VISUAL CONTEXT**: {context_sentence}")
+        summary_parts.append("â€¢ **LEGAL ORDER**: enforce compliant PPE before work resumes")
         return '\n'.join(summary_parts)
 
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
@@ -3961,7 +3957,7 @@ RESPONSE FORMAT (JSON):
             
         return f"""
             <div class="section">
-                <h2 class="section-title">📜 Caption Development History</h2>
+                <h2 class="section-title">ðŸ“œ Caption Development History</h2>
                 <div style="background: rgba(52, 152, 219, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                      <p style="margin: 0; color: #2980b9; font-weight: 600;">
                         <i class="fas fa-info-circle"></i> Tracking AI scene description evolution (v1, v2, v3...)
@@ -3980,7 +3976,7 @@ RESPONSE FORMAT (JSON):
         items = "".join([f"<li style=\"white-space: normal; word-break: break-word;\">{self._to_safe_html_text(h)}</li>" for h in hazards if str(h).strip()])
         return f"""
             <div class="section">
-                <h2 class="section-title">⚠️ Hazards Detected</h2>
+                <h2 class="section-title">âš ï¸ Hazards Detected</h2>
                 <ul class="list">
                     {items}
                 </ul>
@@ -3994,7 +3990,23 @@ RESPONSE FORMAT (JSON):
             return ""
 
         regulations = regulations_raw if isinstance(regulations_raw, list) else [regulations_raw]
-        
+        environment_type = str(nlp_analysis.get('environment_type') or 'General').strip() or 'General'
+        # Best-effort scene-wide missing PPE list for the fallback expander.
+        scene_missing_ppe: List[str] = []
+        for person in (nlp_analysis.get('persons') or []):
+            if not isinstance(person, dict):
+                continue
+            ppe_map = person.get('ppe') or {}
+            if not isinstance(ppe_map, dict):
+                continue
+            for ppe_name, status in ppe_map.items():
+                if not str(status or '').strip():
+                    continue
+                if 'missing' in str(status).lower() or str(status).lower().startswith('no '):
+                    label = str(ppe_name).replace('_', ' ').title()
+                    if label not in scene_missing_ppe:
+                        scene_missing_ppe.append(label)
+
         reg_items = []
         seen_regulations = set()
 
@@ -4002,25 +4014,40 @@ RESPONSE FORMAT (JSON):
             if isinstance(reg, dict):
                 regulation = str(reg.get('regulation') or reg.get('technical_standard') or '').strip()
                 requirement = str(reg.get('requirement') or '').strip()
+                explanation = str(reg.get('explanation') or '').strip()
                 penalty = str(reg.get('penalty') or reg.get('legal_regulatory_consequences') or '').strip()
             else:
                 regulation = str(reg).strip()
                 requirement = ""
+                explanation = ""
                 penalty = ""
 
             if not regulation:
                 continue
-            
+
             # Deduplication
             reg_key = regulation.strip().lower()
             if reg_key in seen_regulations:
                 continue
             seen_regulations.add(reg_key)
 
+            # Apply scenario-aware fallback expanders so terse model
+            # responses still read as substantive paragraphs.
+            requirement = self._expand_requirement_text(
+                requirement, regulation, environment_type, scene_missing_ppe
+            )
+            penalty = self._expand_penalty_text(penalty, regulation)
+
             safe_regulation = self._inject_interactive_tooltips(self._to_safe_html_text(regulation))
             safe_requirement = self._inject_interactive_tooltips(self._to_safe_html_text(requirement))
+            safe_explanation = self._to_safe_html_text(explanation)
             safe_penalty = self._to_safe_html_text(penalty)
-            
+
+            explanation_block = (
+                f'<p style="margin: 0.6rem 0 0; color: #444; white-space: normal; word-break: break-word;">'
+                f'<strong>Why this applies here:</strong> {safe_explanation}</p>'
+            ) if safe_explanation else ''
+
             reg_items.append(f"""
                 <div class="card" style="margin-bottom: 1rem;">
                     <div class="card-header" style="background: linear-gradient(135deg, #e67e22, #d35400); color: white;">
@@ -4028,7 +4055,8 @@ RESPONSE FORMAT (JSON):
                     </div>
                     <div class="card-content">
                         {f'<p style="margin-bottom: 0; white-space: normal; word-break: break-word;"><strong>Requirement:</strong> {safe_requirement}</p>' if safe_requirement else ''}
-                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong>📖 Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
+                        {explanation_block}
+                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong>ðŸ“– Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
                     </div>
                 </div>
             """)
@@ -4036,7 +4064,7 @@ RESPONSE FORMAT (JSON):
         
         return f"""
             <div class="section">
-                <h2 class="section-title">📚 Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
+                <h2 class="section-title">ðŸ“š Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
                 <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                     <p style="margin: 0; color: #e67e22; font-weight: 600;">
                         <i class="fas fa-info-circle"></i> The following official JKR/DOSH regulations may apply to observed scene violations (PPE and non-PPE):
@@ -4053,10 +4081,44 @@ RESPONSE FORMAT (JSON):
             persons = []
         persons = [p for p in persons if isinstance(p, dict)]
 
+        # Reconcile against caption / yolo so the card grid matches the
+        # scene description the user is reading right above it. If the
+        # model returned fewer persons than the caption / detection
+        # implies, pad placeholder cards rather than silently showing
+        # only one card for a "three workers" scene.
+        try:
+            target_count = int(report_data.get('person_count') or 0)
+        except (TypeError, ValueError):
+            target_count = 0
+        caption_text = str(report_data.get('caption') or '')
+        violation_summary_text = str(report_data.get('violation_summary') or '')
+        inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
+        target_count = max(target_count, inferred_from_caption, len(persons))
+
+        if target_count > len(persons):
+            placeholder_template = {
+                'description': (
+                    'This person is referenced in the scene description but the '
+                    'model did not return a dedicated per-person breakdown. '
+                    'Apply the same site-wide PPE requirements and corrective '
+                    'actions listed for the analysed persons above.'
+                ),
+                'compliance_status': 'Review Required',
+                'ppe': {},
+                'hazards_faced': [],
+                'risks': [],
+                'corrective_actions': [],
+                '__placeholder__': True,
+            }
+            for idx in range(len(persons), target_count):
+                ph = dict(placeholder_template)
+                ph['id'] = f'Person {idx + 1}'
+                persons.append(ph)
+
         if not persons:
             return """
             <div class="section">
-                <h2 class="section-title">👥 Individual Analysis</h2>
+                <h2 class="section-title">ðŸ‘¥ Individual Analysis</h2>
                 <div class="card">
                     <div class="card-content">
                         <p>No person-level analysis returned by model.</p>
@@ -4082,6 +4144,9 @@ RESPONSE FORMAT (JSON):
             ppe_keys_order = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
             ppe_keys = [k for k in ppe_keys_order if k in ppe] + [k for k in ppe.keys() if k not in ppe_keys_order]
 
+            person_missing_ppe: List[str] = []
+            environment_type = str(nlp_analysis.get('environment_type') or 'work').strip() or 'work'
+
             for ppe_type in ppe_keys:
                 status = str(ppe.get(ppe_type, '') or '').strip() or 'Not specified'
                 status_lower = status.lower()
@@ -4089,6 +4154,7 @@ RESPONSE FORMAT (JSON):
                 if 'missing' in status_lower or status_lower.startswith('no '):
                     status_class = 'ppe-status-missing'
                     has_missing_ppe = True
+                    person_missing_ppe.append(ppe_type.replace('_', ' ').title())
                 elif 'mention' in status_lower or 'present' in status_lower or 'wear' in status_lower:
                     status_class = 'ppe-status-mentioned'
                 else:
@@ -4147,6 +4213,22 @@ RESPONSE FORMAT (JSON):
                         likelihood = str(r.get('likelihood') or '').strip()
                         regulation_citation = str(r.get('regulation_citation') or '').strip()
                         legal_consequence = str(r.get('legal_regulatory_consequences') or r.get('penalty') or '').strip()
+
+                        # Scenario-aware fallback expansion: if the model
+                        # returned a one-liner, pad with environment + missing
+                        # PPE context so the field reads as a proper paragraph.
+                        hazard_labels = []
+                        for h in (person.get('hazards_faced') or []):
+                            if isinstance(h, dict):
+                                hazard_labels.append(str(h.get('type') or h.get('hazard') or '').strip())
+                            else:
+                                hazard_labels.append(str(h).strip())
+                        risk_desc = self._expand_risk_text(
+                            risk_desc, environment_type, person_missing_ppe, hazard_labels
+                        )
+                        legal_consequence = self._expand_penalty_text(
+                            legal_consequence, regulation_citation or 'the cited regulation'
+                        )
                         if not likelihood:
                             risk_l = risk_desc.lower()
                             if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
@@ -4193,6 +4275,12 @@ RESPONSE FORMAT (JSON):
             actions = self._ensure_list_of_strings(
                 person.get('corrective_actions', []) or person.get('actions', [])
             )
+            # Always pass through the scenario-aware expander so a 1-2 word
+            # chip ("Stop Work") gets replaced/augmented with full sentences
+            # the safety officer can hand to a foreman.
+            actions = self._expand_corrective_actions(
+                actions, environment_type, person_missing_ppe
+            )
             actions_html = ""
             if actions:
                 for a in actions:
@@ -4203,9 +4291,9 @@ RESPONSE FORMAT (JSON):
             # Determine compliance badge style
             comp_lower = compliance.lower()
             if 'non' in comp_lower or 'fail' in comp_lower:
-                comp_badge = '<span class="badge badge-danger">✗ Non-Compliant</span>'
+                comp_badge = '<span class="badge badge-danger">âœ— Non-Compliant</span>'
             elif 'compliant' in comp_lower or 'pass' in comp_lower:
-                comp_badge = '<span class="badge badge-success">✓ Compliant</span>'
+                comp_badge = '<span class="badge badge-success">âœ“ Compliant</span>'
             else:
                 comp_badge = f'<span class="badge badge-warning">{self._to_safe_html_text(compliance)}</span>'
 
@@ -4217,35 +4305,35 @@ RESPONSE FORMAT (JSON):
                 <div class="person-card">
                     <div class="person-header">
                         <div>
-                            <h3>👤 Person {person_id_display}</h3>
+                            <h3>ðŸ‘¤ Person {person_id_display}</h3>
                             <p style="white-space: normal; word-break: break-word;">{description or 'No description provided by model'}</p>
                         </div>
                         {comp_badge}
                     </div>
                     <div class="person-content">
                         <div class="person-section">
-                            <h4>🦺 PPE Status</h4>
+                            <h4>ðŸ¦º PPE Status</h4>
                             <div class="ppe-grid">
                                 {"".join(ppe_items)}
                             </div>
                         </div>
                         
                         <div class="person-section">
-                            <h4>⚠️ Hazards Faced</h4>
+                            <h4>âš ï¸ Hazards Faced</h4>
                             <div class="risk-grid">
                                 {hazards_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>⚕️ Potential Risks &amp; Likelihood</h4>
+                            <h4>âš•ï¸ Potential Risks &amp; Likelihood</h4>
                             <div class="risk-list">
                                 {risks_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>🏃 Recommended Actions</h4>
+                            <h4>ðŸƒ Recommended Actions</h4>
                             <div class="action-grid">
                                 {actions_html}
                             </div>
@@ -4256,7 +4344,7 @@ RESPONSE FORMAT (JSON):
         
         return f"""
             <div class="section">
-                <h2 class="section-title">👥 Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
+                <h2 class="section-title">ðŸ‘¥ Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
                 <div class="persons-grid">
                     {''.join(person_cards)}
                 </div>
@@ -4275,7 +4363,7 @@ RESPONSE FORMAT (JSON):
         ])
         return f"""
             <div class="section">
-                <h2 class="section-title">✅ Recommended Actions</h2>
+                <h2 class="section-title">âœ… Recommended Actions</h2>
                 <ul class="list">
                     {items}
                 </ul>

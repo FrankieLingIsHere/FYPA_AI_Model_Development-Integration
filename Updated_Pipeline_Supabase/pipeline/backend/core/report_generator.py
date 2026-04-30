@@ -4104,12 +4104,12 @@ RESPONSE FORMAT (JSON):
         caption_text = str(report_data.get('caption') or '')
         violation_summary_text = str(report_data.get('violation_summary') or '')
         inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
-        # Use caption/yolo as the authoritative upper bound.
-        # DON'T include len(persons) in max — if Gemini returned MORE persons
-        # than the caption says, we truncate rather than show extra cards.
-        target_count = max(target_count, inferred_from_caption)
-        if target_count == 0:
-            target_count = len(persons)  # fallback: show whatever Gemini returned
+        # Caption/YOLO inference is the authoritative count — Gemini's
+        # person_count field is unreliable and must not override it.
+        if inferred_from_caption > 0:
+            target_count = inferred_from_caption
+        elif target_count == 0:
+            target_count = len(persons)  # last-resort fallback
         # Truncate if Gemini over-generated
         if len(persons) > target_count:
             persons = persons[:target_count]

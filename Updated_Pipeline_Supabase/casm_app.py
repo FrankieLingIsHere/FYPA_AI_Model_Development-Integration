@@ -10134,6 +10134,26 @@ def _render_regenerate_report_page(report_id: str, reason: str, status_code: int
         return page, status_code, {'Content-Type': 'text/html; charset=utf-8'}
 
 
+def _load_local_traceability_sidecar(report_id: str) -> Dict[str, Any]:
+        """Load `violations/<report_id>/metadata.json` written by the report
+        generator. Used as a fallback source for the traceability widget when
+        Supabase has no row yet (offline / pre-sync local mode), so we don't
+        end up showing nulls for caption_validation / nlp_integrity / counts.
+        """
+        if not report_id:
+                return {}
+        try:
+                sidecar_path = VIOLATIONS_DIR / report_id / 'metadata.json'
+                if not sidecar_path.exists():
+                        return {}
+                with open(sidecar_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception as e:
+                logger.debug(f"Could not load traceability sidecar for {report_id}: {e}")
+                return {}
+
+
 def _build_traceability_payload(
         report_id: str,
         violation: Dict[str, Any],
@@ -10164,6 +10184,39 @@ def _build_traceability_payload(
             if isinstance(raw_detections, list):
                 detections = raw_detections
 
+        # Local sidecar fallback: if the Supabase row gave us nothing useful
+        # (typical for offline / pre-sync local mode) read the JSON the report
+        # generator wrote next to report.html so the widget is informative.
+        sidecar: Dict[str, Any] = {}
+        needs_sidecar = (
+            not violation
+            or not detections
+            or caption_validation is None
+            or nlp_integrity is None
+            or not generation_models
+        )
+        if needs_sidecar:
+            sidecar = _load_local_traceability_sidecar(report_id)
+            if sidecar:
+                if not detections and isinstance(sidecar.get('detections'), list):
+                    detections = sidecar['detections']
+                if not caption:
+                    caption = str(sidecar.get('caption') or '')
+                    placeholder = _caption_placeholder_info(caption)
+                if caption_validation is None:
+                    caption_validation = sidecar.get('caption_validation')
+                if nlp_integrity is None:
+                    nlp_integrity = sidecar.get('nlp_integrity')
+                if not generation_models:
+                    sidecar_models = {
+                        'generation_provider': sidecar.get('generation_provider'),
+                        'generation_model': sidecar.get('generation_model'),
+                        'caption_provider': sidecar.get('caption_provider'),
+                        'caption_model': sidecar.get('caption_model'),
+                    }
+                    if any(sidecar_models.values()):
+                        generation_models = {k: v for k, v in sidecar_models.items() if v}
+
         def _normalized_label(item: Dict[str, Any]) -> str:
             label = item.get('class_name') if isinstance(item, dict) else None
             if label is None and isinstance(item, dict):
@@ -10184,10 +10237,16 @@ def _build_traceability_payload(
         person_count = len(detected_people) if detections else (event.get('person_count') if isinstance(event, dict) else None)
         if person_count is None:
             person_count = violation.get('person_count')
+        if person_count is None and sidecar:
+            person_count = sidecar.get('person_count')
 
         violation_count = len(detected_violations) if detections else (event.get('violation_count') if isinstance(event, dict) else None)
         if violation_count is None:
             violation_count = violation.get('violation_count')
+        if violation_count is None and sidecar:
+            violation_count = sidecar.get('violation_count')
+
+        severity = violation.get('severity') or (sidecar.get('severity') if sidecar else None)
 
         return {
                 'report_id': report_id,
@@ -10211,7 +10270,7 @@ def _build_traceability_payload(
                 'generation_models': generation_models,
                 'person_count': person_count,
                 'violation_count': violation_count,
-                'severity': violation.get('severity'),
+                'severity': severity,
         }
 
 

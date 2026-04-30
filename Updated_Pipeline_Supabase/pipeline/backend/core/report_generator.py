@@ -1973,6 +1973,23 @@ RESPONSE FORMAT (JSON):
         
         # Step 3: Generate HTML report
         html_path = self._generate_html_report(report_data, nlp_analysis)
+
+        # Step 3b: Write a traceability sidecar JSON next to the local report
+        # so the offline / local-filesystem fallback path in casm_app.py can
+        # populate the traceability widget instead of showing nulls when
+        # Supabase isn't reachable or the violation row hasn't synced yet.
+        try:
+            self._write_traceability_sidecar(
+                report_data=report_data,
+                nlp_analysis=nlp_analysis,
+                raw_nlp_analysis=raw_nlp_analysis,
+                nlp_integrity=nlp_integrity,
+            )
+        except Exception as sidecar_err:
+            logger.warning(
+                "Failed to write traceability sidecar for %s: %s",
+                report_data.get('report_id'), sidecar_err,
+            )
         
         # Step 4: Generate PDF (if enabled)
         pdf_path = None
@@ -3112,6 +3129,62 @@ RESPONSE FORMAT (JSON):
         logger.info(f"HTML report copied to: {violations_report_path}")
         
         return html_path
+
+    def _write_traceability_sidecar(
+        self,
+        report_data: Dict[str, Any],
+        nlp_analysis: Dict[str, Any],
+        raw_nlp_analysis: Any,
+        nlp_integrity: Optional[Dict[str, Any]],
+    ) -> None:
+        """Write a JSON sidecar (`metadata.json`) next to `report.html` with
+        traceability fields. The Flask app reads this file when serving a
+        report from the local filesystem (offline / pre-sync) so the
+        TRACEABILITY widget shows real values instead of nulls.
+        """
+        report_id = report_data.get('report_id')
+        if not report_id:
+            return
+
+        detections = report_data.get('detections') or []
+        # Reproduce the same person/violation counting heuristic the
+        # traceability widget itself uses, so what users see in the panel
+        # exactly matches what was rendered into the cards.
+        def _norm_label(item: Any) -> str:
+            if not isinstance(item, dict):
+                return ''
+            label = item.get('class_name') or item.get('class') or ''
+            return str(label).strip().lower().replace('_', '-').replace(' ', '-')
+
+        detected_people = [d for d in detections if _norm_label(d) in {'person', 'worker', 'man', 'woman'}]
+        detected_violations = [d for d in detections if _norm_label(d).startswith('no-')]
+
+        sidecar: Dict[str, Any] = {
+            'report_id': report_id,
+            'generated_at_utc': datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+            'caption': report_data.get('caption'),
+            'caption_provider': report_data.get('caption_provider'),
+            'caption_model': report_data.get('caption_model'),
+            'caption_validation': report_data.get('caption_validation'),
+            'caption_quality_fallback_applied': bool(report_data.get('caption_quality_fallback_applied')),
+            'caption_quality_reason': report_data.get('caption_quality_reason'),
+            'nlp_integrity': nlp_integrity,
+            'generation_provider': nlp_analysis.get('provider') if isinstance(nlp_analysis, dict) else None,
+            'generation_model': nlp_analysis.get('model') if isinstance(nlp_analysis, dict) else None,
+            'person_count': len(detected_people) if detections else int(report_data.get('person_count') or 0),
+            'violation_count': len(detected_violations) if detections else int(report_data.get('violation_count') or 0),
+            'severity': report_data.get('severity'),
+            'detections': detections,
+        }
+
+        sidecar_path = self.violations_dir / report_id / 'metadata.json'
+        try:
+            sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(sidecar_path, 'w', encoding='utf-8') as f:
+                json.dump(sidecar, f, ensure_ascii=False, indent=2, default=str)
+            logger.info(f"Traceability sidecar written: {sidecar_path}")
+        except Exception as e:
+            logger.warning(f"Could not write traceability sidecar to {sidecar_path}: {e}")
     
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
@@ -4122,10 +4195,24 @@ RESPONSE FORMAT (JSON):
         caption_text = str(report_data.get('caption') or '')
         violation_summary_text = str(report_data.get('violation_summary') or '')
         inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
+
+        # YOLO 'Person' detections are a strong secondary signal when the
+        # caption is vague ("a man" / "workers") and gives no explicit number.
+        # Without this, scenes where YOLO sees 3 people but caption only says
+        # "a worker" collapse to a single person card.
+        detections = report_data.get('detections') or []
+        yolo_person_count = sum(
+            1 for d in detections
+            if isinstance(d, dict) and str(d.get('class_name', '')).strip().lower() in {'person', 'worker', 'man', 'woman'}
+        )
+
         # Caption/YOLO inference is the authoritative count — Gemini's
         # person_count field is unreliable and must not override it.
         if inferred_from_caption > 0:
             target_count = inferred_from_caption
+        elif yolo_person_count > 0:
+            # Trust YOLO when caption is silent on count.
+            target_count = max(target_count, yolo_person_count)
         elif target_count == 0:
             target_count = len(persons)  # last-resort fallback
         # Truncate if Gemini over-generated

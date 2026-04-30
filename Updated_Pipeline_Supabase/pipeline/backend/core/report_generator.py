@@ -994,10 +994,13 @@ class ReportGenerator:
         # the user can read in the scene description.
         video_caption_lower = caption.lower()
         caption_inferred_people = infer_people_count_from_text(caption, violation_summary)
-        if caption_inferred_people > person_count:
-            logger.info(
-                f"Reconciling person_count: yolo={person_count} -> caption={caption_inferred_people}"
-            )
+        # Caption is authoritative — YOLO over-counts shadows/reflections/partial bodies.
+        # If the caption says '1 worker' we tell the LLM '1', not YOLO's higher count.
+        if caption_inferred_people > 0:
+            if caption_inferred_people != person_count:
+                logger.info(
+                    f"Reconciling person_count: yolo={person_count} -> caption={caption_inferred_people}"
+                )
             person_count = caption_inferred_people
 
         if person_count == 0:

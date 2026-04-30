@@ -523,6 +523,13 @@ const GlobalSettingsModal = {
             };
             if (!merged.machineId) return merged;
             sessionStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            // Also persist the confirmed machineId to localStorage so future sessions
+            // (tab close/reopen, hard refresh) still know which edge device to check
+            // instead of falling back to a freshly-generated Web-XXXX browser ID.
+            // Uses the same key as app.js getOrCreateDeviceMachineId().
+            try {
+                localStorage.setItem('ppe.localMode.deviceMachineId.v1', merged.machineId);
+            } catch (_) { /* quota / privacy mode — best-effort only */ }
             return merged;
         } catch (error) {
             return this.loadRemoteProvisionState();
@@ -679,7 +686,15 @@ const GlobalSettingsModal = {
         }
 
         if (!statusResult || statusResult.success === false) {
-            if (storedStatus === 'approved' || storedStatus === 'provisioned') {
+            // Only trust the cached storedStatus if the failure was a network
+            // error (not a 401/403 invalid-secret). A 401 means the device was
+            // revoked and the old secret is no longer valid — don't let the
+            // stale cached "provisioned" mask that.
+            const statusError = String((statusResult && statusResult.error) || '').toLowerCase();
+            const isAuthError = statusError.includes('invalid provision_secret')
+                || statusError.includes('401')
+                || statusError.includes('403');
+            if (!isAuthError && (storedStatus === 'approved' || storedStatus === 'provisioned')) {
                 return {
                     success: true,
                     status: storedStatus,
@@ -702,12 +717,24 @@ const GlobalSettingsModal = {
             (statusResult && statusResult.status) || 'idle'
         );
 
-        this.saveRemoteProvisionState({
-            machineId,
-            provisionSecret,
-            status: normalizedStatus,
-            adminPortalUrl
-        });
+        // If the device was revoked/rejected, clear the stored provision secret
+        // so the next checkup re-registers the device as a fresh request instead
+        // of silently falling back to the cached "provisioned" status.
+        if (normalizedStatus === 'rejected') {
+            this.saveRemoteProvisionState({
+                machineId,
+                provisionSecret: '',
+                status: 'rejected',
+                adminPortalUrl
+            });
+        } else {
+            this.saveRemoteProvisionState({
+                machineId,
+                provisionSecret,
+                status: normalizedStatus,
+                adminPortalUrl
+            });
+        }
 
         return {
             success: true,
@@ -1508,11 +1535,29 @@ const GlobalSettingsModal = {
             }
 
             const provisionResult = isLikelyRemoteBackend
-                ? await this.refreshRemoteProvisioningStatus({
-                    allowRequest: true,
-                    machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
-                    cloud_local_heartbeat: cloudHeartbeat
-                })
+                ? await (async () => {
+                    // Determine the best available machine ID before deciding
+                    // whether to allow sending a provisioning request.
+                    // Priority: live heartbeat ID > localStorage stored ID > sessionStorage stored ID.
+                    // A browser-generated "Web-XXXX" fallback ID must never be submitted as a
+                    // provisioning request from the cloud frontend — it would create a phantom
+                    // device entry in the admin panel that has nothing to do with the edge device.
+                    const localStoredId = (() => {
+                        try {
+                            return String(localStorage.getItem('ppe.localMode.deviceMachineId.v1') || '').trim();
+                        } catch (_) { return ''; }
+                    })();
+                    const sessionStoredId = String((this.loadRemoteProvisionState().machineId) || '').trim();
+                    const resolvedId = heartbeatMachineId || localStoredId || sessionStoredId || this.localProvisionState.machineId || '';
+                    // Only block the request when the only available ID would be a
+                    // browser-generated Web-XXXX (no heartbeat, nothing in any storage).
+                    const wouldUseBrowserFallback = !resolvedId || /^Web-/i.test(resolvedId);
+                    return this.refreshRemoteProvisioningStatus({
+                        allowRequest: !wouldUseBrowserFallback,
+                        machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
+                        cloud_local_heartbeat: cloudHeartbeat
+                    });
+                })()
                 : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 

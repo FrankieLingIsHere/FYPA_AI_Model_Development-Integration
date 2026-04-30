@@ -13331,6 +13331,11 @@ def provision_request():
     )
     _existing_status_for_auth = str((_existing_for_auth or {}).get('status') or '').strip().lower()
     is_rerequest_for_known_device = _existing_status_for_auth in ('approved', 'provisioned')
+    # A previously-rejected device may always re-apply without admin intervention;
+    # the admin's secret was already rotated on revocation so the device can't
+    # prove prior trust with its old secret. Allow the re-application so the
+    # admin can review and approve/reject again.
+    is_rejected_rerequest = _existing_status_for_auth == 'rejected'
 
     # Validate proof-of-prior-trust if presented. Both the secret-bearer path
     # and the admin-token path are accepted; either is sufficient.
@@ -13354,7 +13359,10 @@ def provision_request():
     #       caller proved prior trust by presenting the current
     #       provision_secret. Approval status alone is no longer sufficient,
     #       because machine_id is deterministic and therefore guessable.
-    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret:
+    #   (c) this is a re-application from a previously-rejected device
+    #       (secret was rotated on revocation so proof of prior trust is
+    #       impossible; admin will review and decide again).
+    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest:
         token_header = request.headers.get('X-Admin-Token', '').strip()
         if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
             _append_device_audit_event(

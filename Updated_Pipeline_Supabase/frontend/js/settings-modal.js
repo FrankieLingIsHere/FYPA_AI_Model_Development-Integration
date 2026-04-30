@@ -366,6 +366,9 @@ const GlobalSettingsModal = {
                                 <button id="globalRunLocalModeCheckupBtn" class="btn btn-secondary" type="button">
                                     <i class="fas fa-wifi"></i> Run Local Mode Checkup
                                 </button>
+                                <button id="globalRequestProvisioningBtn" class="btn btn-primary" type="button">
+                                    <i class="fas fa-paper-plane"></i> Request Provisioning
+                                </button>
                                 <button id="globalRedownloadInstallerBtn" class="btn btn-secondary" type="button" style="display: inline-flex;">
                                     <i class="fas fa-download"></i> Re-download Installer BAT
                                 </button>
@@ -956,6 +959,7 @@ const GlobalSettingsModal = {
 
         this.updateLocalModeCheckupStatus();
         this.updateInstallerRedownloadButton();
+        this.updateRequestProvisioningButton();
         this.updateHeartbeatBadge();
 
         // Propagate the resolved per-device status into the global
@@ -1034,6 +1038,90 @@ const GlobalSettingsModal = {
         }
 
         btn.title = 'Installer re-issue is available after device approval.';
+    },
+
+    updateRequestProvisioningButton() {
+        const btn = this.getEl('globalRequestProvisioningBtn');
+        if (!btn) return;
+        const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+        const isApproved = status === 'approved' || status === 'provisioned';
+        const isPending = status === 'pending_approval';
+
+        btn.disabled = isApproved || isPending;
+        btn.style.opacity = (isApproved || isPending) ? '0.45' : '';
+        btn.style.cursor = (isApproved || isPending) ? 'not-allowed' : '';
+
+        if (isApproved) {
+            btn.title = 'Device is already approved — no provisioning request needed.';
+            btn.innerHTML = '<i class="fas fa-check-circle"></i> Already Approved';
+        } else if (isPending) {
+            btn.title = 'Provisioning request already submitted. Waiting for admin approval.';
+            btn.innerHTML = '<i class="fas fa-clock"></i> Pending Approval…';
+        } else {
+            btn.title = 'Send a provisioning request to the administrator for approval.';
+            btn.innerHTML = '<i class="fas fa-paper-plane"></i> Request Provisioning';
+        }
+    },
+
+    async requestProvisioning() {
+        const btn = this.getEl('globalRequestProvisioningBtn');
+        if (!btn || btn.disabled) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
+
+        try {
+            const stored = this.loadRemoteProvisionState();
+            const localStoredId = (() => {
+                try { return String(localStorage.getItem('ppe.localMode.deviceMachineId.v1') || '').trim(); } catch (_) { return ''; }
+            })();
+            const machineIdHint = String(this.localProvisionState.machineId || stored.machineId || localStoredId || '').trim();
+            const machineId = this.ensureRemoteProvisionMachineId(machineIdHint);
+
+            const requestResult = await API.requestCloudProvisioningApproval({
+                machineId,
+                currentProvisionSecret: String(stored.provisionSecret || '').trim()
+            });
+
+            if (!requestResult || requestResult.success === false) {
+                const errMsg = String((requestResult && requestResult.error) || 'Failed to submit provisioning request.');
+                this.setProviderStatus(errMsg, 'error');
+                this.showNotification(errMsg, 'error');
+                btn.disabled = false;
+                this.updateRequestProvisioningButton();
+                return;
+            }
+
+            const newMachineId = String(requestResult.machine_id || machineId).trim() || machineId;
+            const newSecret = String(requestResult.provision_secret || '').trim();
+            const adminPortalUrl = `${API_CONFIG.BASE_URL}/admin/devices`;
+
+            this.saveRemoteProvisionState({
+                machineId: newMachineId,
+                provisionSecret: newSecret,
+                status: 'pending_approval',
+                adminPortalUrl
+            });
+            this.syncLocalProvisionStateFromPayload({
+                machine_id: newMachineId,
+                status: 'pending_approval',
+                admin_portal_url: adminPortalUrl
+            });
+
+            this.updateLocalModeCheckupStatus();
+            this.updateRequestProvisioningButton();
+            this.ensureLocalProvisionPolling();
+
+            const successMsg = `Provisioning request sent for machine ${newMachineId}. Waiting for admin approval.`;
+            this.setProviderStatus(successMsg, 'warning');
+            this.showNotification('Provisioning request submitted. Waiting for admin approval.', 'warning');
+        } catch (error) {
+            const errMsg = (error && error.message) || 'Failed to submit provisioning request.';
+            this.setProviderStatus(errMsg, 'error');
+            this.showNotification(errMsg, 'error');
+            btn.disabled = false;
+            this.updateRequestProvisioningButton();
+        }
     },
 
     updateLocalModeCheckupStatus() {
@@ -1913,6 +2001,7 @@ const GlobalSettingsModal = {
         const applyApiModeBtn = this.getEl('globalApplyApiModeBtn');
         const reloadProviderBtn = this.getEl('globalReloadProviderRoutingBtn');
         const runCheckupBtn = this.getEl('globalRunLocalModeCheckupBtn');
+        const requestProvisioningBtn = this.getEl('globalRequestProvisioningBtn');
         const redownloadInstallerBtn = this.getEl('globalRedownloadInstallerBtn');
         const pingGemmaBtn = this.getEl('globalPingGemmaBtn');
         const localSnapshotBtn = this.getEl('globalLocalSnapshotBtn');
@@ -1985,6 +2074,10 @@ const GlobalSettingsModal = {
 
         if (runCheckupBtn) {
             runCheckupBtn.addEventListener('click', () => this.runLocalModeCheckup());
+        }
+
+        if (requestProvisioningBtn) {
+            requestProvisioningBtn.addEventListener('click', () => this.requestProvisioning());
         }
 
         if (pingGemmaBtn) {
@@ -2211,6 +2304,7 @@ const GlobalSettingsModal = {
 
         window.addEventListener('ppe-local-mode:policy-changed', () => {
             this.updateLocalModeCheckupStatus();
+            this.updateRequestProvisioningButton();
         });
     },
 

@@ -47,33 +47,21 @@
     <script>
         (function() {
             function initDrawer() {
-                var triggers = [
-                    document.getElementById('mobileMoreToggle'),
-                    document.getElementById('mobileTopbarMenuBtn')
-                ].filter(Boolean);
+                var btn = document.getElementById('mobileMoreToggle');
                 var backdrop = document.getElementById('mobileDrawerBackdrop');
-                var setOpen = function(open) {
-                    document.body.classList.toggle('mobile-drawer-open', open);
-                    triggers.forEach(function(btn) {
+                if (btn && btn.dataset.bound !== '1') {
+                    btn.dataset.bound = '1';
+                    var setOpen = function(open) {
+                        document.body.classList.toggle('mobile-drawer-open', open);
                         btn.setAttribute('aria-expanded', open ? 'true' : 'false');
                         btn.classList.toggle('active', open);
-                    });
-                };
-                triggers.forEach(function(btn) {
-                    if (btn.dataset.bound === '1') return;
-                    btn.dataset.bound = '1';
+                    };
                     btn.addEventListener('click', function(e) {
                         e.preventDefault();
                         e.stopPropagation();
                         setOpen(!document.body.classList.contains('mobile-drawer-open'));
                     });
-                });
-                if (backdrop && backdrop.dataset.bound !== '1') {
-                    backdrop.dataset.bound = '1';
-                    backdrop.addEventListener('click', function() { setOpen(false); });
-                }
-                if (!document.body.dataset.drawerKeyBound) {
-                    document.body.dataset.drawerKeyBound = '1';
+                    if (backdrop) backdrop.addEventListener('click', function() { setOpen(false); });
                     document.addEventListener('click', function(e) {
                         if (!document.body.classList.contains('mobile-drawer-open')) return;
                         var link = e.target.closest && e.target.closest('.sidebar .sidebar-link');
@@ -84,10 +72,104 @@
                     });
                 }
             }
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initDrawer);
-            } else {
+
+            // Top-anchored preferences dropdown (replaces the slide-in drawer
+            // for the new top app-bar 3-dots button).
+            function initTopbarPrefs() {
+                var btn = document.getElementById('mobileTopbarMenuBtn');
+                var panel = document.getElementById('mobileTopbarMenuPanel');
+                var backdrop = document.getElementById('mobileTopbarMenuBackdrop');
+                if (!btn || !panel || btn.dataset.bound === '1') return;
+                btn.dataset.bound = '1';
+
+                function setOpen(open) {
+                    panel.hidden = !open;
+                    if (backdrop) backdrop.hidden = !open;
+                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    btn.classList.toggle('active', open);
+                    document.body.classList.toggle('mobile-prefs-open', open);
+                }
+
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setOpen(panel.hidden);
+                });
+                if (backdrop) backdrop.addEventListener('click', function() { setOpen(false); });
+                document.addEventListener('click', function(e) {
+                    if (panel.hidden) return;
+                    if (e.target.closest('#mobileTopbarMenuPanel')) {
+                        // Clicking a navigational tile or button inside the panel
+                        // should close it; selects/labels stay open until blur.
+                        var tile = e.target.closest('.mobile-prefs-tile');
+                        if (tile && tile.id !== 'mobilePrefsVoiceToggle' && tile.id !== 'mobilePrefsVoiceTest') {
+                            setOpen(false);
+                        }
+                        return;
+                    }
+                    if (e.target.closest('#mobileTopbarMenuBtn')) return;
+                    setOpen(false);
+                });
+                document.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape') setOpen(false);
+                });
+
+                // --- Wire panel controls to existing sidebar elements ---
+                var handbookBtn = document.getElementById('mobilePrefsHandbook');
+                var origHandbook = document.getElementById('openHandbook');
+                if (handbookBtn && origHandbook) {
+                    handbookBtn.addEventListener('click', function() { origHandbook.click(); });
+                }
+
+                var voiceToggleBtn = document.getElementById('mobilePrefsVoiceToggle');
+                var voiceStateLabel = document.getElementById('mobilePrefsVoiceState');
+                var origVoice = document.getElementById('enableVoice');
+                function syncVoiceState() {
+                    if (!origVoice || !voiceToggleBtn) return;
+                    var label = (origVoice.textContent || '').toLowerCase();
+                    var on = label.indexOf('on') !== -1 && label.indexOf('off') === -1;
+                    voiceToggleBtn.setAttribute('aria-checked', on ? 'true' : 'false');
+                    voiceToggleBtn.classList.toggle('is-on', on);
+                    if (voiceStateLabel) voiceStateLabel.textContent = on ? 'ON' : 'OFF';
+                }
+                if (voiceToggleBtn && origVoice) {
+                    voiceToggleBtn.addEventListener('click', function() {
+                        origVoice.click();
+                        setTimeout(syncVoiceState, 50);
+                    });
+                    syncVoiceState();
+                    // Re-sync periodically in case the original button is updated
+                    // by other code paths.
+                    setInterval(syncVoiceState, 1500);
+                }
+
+                var voiceTestBtn = document.getElementById('mobilePrefsVoiceTest');
+                var origTest = document.getElementById('testVoice');
+                if (voiceTestBtn && origTest) {
+                    voiceTestBtn.addEventListener('click', function() { origTest.click(); });
+                }
+
+                var tzMirror = document.getElementById('mobilePrefsTimezone');
+                var tzOrig = document.getElementById('timezone-selector');
+                if (tzMirror && tzOrig) {
+                    var syncTz = function() { tzMirror.value = tzOrig.value; };
+                    syncTz();
+                    tzOrig.addEventListener('change', syncTz);
+                    tzMirror.addEventListener('change', function() {
+                        tzOrig.value = tzMirror.value;
+                        tzOrig.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                }
+            }
+
+            function initAll() {
                 initDrawer();
+                initTopbarPrefs();
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initAll);
+            } else {
+                initAll();
             }
         })();
     </script>
@@ -102,10 +184,58 @@
             <i class="fas fa-bell" aria-hidden="true"></i>
             <span id="mobileTopbarBellBadge" class="mobile-app-bar-badge" aria-live="polite"></span>
         </button>
-        <button id="mobileTopbarMenuBtn" class="mobile-app-bar-action" type="button" aria-label="Preferences" aria-expanded="false" aria-controls="sidebar" title="Preferences">
+        <button id="mobileTopbarMenuBtn" class="mobile-app-bar-action" type="button" aria-label="Preferences" aria-expanded="false" aria-controls="mobileTopbarMenuPanel" title="Preferences">
             <i class="fas fa-ellipsis-v" aria-hidden="true"></i>
         </button>
     </header>
+
+    <!-- Mobile Preferences dropdown (anchored below the top app-bar) -->
+    <div id="mobileTopbarMenuPanel" class="mobile-prefs-panel" role="menu" aria-labelledby="mobileTopbarMenuBtn" hidden>
+        <div class="mobile-prefs-header">Preferences</div>
+        <div class="mobile-prefs-grid">
+            <a href="#settings" class="mobile-prefs-tile sidebar-link" data-page="settings" role="menuitem">
+                <i class="fas fa-gear" aria-hidden="true"></i>
+                <span>Settings</span>
+            </a>
+            <button type="button" id="mobilePrefsHandbook" class="mobile-prefs-tile" role="menuitem">
+                <i class="fas fa-book" aria-hidden="true"></i>
+                <span>Handbook</span>
+            </button>
+            <button type="button" id="mobilePrefsVoiceToggle" class="mobile-prefs-tile" role="menuitemcheckbox" aria-checked="false">
+                <i class="fas fa-volume-up" aria-hidden="true"></i>
+                <span id="mobilePrefsVoiceLabel">Voice Alerts</span>
+                <small id="mobilePrefsVoiceState" class="mobile-prefs-tile-state">OFF</small>
+            </button>
+            <button type="button" id="mobilePrefsVoiceTest" class="mobile-prefs-tile" role="menuitem">
+                <i class="fas fa-bullhorn" aria-hidden="true"></i>
+                <span>Test Voice</span>
+            </button>
+        </div>
+        <div class="mobile-prefs-row">
+            <label for="mobilePrefsTimezone" class="mobile-prefs-row-label">
+                <i class="fas fa-clock" aria-hidden="true"></i>
+                <span>Timezone</span>
+            </label>
+            <select id="mobilePrefsTimezone" class="mobile-prefs-row-select">
+                <option value="Asia/Kuala_Lumpur">Malaysia</option>
+                <option value="Asia/Singapore">Singapore</option>
+                <option value="Asia/Shanghai">China</option>
+                <option value="Asia/Tokyo">Japan</option>
+                <option value="Asia/Kolkata">India</option>
+                <option value="Asia/Bangkok">Thailand</option>
+                <option value="Asia/Dubai">Dubai</option>
+                <option value="Europe/London">UK</option>
+                <option value="Europe/Paris">France</option>
+                <option value="America/New_York">US Eastern</option>
+                <option value="America/Chicago">US Central</option>
+                <option value="America/Denver">US Mountain</option>
+                <option value="America/Los_Angeles">US Pacific</option>
+                <option value="Australia/Sydney">Sydney</option>
+                <option value="UTC">UTC</option>
+            </select>
+        </div>
+    </div>
+    <div id="mobileTopbarMenuBackdrop" class="mobile-prefs-backdrop" aria-hidden="true" hidden></div>
 
     <!-- Mobile drawer backdrop (visible when sidebar drawer is open on phones) -->
     <div id="mobileDrawerBackdrop" class="mobile-drawer-backdrop" aria-hidden="true"></div>
@@ -227,10 +357,10 @@
             <i class="fas fa-chart-line" aria-hidden="true"></i>
             <span>Analytics</span>
         </a>
-        <button id="mobileMoreToggle" class="mobile-bottom-nav-link mobile-more-btn" type="button" aria-label="More options" aria-expanded="false" aria-controls="sidebar">
-            <i class="fas fa-ellipsis-h" aria-hidden="true"></i>
-            <span>More</span>
-        </button>
+        <a href="#about" class="mobile-bottom-nav-link sidebar-link" data-page="about">
+            <i class="fas fa-info-circle" aria-hidden="true"></i>
+            <span>About</span>
+        </a>
     </nav>
 
     <!-- Footer -->

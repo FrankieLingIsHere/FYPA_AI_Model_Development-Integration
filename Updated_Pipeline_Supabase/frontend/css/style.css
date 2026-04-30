@@ -6842,3 +6842,45 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
         padding: 0.25rem 0 !important;
     }
 }
+
+/* =============================================================
+   v75 fixes
+   - Force CASM brand text visible in mobile top app-bar (defeats
+     the global .sidebar-link span { opacity:0 } collapse rule).
+   - Make bottom-nav icons brighter so the active orange pill
+     keeps its icon clearly readable.
+   ============================================================= */
+@media (max-width: 900px) {
+    /* Brand text in top app-bar must always be visible. */
+    .mobile-app-bar .mobile-app-bar-brand span {
+        opacity: 1 !important;
+        display: inline !important;
+        color: #ffffff !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.04em !important;
+    }
+
+    /* Inactive bottom-nav icons: brighter so they read on the dark bar. */
+    .mobile-bottom-nav .mobile-bottom-nav-link i {
+        color: rgba(255, 255, 255, 0.85) !important;
+    }
+
+    /* Active bottom-nav: pure white icon + label so it pops on the
+       orange pill (the icon was previously inheriting --brand which
+       blended into the orange background). */
+    .mobile-bottom-nav .mobile-bottom-nav-link.active,
+    .mobile-bottom-nav .mobile-bottom-nav-link.active i,
+    .mobile-bottom-nav .mobile-bottom-nav-link.active span {
+        color: #ffffff !important;
+    }
+    .mobile-bottom-nav .mobile-bottom-nav-link.active i {
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+    }
+}
+
+/* Very small phones still allow brand text (keep, do not collapse). */
+@media (max-width: 380px) {
+    .mobile-app-bar .mobile-app-bar-brand span {
+        display: inline !important;
+    }
+}

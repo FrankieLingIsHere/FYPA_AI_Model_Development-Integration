@@ -1,4 +1,4 @@
-"""
+﻿"""
 Report Generator - NLP-powered report generation with RAG
 ==========================================================
 
@@ -1198,7 +1198,7 @@ RESPONSE FORMAT (JSON):
             ]
         }}
     ],
-    "summary": "â€¢ **SCENE CLASS**: [Environment Type]...\\nâ€¢ **CRITICAL RISK**: ...\\nâ€¢ **LEGAL ORDER**: ...",
+    "summary": "• **SCENE CLASS**: [Environment Type]...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
     "dosh_regulations_cited": [
         {{
             "regulation": "Official JKR/DOSH regulation name",
@@ -3069,7 +3069,7 @@ RESPONSE FORMAT (JSON):
         <div class="footer">
             <p>CASM PPE Safety Monitor - FYPA AI Model Development & Integration</p>
             <p style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">
-                Powered by YOLO PPE Detection â€¢ Local + Cloud AI Routing â€¢ Supabase-backed Report Pipeline
+                Powered by YOLO PPE Detection • Local + Cloud AI Routing • Supabase-backed Report Pipeline
             </p>
         </div>
     </div>
@@ -3174,7 +3174,7 @@ RESPONSE FORMAT (JSON):
             else:
                 detail = 'PPE/risk observation recorded by model'
 
-            model_person_rows.append(f"â€¢ {person_id}: {detail}")
+            model_person_rows.append(f"• {person_id}: {detail}")
 
         model_person_count = len(model_person_rows)
 
@@ -3196,7 +3196,7 @@ RESPONSE FORMAT (JSON):
         if model_person_count > 0:
             preview_rows = model_person_rows[:4]
             if model_person_count > 4:
-                preview_rows.append(f"â€¢ +{model_person_count - 4} more model-identified person entries")
+                preview_rows.append(f"• +{model_person_count - 4} more model-identified person entries")
 
             who_header = (
                 f"Model identified {model_person_count} person(s), "
@@ -3326,7 +3326,7 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
-            hazard_text = '<br>'.join(f"â€¢ {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+            hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
 
         if not reg_names:
             inferred_regs: List[str] = []
@@ -3349,12 +3349,12 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
-            reg_text = '<br>'.join(f"â€¢ {self._inject_interactive_tooltips(name)}" for name in reg_names)
+            reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>
         parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', what_text)
-        # 2. Lists/Newlines: â€¢ or - -> <br>â€¢
+        # 2. Lists/Newlines: • or - -> <br>•
         parsed_summary = parsed_summary.replace('\n', '<br>')
 
 
@@ -3872,12 +3872,12 @@ RESPONSE FORMAT (JSON):
             issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
 
         summary_parts = [
-            f"â€¢ **SCENE CLASS**: {env}",
-            f"â€¢ **CRITICAL OBSERVATION**: {issue_text}",
+            f"• **SCENE CLASS**: {env}",
+            f"• **CRITICAL OBSERVATION**: {issue_text}",
         ]
         if context_sentence:
-            summary_parts.append(f"â€¢ **VISUAL CONTEXT**: {context_sentence}")
-        summary_parts.append("â€¢ **LEGAL ORDER**: enforce compliant PPE before work resumes")
+            summary_parts.append(f"• **VISUAL CONTEXT**: {context_sentence}")
+        summary_parts.append("• **LEGAL ORDER**: enforce compliant PPE before work resumes")
         return '\n'.join(summary_parts)
 
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:

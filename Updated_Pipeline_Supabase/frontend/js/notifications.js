@@ -510,12 +510,12 @@ const NotificationManager = {
         const compact = this.isMobileViewport();
         notification.style.cssText = `
             background: white;
-            border-left: 4px solid ${colors[type] || colors.info};
-            border-radius: 8px;
-            padding: ${compact ? '10px 12px' : '14px'};
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-left: ${compact ? '3px' : '4px'} solid ${colors[type] || colors.info};
+            border-radius: ${compact ? '6px' : '8px'};
+            padding: ${compact ? '8px 10px' : '14px'};
+            box-shadow: 0 ${compact ? '2px 6px' : '4px 12px'} rgba(0,0,0,0.15);
             display: flex;
-            align-items: start;
+            align-items: center;
             gap: ${compact ? '8px' : '10px'};
             min-width: ${compact ? '0' : '280px'};
             max-width: 100%;
@@ -525,19 +525,37 @@ const NotificationManager = {
             font-size: ${compact ? '13px' : '14px'};
         `;
 
-        // Simplified content for cleaner look
-        const titleHtml = options.title ?
-            `<div style="font-weight: 600; margin-bottom: 2px; color: #2c3e50; font-size: 13px;">${options.title}</div>` : '';
+        // Simplified content for cleaner look. On mobile we collapse the
+        // toast to a single-row bar: smaller icon, no separate title row,
+        // action rendered as an inline text link instead of a big button,
+        // so the whole thing stays under ~50px tall.
+        const titleHtml = options.title && !compact
+            ? `<div style="font-weight: 600; margin-bottom: 2px; color: #2c3e50; font-size: 13px;">${options.title}</div>`
+            : '';
 
-        notification.innerHTML = `
-            <div style="flex-shrink: 0; font-size: 20px; color: ${colors[type]};">
-                <i class="fas ${icons[type] || icons.info}"></i>
-            </div>
-            <div style="flex: 1; min-width: 0;">
-                ${titleHtml}
-                <div style="color: #7f8c8d; font-size: 13px; word-wrap: break-word; line-height: 1.4;">${message}</div>
-                ${options.action ? `
-                    <button class="notification-action-btn" style="
+        // Combine title into message body when compact, so a single-line
+        // toast can still convey the type ("Failed Reports — 43 reports
+        // failed to generate").
+        const compactMessage = (compact && options.title)
+            ? `<span style="font-weight:600;color:#2c3e50;">${options.title}</span> <span style="opacity:.85;">${message}</span>`
+            : message;
+
+        const actionHtml = options.action
+            ? (compact
+                ? `<button class="notification-action-btn" style="
+                        margin-left: 8px;
+                        padding: 0;
+                        background: none;
+                        color: ${colors[type]};
+                        border: none;
+                        cursor: pointer;
+                        font-size: 12px;
+                        font-weight: 600;
+                        white-space: nowrap;
+                        flex-shrink: 0;
+                        text-decoration: underline;
+                    ">${options.action.text}</button>`
+                : `<button class="notification-action-btn" style="
                         margin-top: 8px;
                         padding: 5px 10px;
                         background: ${colors[type]};
@@ -546,23 +564,55 @@ const NotificationManager = {
                         border-radius: 4px;
                         cursor: pointer;
                         font-size: 12px;
-                    ">
-                        ${options.action.text}
-                    </button>
-                ` : ''}
-            </div>
-            <button class="notification-close-btn" style="
-                background: none;
-                border: none;
-                color: #bdc3c7;
-                cursor: pointer;
-                font-size: 14px;
-                flex-shrink: 0;
-                padding: 0;
-            ">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
+                    ">${options.action.text}</button>`)
+            : '';
+
+        if (compact) {
+            // Single-row layout: icon — message+action — close.
+            notification.innerHTML = `
+                <div style="flex-shrink: 0; font-size: 14px; color: ${colors[type]}; line-height: 1;">
+                    <i class="fas ${icons[type] || icons.info}"></i>
+                </div>
+                <div style="flex: 1; min-width: 0; color: #5d6d7e; font-size: 13px; line-height: 1.35; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    <span style="flex: 1; min-width: 0; word-wrap: break-word;">${compactMessage}</span>
+                    ${actionHtml}
+                </div>
+                <button class="notification-close-btn" aria-label="Dismiss" style="
+                    background: none;
+                    border: none;
+                    color: #bdc3c7;
+                    cursor: pointer;
+                    font-size: 13px;
+                    flex-shrink: 0;
+                    padding: 2px 4px;
+                    line-height: 1;
+                ">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+        } else {
+            notification.innerHTML = `
+                <div style="flex-shrink: 0; font-size: 20px; color: ${colors[type]};">
+                    <i class="fas ${icons[type] || icons.info}"></i>
+                </div>
+                <div style="flex: 1; min-width: 0;">
+                    ${titleHtml}
+                    <div style="color: #7f8c8d; font-size: 13px; word-wrap: break-word; line-height: 1.4;">${message}</div>
+                    ${actionHtml}
+                </div>
+                <button class="notification-close-btn" style="
+                    background: none;
+                    border: none;
+                    color: #bdc3c7;
+                    cursor: pointer;
+                    font-size: 14px;
+                    flex-shrink: 0;
+                    padding: 0;
+                ">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+        }
 
         const closeBtn = notification.querySelector('.notification-close-btn');
         if (closeBtn) {

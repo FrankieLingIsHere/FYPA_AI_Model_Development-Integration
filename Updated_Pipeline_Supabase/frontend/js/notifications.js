@@ -6,9 +6,42 @@
 const NotificationManager = {
     container: null,
     notifications: [],
-    maxVisible: 3,  // Maximum notifications shown at once
+    maxVisible: 3,  // Maximum notifications shown at once (desktop)
     groupedCount: 0,  // Count of hidden notifications
     recentByKey: new Map(),
+
+    // Startup-quiet window: for the first N ms after page load, route
+    // info/success straight to the bell history with no on-screen toast.
+    // Avoids the "bombarded on first enter" feeling on mobile, where
+    // provisioning/network/policy banners all fire within the first second.
+    QUIET_STARTUP_MS: 2500,
+    _bootTs: Date.now(),
+
+    isMobileViewport() {
+        try {
+            return window.matchMedia('(max-width: 640px)').matches;
+        } catch (_) {
+            return (window.innerWidth || 0) <= 640;
+        }
+    },
+
+    inStartupQuietWindow() {
+        return (Date.now() - this._bootTs) < this.QUIET_STARTUP_MS;
+    },
+
+    // Decide whether a toast should pop on screen, or be silently logged
+    // to the bell. Returns true = silent (history only).
+    shouldRouteToHistoryOnly(type, options = {}) {
+        if (options.forceToast === true) return false;
+        const isMobile = this.isMobileViewport();
+        const quiet = this.inStartupQuietWindow();
+        const lowValue = (type === 'info' || type === 'success' || type === 'report');
+        // Mobile + low-value -> always silent (bell only).
+        if (isMobile && lowValue) return true;
+        // Any platform + still inside startup quiet window + low-value -> silent.
+        if (quiet && lowValue) return true;
+        return false;
+    },
 
     // ---- History center (S3) ----
     HISTORY_STORAGE_KEY: 'ppe.notifications.history.v1',
@@ -268,21 +301,42 @@ const NotificationManager = {
     init() {
         if (this.container) return;
 
-        // Create notification container - BOTTOM RIGHT to avoid blocking controls
+        // Create notification container - BOTTOM RIGHT to avoid blocking controls.
+        // On mobile (<=640px) the container becomes a single full-width bar at
+        // the bottom so toasts never cover more than one row of content.
         this.container = document.createElement('div');
         this.container.id = 'notification-container';
-        this.container.style.cssText = `
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 10000;
-            display: flex;
-            flex-direction: column-reverse;
-            gap: 10px;
-            max-width: 380px;
-            max-height: calc(100vh - 100px);
-            pointer-events: none;
-        `;
+        const isMobile = this.isMobileViewport();
+        this.container.style.cssText = isMobile
+            ? `
+                position: fixed;
+                bottom: 12px;
+                left: 12px;
+                right: 12px;
+                z-index: 10000;
+                display: flex;
+                flex-direction: column-reverse;
+                gap: 6px;
+                max-width: 100%;
+                max-height: 60vh;
+                pointer-events: none;
+            `
+            : `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                z-index: 10000;
+                display: flex;
+                flex-direction: column-reverse;
+                gap: 10px;
+                max-width: 380px;
+                max-height: calc(100vh - 100px);
+                pointer-events: none;
+            `;
+        // Mobile: only one toast on screen at a time; rest collapse to bell.
+        if (isMobile) {
+            this.maxVisible = 1;
+        }
         document.body.appendChild(this.container);
 
         // Create summary badge for grouped notifications
@@ -410,6 +464,25 @@ const NotificationManager = {
             }
         }
 
+        // Priority + startup gating: route low-value notifications straight
+        // to the bell (history) without rendering an on-screen toast. The
+        // user can still review them via the bell badge.
+        if (this.shouldRouteToHistoryOnly(type, options) && options.persistHistory !== false) {
+            const silentId = nowTs + Math.random();
+            this.addToHistory({
+                id: silentId,
+                type,
+                title: options.title || '',
+                message,
+                category: options.category,
+                priority: options.priority
+            });
+            if (dedupeKey) {
+                this.recentByKey.set(dedupeKey, { id: silentId, ts: nowTs, ttlMs: dedupeTtlMs });
+            }
+            return silentId;
+        }
+
         const id = nowTs + Math.random();
 
         const notification = document.createElement('div');
@@ -434,20 +507,22 @@ const NotificationManager = {
             'report': '#3498db'
         };
 
+        const compact = this.isMobileViewport();
         notification.style.cssText = `
             background: white;
             border-left: 4px solid ${colors[type] || colors.info};
             border-radius: 8px;
-            padding: 14px;
+            padding: ${compact ? '10px 12px' : '14px'};
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             display: flex;
             align-items: start;
-            gap: 10px;
-            min-width: 280px;
+            gap: ${compact ? '8px' : '10px'};
+            min-width: ${compact ? '0' : '280px'};
             max-width: 100%;
             animation: slideInUp 0.3s ease-out;
             cursor: pointer;
             pointer-events: auto;
+            font-size: ${compact ? '13px' : '14px'};
         `;
 
         // Simplified content for cleaner look
@@ -585,21 +660,23 @@ const NotificationManager = {
         ids.forEach(id => this.dismiss(id));
     },
 
-    // Convenience methods
+    // Convenience methods. Durations tuned shorter than v1 — info/success
+    // 3s (was 4s), errors 5s (was 6s), warnings 4.5s (was 5s) to feel less
+    // intrusive on mobile. Long-form notices belong in the bell history.
     success(message, options = {}) {
-        return this.show(message, 'success', options.duration || 4000, options);
+        return this.show(message, 'success', options.duration || 3000, options);
     },
 
     error(message, options = {}) {
-        return this.show(message, 'error', options.duration || 6000, options);
+        return this.show(message, 'error', options.duration || 5000, options);
     },
 
     warning(message, options = {}) {
-        return this.show(message, 'warning', options.duration || 5000, options);
+        return this.show(message, 'warning', options.duration || 4500, options);
     },
 
     info(message, options = {}) {
-        return this.show(message, 'info', options.duration || 4000, options);
+        return this.show(message, 'info', options.duration || 3000, options);
     },
 
     violation(message, reportId, options = {}) {

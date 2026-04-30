@@ -6682,7 +6682,14 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
                     selected_record = record
                     break
 
-    if selected_record is None:
+    if selected_record is None and not normalized_hint:
+        # Only fall back to the newest record from ANY machine when the
+        # caller did NOT pin a specific machine_id. If a hint WAS given
+        # and no matching record exists, returning the newest record from
+        # a different device would incorrectly leak that device's
+        # provision_status (approved/provisioned) to the requesting
+        # device, causing every viewer of the cloud frontend to be
+        # reported as approved as soon as the host laptop heartbeats.
         newest_epoch = -1.0
         newest_machine_id = ''
         newest_record: Optional[Dict[str, Any]] = None
@@ -6771,7 +6778,12 @@ def api_local_mode_provisioning_status():
     state_machine_id = _local_mode_normalize_machine_id(state.get('machine_id'))
     machine_id = requested_machine_id or state_machine_id or _local_mode_get_existing_machine_id()
 
-    if machine_id and machine_id != state_machine_id:
+    # Only persist the resolved machine_id back into local state when the
+    # caller did NOT explicitly pin one. Otherwise a cloud frontend viewer
+    # asking about its own per-device ID would silently overwrite the
+    # host backend's stored ID, causing later viewers to inherit the
+    # most-recent caller's identity.
+    if machine_id and machine_id != state_machine_id and not requested_machine_id:
         state['machine_id'] = machine_id
         state['updated_at'] = datetime.now(timezone.utc).isoformat()
         try:
@@ -6780,7 +6792,11 @@ def api_local_mode_provisioning_status():
             logger.warning(f"Unable to persist machine_id '{machine_id}' into local state: {persist_state_err}")
 
     provision_secret = str(state.get('provision_secret') or '').strip()
-    if provision_secret:
+    # Only resolve machine_id from the local provision_secret when the
+    # caller did NOT pin a specific machine_id. Otherwise a cloud viewer
+    # would be reassigned to whoever owns the host backend's secret and
+    # inherit that device's approval status.
+    if provision_secret and not requested_machine_id:
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
         if resolved_machine_id and resolved_machine_id != machine_id:
             machine_id = resolved_machine_id

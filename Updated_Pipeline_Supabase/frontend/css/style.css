@@ -1285,7 +1285,17 @@ body.is-phone-device .handbook-modal {
 
 body.is-phone-device .handbook-header {
     gap: 0.6rem;
-    padding: 0.7rem 0.8rem;
+    padding: calc(0.7rem + env(safe-area-inset-top, 0px)) 0.8rem 0.7rem;
+}
+
+body.is-phone-device .handbook-close {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    padding: 0 0.3rem;
 }
 
 body.is-phone-device .handbook-page-picker {
@@ -2323,7 +2333,9 @@ body.is-phone-device .handbook-content {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 999;
+    /* Must sit above the mobile app-bar (z-index: 1100) and the bottom
+       nav (z-index: 1190) so the close button is reachable on phones. */
+    z-index: 1500;
 }
 
 .handbook-modal {

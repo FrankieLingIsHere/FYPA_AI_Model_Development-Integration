@@ -5259,19 +5259,14 @@ h1, h2, h3, .recent-header span, .card-header span {
 }
 
 /* =============================================================
-   v27 MOBILE NAV SIMPLIFIED
-   - Remove top app-bar (redundant with bottom nav)
-   - Replace 5th bottom-nav slot (About) with "More" -> opens
-     the existing drawer (which now hosts About + extras)
-   - Reclaim top padding previously reserved for app-bar
+   v27 MOBILE NAV SIMPLIFIED (revised in v71)
+   - Top app-bar IS shown (brand + bell + 3-dots preferences).
+     The earlier `display:none !important` rules have been
+     removed so the bar from index.html actually renders.
+   - Bottom nav 5th slot stays as "More" -> opens the drawer
+     (drawer now hosts only Preferences items on mobile).
    ============================================================= */
 @media (max-width: 768px) {
-    .mobile-app-bar { display: none !important; }
-
-    .main-content {
-        padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem) !important;
-    }
-
     .mobile-bottom-nav {
         padding-bottom: env(safe-area-inset-bottom, 0px) !important;
     }
@@ -5295,9 +5290,10 @@ h1, h2, h3, .recent-header span, .card-header span {
 }
 
 @media (max-width: 900px) {
-    .mobile-app-bar { display: none !important; }
+    /* App-bar is shown (see definition earlier in this file). Keep a
+       small extra top breathing room here without re-hiding the bar. */
     .main-content {
-        padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem) !important;
+        padding-top: calc(56px + env(safe-area-inset-top, 0px) + 0.75rem) !important;
     }
 }
 

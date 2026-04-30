@@ -2806,6 +2806,11 @@ body.is-phone-device .footer {
     }
 
     /* ---------- Top-anchored Preferences dropdown ---------- */
+    .mobile-prefs-backdrop[hidden],
+    .mobile-prefs-panel[hidden] {
+        display: none !important;
+    }
+
     .mobile-prefs-backdrop {
         position: fixed;
         inset: 0;

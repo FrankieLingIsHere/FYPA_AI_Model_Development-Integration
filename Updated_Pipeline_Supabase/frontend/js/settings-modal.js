@@ -1623,72 +1623,36 @@ const GlobalSettingsModal = {
             }
 
             const provisionResult = isLikelyRemoteBackend
-                ? await (async () => {
-                    // Determine the best available machine ID before deciding
-                    // whether to allow sending a provisioning request.
-                    // Priority: live heartbeat ID > localStorage stored ID > sessionStorage stored ID.
-                    // A browser-generated "Web-XXXX" fallback ID must never be submitted as a
-                    // provisioning request from the cloud frontend — it would create a phantom
-                    // device entry in the admin panel that has nothing to do with the edge device.
-                    const localStoredId = (() => {
-                        try {
-                            return String(localStorage.getItem('ppe.localMode.deviceMachineId.v1') || '').trim();
-                        } catch (_) { return ''; }
-                    })();
-                    const sessionStoredId = String((this.loadRemoteProvisionState().machineId) || '').trim();
-                    const resolvedId = heartbeatMachineId || localStoredId || sessionStoredId || this.localProvisionState.machineId || '';
-                    // Only block the request when the only available ID would be a
-                    // browser-generated Web-XXXX (no heartbeat, nothing in any storage).
-                    const wouldUseBrowserFallback = !resolvedId || /^Web-/i.test(resolvedId);
-                    return this.refreshRemoteProvisioningStatus({
-                        allowRequest: !wouldUseBrowserFallback,
-                        machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
-                        cloud_local_heartbeat: cloudHeartbeat
-                    });
-                })()
+                ? await this.refreshRemoteProvisioningStatus({
+                    allowRequest: false,   // checkup is health-check only — use the dedicated button to request provisioning
+                    machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
+                    cloud_local_heartbeat: cloudHeartbeat
+                })
                 : await API.autoProvisionLocalModeCredentials();
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
             const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
             if (status === 'provisioned') {
-                this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
-                this.showNotification('Provisioning completed. Cloud sync is now available.', 'success');
+                this.setProviderStatus('Device is provisioned. Cloud sync is active.', 'success');
             } else if (status === 'approved') {
-                this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
-                this.showNotification('Device approved. Installer re-issue is now available.', 'success');
+                this.setProviderStatus('Device is approved. Cloud sync is available.', 'success');
             } else if (status === 'credentials_present') {
-                this.setProviderStatus('Cloud credentials are detected locally, but this machine is not approved/provisioned in admin records.', 'warning');
-                this.showNotification('Credentials detected locally, but this machine is not approved/provisioned in admin records.', 'warning');
+                this.setProviderStatus('Cloud credentials are present on this device.', 'info');
             } else if (status === 'pending_approval') {
-                this.setProviderStatus('Provision request submitted. Waiting for admin approval.', 'warning');
-                this.showNotification('Provision request submitted. Waiting for admin approval.', 'warning');
+                this.setProviderStatus('Provisioning request is pending admin approval.', 'warning');
                 this.ensureLocalProvisionPolling();
             } else if (status === 'rejected') {
-                this.setProviderStatus('Provision request was rejected by administrator.', 'error');
-                this.showNotification('Provision request was rejected by administrator.', 'error');
-            } else if (provisionResult && provisionResult.success === false && provisionResult.error) {
-                const provisionError = String(provisionResult.error).trim();
-                if (this.isCloudEndpointUnreachable(provisionError)) {
-                    const unreachableMessage = 'Cloud approval endpoint is unreachable right now. Local mode remains available; cloud sync will resume after CLOUD_URL/DNS is fixed.';
-                    this.setProviderStatus(unreachableMessage, 'warning');
-                    this.showNotification('Cloud approval endpoint is unreachable. Local mode remains available.', 'warning');
-                } else {
-                    this.setProviderStatus(`${provisionError} Local mode can still run offline, but cloud sync requires approval.`, 'warning');
-                    this.showNotification(provisionError, 'warning');
-                }
+                this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             } else if (ready) {
+                // No provisioning info yet — health check passed, prompt user to use the button
                 this.setProviderStatus(
                     useHeartbeatDiagnostics
-                        ? `Local mode checkup passed via edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''}.`
-                        : 'Local mode checkup completed successfully.',
-                    'success'
+                        ? `Health check passed via edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''}. Use "Request Provisioning" to register this device.`
+                        : 'Health check completed. Use "Request Provisioning" to register this device for cloud sync.',
+                    'info'
                 );
-                this.showNotification(
-                    useHeartbeatDiagnostics
-                        ? 'Local mode checkup validated from edge heartbeat.'
-                        : 'Local mode checkup completed.',
-                    'success'
-                );
+            } else if (this.isCloudEndpointUnreachable(String((provisionResult && provisionResult.error) || ''))) {
+                this.setProviderStatus('Cloud endpoint is unreachable. Local mode remains available.', 'warning');
             }
 
             const shouldSkipRemoteRefresh = isLikelyRemoteBackend

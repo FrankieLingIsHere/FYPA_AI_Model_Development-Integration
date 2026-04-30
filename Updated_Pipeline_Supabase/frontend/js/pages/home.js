@@ -183,7 +183,6 @@ const HomePage = {
                 <div class="card home-local-mode-card">
                     <div class="card-header home-local-mode-header">
                         <span><i class="fas fa-plug-circle-check"></i> Local Mode Approval</span>
-                        <span id="homeProvisionBadge" class="badge badge-info">Checking...</span>
                     </div>
                     <div class="card-content home-local-mode-content">
                         <p id="homeProvisionMessage" style="margin: 0; color: var(--text-color);">
@@ -433,12 +432,12 @@ const HomePage = {
     },
 
     renderProvisioningStatus(statusPayload) {
-        const badgeEl = document.getElementById('homeProvisionBadge');
+        const badgeEl = document.getElementById('homeProvisionBadge'); // removed in v78; tolerate absence
         const messageEl = document.getElementById('homeProvisionMessage');
         const machineEl = document.getElementById('homeProvisionMachine');
         const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
 
-        if (!badgeEl || !messageEl || !machineEl) {
+        if (!messageEl || !machineEl) {
             return;
         }
 
@@ -460,48 +459,47 @@ const HomePage = {
                 : 'Installer re-download is available after provisioning completes.';
         }
 
-        badgeEl.className = 'badge badge-info';
+        // Helper: write to the badge only if it still exists in the DOM
+        // (the badge was removed in v78 to keep status purely message-driven).
+        const setBadge = (cls, text) => {
+            if (!badgeEl) return;
+            badgeEl.className = cls;
+            badgeEl.textContent = text;
+        };
+
         machineEl.textContent = '';
 
         if (status === 'provisioned') {
-            badgeEl.className = 'badge badge-success';
-            badgeEl.textContent = 'Provisioned';
+            setBadge('badge badge-success', 'Provisioned');
             messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
         } else if (status === 'approved') {
             // Admin has approved this device. Treat as a green
             // success state — the only difference vs. 'provisioned'
             // is that the launcher hasn't reported full handoff yet.
-            badgeEl.className = 'badge badge-success';
-            badgeEl.textContent = 'Approved';
+            setBadge('badge badge-success', 'Approved');
             messageEl.textContent = 'Approved by admin. Cloud sync is active.';
         } else if (status === 'credentials_present') {
             const viewingThroughCloud = (typeof isLikelyRemoteBackend === 'function')
                 ? isLikelyRemoteBackend()
                 : false;
             if (viewingThroughCloud) {
-                badgeEl.className = 'badge badge-info';
-                badgeEl.textContent = 'Not Requested';
+                setBadge('badge badge-info', 'Not Requested');
                 messageEl.textContent = 'No approval request from this device yet. Cloud mode is available now; to enable local mode, run Local Mode Checkup from the host PC.';
             } else {
-                badgeEl.className = 'badge badge-success';
-                badgeEl.textContent = 'Credentials Detected';
+                setBadge('badge badge-success', 'Credentials Detected');
                 messageEl.textContent = 'Cloud credentials are present on this backend, but this machine is not approved/provisioned yet.';
             }
         } else if (status === 'pending_approval') {
-            badgeEl.className = 'badge badge-warning';
-            badgeEl.textContent = 'Pending Approval';
+            setBadge('badge badge-warning', 'Pending Approval');
             messageEl.textContent = 'Approval request is pending. This page updates automatically when admin approves.';
         } else if (status === 'rejected') {
-            badgeEl.className = 'badge badge-danger';
-            badgeEl.textContent = 'Rejected';
+            setBadge('badge badge-danger', 'Rejected');
             messageEl.textContent = 'Approval request was rejected. Open Local Mode Checkup to submit a new request.';
         } else if (status === 'error') {
-            badgeEl.className = 'badge badge-warning';
-            badgeEl.textContent = 'Status Error';
+            setBadge('badge badge-warning', 'Status Error');
             messageEl.textContent = 'Unable to refresh provisioning status right now. Retrying in background.';
         } else {
-            badgeEl.className = 'badge badge-info';
-            badgeEl.textContent = 'Not Requested';
+            setBadge('badge badge-info', 'Not Requested');
             messageEl.textContent = 'No approval request yet. Run Local Mode Checkup to begin local provisioning.';
         }
 

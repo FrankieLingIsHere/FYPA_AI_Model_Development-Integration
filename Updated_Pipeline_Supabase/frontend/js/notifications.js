@@ -149,15 +149,19 @@ const NotificationManager = {
     },
 
     updateBellBadge() {
-        const badge = document.getElementById('notif-bell-badge');
-        if (badge) {
+        const badges = [
+            document.getElementById('notif-bell-badge'),
+            document.getElementById('mobileTopbarBellBadge')
+        ].filter(Boolean);
+        const visibleText = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
+        badges.forEach((badge) => {
             if (this.unreadCount > 0) {
-                badge.textContent = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
+                badge.textContent = visibleText;
                 badge.style.display = 'inline-flex';
             } else {
                 badge.style.display = 'none';
             }
-        }
+        });
     },
 
     openHistoryCenter() {
@@ -376,7 +380,16 @@ const NotificationManager = {
             // The host already contains <i.fa-bell> and <span#notif-bell-badge>
             // from index.html — just wire the click handler.
             statusbarHost.addEventListener('click', () => this.openHistoryCenter());
-        } else if (!document.getElementById('notif-bell-btn') && !statusbarHost) {
+        }
+        // Mobile topbar bell — same handler, separate badge element so the
+        // count stays in sync regardless of which bell is currently visible.
+        const topbarBell = document.getElementById('mobileTopbarBellBtn');
+        if (topbarBell && !topbarBell.dataset.notifBound) {
+            topbarBell.dataset.notifBound = '1';
+            topbarBell.addEventListener('click', () => this.openHistoryCenter());
+        }
+        if (!statusbarHost && !topbarBell
+            && !document.getElementById('notif-bell-btn')) {
             const bell = document.createElement('button');
             bell.id = 'notif-bell-btn';
             bell.setAttribute('aria-label', 'Notification history');

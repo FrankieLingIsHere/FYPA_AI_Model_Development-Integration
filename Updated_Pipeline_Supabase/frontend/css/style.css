@@ -2744,7 +2744,7 @@ body.is-phone-device .footer {
     }
 
     .mobile-app-bar-action {
-        margin-left: auto;
+        margin-left: 0;
         background: transparent;
         border: none;
         color: #fff;
@@ -2757,12 +2757,69 @@ body.is-phone-device .footer {
         justify-content: center;
         text-decoration: none;
         transition: background 0.2s ease;
+        position: relative;
+    }
+
+    /* Push the action group to the right of the brand */
+    .mobile-app-bar-brand + .mobile-app-bar-action {
+        margin-left: auto;
     }
 
     .mobile-app-bar-action:hover,
     .mobile-app-bar-action:focus-visible {
         background: rgba(255, 255, 255, 0.12);
         outline: none;
+    }
+
+    .mobile-app-bar-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        background: #e74c3c;
+        color: #fff;
+        border-radius: 999px;
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 1;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 0 2px var(--primary-color, #1f2937);
+    }
+
+    /* On mobile we move the bell into the top app-bar; hide the desktop
+       in-page status-bar bell so we never show two bells at once. */
+    .main-content-statusbar #notifBellHost {
+        display: none;
+    }
+
+    /* Drawer is "Preferences only" on mobile.
+       The bottom nav already covers Home/Live/Reports/Analytics/About,
+       so showing the same items inside the drawer would be redundant.
+       Hide the primary nav block + sidebar header when the drawer is
+       opened on mobile, leaving just timezone / handbook / settings /
+       voice controls. */
+    body.mobile-drawer-open .sidebar .sidebar-header,
+    body.mobile-drawer-open .sidebar .sidebar-main {
+        display: none !important;
+    }
+
+    /* Inject a small "Preferences" header at the top of the drawer
+       via the existing sidebar-bottom container. */
+    body.mobile-drawer-open .sidebar .sidebar-bottom::before {
+        content: 'Preferences';
+        display: block;
+        padding: 1rem 1.25rem 0.75rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-secondary, #6b7280);
+        border-bottom: 1px solid var(--border-color, rgba(0,0,0,0.08));
+        margin-bottom: 0.5rem;
     }
 
     /* --- Sidebar becomes a slide-in drawer --- */

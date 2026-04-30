@@ -47,29 +47,42 @@
     <script>
         (function() {
             function initDrawer() {
-                var btn = document.getElementById('mobileMoreToggle');
+                var triggers = [
+                    document.getElementById('mobileMoreToggle'),
+                    document.getElementById('mobileTopbarMenuBtn')
+                ].filter(Boolean);
                 var backdrop = document.getElementById('mobileDrawerBackdrop');
-                if (!btn || btn.dataset.bound === '1') return;
-                btn.dataset.bound = '1';
                 var setOpen = function(open) {
                     document.body.classList.toggle('mobile-drawer-open', open);
-                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-                    btn.classList.toggle('active', open);
+                    triggers.forEach(function(btn) {
+                        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                        btn.classList.toggle('active', open);
+                    });
                 };
-                btn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setOpen(!document.body.classList.contains('mobile-drawer-open'));
+                triggers.forEach(function(btn) {
+                    if (btn.dataset.bound === '1') return;
+                    btn.dataset.bound = '1';
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setOpen(!document.body.classList.contains('mobile-drawer-open'));
+                    });
                 });
-                if (backdrop) backdrop.addEventListener('click', function() { setOpen(false); });
-                document.addEventListener('click', function(e) {
-                    if (!document.body.classList.contains('mobile-drawer-open')) return;
-                    var link = e.target.closest && e.target.closest('.sidebar .sidebar-link');
-                    if (link) setOpen(false);
-                });
-                document.addEventListener('keydown', function(e) {
-                    if (e.key === 'Escape') setOpen(false);
-                });
+                if (backdrop && backdrop.dataset.bound !== '1') {
+                    backdrop.dataset.bound = '1';
+                    backdrop.addEventListener('click', function() { setOpen(false); });
+                }
+                if (!document.body.dataset.drawerKeyBound) {
+                    document.body.dataset.drawerKeyBound = '1';
+                    document.addEventListener('click', function(e) {
+                        if (!document.body.classList.contains('mobile-drawer-open')) return;
+                        var link = e.target.closest && e.target.closest('.sidebar .sidebar-link');
+                        if (link) setOpen(false);
+                    });
+                    document.addEventListener('keydown', function(e) {
+                        if (e.key === 'Escape') setOpen(false);
+                    });
+                }
             }
             if (document.readyState === 'loading') {
                 document.addEventListener('DOMContentLoaded', initDrawer);
@@ -78,6 +91,21 @@
             }
         })();
     </script>
+
+    <!-- Mobile Top App-bar (visible on phones only) -->
+    <header class="mobile-app-bar" role="banner">
+        <a href="#home" class="mobile-app-bar-brand sidebar-link" data-page="home">
+            <i class="fas fa-hard-hat" aria-hidden="true"></i>
+            <span>CASM</span>
+        </a>
+        <button id="mobileTopbarBellBtn" class="mobile-app-bar-action" type="button" aria-label="Notification history" title="Notifications">
+            <i class="fas fa-bell" aria-hidden="true"></i>
+            <span id="mobileTopbarBellBadge" class="mobile-app-bar-badge" aria-live="polite"></span>
+        </button>
+        <button id="mobileTopbarMenuBtn" class="mobile-app-bar-action" type="button" aria-label="Preferences" aria-expanded="false" aria-controls="sidebar" title="Preferences">
+            <i class="fas fa-ellipsis-v" aria-hidden="true"></i>
+        </button>
+    </header>
 
     <!-- Mobile drawer backdrop (visible when sidebar drawer is open on phones) -->
     <div id="mobileDrawerBackdrop" class="mobile-drawer-backdrop" aria-hidden="true"></div>

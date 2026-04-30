@@ -10,9 +10,17 @@ let lastResolvedBackendBaseUrl = null;
 const LEGACY_LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.v1';
 const LEGACY_LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
 const LOCAL_MODE_POLICY_STATE_KEY = 'ppe.localMode.policyState.v2';
-const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v1';
+const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v2';
+const LEGACY_LOCAL_MODE_PROVISIONING_STATUS_KEYS = [
+    'ppe.localMode.provisioningStatus.v1'
+];
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
-const LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Cache lifetime is intentionally short. Provisioning status can flip
+// (admin revoke, secret rotation) without the cache being notified, and
+// a stale "approved" entry was previously sticking on the home/settings
+// UI for up to 24h. Two minutes is plenty to smooth over a single page
+// reload race without risking long-lived stale state.
+const LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 let localModePolicyState = {
     checkupCompleted: false,
     autoSetupAllowed: false
@@ -112,6 +120,19 @@ function isLikelyRemoteBackend() {
 
 function loadPersistedProvisioningState() {
     try {
+        // Best-effort cleanup of older cache keys so devices that
+        // previously stored a long-lived 'approved' entry get unstuck
+        // automatically on next load.
+        try {
+            LEGACY_LOCAL_MODE_PROVISIONING_STATUS_KEYS.forEach((key) => {
+                if (key !== LOCAL_MODE_PROVISIONING_STATUS_KEY) {
+                    localStorage.removeItem(key);
+                }
+            });
+        } catch (cleanupErr) {
+            // Ignore localStorage access errors.
+        }
+
         const raw = localStorage.getItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
         if (!raw) return null;
 

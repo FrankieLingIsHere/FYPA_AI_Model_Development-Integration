@@ -874,6 +874,7 @@ const GlobalSettingsModal = {
             this.localProvisionState.cloudHeartbeat
         );
         const previousStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
+        const previousMeasuredAt = Number(this.localProvisionState.measuredAt || 0);
         let normalizedStatus = this.normalizeLocalProvisionStatus(source.status || previousStatus);
         const heartbeatProvisionStatus = this.normalizeLocalProvisionStatus(normalizedHeartbeat.provisionStatus || 'idle');
         if (this.isLikelyRemoteBackend()) {
@@ -884,7 +885,16 @@ const GlobalSettingsModal = {
                 || normalizedStatus === 'credentials_present'
                 || normalizedStatus === 'error'
             );
-            if (previousIsApprovedLike && incomingIsWeakerStatus) {
+            // Time-bound the downgrade protection. A long-lived 'approved'
+            // value would otherwise stick across page loads and ignore
+            // legitimate backend downgrades (admin revoke, secret rotation,
+            // viewing from a non-approved device, etc).
+            const previousAgeMs = previousMeasuredAt > 0 ? (Date.now() - previousMeasuredAt) : Infinity;
+            const PROTECTION_WINDOW_MS = 60 * 1000;
+            const protectionStillFresh = previousIsApprovedLike
+                && incomingIsWeakerStatus
+                && previousAgeMs < PROTECTION_WINDOW_MS;
+            if (protectionStillFresh) {
                 normalizedStatus = previousStatus;
             }
 
@@ -897,7 +907,8 @@ const GlobalSettingsModal = {
             status: normalizedStatus,
             machineId: String(source.machineId || source.machine_id || normalizedHeartbeat.machineId || this.localProvisionState.machineId || '').trim(),
             adminPortalUrl: String(source.adminPortalUrl || source.admin_portal_url || this.localProvisionState.adminPortalUrl || '').trim(),
-            cloudHeartbeat: normalizedHeartbeat
+            cloudHeartbeat: normalizedHeartbeat,
+            measuredAt: Date.now()
         };
 
         this.updateLocalModeCheckupStatus();

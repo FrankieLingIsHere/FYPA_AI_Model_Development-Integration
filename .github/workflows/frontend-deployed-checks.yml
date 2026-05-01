@@ -32,10 +32,10 @@ jobs:
 
       - name: Validate deployed frontend assets include settings fixes
         env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_FRONTEND_ASSETS_STRICT: "1"
+          CASM_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          CASM_FRONTEND_ASSETS_STRICT: "1"
         run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_asset_check.py
+          python Updated_Pipeline_Supabase/tests/deployed_frontend_asset_check.py
 
   frontend-interaction-robustness:
     name: Frontend Interaction Robustness
@@ -62,25 +62,25 @@ jobs:
 
       - name: Run frontend robustness browser checks
         env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "30000"
-          LUNA_FRONTEND_STRESS_CLICKS: "3"
+          CASM_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          CASM_FRONTEND_MAX_NAV_LATENCY_MS: "30000"
+          CASM_FRONTEND_STRESS_CLICKS: "3"
         run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_robustness_test.py
+          python Updated_Pipeline_Supabase/tests/deployed_frontend_robustness_test.py
 
       - name: Run frontend navigation and timezone action checks
         env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_FRONTEND_MAX_NAV_LATENCY_MS: "30000"
+          CASM_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          CASM_FRONTEND_MAX_NAV_LATENCY_MS: "30000"
         run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+          python Updated_Pipeline_Supabase/tests/deployed_frontend_navigation_timezone_action_test.py
 
       - name: Run frontend visual placement integrity checks (Selenium)
         env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
-          LUNA_FRONTEND_VISUAL_MAX_WAIT_SECONDS: "120"
+          CASM_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          CASM_FRONTEND_VISUAL_MAX_WAIT_SECONDS: "120"
         run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_visual_layout_integrity_selenium_test.py
+          python Updated_Pipeline_Supabase/tests/deployed_frontend_visual_layout_integrity_selenium_test.py
 
   frontend-mobile-usability:
     name: Frontend Mobile Usability
@@ -107,6 +107,6 @@ jobs:
 
       - name: Run frontend mobile usability browser checks
         env:
-          LUNA_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
+          CASM_VERCEL_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.vercel_url || 'https://fypa-ai-model-development-integrati.vercel.app' }}
         run: |
-          python Updated_Pipeline_Supabase/deployed_frontend_mobile_usability_test.py
+          python Updated_Pipeline_Supabase/tests/deployed_frontend_mobile_usability_test.py

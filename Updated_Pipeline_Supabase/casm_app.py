@@ -3313,6 +3313,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             )
             violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
             violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
+
+            detections_list = detections if isinstance(detections, list) else []
+            detected_person_count = sum(
+                1 for d in detections_list
+                if isinstance(d, dict)
+                and str(d.get('class_name') or d.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
+                in {'person', 'worker', 'man', 'woman', 'people'}
+            )
             
             report_data = {
                 'report_id': report_id,
@@ -3331,7 +3339,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'annotated_image_path': str(annotated_path),
                 'location': 'Live Stream Monitor',
                 'severity': 'HIGH',
-                'person_count': len(detections),
+                'person_count': detected_person_count,
                 'cloud_upload_disabled': force_local_artifact_pipeline,
                 'force_local_nlp': force_local_artifact_pipeline,
                 'allow_local_nlp_fallback': force_local_artifact_pipeline,
@@ -3700,6 +3708,14 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         logger.warning(f"Could not update status: {e}")
                 
                 logger.info(f"📄 Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
+
+                detections_list = detections if isinstance(detections, list) else []
+                detected_person_count = sum(
+                    1 for d in detections_list
+                    if isinstance(d, dict)
+                    and str(d.get('class_name') or d.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
+                    in {'person', 'worker', 'man', 'woman', 'people'}
+                )
                 
                 report_data = {
                     'report_id': report_id,
@@ -3718,7 +3734,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'annotated_image_path': str(annotated_path),
                     'location': 'Live Stream Monitor',
                     'severity': 'HIGH',
-                    'person_count': len(detections)
+                    'person_count': detected_person_count
                 }
                 
                 # generate_report returns dict with 'html' and 'pdf' keys

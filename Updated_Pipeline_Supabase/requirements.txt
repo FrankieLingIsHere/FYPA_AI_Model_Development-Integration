@@ -1,4 +1,4 @@
-# CASM PPE Safety Monitor - Requirements
+# LUNA PPE Safety Monitor - Requirements
 # =========================================
 # AI-powered PPE compliance monitoring system with YOLOv8, LLaVA (Ollama), and RAG
 
@@ -7,9 +7,10 @@ Flask==3.1.2
 Werkzeug==3.1.3
 
 # Computer Vision & Object Detection
-opencv-python-headless==4.12.0.88
+opencv-python==4.12.0.88
 ultralytics==8.3.228
-# PyTorch is installed manually in Dockerfile with CPU-only flag to save 10GB of space
+torch==2.9.1
+torchvision==0.24.1
 
 # Image Captioning (Qwen2.5-VL via Ollama API)
 # Uses Ollama API for efficient inference with Qwen2.5-VL vision model
@@ -56,11 +57,15 @@ rich==14.2.0
 supabase
 psycopg2-binary
 
-# CORS (for cross-origin frontend requests)
-flask-cors
-
-# Gemini API (Primary AI provider — replaces Ollama for captioning + NLP)
-google-genai
-
-# Optional camera source (Intel RealSense)
-pyrealsense2; platform_system == "Windows"
+# Note: Model files must be downloaded separately:
+# 
+# FOR IMAGE CAPTIONING (Qwen2.5-VL-3B):
+#   Download these files to Updated_Pipeline_Supabase/ directory:
+#   1. Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf (~1.93GB)
+#   2. mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf (~1.34GB)
+#   From: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF
+#
+# FOR REPORT GENERATION (Ollama still used):
+#   Install Ollama from: https://ollama.ai
+#   - ollama pull llama3          (for report generation)
+#   - ollama pull nomic-embed-text (for DOSH RAG embeddings)

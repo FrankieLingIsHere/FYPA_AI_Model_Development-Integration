@@ -3269,8 +3269,23 @@ RESPONSE FORMAT (JSON):
 
         model_person_count = len(model_person_rows)
 
-        detected_person_count = int((report_data or {}).get('person_count', 0) or 0)
-        detected_violation_items = int((report_data or {}).get('violation_count', 0) or 0)
+        detections = report_data.get('detections')
+        if not isinstance(detections, list):
+            detections = []
+        detected_people = []
+        detected_violations = []
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip().lower()
+            label = label.replace('_', '-').replace(' ', '-')
+            if label in {'person', 'worker', 'man', 'woman', 'people'}:
+                detected_people.append(det)
+            if label.startswith('no-'):
+                detected_violations.append(det)
+
+        detected_person_count = len(detected_people) if detections else int(report_data.get('person_count', 0) or 0)
+        detected_violation_items = len(detected_violations) if detections else int(report_data.get('violation_count', 0) or 0)
 
         def _infer_people_count_from_text(*texts: str) -> int:
             return infer_people_count_from_text(*texts)
@@ -4201,10 +4216,16 @@ RESPONSE FORMAT (JSON):
         # Without this, scenes where YOLO sees 3 people but caption only says
         # "a worker" collapse to a single person card.
         detections = report_data.get('detections') or []
-        yolo_person_count = sum(
-            1 for d in detections
-            if isinstance(d, dict) and str(d.get('class_name', '')).strip().lower() in {'person', 'worker', 'man', 'woman'}
-        )
+        if not isinstance(detections, list):
+            detections = []
+        yolo_person_count = 0
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip().lower()
+            label = label.replace('_', '-').replace(' ', '-')
+            if label in {'person', 'worker', 'man', 'woman', 'people'}:
+                yolo_person_count += 1
 
         # Caption/YOLO inference is the authoritative count — Gemini's
         # person_count field is unreliable and must not override it.
@@ -4212,7 +4233,7 @@ RESPONSE FORMAT (JSON):
             target_count = inferred_from_caption
         elif yolo_person_count > 0:
             # Trust YOLO when caption is silent on count.
-            target_count = max(target_count, yolo_person_count)
+            target_count = yolo_person_count
         elif target_count == 0:
             target_count = len(persons)  # last-resort fallback
         # Truncate if Gemini over-generated

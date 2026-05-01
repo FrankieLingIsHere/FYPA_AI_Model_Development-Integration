@@ -20,30 +20,42 @@ def fail(message: str, code: int = 2) -> int:
     return 0
 
 
+def _find_visible_nav_locator(page, page_name: str):
+    nav_selector = f"[data-page='{page_name}']"
+    locator = page.locator(nav_selector)
+    count = locator.count()
+    for index in range(count):
+        candidate = locator.nth(index)
+        if candidate.is_visible():
+            return candidate
+    return None
+
+
 def ensure_nav_visible(page, page_name: str):
     nav_selector = f"[data-page='{page_name}']"
     locator = page.locator(nav_selector)
     if locator.count() == 0:
         raise RuntimeError(f"Navigation link not found for page={page_name}")
 
-    if locator.first.is_visible():
-        return
+    visible_nav = _find_visible_nav_locator(page, page_name)
+    if visible_nav:
+        return visible_nav
 
-    for toggle_selector in ("#navToggle", "#navMoreToggle"):
+    for toggle_selector in ("#navToggle", "#navMoreToggle", "#mobileMoreToggle"):
         toggle = page.locator(toggle_selector)
         if toggle.count() > 0 and toggle.first.is_visible():
             toggle.first.click()
             page.wait_for_timeout(220)
-            if locator.first.is_visible():
-                return
+            visible_nav = _find_visible_nav_locator(page, page_name)
+            if visible_nav:
+                return visible_nav
 
-    if not locator.first.is_visible():
-        raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
+    raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 
 def navigate_to(page, page_name: str, wait_selector: str = "#app"):
-    ensure_nav_visible(page, page_name)
-    page.click(f"[data-page='{page_name}']")
+    nav_link = ensure_nav_visible(page, page_name)
+    nav_link.click()
     page.wait_for_selector(wait_selector, timeout=MAX_NAV_LATENCY_MS)
     page.wait_for_timeout(320)
 
@@ -64,6 +76,13 @@ def install_metrics_hooks(page):
             }
 
             const m = window.__CASM_ACTION_METRICS;
+
+            const RouterRef = window.Router || (typeof Router !== 'undefined' ? Router : null);
+            const HomePageRef = window.HomePage || (typeof HomePage !== 'undefined' ? HomePage : null);
+            const ReportsPageRef = window.ReportsPage || (typeof ReportsPage !== 'undefined' ? ReportsPage : null);
+            const AnalyticsPageRef = window.AnalyticsPage || (typeof AnalyticsPage !== 'undefined' ? AnalyticsPage : null);
+            const LivePageRef = window.LivePage || (typeof LivePage !== 'undefined' ? LivePage : null);
+            const AboutPageRef = window.AboutPage || (typeof AboutPage !== 'undefined' ? AboutPage : null);
 
             const wrapMethod = (obj, methodName, counterName) => {
                 if (!obj || typeof obj[methodName] !== 'function') return;
@@ -89,25 +108,25 @@ def install_metrics_hooks(page):
                 obj.mount = wrapped;
             };
 
-            if (window.Router && typeof window.Router.render === 'function' && !window.Router.render.__casm_wrapped) {
-                const originalRender = window.Router.render.bind(window.Router);
+            if (RouterRef && typeof RouterRef.render === 'function' && !RouterRef.render.__casm_wrapped) {
+                const originalRender = RouterRef.render.bind(RouterRef);
                 const wrappedRender = function(...args) {
                     m.renders += 1;
                     return originalRender(...args);
                 };
                 wrappedRender.__casm_wrapped = true;
-                window.Router.render = wrappedRender;
+                RouterRef.render = wrappedRender;
             }
 
-            wrapMount(window.HomePage, 'home');
-            wrapMount(window.ReportsPage, 'reports');
-            wrapMount(window.AnalyticsPage, 'analytics');
-            wrapMount(window.LivePage, 'live');
-            wrapMount(window.AboutPage, 'about');
+            wrapMount(HomePageRef, 'home');
+            wrapMount(ReportsPageRef, 'reports');
+            wrapMount(AnalyticsPageRef, 'analytics');
+            wrapMount(LivePageRef, 'live');
+            wrapMount(AboutPageRef, 'about');
 
-            wrapMethod(window.ReportsPage, 'renderReports', 'reportsRenderCalls');
-            wrapMethod(window.HomePage, 'refreshData', 'homeRefreshCalls');
-            wrapMethod(window.AnalyticsPage, 'refreshData', 'analyticsRefreshCalls');
+            wrapMethod(ReportsPageRef, 'renderReports', 'reportsRenderCalls');
+            wrapMethod(HomePageRef, 'refreshData', 'homeRefreshCalls');
+            wrapMethod(AnalyticsPageRef, 'refreshData', 'analyticsRefreshCalls');
 
             if (!window.__CASM_ACTION_METRICS_EVENT_HOOKED) {
                 window.addEventListener('ppe-timezone:changed', () => {

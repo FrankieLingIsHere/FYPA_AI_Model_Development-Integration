@@ -13680,6 +13680,17 @@ def request_bootstrap_installer():
             if resolved_from_secret:
                 resolved_machine_id, device = _resolve_pending_device(resolved_from_secret, devices=devices)
 
+        if device and resolved_machine_id and resolved_machine_id != machine_id:
+            resolved_from_local_state = _resolve_machine_id_from_local_provision_state(
+                machine_id,
+                devices=devices,
+            )
+            if resolved_from_local_state:
+                resolved_machine_id, device = _resolve_pending_device(
+                    resolved_from_local_state,
+                    devices=devices,
+                )
+
         if not device:
             resolved_from_local_state = _resolve_machine_id_from_local_provision_state(
                 machine_id,

@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ['FLASK_DEBUG'] = 'false'
 os.environ['SERVE_FRONTEND'] = 'false'
 os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
+os.environ['PROVISION_ALLOW_SELF_REGISTER'] = 'true'
 os.environ['BOOTSTRAP_TOKEN_SECRET'] = 'test-bootstrap-secret'
 os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
 os.environ['SUPABASE_URL'] = 'https://projtest123.supabase.co'
@@ -156,9 +157,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(str(approved_payload.get('bootstrap_token') or '').strip())
         self.assertTrue(str(approved_payload.get('installer_token') or '').strip())
 
-        # Step 6: Installer issuance can now be done by machine_id only.
+        # Step 6: Installer issuance requires a device provision_secret.
         installer_redirect = self.client.get(
-            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+            f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
         )
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
@@ -315,15 +316,15 @@ class ProvisioningActionTest(unittest.TestCase):
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
 
-        request_machine_only = self.client.get(
-            f'/api/bootstrap/installer/request?machine_id={machine_id}',
+        request_with_secret = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
         )
-        self.assertIn(request_machine_only.status_code, (301, 302, 303, 307, 308))
-        self._assert_no_cache_headers(request_machine_only)
-        machine_only_location = str(request_machine_only.headers.get('Location') or '')
+        self.assertIn(request_with_secret.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(request_with_secret)
+        machine_only_location = str(request_with_secret.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', machine_only_location)
-        request_machine_only.close()
+        request_with_secret.close()
 
         request_unauth = self.client.get('/api/bootstrap/installer/request')
         self.assertEqual(request_unauth.status_code, 401)
@@ -405,9 +406,9 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_replay.close()
 
     def test_batch_templates_have_required_label_targets(self):
-        script_dir = os.path.abspath(os.path.dirname(__file__))
-        start_bat_path = os.path.join(script_dir, 'start.bat')
-        installer_bat_path = os.path.join(script_dir, 'frontend', 'static', 'CASM_LocalInstaller.bat')
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        start_bat_path = os.path.join(repo_root, 'start.bat')
+        installer_bat_path = os.path.join(repo_root, 'frontend', 'static', 'CASM_LocalInstaller.bat')
 
         with open(start_bat_path, 'r', encoding='utf-8') as f:
             start_bat = f.read()
@@ -491,7 +492,7 @@ class ProvisioningActionTest(unittest.TestCase):
         )
 
         installer_redirect = self.client.get(
-            f'/api/bootstrap/installer/request?machine_id={drifted_machine_id}',
+            f'/api/bootstrap/installer/request?machine_id={drifted_machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
         )
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))

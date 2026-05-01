@@ -153,6 +153,49 @@ def _set_cached_report_html_content(report_id: str, report_html_key: str, conten
                 report_html_cache.pop(key, None)
 
 
+def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
+    if not report_id:
+        return
+    if not isinstance(html_content, str) or not html_content:
+        return
+    if _looks_like_fallback_template_html(html_content):
+        return
+
+    try:
+        violation_dir = VIOLATIONS_DIR / report_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+        report_path = violation_dir / 'report.html'
+
+        if report_path.exists():
+            try:
+                existing = report_path.read_text(encoding='utf-8', errors='ignore')
+                if existing and not _looks_like_fallback_template_html(existing):
+                    return
+            except Exception:
+                return
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+    except Exception as e:
+        logger.debug(f"Could not persist cached report HTML for {report_id}: {e}")
+
+
+def _egress_budget_blocked_response():
+    if storage_manager is None:
+        return None
+    try:
+        usage = storage_manager.get_egress_usage()
+    except Exception:
+        return None
+    if not usage.get('blocked'):
+        return None
+    return jsonify({
+        'success': False,
+        'error': 'Monthly Supabase egress budget exceeded',
+        'egress': usage,
+    }), 429
+
+
 def _get_cached_rendered_report_html(report_id: str, report_html_key: str) -> Optional[str]:
     if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
         return None
@@ -5133,10 +5176,23 @@ def api_report_prefetch(report_id):
         html_content = _get_cached_report_html_content(report_id, report_html_key)
         source_layer = 'source_cache'
         if html_content is None:
-            html_content = storage_manager.download_file_content(report_html_key)
-            source_layer = 'supabase_storage'
+            if local_report_html.exists():
+                try:
+                    local_html = local_report_html.read_text(encoding='utf-8', errors='ignore')
+                    if local_html and not _looks_like_fallback_template_html(local_html):
+                        html_content = local_html
+                        source_layer = 'local_filesystem'
+                except Exception:
+                    html_content = None
+
+            if html_content is None:
+                html_content = storage_manager.download_file_content(report_html_key)
+                source_layer = 'supabase_storage'
 
         if not html_content:
+            blocked = _egress_budget_blocked_response()
+            if blocked:
+                return blocked
             return jsonify({'success': False, 'error': 'Failed to download report HTML'}), 404
 
         if isinstance(html_content, (bytes, bytearray)):
@@ -5145,6 +5201,7 @@ def api_report_prefetch(report_id):
             html_content = str(html_content)
 
         _set_cached_report_html_content(report_id, report_html_key, html_content)
+        _persist_local_report_html_cache(report_id, html_content)
 
         event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
         trace_payload = _build_traceability_payload(
@@ -9645,6 +9702,21 @@ def view_report(report_id):
                     status_code=409
                 )
             abort(404, description="Report not found")
+
+        if local_report_html.exists() and not failed_view and event_status not in ('failed', 'partial', 'skipped'):
+            try:
+                local_html = local_report_html.read_text(encoding='utf-8', errors='ignore')
+                if local_html and not _looks_like_fallback_template_html(local_html):
+                    trace_payload = _build_traceability_payload(
+                        report_id=report_id,
+                        violation=violation or {},
+                        event=event or {},
+                        source='local_filesystem_cache',
+                        failed_view_requested=failed_view,
+                    )
+                    return _read_local_report_with_trace(local_report_html, trace_payload)
+            except Exception:
+                pass
         
         # Get signed URL for report HTML
         report_html_key = violation.get('report_html_key')
@@ -9690,6 +9762,9 @@ def view_report(report_id):
             if html_content is None:
                 html_content = storage_manager.download_file_content(report_html_key)
             if not html_content:
+                blocked = _egress_budget_blocked_response()
+                if blocked:
+                    return blocked
                 if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
                     trace_payload = _build_traceability_payload(
                         report_id=report_id,
@@ -9722,6 +9797,7 @@ def view_report(report_id):
                 )
 
             _set_cached_report_html_content(report_id, report_html_key, html_content)
+            _persist_local_report_html_cache(report_id, html_content)
             
             # Return the HTML content directly so browser renders it
             trace_payload = _build_traceability_payload(
@@ -10663,6 +10739,9 @@ def get_image(report_id, filename):
 
         blob = storage_manager.download_file_content(storage_key)
         if not blob:
+            blocked = _egress_budget_blocked_response()
+            if blocked:
+                return blocked
             abort(404, description="Failed to fetch image")
 
         if isinstance(blob, str):
@@ -11484,6 +11563,40 @@ def system_info():
     }
     
     return jsonify(info)
+
+
+@app.route('/api/system/egress', methods=['GET'])
+def api_system_egress():
+    """Get Supabase storage egress usage and budget status."""
+    if storage_manager is None:
+        return jsonify({
+            'available': False,
+            'message': 'Supabase storage not configured',
+        }), 503
+
+    usage = storage_manager.get_egress_usage()
+    budget_bytes = usage.get('budget_bytes') or 0
+    downloaded_bytes = usage.get('bytes_downloaded') or 0
+    remaining_bytes = usage.get('remaining_bytes')
+
+    def _bytes_to_gb(value):
+        if value is None:
+            return None
+        return round(float(value) / (1024 ** 3), 3)
+
+    payload = {
+        'available': True,
+        'month': usage.get('month'),
+        'budget_bytes': budget_bytes,
+        'budget_gb': _bytes_to_gb(budget_bytes),
+        'downloaded_bytes': downloaded_bytes,
+        'downloaded_gb': _bytes_to_gb(downloaded_bytes),
+        'remaining_bytes': remaining_bytes,
+        'remaining_gb': _bytes_to_gb(remaining_bytes),
+        'blocked': bool(usage.get('blocked')),
+        'blocked_reason': usage.get('blocked_reason'),
+    }
+    return jsonify(payload), 200
 
 
 @app.route('/api/llm/ping', methods=['GET', 'POST'])

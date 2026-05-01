@@ -9,9 +9,11 @@ Provides signed URLs for secure access to private buckets.
 import logging
 import os
 import time
+import json
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 
 import requests
 from supabase import create_client, Client
@@ -22,6 +24,16 @@ logger = logging.getLogger(__name__)
 # project paused, billing block), every subsequent upload will fail the same way.
 # We short-circuit for this many seconds before re-probing, so the log isn't spammed.
 _RESTRICTION_BACKOFF_SECONDS = 300
+_GB_BYTES = 1024 ** 3
+_EGRESS_STATE_LOCK = threading.Lock()
+_DEFAULT_EGRESS_STATE_FILENAME = 'supabase_egress_state.json'
+
+
+def _safe_float_env(name: str, default: float = 0.0) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 class SupabaseStorageManager:
@@ -60,6 +72,16 @@ class SupabaseStorageManager:
         # remember that for a short window so we don't keep retrying.
         self._restricted_until_ts: float = 0.0
         self._restriction_reason: str = ''
+        self.egress_budget_bytes = int(
+            max(0.0, _safe_float_env('SUPABASE_EGRESS_BUDGET_GB', 0.0)) * _GB_BYTES
+        )
+        self.egress_state_path = Path(
+            os.getenv(
+                'SUPABASE_EGRESS_STATE_PATH',
+                str(Path('.runtime') / _DEFAULT_EGRESS_STATE_FILENAME)
+            )
+        )
+        self._egress_block_reason: str = ''
         
         # Initialize Supabase client
         try:
@@ -75,6 +97,97 @@ class SupabaseStorageManager:
     # =========================================================================
     # UPLOAD OPERATIONS
     # =========================================================================
+
+    def _current_month_key(self) -> str:
+        return datetime.now(timezone.utc).strftime('%Y-%m')
+
+    def _load_egress_state_locked(self) -> Dict[str, Any]:
+        default_state = {
+            'month': self._current_month_key(),
+            'bytes_downloaded': 0,
+            'updated_at': None,
+        }
+        try:
+            if not self.egress_state_path.exists():
+                return default_state
+            with open(self.egress_state_path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            if not isinstance(state, dict):
+                return default_state
+            month = str(state.get('month') or default_state['month'])
+            if month != default_state['month']:
+                return default_state
+            bytes_downloaded = int(state.get('bytes_downloaded') or 0)
+            return {
+                'month': month,
+                'bytes_downloaded': max(0, bytes_downloaded),
+                'updated_at': state.get('updated_at'),
+            }
+        except Exception as e:
+            logger.debug(f"Failed to read egress state: {e}")
+            return default_state
+
+    def _save_egress_state_locked(self, state: Dict[str, Any]) -> None:
+        try:
+            self.egress_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.egress_state_path.with_suffix('.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            tmp_path.replace(self.egress_state_path)
+        except Exception as e:
+            logger.debug(f"Failed to persist egress state: {e}")
+
+    def _egress_budget_active(self) -> bool:
+        return self.egress_budget_bytes > 0
+
+    def _record_egress_bytes(self, size_bytes: int) -> None:
+        if not self._egress_budget_active():
+            return
+        if size_bytes <= 0:
+            return
+        with _EGRESS_STATE_LOCK:
+            state = self._load_egress_state_locked()
+            state['bytes_downloaded'] = int(state.get('bytes_downloaded') or 0) + int(size_bytes)
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            self._save_egress_state_locked(state)
+
+        if state['bytes_downloaded'] >= self.egress_budget_bytes:
+            budget_gb = self.egress_budget_bytes / _GB_BYTES
+            used_gb = state['bytes_downloaded'] / _GB_BYTES
+            self._egress_block_reason = (
+                f"Monthly egress budget exceeded ({used_gb:.2f}GB / {budget_gb:.2f}GB)."
+            )
+
+    def get_egress_usage(self) -> Dict[str, Any]:
+        if not self._egress_budget_active():
+            return {
+                'month': self._current_month_key(),
+                'budget_bytes': 0,
+                'bytes_downloaded': 0,
+                'remaining_bytes': None,
+                'blocked': False,
+                'blocked_reason': None,
+            }
+
+        with _EGRESS_STATE_LOCK:
+            state = self._load_egress_state_locked()
+            remaining = max(0, self.egress_budget_bytes - int(state.get('bytes_downloaded') or 0))
+            blocked = remaining <= 0
+            blocked_reason = None
+            if blocked:
+                budget_gb = self.egress_budget_bytes / _GB_BYTES
+                used_gb = int(state.get('bytes_downloaded') or 0) / _GB_BYTES
+                blocked_reason = (
+                    f"Monthly egress budget exceeded ({used_gb:.2f}GB / {budget_gb:.2f}GB)."
+                )
+            return {
+                'month': state.get('month') or self._current_month_key(),
+                'budget_bytes': self.egress_budget_bytes,
+                'bytes_downloaded': int(state.get('bytes_downloaded') or 0),
+                'remaining_bytes': remaining,
+                'blocked': blocked,
+                'blocked_reason': blocked_reason,
+            }
 
     def _object_exists(self, bucket_name: str, storage_key: str) -> bool:
         """Best-effort check for object presence to keep uploads idempotent."""
@@ -350,12 +463,31 @@ class SupabaseStorageManager:
             return None
         
         bucket_name, path = parts
+
+        if self._egress_budget_active():
+            usage = self.get_egress_usage()
+            if usage.get('blocked'):
+                self._egress_block_reason = usage.get('blocked_reason') or 'Monthly egress budget exceeded.'
+                logger.warning(self._egress_block_reason)
+                return None
         
         try:
             # Download file content
             result = self.client.storage.from_(bucket_name).download(path)
             
             if result:
+                size_bytes = 0
+                if isinstance(result, (bytes, bytearray)):
+                    size_bytes = len(result)
+                elif isinstance(result, str):
+                    size_bytes = len(result.encode('utf-8'))
+                else:
+                    try:
+                        size_bytes = len(result)
+                    except Exception:
+                        size_bytes = 0
+                if size_bytes:
+                    self._record_egress_bytes(size_bytes)
                 logger.debug(f"Downloaded content from: {storage_key}")
                 return result
             else:

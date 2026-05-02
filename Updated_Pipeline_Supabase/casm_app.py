@@ -11355,8 +11355,15 @@ def live_frame_inference():
             # Treat browser-submitted live frames as live source so dedup logic applies.
             queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
             report_queued = queued_report_id is not None
+            # NOTE: when enqueue_violation returns None it is almost always because
+            # the live cooldown / dedup window suppressed a redundant frame from a
+            # stationary violation. That is the *intended* behavior, not an error,
+            # so we deliberately do NOT surface a 'report not queued' warning to
+            # the UI. Genuine queue-side failures (capacity, pipeline missing) are
+            # surfaced via the explicit branches below or via the returned
+            # report_queued=false + a non-benign reason string.
             if not report_queued:
-                report_queue_reason = 'cooldown_or_dedup_or_already_processing'
+                report_queue_reason = None  # benign: dedup / cooldown / already_processing
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
             report_queue_reason = 'pipeline_components_unavailable'
 

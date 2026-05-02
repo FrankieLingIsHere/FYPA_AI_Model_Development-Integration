@@ -923,19 +923,27 @@ const LivePage = {
                         }
                     }
                     if (result.report_queued === false) {
-                        const reason = result.report_queue_reason || 'queue_unavailable';
+                        const rawReason = String(result.report_queue_reason || '').trim().toLowerCase();
                         // Dedup / cooldown / already-processing are *normal* outcomes
                         // when consecutive frames detect the same stationary violation.
                         // Only surface a warning toast for genuine queue-side failures
                         // so the user is not spammed with misleading "not queued"
                         // messages while the previously-queued report is generating.
+                        //
+                        // The backend now leaves report_queue_reason null for benign
+                        // suppressions, but older deployments still return the
+                        // legacy 'cooldown_or_dedup_or_already_processing' string,
+                        // so we treat both null/empty AND the legacy string as
+                        // benign here.
                         const benignReasons = new Set([
+                            '',
                             'cooldown_or_dedup_or_already_processing',
                             'cooldown',
                             'dedup',
                             'already_processing'
                         ]);
-                        if (!benignReasons.has(String(reason).toLowerCase())) {
+                        if (!benignReasons.has(rawReason)) {
+                            const reason = rawReason || 'queue_unavailable';
                             const shouldNotifySuppression =
                                 !this.reportQueueSuppressionActive || this.reportQueueSuppressionReason !== reason;
                             if (shouldNotifySuppression) {

@@ -895,15 +895,54 @@ const LivePage = {
                         // Reset suppression state only when a new violation is successfully enqueued.
                         this.reportQueueSuppressionActive = false;
                         this.reportQueueSuppressionReason = null;
+
+                        // Fire the rich "PPE Violation Detected!" toast immediately at
+                        // the moment of detection instead of waiting for the polling
+                        // ViolationMonitor to pick it up after the report is generated.
+                        try {
+                            if (typeof ViolationMonitor !== 'undefined'
+                                && typeof ViolationMonitor._notifyViolationDetected === 'function'
+                                && result.report_id) {
+                                const detectedTypes = (Array.isArray(result.detections)
+                                    ? result.detections
+                                        .map(d => String(d && (d.class_name || d.class) || ''))
+                                        .filter(name => name.toLowerCase().startsWith('no-'))
+                                    : []);
+                                ViolationMonitor._notifyViolationDetected({
+                                    report_id: result.report_id,
+                                    timestamp: new Date().toISOString(),
+                                    severity: 'HIGH',
+                                    missing_ppe: detectedTypes,
+                                    violation_summary: detectedTypes.length
+                                        ? `PPE Violation Detected: ${detectedTypes.join(', ')}`
+                                        : 'PPE Violation Detected'
+                                });
+                            }
+                        } catch (notifyErr) {
+                            console.warn('Could not fire immediate violation notification:', notifyErr);
+                        }
                     }
                     if (result.report_queued === false) {
                         const reason = result.report_queue_reason || 'queue_unavailable';
-                        const shouldNotifySuppression =
-                            !this.reportQueueSuppressionActive || this.reportQueueSuppressionReason !== reason;
-                        if (shouldNotifySuppression) {
-                            showNotification(`Violation detected but report not queued (${reason})`, 'warning');
-                            this.reportQueueSuppressionActive = true;
-                            this.reportQueueSuppressionReason = reason;
+                        // Dedup / cooldown / already-processing are *normal* outcomes
+                        // when consecutive frames detect the same stationary violation.
+                        // Only surface a warning toast for genuine queue-side failures
+                        // so the user is not spammed with misleading "not queued"
+                        // messages while the previously-queued report is generating.
+                        const benignReasons = new Set([
+                            'cooldown_or_dedup_or_already_processing',
+                            'cooldown',
+                            'dedup',
+                            'already_processing'
+                        ]);
+                        if (!benignReasons.has(String(reason).toLowerCase())) {
+                            const shouldNotifySuppression =
+                                !this.reportQueueSuppressionActive || this.reportQueueSuppressionReason !== reason;
+                            if (shouldNotifySuppression) {
+                                showNotification(`Violation detected but report not queued (${reason})`, 'warning');
+                                this.reportQueueSuppressionActive = true;
+                                this.reportQueueSuppressionReason = reason;
+                            }
                         }
                     }
                 }

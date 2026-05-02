@@ -58,7 +58,7 @@ def main() -> int:
     summary = {
         "test_name": "deployed_system_conditions_diagnostics",
         "target_url": BASE_URL,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "endpoint_samples": results,
         "thresholds": thresholds,
     }

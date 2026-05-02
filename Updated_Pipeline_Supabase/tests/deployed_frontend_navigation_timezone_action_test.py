@@ -259,7 +259,7 @@ def check_timestamp_alignment_contract(page):
 
 def main() -> int:
     checks: list = []
-    metrics: dict = {}
+    summary_metrics: dict = {}
 
     try:
         with sync_playwright() as p:
@@ -307,7 +307,7 @@ def main() -> int:
                         f"Possible duplicate remounts for {page_name}: observed={observed}, expected<={expected + 1}"
                     )
 
-            metrics["mounts"] = mounts
+            summary_metrics["mounts"] = mounts
             checks.append({"name": "remount_guard", "pass": True, "message": f"metrics={browser_metrics}"})
             print(f"PASS: navigation remount guard checks metrics={browser_metrics}")
 
@@ -398,7 +398,7 @@ def main() -> int:
             "target_url": VERCEL_URL,
             "checks": checks,
             "pass": overall_pass,
-            "metrics": metrics,
+            "metrics": summary_metrics,
             "strict_mode": STRICT,
         }
         _write_summary(summary)
@@ -414,7 +414,7 @@ def main() -> int:
             "target_url": VERCEL_URL,
             "checks": checks + [{"name": "playwright_timeout", "pass": False, "message": str(exc)}],
             "pass": False,
-            "metrics": metrics,
+            "metrics": summary_metrics,
             "strict_mode": STRICT,
         })
         return fail(f"timeout in navigation/timezone action test: {exc}", 40)
@@ -424,7 +424,7 @@ def main() -> int:
             "target_url": VERCEL_URL,
             "checks": checks + [{"name": "unhandled_error", "pass": False, "message": str(exc)}],
             "pass": False,
-            "metrics": metrics,
+            "metrics": summary_metrics,
             "strict_mode": STRICT,
         })
         return fail(f"navigation/timezone action test unhandled error: {exc}", 41)

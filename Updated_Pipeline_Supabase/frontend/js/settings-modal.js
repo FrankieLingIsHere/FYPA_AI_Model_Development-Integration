@@ -513,6 +513,23 @@ const GlobalSettingsModal = {
         }
     },
 
+    resolveStableMachineId(currentMachineId = '', candidateMachineId = '', source = 'unknown') {
+        const current = String(currentMachineId || '').trim();
+        const candidate = String(candidateMachineId || '').trim();
+        const isValid = (value) => /^[A-Za-z0-9._:-]{3,120}$/.test(value);
+
+        if (isValid(current) && isValid(candidate) && current !== candidate) {
+            console.warn(
+                `[Provisioning] Ignoring machine_id mismatch from ${source}. Keeping stable device id.`,
+                { currentMachineId: current, candidateMachineId: candidate }
+            );
+            return current;
+        }
+
+        if (isValid(candidate)) return candidate;
+        return current;
+    },
+
     saveRemoteProvisionState(nextState = {}) {
         try {
             const current = this.loadRemoteProvisionState();
@@ -531,7 +548,18 @@ const GlobalSettingsModal = {
             // instead of falling back to a freshly-generated Web-XXXX browser ID.
             // Uses the same key as app.js getOrCreateDeviceMachineId().
             try {
-                localStorage.setItem('ppe.localMode.deviceMachineId.v1', merged.machineId);
+                const localKey = 'ppe.localMode.deviceMachineId.v1';
+                const existingLocalMachineId = String(localStorage.getItem(localKey) || '').trim();
+                const localMachineId = this.resolveStableMachineId(
+                    existingLocalMachineId,
+                    merged.machineId,
+                    'saveRemoteProvisionState'
+                );
+                if (localMachineId) {
+                    localStorage.setItem(localKey, localMachineId);
+                    // Keep session state aligned with the stable local identity.
+                    merged.machineId = localMachineId;
+                }
             } catch (_) { /* quota / privacy mode — best-effort only */ }
             return merged;
         } catch (error) {
@@ -619,7 +647,11 @@ const GlobalSettingsModal = {
                 };
             }
 
-            machineId = String(requestResult.machine_id || machineId).trim() || machineId;
+            machineId = this.resolveStableMachineId(
+                machineId,
+                String(requestResult.machine_id || '').trim(),
+                'requestCloudProvisioningApproval'
+            );
             provisionSecret = String(requestResult.provision_secret || provisionSecret).trim();
             this.saveRemoteProvisionState({
                 machineId,
@@ -672,7 +704,11 @@ const GlobalSettingsModal = {
                     currentProvisionSecret: provisionSecret || ''
                 });
                 if (retryRequest && retryRequest.success) {
-                    machineId = String(retryRequest.machine_id || machineId).trim() || machineId;
+                    machineId = this.resolveStableMachineId(
+                        machineId,
+                        String(retryRequest.machine_id || '').trim(),
+                        'requestCloudProvisioningApproval:retry'
+                    );
                     provisionSecret = String(retryRequest.provision_secret || provisionSecret).trim();
                     this.saveRemoteProvisionState({
                         machineId,

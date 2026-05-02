@@ -2532,10 +2532,24 @@ def queue_worker_loop():
             if now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS:
                 last_supabase_recovery_check_epoch = now_epoch
                 recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
+                # Auto-reconnect local-cache sync is meant for reports captured
+                # while the runtime was forced offline (local mode or Supabase
+                # outage) that now need to be uploaded back to the cloud once
+                # connectivity returns. In a pure cloud-mode runtime the live
+                # pipeline already uploads directly, so re-enqueueing those
+                # local-staged artifacts as 'sync_local_cache' jobs incorrectly
+                # tags freshly-generated cloud reports with the orange
+                # 'Local Synced' badge. Skip the sweep when the active routing
+                # profile is cloud (per-report cloud upload failures are
+                # handled by the dedicated stuck-report sweep, not by the bulk
+                # local-cache sync).
+                worker_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+                worker_skip_local_cache_sync = worker_routing_profile != 'local'
                 if (
                     recovery.get('success')
                     and SUPABASE_AUTO_SYNC_BATCH_SIZE > 0
                     and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
+                    and not worker_skip_local_cache_sync
                 ):
                     queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
                     if queue_size_now <= 0:

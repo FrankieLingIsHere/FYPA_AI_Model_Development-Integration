@@ -304,12 +304,32 @@ const RealtimeSync = {
         const reports = Array.isArray(payload.reports) ? payload.reports : [];
         const nowEpochMs = Date.now();
 
+        const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
+        const progressReportId = String(progress.current || '').trim();
+        const progressStatus = String(progress.status || '').trim().toLowerCase();
+        const progressStep = String(progress.current_step || '').trim();
+        const hasProgressReportRow = !!(progressReportId && reports.some((row) => {
+            return String((row && row.report_id) || '').trim() === progressReportId;
+        }));
+        const isActiveProgress = !!(
+            progressReportId
+            && (progressStatus === 'waiting' || progressStatus === 'processing' || progressStatus === 'generating')
+        );
+
         const isRecentRow = (row) => {
             const raw = row && (row.updated_at || row.timestamp);
             if (!raw) return false;
             const ts = Date.parse(raw);
             if (!Number.isFinite(ts)) return false;
             return (nowEpochMs - ts) <= 120000;
+        };
+
+        const shouldTreatRowAsRecent = (row) => {
+            const rowId = String((row && row.report_id) || '').trim();
+            if (isActiveProgress && rowId && rowId === progressReportId) {
+                return true;
+            }
+            return isRecentRow(row);
         };
 
         reports.forEach((row) => {
@@ -321,7 +341,7 @@ const RealtimeSync = {
             this.reportStatusCache[reportId] = status;
 
             if (!prev) {
-                if (!isRecentRow(row)) {
+                if (!shouldTreatRowAsRecent(row)) {
                     return;
                 }
 
@@ -386,11 +406,6 @@ const RealtimeSync = {
 
         // Fallback path: when DB-backed report rows are unavailable, use pipeline progress.
         // This keeps UX visibility in local/offline runs while generation is still active.
-        const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
-        const progressReportId = String(progress.current || '').trim();
-        const progressStatus = String(progress.status || '').trim().toLowerCase();
-        const progressStep = String(progress.current_step || '').trim();
-
         if (!progressReportId) {
             this.lastProgressReportId = null;
             this.lastProgressStatus = progressStatus || null;
@@ -401,9 +416,9 @@ const RealtimeSync = {
         const changedReport = this.lastProgressReportId !== progressReportId;
         const changedStatus = this.lastProgressStatus !== progressStatus;
         const changedStep = this.lastProgressStep !== progressStep;
-        const noDbBackedRows = reports.length === 0;
+        const allowProgressFallback = !hasProgressReportRow;
 
-        if (noDbBackedRows) {
+        if (allowProgressFallback) {
             if ((progressStatus === 'waiting' || progressStatus === 'processing') && (changedReport || changedStatus)) {
                 NotificationManager.reportGenerating(progressReportId, {
                     title: progressStatus === 'waiting' ? 'Report Queued' : 'Report Generating'

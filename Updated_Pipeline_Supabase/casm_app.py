@@ -68,7 +68,8 @@ report_progress = {
     'completed': 0,
     'status': 'idle',  # idle, processing, completed, error
     'current_step': '',
-    'error_message': None
+    'error_message': None,
+    'updated_at': None
 }
 report_progress_lock = Lock()
 
@@ -1085,6 +1086,33 @@ SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS = max(
     SUPABASE_OFFLINE_BACKOFF_SECONDS,
     int(os.getenv('SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS', '900') or 900)
 )
+REALTIME_SUPABASE_POLL_INTERVAL_SECONDS = max(
+    5,
+    int(os.getenv('REALTIME_SUPABASE_POLL_INTERVAL_SECONDS', '20') or 20)
+)
+REALTIME_SUPABASE_POLL_INTERVAL_SECONDS = min(REALTIME_SUPABASE_POLL_INTERVAL_SECONDS, 600)
+REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL = os.getenv(
+    'REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL',
+    'false'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+realtime_supabase_cache_lock = Lock()
+realtime_supabase_cache = {
+    'rows': [],
+    'fetched_at': 0.0
+}
+
+
+def _get_realtime_supabase_cached_rows() -> Tuple[List[Dict[str, Any]], float]:
+    with realtime_supabase_cache_lock:
+        rows = list(realtime_supabase_cache.get('rows') or [])
+        fetched_at = float(realtime_supabase_cache.get('fetched_at') or 0.0)
+    return rows, fetched_at
+
+
+def _set_realtime_supabase_cached_rows(rows: List[Dict[str, Any]]) -> None:
+    with realtime_supabase_cache_lock:
+        realtime_supabase_cache['rows'] = list(rows or [])
+        realtime_supabase_cache['fetched_at'] = time.time()
 
 
 def _is_supabase_offline_backoff_active() -> bool:
@@ -1352,6 +1380,7 @@ def update_report_progress(
             report_progress['completed'] = completed
         if status == 'completed':
             report_progress['completed'] = report_progress.get('total', 0)
+        report_progress['updated_at'] = datetime.now(timezone.utc).isoformat()
 
 def get_report_progress():
     """Get current report generation progress."""
@@ -1368,7 +1397,8 @@ def reset_report_progress():
             'completed': 0,
             'status': 'idle',
             'current_step': '',
-            'error_message': None
+            'error_message': None,
+            'updated_at': None
         }
 
 
@@ -5429,31 +5459,54 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
         except Exception as e:
             logger.debug(f"Queue stats unavailable for realtime snapshot: {e}")
 
-    report_rows = []
-    if db_manager is not None and getattr(db_manager, 'conn', None) is not None:
-        try:
-            with db_manager.conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT report_id, status, error_message, timestamp, updated_at
-                    FROM public.detection_events
-                    ORDER BY COALESCE(updated_at, timestamp) DESC
-                    LIMIT %s
-                    """,
-                    (int(limit),)
-                )
-                rows = cur.fetchall()
+    progress = get_report_progress()
+    progress_status = str(progress.get('status') or '').strip().lower()
+    queue_size = int(queue_data.get('queue_size') or 0)
+    active_local = queue_size > 0 or progress_status in ('waiting', 'processing', 'generating')
 
-            for row in rows:
-                report_rows.append({
-                    'report_id': row.get('report_id'),
-                    'status': str(row.get('status') or '').strip().lower() or 'unknown',
-                    'error_message': row.get('error_message'),
-                    'timestamp': _iso_or_none(row.get('timestamp')),
-                    'updated_at': _iso_or_none(row.get('updated_at'))
-                })
-        except Exception as e:
-            logger.debug(f"Realtime report snapshot query failed: {e}")
+    report_rows = []
+    if (
+        db_manager is not None
+        and getattr(db_manager, 'conn', None) is not None
+        and not _is_supabase_offline_backoff_active()
+    ):
+        cached_rows, cached_at = _get_realtime_supabase_cached_rows()
+        should_poll = True
+        if active_local and not REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL:
+            should_poll = False
+
+        if should_poll:
+            now_epoch = time.time()
+            if cached_rows and (now_epoch - cached_at) < REALTIME_SUPABASE_POLL_INTERVAL_SECONDS:
+                report_rows = cached_rows
+            else:
+                try:
+                    with db_manager.conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT report_id, status, error_message, timestamp, updated_at
+                            FROM public.detection_events
+                            ORDER BY COALESCE(updated_at, timestamp) DESC
+                            LIMIT %s
+                            """,
+                            (int(limit),)
+                        )
+                        rows = cur.fetchall()
+
+                    for row in rows:
+                        report_rows.append({
+                            'report_id': row.get('report_id'),
+                            'status': str(row.get('status') or '').strip().lower() or 'unknown',
+                            'error_message': row.get('error_message'),
+                            'timestamp': _iso_or_none(row.get('timestamp')),
+                            'updated_at': _iso_or_none(row.get('updated_at'))
+                        })
+                    _set_realtime_supabase_cached_rows(report_rows)
+                except Exception as e:
+                    logger.debug(f"Realtime report snapshot query failed: {e}")
+                    report_rows = cached_rows
+        else:
+            report_rows = cached_rows
 
     local_rows = _collect_local_report_state_rows(limit=max(40, int(limit) * 2))
     if local_rows:
@@ -5509,7 +5562,7 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
     return {
         'server_time': datetime.now(timezone.utc).isoformat(),
         'queue': queue_data,
-        'progress': get_report_progress(),
+        'progress': progress,
         'reports': report_rows
     }
 
@@ -5534,8 +5587,16 @@ def api_realtime_stream():
             }
             signature = json.dumps(signature_source, sort_keys=True, default=str)
 
+            progress = payload.get('progress') or {}
+            progress_status = str(progress.get('status') or '').strip().lower()
+            queue = payload.get('queue') or {}
+            active_generation = (
+                int(queue.get('queue_size') or 0) > 0
+                or progress_status in ('waiting', 'processing', 'generating')
+            )
+
             # Push update when state changes; otherwise keep connection warm.
-            if signature != last_signature:
+            if signature != last_signature or (active_generation and heartbeat_counter >= 3):
                 data = json.dumps(payload, default=str)
                 yield f"event: update\ndata: {data}\n\n"
                 last_signature = signature

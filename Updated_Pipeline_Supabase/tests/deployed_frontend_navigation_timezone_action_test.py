@@ -293,11 +293,11 @@ def main() -> int:
                 expected_visits[route_name] += 1
 
             time.sleep(0.25)
-            metrics_data = get_metrics(page)
-            if not metrics_data:
+            browser_metrics = get_metrics(page)
+            if not browser_metrics:
                 raise RuntimeError("Missing browser action metrics after navigation sequence")
 
-            mounts = metrics_data.get("mounts", {})
+            mounts = browser_metrics.get("mounts", {})
             for page_name in ("home", "reports", "analytics", "live"):
                 observed = int(mounts.get(page_name, 0))
                 expected = int(expected_visits.get(page_name, 0))
@@ -308,8 +308,8 @@ def main() -> int:
                     )
 
             metrics["mounts"] = mounts
-            checks.append({"name": "remount_guard", "pass": True, "message": f"metrics={metrics_data}"})
-            print(f"PASS: navigation remount guard checks metrics={metrics_data}")
+            checks.append({"name": "remount_guard", "pass": True, "message": f"metrics={browser_metrics}"})
+            print(f"PASS: navigation remount guard checks metrics={browser_metrics}")
 
             # Timezone action checks across pages.
             if page.locator("#timezone-selector").count() == 0:

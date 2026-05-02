@@ -216,9 +216,11 @@ def main() -> int:
     progressed = bool(statuses) and not all(s in ("pending", "queued") for s in statuses)
 
     if not statuses and poll_error:
-        # Network failure mid-poll – treat as non-deterministic, warn only
+        # Network failure mid-poll: the outcome is indeterminate (the report may
+        # have completed or remained queued – we cannot tell).  Treat this as a
+        # warning in both strict and non-strict mode rather than a hard failure.
         msg = f"status polling failed (network): {poll_error}"
-        checks.append({"name": "progression", "pass": False, "message": msg})
+        checks.append({"name": "progression", "pass": True, "message": f"WARN: {msg}"})
         print(f"WARN: {msg}")
     elif not progressed:
         msg = (

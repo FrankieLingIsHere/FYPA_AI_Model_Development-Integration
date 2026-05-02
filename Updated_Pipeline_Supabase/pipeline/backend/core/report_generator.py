@@ -1810,6 +1810,22 @@ RESPONSE FORMAT (JSON):
                         self.last_nlp_error = self.last_nlp_error or 'Gemini NLP provider failed'
                     else:
                         self._record_gemini_spend(est_cost)
+                else:
+                    # Cloud routing resolves to ['gemini'] only, so when Gemini is
+                    # disabled or its client failed to initialize the loop would
+                    # otherwise complete with no analysis and no error detail. Set
+                    # an actionable diagnostic so the resulting RuntimeError tells
+                    # the user exactly what to fix.
+                    detail = (
+                        'Gemini provider unavailable (GEMINI_ENABLED is false, '
+                        'GEMINI_API_KEY is missing, or the google-generativeai '
+                        'client failed to initialize). Set GEMINI_ENABLED=true and '
+                        'GEMINI_API_KEY in .env, switch CASM_ROUTING_PROFILE=local '
+                        'to use Ollama, or set ALLOW_NLP_FALLBACK=true to permit '
+                        'rule-based fallback reports.'
+                    )
+                    self.last_nlp_error = detail
+                    logger.warning(f"Skipping Gemini provider: {detail}")
             elif provider_name == 'ollama':
                 logger.info("Trying Ollama NLP API...")
                 nlp_analysis = self._call_ollama_api(

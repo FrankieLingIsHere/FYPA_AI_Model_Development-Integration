@@ -57,6 +57,13 @@ rich==14.2.0
 supabase
 psycopg2-binary
 
+# Google Gemini SDK (cloud NLP + captioning provider)
+# Required for CASM_ROUTING_PROFILE=cloud. Without it, GEMINI_AVAILABLE=False
+# at startup, use_gemini becomes False, and cloud-mode reports fail with
+# "Gemini provider unavailable" because the only provider in the cloud preset
+# is gemini.
+google-genai>=0.3.0
+
 # Note: Model files must be downloaded separately:
 # 
 # FOR IMAGE CAPTIONING (Qwen2.5-VL-3B):

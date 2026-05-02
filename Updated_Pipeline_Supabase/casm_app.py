@@ -9315,6 +9315,14 @@ def api_pending_reports():
 
     # Always include local filesystem state for immediate queue/generation visibility.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    # The local artifacts on disk are only the *staging* area for the report
+    # pipeline; they exist in both local-mode and cloud-mode runs (cloud runs
+    # also write original.jpg/annotated.jpg to disk before uploading). The
+    # source-scope badge should reflect the active routing profile, not the
+    # mere presence of disk artifacts. Otherwise a cloud-mode report card
+    # incorrectly shows the 'Local' chip during the generating window and
+    # only flips to 'Cloud' once the DB row appears as completed.
+    local_artifact_scope = 'local' if (db_manager is None or active_profile == 'local') else 'cloud'
     local_seed_device_id = 'local_cache' if (db_manager is None or active_profile == 'local') else None
     local_rows = _collect_local_report_state_rows(limit=300)
     completed_local_report_ids = set()
@@ -9339,8 +9347,8 @@ def api_pending_reports():
             'has_original': bool(row.get('has_original')),
             'has_annotated': bool(row.get('has_annotated')),
             'has_report': bool(row.get('has_report')),
-            'source_scope': 'local',
-            'source_label': 'Local',
+            'source_scope': local_artifact_scope,
+            'source_label': _source_label(local_artifact_scope),
         }
 
     if db_manager is not None:

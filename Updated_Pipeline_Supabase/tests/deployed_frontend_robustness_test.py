@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -14,6 +15,11 @@ VERCEL_URL = os.environ.get(
 
 MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "9000"))
 STRESS_CLICKS = int(os.environ.get("CASM_FRONTEND_STRESS_CLICKS", "5"))
+# CASM_FRONTEND_STRICT=1 (default) causes robustness issues to fail the job.
+# Set CASM_FRONTEND_STRICT=0 for informational-only runs.
+STRICT = os.environ.get("CASM_FRONTEND_STRICT", "1") not in ("0", "false", "no", "off")
+
+SUMMARY_PATH = os.environ.get("CASM_SUMMARY_PATH", "frontend-robustness-summary.json")
 
 IGNORED_ERROR_PATTERNS = (
     "Cannot set properties of null (setting 'textContent')",
@@ -24,8 +30,20 @@ IGNORED_ERROR_PATTERNS = (
 )
 
 
+def _write_summary(summary: dict) -> None:
+    try:
+        with open(SUMMARY_PATH, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, ensure_ascii=True, indent=2)
+        print(f"INFO: summary written to {SUMMARY_PATH}")
+    except Exception as exc:
+        print(f"WARN: could not write summary file: {exc}")
+
+
 def fail(message: str, code: int = 2) -> int:
-    # Deployed frontend can be transiently inconsistent; treat this as non-blocking.
+    if STRICT:
+        print(f"FAIL: frontend robustness check failed: {message}")
+        return code
+    # Non-strict: log as a warning but do not fail the job.
     print(f"INFO: non-blocking frontend robustness issue: {message}")
     return 0
 
@@ -516,6 +534,8 @@ def validate_local_mode_checkup_action(page):
 def main() -> int:
     console_errors = []
     page_errors = []
+    checks: list = []
+    metrics: dict = {"url": VERCEL_URL, "stress_clicks": STRESS_CLICKS}
 
     try:
         with sync_playwright() as p:
@@ -575,12 +595,14 @@ def main() -> int:
                 timeout=120000,
             )
             ensure_nav_visible(page, "home")
+            checks.append({"name": "startup_gate", "pass": True, "message": "startup loading completed"})
             print("PASS: startup gate completed")
             validate_network_badges_presence(page)
 
             successful_navs = 0
 
             validate_sidebar_navigation(page)
+            checks.append({"name": "sidebar_navigation", "pass": True, "message": "all nav pages active-state verified"})
 
             try:
                 if navigate_and_measure(page, "live", "#app"):
@@ -612,6 +634,7 @@ def main() -> int:
                     except PlaywrightTimeoutError:
                         print("INFO: settings modal cycle timed out; stopping stress loop for this run")
                         break
+                checks.append({"name": "settings_stress", "pass": True, "message": f"settings open/close stress x{STRESS_CLICKS}"})
             else:
                 print("INFO: settings modal stress check skipped (controls not available in this UI variant)")
 
@@ -695,6 +718,7 @@ def main() -> int:
                 page.wait_for_timeout(350)
                 page.click(live_mode_btn)
                 page.wait_for_timeout(350)
+                checks.append({"name": "live_mode_switch", "pass": True, "message": "live mode switch flow completed"})
                 print("PASS: live mode switch flow")
             else:
                 print("INFO: live mode switch check skipped (controls not available in this UI variant)")
@@ -714,6 +738,7 @@ def main() -> int:
                     for _ in range(1, STRESS_CLICKS + 1):
                         page.click(refresh_selector)
                     page.wait_for_timeout(1200)
+                    checks.append({"name": "reports_refresh_stress", "pass": True, "message": f"refresh stress x{STRESS_CLICKS}"})
                     print(f"PASS: reports refresh stress x{STRESS_CLICKS}")
                 else:
                     print("INFO: reports refresh control missing in this UI variant; skipping refresh stress")
@@ -729,6 +754,8 @@ def main() -> int:
                 successful_navs += 1
             else:
                 print("INFO: about navigation check skipped after retries")
+
+            metrics["successful_navs"] = successful_navs
 
             if successful_navs == 0:
                 raise RuntimeError("No page navigation checks succeeded")
@@ -752,11 +779,42 @@ def main() -> int:
         if ignored_total:
             print(f"INFO: ignored known transient frontend errors count={ignored_total}")
 
+        metrics["page_errors"] = len(filtered_page_errors)
+        metrics["console_errors"] = len(filtered_console_errors)
+        checks.append({"name": "navigation_success", "pass": True, "message": f"successful_navs={successful_navs}"})
+
+        summary = {
+            "test_name": "deployed_frontend_robustness",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": True,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        }
+        _write_summary(summary)
         print("PASS: frontend robustness checks")
         return 0
     except PlaywrightTimeoutError as exc:
+        checks.append({"name": "playwright_timeout", "pass": False, "message": str(exc)})
+        _write_summary({
+            "test_name": "deployed_frontend_robustness",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"timeout in frontend robustness test: {exc}", 30)
     except Exception as exc:
+        checks.append({"name": "unhandled_error", "pass": False, "message": str(exc)})
+        _write_summary({
+            "test_name": "deployed_frontend_robustness",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"frontend robustness unhandled error: {exc}", 31)
 
 

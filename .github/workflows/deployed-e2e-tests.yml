@@ -71,6 +71,7 @@ jobs:
           CASM_CONDITIONS_POLL_SECONDS: "90"
           CASM_CONDITIONS_POLL_INTERVAL: "5"
         run: |
+          echo "INFO: thresholds CASM_CONDITIONS_STRICT=1 CASM_CONDITIONS_POLL_SECONDS=90 CASM_CONDITIONS_POLL_INTERVAL=5"
           set +e
           python Updated_Pipeline_Supabase/tests/deployed_system_conditions_test.py
           first_exit=$?
@@ -128,6 +129,7 @@ jobs:
           CASM_FLOOD_MIN_SUCCESS_RATIO: "0.75"
           CASM_FLOOD_MAX_UNIQUE_REPORTS: "1"
         run: |
+          echo "INFO: flood thresholds total_requests=8 workers=3 p95_limit_ms=12000 min_success_ratio=0.75 max_unique_reports=1"
           set +e
           python Updated_Pipeline_Supabase/tests/deployed_inference_flood_test.py
           first_exit=$?
@@ -157,6 +159,54 @@ jobs:
           CASM_LIVE_DEDUP_MIN_BLOCKED: "1"
         run: |
           python Updated_Pipeline_Supabase/tests/deployed_live_dedup_probe_test.py
+
+      - name: Write system-conditions diagnostics summary
+        if: always()
+        env:
+          CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+        run: |
+          python - <<'PY'
+          import json, os, requests, datetime
+          base = os.environ.get("CASM_BASE_URL", "").rstrip("/")
+          paths = ["/api/system/startup-status", "/api/queue/status", "/api/stats"]
+          results = {}
+          for path in paths:
+              try:
+                  r = requests.get(f"{base}{path}", timeout=20)
+                  try:
+                      results[path] = {"status": r.status_code, "body": r.json()}
+                  except Exception:
+                      results[path] = {"status": r.status_code, "body": r.text[:300]}
+              except Exception as exc:
+                  results[path] = {"error": str(exc)}
+          summary = {
+              "test_name": "deployed_system_conditions_diagnostics",
+              "target_url": base,
+              "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+              "endpoint_samples": results,
+              "thresholds": {
+                  "CASM_CONDITIONS_STRICT": "1",
+                  "CASM_CONDITIONS_POLL_SECONDS": "90",
+                  "CASM_CONDITIONS_POLL_INTERVAL": "5",
+                  "CASM_FLOOD_TOTAL_REQUESTS": "8",
+                  "CASM_FLOOD_WORKERS": "3",
+                  "CASM_FLOOD_P95_MS": "12000",
+                  "CASM_FLOOD_MIN_SUCCESS_RATIO": "0.75",
+                  "CASM_FLOOD_MAX_UNIQUE_REPORTS": "1",
+              },
+          }
+          with open("system-conditions-summary.json", "w") as fh:
+              json.dump(summary, fh, ensure_ascii=True, indent=2)
+          print("INFO: system-conditions-summary.json written")
+          PY
+
+      - name: Upload system-conditions summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-conditions-summary
+          path: system-conditions-summary.json
+          if-no-files-found: warn
 
   deployed-live-start-contract:
     name: Deployed Live Start Contract
@@ -302,6 +352,8 @@ jobs:
       - name: Run deployed generate-now progression smoke test
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
+          CASM_STRICT: "1"
+          CASM_SUMMARY_PATH: generate-now-smoke-summary.json
         run: |
           python Updated_Pipeline_Supabase/tests/deployed_generate_now_smoke.py
 
@@ -312,3 +364,11 @@ jobs:
           CASM_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
         run: |
           python Updated_Pipeline_Supabase/tests/e2e_report_test.py
+
+      - name: Upload generate-now smoke summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generate-now-smoke-summary
+          path: generate-now-smoke-summary.json
+          if-no-files-found: warn

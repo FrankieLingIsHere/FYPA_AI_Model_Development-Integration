@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -12,10 +13,27 @@ VERCEL_URL = os.environ.get(
 
 STARTUP_WAIT_MS = int(os.environ.get("CASM_MOBILE_STARTUP_WAIT_MS", "120000"))
 NAV_WAIT_MS = int(os.environ.get("CASM_MOBILE_NAV_WAIT_MS", "20000"))
+# CASM_FRONTEND_STRICT=1 (default) causes mobile usability issues to fail the job.
+# Set CASM_FRONTEND_STRICT=0 for informational-only runs.
+STRICT = os.environ.get("CASM_FRONTEND_STRICT", "1") not in ("0", "false", "no", "off")
+
+SUMMARY_PATH = os.environ.get("CASM_SUMMARY_PATH", "frontend-mobile-usability-summary.json")
+
+
+def _write_summary(summary: dict) -> None:
+    try:
+        with open(SUMMARY_PATH, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, ensure_ascii=True, indent=2)
+        print(f"INFO: summary written to {SUMMARY_PATH}")
+    except Exception as exc:
+        print(f"WARN: could not write summary file: {exc}")
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Deployed mobile checks can be timing-sensitive; keep non-blocking like other frontend robustness suites.
+    if STRICT:
+        print(f"FAIL: frontend mobile usability check failed: {message}")
+        return code
+    # Non-strict: log as a warning but do not fail the job.
     print(f"INFO: non-blocking frontend mobile usability issue: {message}")
     return 0
 
@@ -45,6 +63,9 @@ def ensure_nav_visible(page, page_name: str):
 
 
 def main() -> int:
+    checks: list = []
+    metrics: dict = {"url": VERCEL_URL, "viewport": "390x844"}
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -91,6 +112,7 @@ def main() -> int:
                     raise RuntimeError("Portrait orientation overlay did not activate")
             else:
                 print("INFO: mobile orientation overlay not present in this deployed variant")
+            checks.append({"name": "portrait_lock", "pass": True, "message": "is-phone-device and mobile-portrait-locked applied"})
             print("PASS: mobile portrait lock behavior")
 
             # Rotate to landscape to unlock app usage.
@@ -105,6 +127,7 @@ def main() -> int:
                 overlay_hidden = overlay.get_attribute("aria-hidden")
                 if overlay_hidden != "true":
                     raise RuntimeError("Orientation overlay remained active after landscape rotation")
+            checks.append({"name": "landscape_unlock", "pass": True, "message": "portrait lock cleared on landscape rotation"})
             print("PASS: mobile landscape unlock behavior")
 
             nav_toggle = None
@@ -130,6 +153,7 @@ def main() -> int:
             body_classes = page.get_attribute("body", "class") or ""
             if "nav-open" in body_classes:
                 raise RuntimeError("Mobile nav drawer did not close after navigation")
+            checks.append({"name": "nav_drawer_interaction", "pass": True, "message": "nav drawer opened and closed correctly"})
             print("PASS: mobile nav drawer interaction")
 
             nav_more = None
@@ -151,6 +175,7 @@ def main() -> int:
                 body_classes = page.get_attribute("body", "class") or ""
                 if "nav-more-open" in body_classes:
                     raise RuntimeError("Mobile nav-more panel did not close on outside click")
+                checks.append({"name": "nav_more_panel", "pass": True, "message": "nav-more panel opened and dismissed correctly"})
                 print("PASS: mobile nav-more panel interaction")
             else:
                 print("INFO: mobile nav-more toggle not present in this deployed variant")
@@ -158,15 +183,43 @@ def main() -> int:
             ensure_nav_visible(page, "analytics")
             page.click("[data-page='analytics']")
             page.wait_for_selector("#trendChart", timeout=NAV_WAIT_MS)
+            checks.append({"name": "analytics_navigation", "pass": True, "message": "analytics page loaded"})
             print("PASS: mobile analytics navigation")
 
             browser.close()
 
+        summary = {
+            "test_name": "deployed_frontend_mobile_usability",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": True,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        }
+        _write_summary(summary)
         print("PASS: frontend mobile usability checks")
         return 0
     except PlaywrightTimeoutError as exc:
+        checks.append({"name": "playwright_timeout", "pass": False, "message": str(exc)})
+        _write_summary({
+            "test_name": "deployed_frontend_mobile_usability",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"timeout in frontend mobile usability test: {exc}", 40)
     except Exception as exc:
+        checks.append({"name": "unhandled_error", "pass": False, "message": str(exc)})
+        _write_summary({
+            "test_name": "deployed_frontend_mobile_usability",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"frontend mobile usability unhandled error: {exc}", 41)
 
 

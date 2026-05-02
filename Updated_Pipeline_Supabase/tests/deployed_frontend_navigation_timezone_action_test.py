@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -12,10 +13,27 @@ VERCEL_URL = os.environ.get(
 ).rstrip("/")
 
 MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "12000"))
+# CASM_FRONTEND_STRICT=1 (default) causes navigation/timezone issues to fail the job.
+# Set CASM_FRONTEND_STRICT=0 for informational-only runs.
+STRICT = os.environ.get("CASM_FRONTEND_STRICT", "1") not in ("0", "false", "no", "off")
+
+SUMMARY_PATH = os.environ.get("CASM_SUMMARY_PATH", "frontend-nav-timezone-summary.json")
+
+
+def _write_summary(summary: dict) -> None:
+    try:
+        with open(SUMMARY_PATH, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, ensure_ascii=True, indent=2)
+        print(f"INFO: summary written to {SUMMARY_PATH}")
+    except Exception as exc:
+        print(f"WARN: could not write summary file: {exc}")
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Keep this action test non-blocking in deployed CI, same philosophy as robustness checks.
+    if STRICT:
+        print(f"FAIL: frontend navigation/timezone action test failed: {message}")
+        return code
+    # Non-strict: log as a warning but do not fail the job.
     print(f"INFO: non-blocking frontend action-test issue: {message}")
     return 0
 
@@ -240,6 +258,9 @@ def check_timestamp_alignment_contract(page):
 
 
 def main() -> int:
+    checks: list = []
+    metrics: dict = {}
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -272,11 +293,11 @@ def main() -> int:
                 expected_visits[route_name] += 1
 
             time.sleep(0.25)
-            metrics = get_metrics(page)
-            if not metrics:
+            metrics_data = get_metrics(page)
+            if not metrics_data:
                 raise RuntimeError("Missing browser action metrics after navigation sequence")
 
-            mounts = metrics.get("mounts", {})
+            mounts = metrics_data.get("mounts", {})
             for page_name in ("home", "reports", "analytics", "live"):
                 observed = int(mounts.get(page_name, 0))
                 expected = int(expected_visits.get(page_name, 0))
@@ -286,7 +307,9 @@ def main() -> int:
                         f"Possible duplicate remounts for {page_name}: observed={observed}, expected<={expected + 1}"
                     )
 
-            print(f"PASS: navigation remount guard checks metrics={metrics}")
+            metrics["mounts"] = mounts
+            checks.append({"name": "remount_guard", "pass": True, "message": f"metrics={metrics_data}"})
+            print(f"PASS: navigation remount guard checks metrics={metrics_data}")
 
             # Timezone action checks across pages.
             if page.locator("#timezone-selector").count() == 0:
@@ -333,9 +356,20 @@ def main() -> int:
 
                 if issue:
                     non_blocking_issues.append(issue)
-                    print(f"INFO: non-blocking frontend action-test issue: {issue}")
+                    checks.append({"name": f"timezone_{route_name}", "pass": False, "message": issue})
+                    if STRICT:
+                        print(f"FAIL: {issue}")
+                    else:
+                        print(f"INFO: non-blocking frontend action-test issue: {issue}")
                     continue
 
+                checks.append(
+                    {
+                        "name": f"timezone_{route_name}",
+                        "pass": True,
+                        "message": f"{metric_key} {before_value} -> {after_value}",
+                    }
+                )
                 print(
                     f"PASS: timezone action on {route_name} increased {metric_key} "
                     f"({before_value} -> {after_value})"
@@ -346,21 +380,53 @@ def main() -> int:
             if not alignment or not alignment.get("ok"):
                 raise RuntimeError(f"Timezone timestamp alignment contract failed: {alignment}")
 
+            checks.append({"name": "timestamp_alignment", "pass": True, "message": str(alignment)})
             print(f"PASS: timezone timestamp alignment contract {alignment}")
 
-            if non_blocking_issues:
+            if non_blocking_issues and STRICT:
                 print(
-                    "INFO: non-blocking frontend action-test summary: "
-                    f"{len(non_blocking_issues)} issue(s)"
+                    f"FAIL: {len(non_blocking_issues)} timezone handler issue(s) detected in strict mode"
                 )
 
             browser.close()
 
-        print("PASS: navigation + timezone action test")
-        return 0
+        overall_pass = not (non_blocking_issues and STRICT)
+        metrics["timezone_issues"] = len(non_blocking_issues)
+
+        summary = {
+            "test_name": "deployed_frontend_navigation_timezone_action",
+            "target_url": VERCEL_URL,
+            "checks": checks,
+            "pass": overall_pass,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        }
+        _write_summary(summary)
+
+        if overall_pass:
+            print("PASS: navigation + timezone action test")
+            return 0
+        return 2
+
     except PlaywrightTimeoutError as exc:
+        _write_summary({
+            "test_name": "deployed_frontend_navigation_timezone_action",
+            "target_url": VERCEL_URL,
+            "checks": checks + [{"name": "playwright_timeout", "pass": False, "message": str(exc)}],
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"timeout in navigation/timezone action test: {exc}", 40)
     except Exception as exc:
+        _write_summary({
+            "test_name": "deployed_frontend_navigation_timezone_action",
+            "target_url": VERCEL_URL,
+            "checks": checks + [{"name": "unhandled_error", "pass": False, "message": str(exc)}],
+            "pass": False,
+            "metrics": metrics,
+            "strict_mode": STRICT,
+        })
         return fail(f"navigation/timezone action test unhandled error: {exc}", 41)
 
 

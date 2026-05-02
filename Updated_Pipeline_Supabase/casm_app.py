@@ -3169,9 +3169,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         sync_source=queued_sync_source,
         device_id=queue_device_id,
     )
-    force_local_artifact_pipeline = _should_force_local_artifact_pipeline(
-        sync_source=queued_sync_source,
-        device_id=queue_device_id,
+    queue_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    queue_local_profile_active = queue_routing_profile == 'local'
+    force_local_artifact_pipeline = bool(
+        queue_local_profile_active
+        and _should_force_local_artifact_pipeline(
+            sync_source=queued_sync_source,
+            device_id=queue_device_id,
+        )
     )
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
@@ -3433,7 +3438,33 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     f"Local-first artifact pipeline active for {report_id}; deferring cloud upload until sync"
                 )
             
-            result = report_generator.generate_report(report_data)
+            # Wrap report generation in a wall-clock watchdog so a hung downstream
+            # provider call (e.g. an unreachable Ollama / NLP backend) cannot freeze
+            # the queue worker indefinitely. The leaked executor thread is acceptable
+            # because the queue worker can recover and continue draining the queue.
+            import concurrent.futures as _cf
+            _report_gen_timeout_seconds = max(
+                30,
+                int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '180') or 180)
+            )
+            _gen_executor = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'report-gen-{report_id}')
+            try:
+                _gen_future = _gen_executor.submit(report_generator.generate_report, report_data)
+                try:
+                    result = _gen_future.result(timeout=_report_gen_timeout_seconds)
+                except _cf.TimeoutError:
+                    logger.error(
+                        f"⏱️ Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
+                        "abandoning the call and proceeding to fallback to keep the queue moving"
+                    )
+                    failure_reason = (
+                        f"Report generation exceeded {_report_gen_timeout_seconds}s wall-clock timeout"
+                    )
+                    result = None
+            finally:
+                # Don't block the queue worker waiting for the leaked thread to finish.
+                _gen_executor.shutdown(wait=False)
+
             if isinstance(result, dict):
                 cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
                 if isinstance(result.get('storage_keys'), dict):
@@ -3575,6 +3606,17 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
 def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, detections: List, caption: str):
     """Create a placeholder HTML report when generation fails."""
     report_html_path = violation_dir / 'report.html'
+    placeholder_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    if placeholder_routing_profile == 'local':
+        placeholder_warning_message = (
+            f"The local NLP report generator ({LOCAL_OLLAMA_UNIFIED_MODEL}) is not configured or not running."
+        )
+    else:
+        placeholder_warning_message = (
+            "The cloud NLP report generator (Gemini) was unavailable for this run. "
+            "This placeholder was produced so the violation is still recorded; the report will be "
+            "regenerated automatically once the cloud provider is reachable again."
+        )
     placeholder_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -3596,7 +3638,7 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
         
         <div class="warning">
             <h3>⚠️ Report Generator Not Available</h3>
-            <p>The local NLP report generator ({LOCAL_OLLAMA_UNIFIED_MODEL}) is not configured or not running.</p>
+            <p>{placeholder_warning_message}</p>
         </div>
         
         <div class="info">

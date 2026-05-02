@@ -2804,13 +2804,50 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             expedite=queue_expedite,
         )
 
+        if not success:
+            # Most likely cause: per-device rate limit hit during a burst of live
+            # captures. The queue itself usually still has room, so retry once with
+            # a per-report unique device_id so a single busy webcam can't silently
+            # drop reports into a permanently stuck 'pending' state.
+            queue_stats_check = violation_queue.get_stats()
+            queue_size_check = int(queue_stats_check.get('current_size', 0) or 0)
+            queue_capacity_check = int(queue_stats_check.get('capacity', 0) or 0)
+            queue_full_check = queue_capacity_check > 0 and queue_size_check >= queue_capacity_check
+            if not queue_full_check:
+                fallback_device_id = f'live_capture_{report_id}_{time.time_ns()}'
+                success = violation_queue.enqueue(
+                    violation_data=violation_data,
+                    device_id=fallback_device_id,
+                    report_id=report_id,
+                    severity=queue_severity,
+                    expedite=queue_expedite,
+                )
+                if success:
+                    logger.warning(
+                        f"Live enqueue rate-limit fallback succeeded for {report_id} "
+                        f"(original device_id={runtime_device_id}, fallback device_id={fallback_device_id})"
+                    )
+
         if success:
             logger.info(f"✓ Violation {report_id} added to processing queue")
             queue_stats = violation_queue.get_stats()
             logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
             return report_id
 
-        logger.error("Failed to add violation to queue")
+        # Final failure path: the report row is already 'pending' in the DB but the
+        # violation never made it into the queue. Mark it as failed so the user (and
+        # the stuck-report sweep) can recover via 'Reprocess Now' instead of leaving
+        # it stuck at 'pending' forever.
+        logger.error("Failed to add violation to queue (capacity or sustained rate limit); marking report as failed")
+        if db_manager and not force_local_scope:
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'failed',
+                    'Could not enqueue violation (queue full or device rate-limited). Use Reprocess Now to retry.'
+                )
+            except Exception as status_err:
+                logger.warning(f"Could not mark un-enqueued report {report_id} as failed: {status_err}")
         return None
         
         return None

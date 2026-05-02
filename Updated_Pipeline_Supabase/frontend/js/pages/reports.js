@@ -1521,7 +1521,11 @@ const ReportsPage = {
         const isReprocess = status === 'completed'
             || status === 'failed'
             || status === 'skipped'
-            || status === 'partial';
+            || status === 'partial'
+            // Stuck queued/pending reports also need force=true so the backend
+            // re-enqueues them instead of returning an early 'already_queued'.
+            || status === 'pending'
+            || status === 'queued';
 
         return {
             force: isReprocess,
@@ -1596,7 +1600,22 @@ const ReportsPage = {
                 return;
             }
 
-            this.notify(options.force ? 'Reprocess started successfully' : 'Report generation started successfully', 'success');
+            // Surface the actual backend outcome so users aren't told "started"
+            // when the request was actually a no-op (already queued / already
+            // completed). Otherwise the UI looks broken when a stuck report
+            // returns success without anything happening.
+            let successMessage;
+            let successLevel = 'success';
+            if (result.already_completed) {
+                successMessage = 'Report is already completed.';
+                successLevel = 'info';
+            } else if (result.already_queued) {
+                successMessage = 'Report is already queued or generating; awaiting the worker.';
+                successLevel = 'info';
+            } else {
+                successMessage = options.force ? 'Reprocess started successfully' : 'Report generation started successfully';
+            }
+            this.notify(successMessage, successLevel);
             this.stopModalCooldown();
             this.setModalStage('queued');
             this.setModalStatusText('Regeneration queued. Monitoring progress...');

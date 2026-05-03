@@ -503,7 +503,24 @@ const GlobalSettingsModal = {
 
     loadRemoteProvisionState() {
         try {
-            const raw = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+            // Provisioning state (machineId + provision_secret + status) is
+            // persisted to localStorage so that tab close, hard refresh, or
+            // browser restart does not wipe the credentials needed to
+            // re-download the installer BAT from the cloud frontend when no
+            // local backend is running. Storing on disk is no more sensitive
+            // than the BAT installer's on-disk secret file, and avoids the
+            // user being locked out of installer downloads after every
+            // refresh.  One-time migration from the legacy sessionStorage
+            // location preserves any in-flight session data.
+            let raw = localStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+            if (!raw) {
+                const legacy = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+                if (legacy) {
+                    try { localStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, legacy); } catch (_) {}
+                    try { sessionStorage.removeItem(this.REMOTE_PROVISION_STATE_KEY); } catch (_) {}
+                    raw = legacy;
+                }
+            }
             if (!raw) return {};
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return {};
@@ -542,7 +559,11 @@ const GlobalSettingsModal = {
                 updatedAt: new Date().toISOString()
             };
             if (!merged.machineId) return merged;
-            sessionStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            // Persist to localStorage so credentials survive tab close /
+            // refresh / browser restart (see loadRemoteProvisionState).
+            localStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            // Clean up any legacy sessionStorage copy.
+            try { sessionStorage.removeItem(this.REMOTE_PROVISION_STATE_KEY); } catch (_) {}
             // Also persist the confirmed machineId to localStorage so future sessions
             // (tab close/reopen, hard refresh) still know which edge device to check
             // instead of falling back to a freshly-generated Web-XXXX browser ID.

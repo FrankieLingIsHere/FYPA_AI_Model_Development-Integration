@@ -151,19 +151,12 @@ const AudioAlert = (function () {
             return { missing, derivedType };
         }
 
-        // Try to fetch fuller details if missing data
-        if (typeof window.API !== 'undefined' && typeof window.API.getViolation === 'function') {
-            try {
-                const full = await window.API.getViolation(reportId);
-                if (full) {
-                    // shallow merge so nested fields are present
-                    violation = Object.assign({}, violation, full);
-                    console.log('[AudioAlert] Fetched full violation for', reportId, full);
-                }
-            } catch (e) {
-                console.warn('[AudioAlert] Failed to fetch full violation:', e);
-            }
-        }
+        // Skip the optional API enrichment fetch entirely. Callers (live.js +
+        // ViolationMonitor) already pass missing_ppe / violation_type, and the
+        // network request was sometimes hanging long enough that the user
+        // toggle's "user gesture" grace period had expired by the time
+        // speechSynthesis.speak() ran -- which silently dropped the audio in
+        // Chrome. Speak immediately from what we already have.
 
         const extracted = extractMissingAndType(violation || {});
         const missing = extracted.missing || [];
@@ -197,12 +190,40 @@ const AudioAlert = (function () {
                 if (selected) utter.voice = selected;
             }
 
+            // Diagnostic event hooks so we can SEE in DevTools whether the
+            // browser actually started/finished/errored on this utterance.
+            utter.onstart = () => console.log('[AudioAlert] utterance onstart for', reportId);
+            utter.onend = () => console.log('[AudioAlert] utterance onend for', reportId);
+            utter.onerror = (ev) => console.warn('[AudioAlert] utterance onerror for', reportId, ev && ev.error);
+
             // Mark as played immediately to avoid duplicates while speaking
             playedReports.add(reportId);
             _saveState();
 
-            window.speechSynthesis.cancel(); // stop any in-progress TTS
+            // Chrome bug workaround: speechSynthesis stops working after ~15s
+            // of inactivity OR if the queue is "stuck" in a paused/cancelled
+            // state. Resume + cancel + speak in that order clears any stuck
+            // queue and re-enables the engine.
+            try { window.speechSynthesis.resume(); } catch (e) {}
+            window.speechSynthesis.cancel();
             window.speechSynthesis.speak(utter);
+
+            // Detect Chrome's silent-drop: if neither onstart nor onerror has
+            // fired within ~600ms AND speechSynthesis is no longer speaking,
+            // retry once (works around the auto-cancel that happens when
+            // speak() is called outside a user-gesture context).
+            let started = false;
+            const origOnStart = utter.onstart;
+            utter.onstart = (ev) => { started = true; if (origOnStart) origOnStart(ev); };
+            setTimeout(() => {
+                if (!started && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+                    console.warn('[AudioAlert] speak() was silently dropped, retrying for', reportId);
+                    try { window.speechSynthesis.resume(); } catch (e) {}
+                    try { window.speechSynthesis.speak(utter); } catch (e) {
+                        console.warn('[AudioAlert] retry speak failed:', e);
+                    }
+                }
+            }, 600);
 
             // Optionally notify visually
             NotificationManager.violation(message, reportId);
@@ -319,6 +340,23 @@ const AudioAlert = (function () {
 
             // Patch monitor to play audio on new violations
             patchViolationMonitor();
+
+            // Chrome keep-alive: speechSynthesis goes silent after ~15s of
+            // idle. Periodically pause+resume to keep the engine warm so
+            // future speak() calls actually produce audio during a long
+            // live-monitoring session.
+            try {
+                if (typeof window.speechSynthesis !== 'undefined') {
+                    setInterval(() => {
+                        try {
+                            if (!window.speechSynthesis.speaking
+                                && !window.speechSynthesis.pending) {
+                                window.speechSynthesis.resume();
+                            }
+                        } catch (e) { /* ignore */ }
+                    }, 10000);
+                }
+            } catch (e) { /* ignore */ }
 
             console.log('[AudioAlert] Initialized - enabled:', enabled);
         });

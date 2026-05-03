@@ -504,8 +504,14 @@ def _apply_cors_headers(response):
 
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = (
-        'Content-Type,Authorization,X-Requested-With,X-Provision-Secret,X-Edge-Token'
+        'Content-Type,Authorization,X-Requested-With,X-Provision-Secret,X-Edge-Token,'
+        'Cache-Control,Pragma,Expires,If-None-Match,If-Modified-Since'
     )
+    response.headers['Access-Control-Max-Age'] = '600'
+    # Chrome's Private Network Access (PNA) blocks https://*.vercel.app -> http://localhost
+    # without this header. Required for cloud-hosted frontend talking to a local
+    # Flask backend (the typical local-mode dev/demo setup).
+    response.headers['Access-Control-Allow-Private-Network'] = 'true'
     response.headers['Vary'] = 'Origin'
     return response
 

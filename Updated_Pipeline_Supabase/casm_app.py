@@ -4160,6 +4160,13 @@ def api_violations():
             or device_key.startswith('offline_')
         )
 
+        # Honour the deployment routing profile: in cloud mode the queue worker
+        # ALWAYS writes original.jpg / annotated.jpg to the local violations
+        # directory before uploading them to Supabase Storage, so the presence
+        # of those local artifacts mid-flight must NOT be misread as a
+        # "Local" report.
+        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+
         if has_cloud_artifacts and is_local_device:
             return 'synced_local', 'cloud_record_local_device'
         if has_cloud_artifacts and has_local_artifacts:
@@ -4167,6 +4174,12 @@ def api_violations():
         if has_cloud_artifacts:
             return 'cloud', 'cloud_artifacts'
         if has_local_artifacts or is_local_device:
+            # Cloud-mode in-flight report: cloud upload hasn't finished yet,
+            # but the device is a normal cloud device (e.g. webcam_0). Treat
+            # it as cloud so the badge doesn't flicker to "Local" between
+            # "Generating..." and "Ready".
+            if active_profile == 'cloud' and not is_local_device:
+                return 'cloud', 'cloud_profile_inflight'
             return 'local', 'local_artifacts'
         return 'cloud', 'default_cloud'
 

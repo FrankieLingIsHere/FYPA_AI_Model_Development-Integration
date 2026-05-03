@@ -951,7 +951,15 @@ const LivePage = {
                                 && window.AudioAlert
                                 && typeof window.AudioAlert.speakViolation === 'function'
                                 && synthViolation.report_id) {
+                                const alertEnabled = (typeof window.AudioAlert.isEnabled === 'function')
+                                    ? !!window.AudioAlert.isEnabled() : 'unknown';
+                                console.log('[live.js] firing direct AudioAlert.speakViolation for',
+                                    synthViolation.report_id, 'enabled=', alertEnabled);
                                 window.AudioAlert.speakViolation(synthViolation);
+                            } else {
+                                console.warn('[live.js] AudioAlert unavailable for direct speakViolation',
+                                    { hasAudioAlert: !!window.AudioAlert,
+                                      hasReportId: !!synthViolation.report_id });
                             }
                         } catch (audioErr) {
                             console.warn('Could not fire voice alert directly:', audioErr);

@@ -13634,18 +13634,38 @@ def provision_request():
     # Validate proof-of-prior-trust if presented. Both the secret-bearer path
     # and the admin-token path are accepted; either is sufficient.
     rerequest_authenticated_by_secret = False
+    credential_desync_recovery = False
     if is_rerequest_for_known_device and presented_existing_secret:
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
             rerequest_authenticated_by_secret = True
         else:
-            # Wrong secret on a known approved device â†’ log and reject hard.
+            # Wrong secret on a known approved device. Historically this returned
+            # a hard 401, which created a permanent deadlock when the browser's
+            # cached secret drifted (e.g. sessionStorage cleared, multi-tab race
+            # before the idempotency fix, or a different browser profile). The
+            # only escape was admin-side revoke + re-approve.
+            #
+            # PRV5 (self-healing recovery) — instead of a hard 401, treat this
+            # as a credential-desync recovery request: demote the device back to
+            # `pending`, issue a fresh provision_secret, and notify the admin so
+            # they can re-approve. The legitimate device's already-installed
+            # local backend keeps running on its existing in-process credentials
+            # until its next bootstrap exchange, so this does NOT silently
+            # de-authenticate a working install.
+            #
+            # Security trade-off: a network attacker who guesses the
+            # deterministic machine_id can force a device into `pending`
+            # (denial-of-approval), but the attacker still needs admin approval
+            # before any secret is usable. Admin sees an explicit audit event.
             _append_device_audit_event(
                 machine_id,
-                'request_rejected_bad_secret',
+                'request_secret_mismatch_demoted',
                 actor='device',
                 metadata=_capture_request_metadata(),
             )
-            return jsonify({'error': 'Invalid provision_secret for this machine_id'}), 401
+            credential_desync_recovery = True
+            is_rerequest_for_known_device = False
+            _existing_status_for_auth = 'pending'
 
     # PRV1 (hardened) â€” Require admin authorisation unless either:
     #   (a) PROVISION_ALLOW_SELF_REGISTER=true (operator opt-in); or
@@ -13656,7 +13676,7 @@ def provision_request():
     #   (c) this is a re-application from a previously-rejected device
     #       (secret was rotated on revocation so proof of prior trust is
     #       impossible; admin will review and decide again).
-    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest:
+    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest and not credential_desync_recovery:
         token_header = request.headers.get('X-Admin-Token', '').strip()
         if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
             _append_device_audit_event(
@@ -13684,6 +13704,16 @@ def provision_request():
     preserve_status = existing_status in ('approved', 'provisioned')
     repeated_pending_request = existing_status in ('pending', 'pending_approval')
     effective_status = existing_status if preserve_status else 'pending'
+
+    # PRV5 — credential-desync recovery overrides preservation. When a device
+    # presents a wrong current_provision_secret, we MUST demote it back to
+    # `pending` so admin re-approval is required before the new secret is
+    # usable. Without this, an attacker who guesses machine_id could obtain
+    # a working secret without admin involvement.
+    if credential_desync_recovery:
+        preserve_status = False
+        repeated_pending_request = False
+        effective_status = 'pending'
 
     # Idempotency: when an already-approved/provisioned device re-requests with
     # proof-of-prior-trust (matching current_provision_secret), DO NOT rotate the
@@ -13745,9 +13775,13 @@ def provision_request():
     # Capture request metadata for admin risk view + audit log
     request_meta = _capture_request_metadata()
     audit_event = (
-        'request_existing' if preserve_status
-        else ('request_repeat_pending' if repeated_pending_request else 'request_new')
+        'request_secret_mismatch_recovered' if credential_desync_recovery
+        else ('request_existing' if preserve_status
+              else ('request_repeat_pending' if repeated_pending_request else 'request_new'))
     )
+    if credential_desync_recovery:
+        notification_reason = 'credential_desync_recovery'
+        notify_pending_request = True
     _append_device_audit_event(
         machine_id,
         audit_event,

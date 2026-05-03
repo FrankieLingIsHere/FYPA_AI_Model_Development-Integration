@@ -743,6 +743,29 @@ const GlobalSettingsModal = {
                 };
             }
 
+            // PRV5-frontend — when the cloud explicitly rejects our cached
+            // provision_secret, scrub it from sessionStorage so the next
+            // checkup (or any code reading loadRemoteProvisionState) does not
+            // keep displaying a stale "approved" status. Without this, a
+            // checkup that runs with allowRequest:false will silently fall
+            // back to the cached status and the UI will show green even
+            // though the installer download will 401.
+            if (isAuthError) {
+                this.saveRemoteProvisionState({
+                    machineId,
+                    provisionSecret: '',
+                    status: 'rejected',
+                    adminPortalUrl
+                });
+                return {
+                    success: false,
+                    status: 'rejected',
+                    machine_id: machineId,
+                    admin_portal_url: adminPortalUrl,
+                    error: String((statusResult && statusResult.error) || 'Cached provision_secret is no longer valid; re-request provisioning.')
+                };
+            }
+
             return {
                 success: false,
                 status: storedStatus,

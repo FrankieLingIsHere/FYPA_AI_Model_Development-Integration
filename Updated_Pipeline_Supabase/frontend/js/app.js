@@ -21,6 +21,41 @@ const LEGACY_LOCAL_MODE_PROVISIONING_STATUS_KEYS = [
 // never been admin-approved will correctly show 'idle' / 'Not Requested'.
 const LOCAL_MODE_DEVICE_MACHINE_ID_KEY = 'ppe.localMode.deviceMachineId.v1';
 
+// FNV-1a 32-bit hash → 8-hex-char string. Used to derive a deterministic
+// device id from stable browser+device signals so that clearing localStorage
+// (cache wipe, profile recovery, browser bug, etc.) does NOT regenerate a
+// fresh machine_id and orphan the cloud-side approved device record.
+function _fnv1aHex(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i += 1) {
+        h ^= str.charCodeAt(i);
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return ('00000000' + h.toString(16)).slice(-8);
+}
+
+function _deriveStableDeviceMachineId() {
+    // Combine signals that are stable across sessions on the same browser+PC
+    // but vary across browsers / PCs. Avoid IP / canvas to keep this minimal
+    // and avoid privacy-heuristic flags.
+    let tz = '';
+    try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || ''); } catch (_) { tz = ''; }
+    const signalParts = [
+        String(navigator.userAgent || ''),
+        String(navigator.language || ''),
+        String(navigator.hardwareConcurrency || ''),
+        String((window.screen && window.screen.width) || ''),
+        String((window.screen && window.screen.height) || ''),
+        String((window.screen && window.screen.colorDepth) || ''),
+        tz,
+        // Two independent hash chunks to widen the keyspace beyond 32 bits.
+        'casm-v1'
+    ];
+    const a = _fnv1aHex(signalParts.join('|'));
+    const b = _fnv1aHex(signalParts.reverse().join('#'));
+    return `Web-${a}${b.slice(0, 4)}`; // 12 hex chars total — matches existing format
+}
+
 function _generateDeviceMachineId() {
     let suffix = '';
     try {
@@ -45,15 +80,20 @@ function getOrCreateDeviceMachineId() {
         if (/^[A-Za-z0-9._:-]{3,120}$/.test(existing)) {
             return existing;
         }
-        const generated = _generateDeviceMachineId();
+        // Prefer a deterministic fingerprint so re-derivation after a storage
+        // wipe gives the SAME id. Falls back to random only if the fingerprint
+        // path throws (very old browsers).
+        let derived = '';
+        try { derived = _deriveStableDeviceMachineId(); } catch (_) { derived = ''; }
+        const machineId = /^[A-Za-z0-9._:-]{3,120}$/.test(derived) ? derived : _generateDeviceMachineId();
         try {
-            localStorage.setItem(LOCAL_MODE_DEVICE_MACHINE_ID_KEY, generated);
+            localStorage.setItem(LOCAL_MODE_DEVICE_MACHINE_ID_KEY, machineId);
         } catch (writeErr) {
             // ignore quota / privacy mode failures
         }
-        return generated;
+        return machineId;
     } catch (error) {
-        return _generateDeviceMachineId();
+        try { return _deriveStableDeviceMachineId(); } catch (_) { return _generateDeviceMachineId(); }
     }
 }
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;

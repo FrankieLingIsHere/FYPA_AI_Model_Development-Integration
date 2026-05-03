@@ -143,7 +143,11 @@ def main() -> int:
                 print("INFO: mobile nav drawer toggle not present in this deployed variant")
 
             ensure_nav_visible(page, "reports")
-            page.click("[data-page='reports']")
+            visible_reports = _find_visible_nav(page, "[data-page='reports']")
+            if visible_reports:
+                visible_reports.click()
+            else:
+                page.click("[data-page='reports']")
             page.wait_for_selector("#reports-list", timeout=NAV_WAIT_MS)
             page.wait_for_timeout(250)
             body_classes = page.get_attribute("body", "class") or ""
@@ -175,7 +179,11 @@ def main() -> int:
                 print("INFO: mobile nav-more toggle not present in this deployed variant")
 
             ensure_nav_visible(page, "analytics")
-            page.click("[data-page='analytics']")
+            visible_analytics = _find_visible_nav(page, "[data-page='analytics']")
+            if visible_analytics:
+                visible_analytics.click()
+            else:
+                page.click("[data-page='analytics']")
             page.wait_for_selector("#trendChart", timeout=NAV_WAIT_MS)
             print("PASS: mobile analytics navigation")
 

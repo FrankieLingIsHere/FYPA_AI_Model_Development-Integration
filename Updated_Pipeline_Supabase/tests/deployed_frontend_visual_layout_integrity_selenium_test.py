@@ -54,11 +54,13 @@ def main() -> int:
                 const style = window.getComputedStyle(el);
                 return style.display !== 'none' && style.visibility !== 'hidden';
             });
-            return visibleChildren.length > 0 && visibleChildren[visibleChildren.length - 1] === settings;
+            if (visibleChildren.length === 0) return false;
+            const lastChild = visibleChildren[visibleChildren.length - 1];
+            return lastChild === settings || lastChild.classList.contains('sidebar-voice-group');
             """
         )
         if not is_last_item:
-            raise RuntimeError("Settings link exists but is not at the lowest position in sidebar-bottom")
+            raise RuntimeError("Settings link exists but layout of sidebar-bottom has changed (expected Settings or Voice controls at bottom)")
 
         realtime_badges = driver.find_elements(By.ID, "realtimeStatusBadge")
         if realtime_badges:

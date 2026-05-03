@@ -311,6 +311,31 @@ def main() -> int:
             for route_name, wait_selector, metric_key in tz_scenarios:
                 navigate_to(page, route_name, wait_selector)
 
+                # Wait for the page's mount() to finish by checking if the handler is attached
+                handler_check_js = """
+                () => {
+                    const route = '%s';
+                    if (route === 'reports') {
+                        const page = typeof ReportsPage !== 'undefined' ? ReportsPage : window.ReportsPage;
+                        return typeof page?.timezoneChangeHandler === 'function';
+                    }
+                    if (route === 'home') {
+                        const page = typeof HomePage !== 'undefined' ? HomePage : window.HomePage;
+                        return typeof page?._timezoneChangeHandler === 'function';
+                    }
+                    if (route === 'analytics') {
+                        const page = typeof AnalyticsPage !== 'undefined' ? AnalyticsPage : window.AnalyticsPage;
+                        return typeof page?._timezoneChangeHandler === 'function';
+                    }
+                    return true;
+                }
+                """ % route_name
+
+                try:
+                    page.wait_for_function(handler_check_js, timeout=15000)
+                except PlaywrightTimeoutError:
+                    print(f"Warning: timezoneChangeHandler not found on {route_name} after 15s")
+
                 before = get_metrics(page)
                 before_value = int((before or {}).get(metric_key, 0))
                 before_events = int((before or {}).get("timezoneEvents", 0))

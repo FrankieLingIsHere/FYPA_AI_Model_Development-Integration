@@ -1700,7 +1700,11 @@ const GlobalSettingsModal = {
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provisioning request is pending admin approval.', 'warning');
                 this.ensureLocalProvisionPolling();
-            } else if (status === 'rejected') {
+            } else if (status === 'rejected' && isLikelyRemoteBackend) {
+                // Only show 'rejected' immediately when connected to the remote backend
+                // (where the response is authoritative). When connected to the local
+                // backend the disk state may be stale — defer to the finalStatus block
+                // after refreshProvisioningState() has done a live cloud check.
                 this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             } else if (ready) {
                 // No provisioning info yet — health check passed, prompt user to use the button
@@ -1746,6 +1750,8 @@ const GlobalSettingsModal = {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
             } else if (finalStatus === 'approved') {
                 this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
+            } else if (finalStatus === 'rejected') {
+                this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             }
         } catch (error) {
             console.error('GlobalSettingsModal: local checkup failed', error);

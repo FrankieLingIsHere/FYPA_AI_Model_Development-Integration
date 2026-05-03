@@ -7634,9 +7634,39 @@ def api_local_mode_installer_redirect():
         }), 503
 
     if status not in ('approved', 'provisioned'):
-        return jsonify({
-            'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
-        }), 403
+        # Disk state may be stale (e.g. written as 'rejected' by an old bug or by
+        # a previous failed auto-provision cycle).  Do a live cloud check before
+        # blocking — if the cloud confirms 'approved' we can proceed and heal the
+        # disk state at the same time.
+        if provision_secret and cloud_url:
+            live_check = _local_mode_fetch_authoritative_status(
+                cloud_url=cloud_url,
+                machine_id=machine_id,
+                provision_secret=provision_secret,
+                timeout_seconds=8,
+            )
+            live_status = str(live_check.get('status') or '').strip().lower()
+            if live_status in ('approved', 'provisioned'):
+                # Heal the disk state so subsequent calls pass the fast path.
+                state['status'] = live_status
+                state['updated_at'] = datetime.now(timezone.utc).isoformat()
+                try:
+                    _local_mode_save_provision_state(state)
+                except Exception:
+                    pass
+                status = live_status  # allow the redirect below
+            else:
+                return jsonify({
+                    'error': (
+                        f'Device is not approved yet (disk status={status or "unknown"}, '
+                        f'cloud status={live_status or "unknown"}). '
+                        'Wait for admin approval, then retry.'
+                    )
+                }), 403
+        else:
+            return jsonify({
+                'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
+            }), 403
 
     target = (
         f"{cloud_url.rstrip('/')}/api/bootstrap/installer/request"

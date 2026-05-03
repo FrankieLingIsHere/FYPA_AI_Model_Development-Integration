@@ -30,9 +30,16 @@ const AudioAlert = (function () {
         }
 
         try {
-            const vol = Number(localStorage.getItem(STORAGE_KEY_VOLUME));
-            if (Number.isFinite(vol)) {
-                volume = Math.max(0, Math.min(1, vol / 100));
+            const stored = localStorage.getItem(STORAGE_KEY_VOLUME);
+            // IMPORTANT: Number(null) === 0 (not NaN), so a missing key would
+            // silently set volume=0 and mute every alert. Only treat the value
+            // as a real configured volume when the key exists and parses to a
+            // finite number. Otherwise leave the default 1.0.
+            if (stored !== null && stored !== '') {
+                const vol = Number(stored);
+                if (Number.isFinite(vol)) {
+                    volume = Math.max(0, Math.min(1, vol / 100));
+                }
             }
         } catch (e) {}
 
@@ -174,8 +181,16 @@ const AudioAlert = (function () {
             utter.rate = 1.0;
             utter.pitch = 1.0;
 
-            // apply saved volume (0..1)
-            try { utter.volume = Number.isFinite(Number(volume)) ? Number(volume) : 1.0; } catch (e) {}
+            // apply saved volume (0..1). Guard against a stale 0 in
+            // localStorage from older builds: if user has alerts ENABLED
+            // but the saved volume is 0, that's almost certainly a bug
+            // and not an intentional mute, so promote to full volume.
+            try {
+                let vol = Number.isFinite(Number(volume)) ? Number(volume) : 1.0;
+                if (vol <= 0) vol = 1.0;
+                utter.volume = vol;
+                console.log('[AudioAlert] utterance volume=', vol, 'voice=', preferredVoice || '(auto)');
+            } catch (e) {}
 
             // Choose a voice if available (prefer saved selection, then English voices)
             const voices = window.speechSynthesis.getVoices() || [];

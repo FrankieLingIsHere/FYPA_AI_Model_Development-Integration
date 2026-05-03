@@ -20,7 +20,6 @@ const STATIC_ASSETS = [
   '/static/js/pages/home.js',
   '/static/js/pages/live.js',
   '/static/js/pages/reports.js',
-  '/static/js/pages/batch-docs.js',
   '/static/js/pages/analytics.js',
   '/static/js/pages/about.js',
   '/static/js/app.js',

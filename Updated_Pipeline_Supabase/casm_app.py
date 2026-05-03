@@ -1074,7 +1074,7 @@ supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
 supabase_offline_backoff_error = ''
-# H3 — tracks consecutive Supabase connectivity failures.
+# H3 â€” tracks consecutive Supabase connectivity failures.
 # db_manager / storage_manager are only wiped once this reaches >= 2 consecutive failures,
 # preventing a single transient error from knocking the whole pipeline offline.
 supabase_offline_failure_count = 0
@@ -1170,7 +1170,7 @@ def _clear_supabase_offline_backoff(reason: str = '') -> None:
         supabase_offline_backoff_until_epoch = 0.0
         supabase_offline_backoff_context = ''
         supabase_offline_backoff_error = ''
-    # H3 — Reset failure counter on a confirmed successful Supabase connection.
+    # H3 â€” Reset failure counter on a confirmed successful Supabase connection.
     supabase_offline_failure_count = 0
     if reason:
         logger.info(f"Supabase offline backoff cleared ({reason})")
@@ -1203,7 +1203,7 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
         supabase_offline_backoff_error = error_text[:300]
 
-    # H3 — Only wipe managers after at least 2 consecutive failures so a single
+    # H3 â€” Only wipe managers after at least 2 consecutive failures so a single
     # transient Supabase blip does not bring the whole pipeline offline.
     if supabase_offline_failure_count >= 2:
         demoted_parts = []
@@ -1218,7 +1218,7 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         demoted_parts = []
         logger.warning(
             f"Supabase connectivity failure #{supabase_offline_failure_count} "
-            f"(context={context!r}): managers preserved — need >= 2 consecutive failures to trigger offline demotion."
+            f"(context={context!r}): managers preserved â€” need >= 2 consecutive failures to trigger offline demotion."
         )
 
     if report_generator is not None and _is_supabase_report_generator_active():
@@ -1319,10 +1319,10 @@ ENVIRONMENT_VALIDATION_ENABLED = False  # <-- SET TO False TO DISABLE SKIPPING
 
 # How environment classification works:
 # 1. LLaVA model analyzes the image and classifies it as:
-#    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop → VALID
-#    B) OFFICE/COMMERCIAL - office, retail, meeting room → VALID (may need PPE)
-#    C) RESIDENTIAL/CASUAL - home, living room, park, beach → INVALID (skipped)
-#    D) OTHER - unclear scenes → VALID (benefit of doubt)
+#    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop â†’ VALID
+#    B) OFFICE/COMMERCIAL - office, retail, meeting room â†’ VALID (may need PPE)
+#    C) RESIDENTIAL/CASUAL - home, living room, park, beach â†’ INVALID (skipped)
+#    D) OTHER - unclear scenes â†’ VALID (benefit of doubt)
 #
 # 2. Only category C (residential/casual) causes skipping
 # 3. Categories A, B, D all proceed with report generation
@@ -1709,10 +1709,10 @@ def _run_startup_sequence():
         _ensure_startup_local_auto_provision_worker()
         _ensure_local_mode_cloud_heartbeat_worker()
         _set_startup_ready()
-        logger.info('✅ Startup sequence completed. System is ready.')
+        logger.info('âœ… Startup sequence completed. System is ready.')
 
     except Exception as e:
-        logger.error(f'❌ Startup sequence failed: {e}', exc_info=True)
+        logger.error(f'âŒ Startup sequence failed: {e}', exc_info=True)
         _set_startup_error(str(e))
 
 
@@ -1873,7 +1873,7 @@ def initialize_pipeline_components():
                     'fix_stuck_reports'
                 )
                 if fixed > 0:
-                    logger.info(f"✓ Fixed {fixed} stuck reports")
+                    logger.info(f"âœ“ Fixed {fixed} stuck reports")
         
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
@@ -1927,11 +1927,11 @@ def initialize_pipeline_components():
                 )
         
         # Initialize violation queue for handling multiple violations
-        # H4 — If violation_queue exists but its internal worker thread has died (e.g. after
+        # H4 â€” If violation_queue exists but its internal worker thread has died (e.g. after
         # an unhandled exception inside the worker), reset it so the block below recreates it.
         if violation_queue is not None and not _is_queue_worker_alive():
             logger.warning(
-                "H4: violation_queue exists but worker thread is not alive — resetting queue to force re-creation."
+                "H4: violation_queue exists but worker thread is not alive â€” resetting queue to force re-creation."
             )
             violation_queue = None
 
@@ -1940,7 +1940,7 @@ def initialize_pipeline_components():
             logger.info("Initializing violation queue manager...")
             if not _ensure_violation_queue_runtime_ready(reason='startup_component_init'):
                 raise RuntimeError('Violation queue manager initialization failed')
-            logger.info(f"✓ Violation queue initialized (max_size=100)")
+            logger.info(f"âœ“ Violation queue initialized (max_size=100)")
         
         # Start queue worker thread if not running
         if not ensure_queue_worker_running():
@@ -2287,7 +2287,22 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             summary['skipped_queue_unavailable'] += 1
             break
 
-        recovery_device_id = f"local_recovery_{report_id}_{time.time_ns()}"
+        recovery_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        recovery_in_local_mode = recovery_routing_profile == 'local'
+        # Recovery sweep should preserve the runtime's active routing profile so
+        # cloud-mode reports being recovered don't get tagged with the orange
+        # 'Local' / 'Local Synced' chips. Use a neutral webcam_0 device id in
+        # cloud mode so downstream scope inference doesn't flip the report to
+        # 'local' just because the recovery device id starts with 'local_'.
+        if recovery_in_local_mode:
+            recovery_device_id = f"local_recovery_{report_id}_{time.time_ns()}"
+            recovery_source_scope = 'local'
+            recovery_sync_source = 'local_pending_recovery'
+        else:
+            recovery_device_id = f"recovery_{report_id}_{time.time_ns()}"
+            recovery_source_scope = 'cloud'
+            recovery_sync_source = 'cloud_pending_recovery'
+
         queue_payload = {
             'report_id': report_id,
             'timestamp': timestamp_iso,
@@ -2297,9 +2312,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path),
             'violation_dir': str(violation_dir),
-            'source_scope': 'local',
-            'sync_source': 'local_pending_recovery',
-            'source': 'local_pending_recovery',
+            'source_scope': recovery_source_scope,
+            'sync_source': recovery_sync_source,
+            'source': recovery_sync_source,
             'allow_placeholder_report': True,
         }
 
@@ -2362,7 +2377,7 @@ def start_queue_worker_watchdog() -> bool:
             return False
 
         logger.info(
-            f"✓ Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
+            f"âœ“ Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
         )
         return True
 
@@ -2479,7 +2494,7 @@ def start_queue_worker(force_restart: bool = False) -> bool:
     if already_running:
         logger.info(f"Queue worker already running (Thread ID: {running_thread_id})")
     else:
-        logger.info(f"✓ Queue worker thread started (Thread ID: {running_thread_id})")
+        logger.info(f"âœ“ Queue worker thread started (Thread ID: {running_thread_id})")
 
     if QUEUE_WORKER_WATCHDOG_ENABLED:
         start_queue_worker_watchdog()
@@ -2610,7 +2625,7 @@ def queue_worker_loop():
                 # No violation in queue, continue waiting
                 continue
             
-            logger.info(f"📥 Dequeued violation {queued_violation.report_id} for processing")
+            logger.info(f"ðŸ“¥ Dequeued violation {queued_violation.report_id} for processing")
             
             try:
                 _mark_queue_worker_heartbeat()
@@ -2628,7 +2643,7 @@ def queue_worker_loop():
                 # Process the violation
                 process_queued_violation(queued_violation)
                 violation_queue.mark_processed(queued_violation)
-                logger.info(f"✅ Completed processing {queued_violation.report_id}")
+                logger.info(f"âœ… Completed processing {queued_violation.report_id}")
                 _mark_queue_worker_heartbeat()
                 
                 # Update progress: completed
@@ -2643,7 +2658,7 @@ def queue_worker_loop():
                 # Get full traceback for debugging
                 import traceback
                 error_details = traceback.format_exc()
-                logger.error(f"❌ Error processing {queued_violation.report_id}: {e}")
+                logger.error(f"âŒ Error processing {queued_violation.report_id}: {e}")
                 logger.error(f"Full traceback:\n{error_details}")
                 
                 update_report_progress(
@@ -2732,7 +2747,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
-        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
+        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_types}")
         runtime_device_id = 'local_cache' if force_local_scope else 'webcam_0'
         
         # Create violation directory with timestamp (configurable timezone)
@@ -2740,19 +2755,19 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"📁 Created violation directory: {violation_dir}")
+        logger.info(f"ðŸ“ Created violation directory: {violation_dir}")
         
         # === IMMEDIATE: Save images (fast operation) ===
         # Save original frame
         original_path = violation_dir / 'original.jpg'
         cv2.imwrite(str(original_path), frame)
-        logger.info(f"✓ Saved original image: {original_path}")
+        logger.info(f"âœ“ Saved original image: {original_path}")
         
         # Save annotated frame
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"✓ Saved annotated image: {annotated_path}")
+        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
         
         # === IMMEDIATE: Insert pending detection event ===
         # Local-first profile must not depend on cloud DB availability during capture.
@@ -2767,7 +2782,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"✓ Inserted PENDING detection event: {report_id}")
+                logger.info(f"âœ“ Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
                 logger.warning(
@@ -2843,7 +2858,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     )
 
         if success:
-            logger.info(f"✓ Violation {report_id} added to processing queue")
+            logger.info(f"âœ“ Violation {report_id} added to processing queue")
             queue_stats = violation_queue.get_stats()
             logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
             return report_id
@@ -3237,7 +3252,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         # flush to cloud even when local NLP generation fails.
         allow_placeholder_report = True
     
-    logger.info(f"📄 Processing queued violation: {report_id}")
+    logger.info(f"ðŸ“„ Processing queued violation: {report_id}")
 
     if is_local_cache_sync_job:
         handled_sync_job = _handle_local_cache_sync_job(
@@ -3253,7 +3268,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             queued_sync_source=queued_sync_source,
         )
         if handled_sync_job:
-            logger.info(f"✅ Local-cache sync job completed without regeneration: {report_id}")
+            logger.info(f"âœ… Local-cache sync job completed without regeneration: {report_id}")
             return
     
     # Update progress
@@ -3268,7 +3283,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         try:
             from caption_image import validate_work_environment
             
-            logger.info("🔍 Validating work environment (acquiring Ollama lock)...")
+            logger.info("ðŸ” Validating work environment (acquiring Ollama lock)...")
             with ollama_semaphore:  # Only one Ollama call at a time
                 env_result = validate_work_environment(str(original_path))
             
@@ -3281,7 +3296,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 json.dump(env_result, f, indent=2)
             
             if not env_result['is_valid']:
-                logger.warning(f"⚠️ SKIPPING violation {report_id} - not a valid work environment")
+                logger.warning(f"âš ï¸ SKIPPING violation {report_id} - not a valid work environment")
                 logger.warning(f"   Reason: {env_result['reason']}")
                 
                 # Update status to 'skipped' and clean up
@@ -3315,7 +3330,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     if db_manager:
         try:
             db_manager.update_detection_status(report_id, 'generating')
-            logger.info(f"✓ Status updated to GENERATING: {report_id}")
+            logger.info(f"âœ“ Status updated to GENERATING: {report_id}")
         except Exception as e:
             _activate_local_offline_runtime('process_queued_violation.status_generating', e)
             logger.warning(f"Could not update status: {e}")
@@ -3334,7 +3349,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_quality_reason = ''
     if caption_generator:
         try:
-            logger.info("🎨 Generating image caption with LLaVA (acquiring Ollama lock)...")
+            logger.info("ðŸŽ¨ Generating image caption with LLaVA (acquiring Ollama lock)...")
             
             # Free up GPU memory before heavy captioning operation
             try:
@@ -3350,7 +3365,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             if caption:
                 with open(caption_path, 'w', encoding='utf-8') as f:
                     f.write(caption)
-                logger.info(f"✓ Caption saved: {caption_path}")
+                logger.info(f"âœ“ Caption saved: {caption_path}")
                 
                 # Secondary validation: check caption content for work environment indicators
                 caption_lower = caption.lower()
@@ -3358,13 +3373,13 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 has_invalid_indicators = any(kw in caption_lower for kw in INVALID_ENVIRONMENT_KEYWORDS)
                 
                 if has_invalid_indicators and not has_work_indicators:
-                    logger.warning(f"⚠️ Caption suggests non-work environment: {caption[:100]}...")
+                    logger.warning(f"âš ï¸ Caption suggests non-work environment: {caption[:100]}...")
                     env_context = " [Warning: Scene may not be a typical work environment]"
 
                 if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                     failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                     logger.warning(
-                        f"⚠️ Local mode unavailable for {report_id}: {failure_reason}. "
+                        f"âš ï¸ Local mode unavailable for {report_id}: {failure_reason}. "
                         "Continuing with detection-only fallback report generation."
                     )
                     caption = (
@@ -3378,7 +3393,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             else:
                 caption = "Caption generation returned empty"
         except Exception as e:
-            logger.error(f"❌ Caption generation failed: {e}")
+            logger.error(f"âŒ Caption generation failed: {e}")
             caption = "Caption generation failed"
     else:
         caption = "Image captioning not available"
@@ -3429,7 +3444,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 current_step='Generating analysis report'
             )
             
-            logger.info(f"📄 Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
+            logger.info(f"ðŸ“„ Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
             
             violation_types_raw = violation_types if isinstance(violation_types, list) else []
             if not violation_types_raw:
@@ -3505,7 +3520,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     result = _gen_future.result(timeout=_report_gen_timeout_seconds)
                 except _cf.TimeoutError:
                     logger.error(
-                        f"⏱️ Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
+                        f"â±ï¸ Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
                         "abandoning the call and proceeding to fallback to keep the queue moving"
                     )
                     failure_reason = (
@@ -3524,14 +3539,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             if result and result.get('html'):
                 target_html = violation_dir / 'report.html'
                 if target_html.exists():
-                    logger.info(f"✓ Report generated: {target_html}")
+                    logger.info(f"âœ“ Report generated: {target_html}")
                     report_created = True
                     
                     # Update status to completed
                     if db_manager:
                         try:
                             db_manager.update_detection_status(report_id, 'completed')
-                            logger.info(f"✓ Status updated to COMPLETED: {report_id}")
+                            logger.info(f"âœ“ Status updated to COMPLETED: {report_id}")
                         except Exception as e:
                             _activate_local_offline_runtime('process_queued_violation.status_completed', e)
                             logger.warning(f"Could not update status: {e}")
@@ -3541,7 +3556,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 failure_reason = "Report generator returned empty or missing HTML output"
                             
         except Exception as e:
-            logger.error(f"❌ Report generation failed: {e}")
+            logger.error(f"âŒ Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
     
     if not report_created and allow_placeholder_report and (
@@ -3651,7 +3666,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 f"(keys={sorted(result_storage_keys.keys()) if isinstance(result_storage_keys, dict) else []})"
             )
     
-    logger.info(f"✅ Queued violation processing complete: {report_id}")
+    logger.info(f"âœ… Queued violation processing complete: {report_id}")
 
 
 def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, detections: List, caption: str):
@@ -3682,33 +3697,33 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
 </head>
 <body>
     <div class="container">
-        <h1>🚨 PPE Violation Report</h1>
+        <h1>ðŸš¨ PPE Violation Report</h1>
         <p><strong>Report ID:</strong> {report_id}</p>
         <p><strong>Timestamp:</strong> {timestamp}</p>
         <p><strong>Severity:</strong> HIGH</p>
         
         <div class="warning">
-            <h3>⚠️ Report Generator Not Available</h3>
+            <h3>âš ï¸ Report Generator Not Available</h3>
             <p>{placeholder_warning_message}</p>
         </div>
         
         <div class="info">
-            <h3>📋 Detection Summary</h3>
+            <h3>ðŸ“‹ Detection Summary</h3>
             <p><strong>Detections:</strong> {len(detections)}</p>
         </div>
         
-        <h3>📸 Images</h3>
+        <h3>ðŸ“¸ Images</h3>
         <p>Original: <a href="original.jpg">original.jpg</a></p>
         <p>Annotated: <a href="annotated.jpg">annotated.jpg</a></p>
         
-        <h3>📝 Caption</h3>
+        <h3>ðŸ“ Caption</h3>
         <p>{caption if caption else 'No caption available'}</p>
     </div>
 </body>
 </html>"""
     with open(report_html_path, 'w', encoding='utf-8') as f:
         f.write(placeholder_html)
-    logger.info(f"✓ Placeholder report saved: {report_html_path}")
+    logger.info(f"âœ“ Placeholder report saved: {report_html_path}")
 
 
 def process_violation(frame: np.ndarray, detections: List[Dict]):
@@ -3739,11 +3754,11 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             return
         
         violation_types = [d['class_name'] for d in violation_detections]
-        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_types}")
+        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_types}")
         logger.info("   Starting full processing...")
         logger.info(f"   Pipeline available: {FULL_PIPELINE_AVAILABLE}")
-        logger.info(f"   Caption generator: {'✓ Available' if caption_generator else '✗ Not initialized'}")
-        logger.info(f"   Report generator: {'✓ Available' if report_generator else '✗ Not initialized'}")
+        logger.info(f"   Caption generator: {'âœ“ Available' if caption_generator else 'âœ— Not initialized'}")
+        logger.info(f"   Report generator: {'âœ“ Available' if report_generator else 'âœ— Not initialized'}")
         runtime_device_id = 'webcam_0'
         
         # Create violation directory with absolute path
@@ -3751,7 +3766,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"📁 Created violation directory: {violation_dir}")
+        logger.info(f"ðŸ“ Created violation directory: {violation_dir}")
         
         # === IMMEDIATE: Insert "pending" detection event ===
         # This makes the violation visible in the frontend immediately
@@ -3766,7 +3781,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"✓ Inserted PENDING detection event: {report_id} (visible in frontend now)")
+                logger.info(f"âœ“ Inserted PENDING detection event: {report_id} (visible in frontend now)")
             except Exception as e:
                 _activate_local_offline_runtime('process_violation.insert_pending_event', e)
                 logger.warning(
@@ -3777,13 +3792,13 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         # Save original frame
         original_path = violation_dir / 'original.jpg'
         cv2.imwrite(str(original_path), frame)
-        logger.info(f"✓ Saved original image: {original_path}")
+        logger.info(f"âœ“ Saved original image: {original_path}")
         
         # Save annotated frame
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"✓ Saved annotated image: {annotated_path}")
+        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
         
         # Generate caption if available
         caption = ""
@@ -3794,18 +3809,18 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         
         if caption_generator:
             try:
-                logger.info("🎨 Generating image caption with LLaVA...")
+                logger.info("ðŸŽ¨ Generating image caption with LLaVA...")
                 caption = caption_generator.generate_caption(str(original_path))
                 if caption:
                     with open(caption_path, 'w', encoding='utf-8') as f:
                         f.write(caption)
-                    logger.info(f"✓ Caption saved: {caption_path}")
+                    logger.info(f"âœ“ Caption saved: {caption_path}")
                     logger.info(f"  Caption preview: {caption[:100]}...")
 
                     if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                         failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                         logger.warning(
-                            f"⚠️ Local mode unavailable for {report_id}: {failure_reason}. "
+                            f"âš ï¸ Local mode unavailable for {report_id}: {failure_reason}. "
                             "Continuing with detection-only fallback report generation."
                         )
                         caption = (
@@ -3819,7 +3834,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     logger.error("Caption generation returned None or empty string")
                     caption = "Caption generation returned empty"
             except Exception as e:
-                logger.error(f"❌ Caption generation failed: {e}", exc_info=True)
+                logger.error(f"âŒ Caption generation failed: {e}", exc_info=True)
                 caption = "Caption generation failed"
         else:
             # Save placeholder caption even if generator not available
@@ -3827,7 +3842,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             caption = "Image captioning not available - LLaVA model not loaded. Install dependencies: pip install transformers accelerate bitsandbytes"
             with open(caption_path, 'w', encoding='utf-8') as f:
                 f.write(caption)
-            logger.info(f"✓ Placeholder caption saved: {caption_path}")
+            logger.info(f"âœ“ Placeholder caption saved: {caption_path}")
 
         caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
             caption,
@@ -3869,11 +3884,11 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 if db_manager:
                     try:
                         db_manager.update_detection_status(report_id, 'generating')
-                        logger.info(f"✓ Status updated to GENERATING: {report_id}")
+                        logger.info(f"âœ“ Status updated to GENERATING: {report_id}")
                     except Exception as e:
                         logger.warning(f"Could not update status: {e}")
                 
-                logger.info(f"📄 Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
+                logger.info(f"ðŸ“„ Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
 
                 detections_list = detections if isinstance(detections, list) else []
                 detected_person_count = sum(
@@ -3913,27 +3928,27 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     # Check if report was created in violations directory
                     target_html = violation_dir / 'report.html'
                     if target_html.exists():
-                        logger.info(f"✓ Report generated: {target_html}")
+                        logger.info(f"âœ“ Report generated: {target_html}")
                         report_created = True
                         # Update status to "completed"
                         if db_manager:
                             try:
                                 db_manager.update_detection_status(report_id, 'completed')
-                                logger.info(f"✓ Status updated to COMPLETED: {report_id}")
+                                logger.info(f"âœ“ Status updated to COMPLETED: {report_id}")
                             except Exception as e:
                                 logger.warning(f"Could not update status: {e}")
                     else:
-                        logger.warning(f"❌ Report not found in violations directory: {target_html}")
+                        logger.warning(f"âŒ Report not found in violations directory: {target_html}")
                 else:
-                    logger.warning(f"❌ Report generation returned None or no HTML path. Result: {result}")
+                    logger.warning(f"âŒ Report generation returned None or no HTML path. Result: {result}")
                     
             except Exception as e:
-                logger.error(f"❌ Report generation failed: {e}", exc_info=True)
+                logger.error(f"âŒ Report generation failed: {e}", exc_info=True)
                 # Update status to "failed"
                 if db_manager:
                     try:
                         db_manager.update_detection_status(report_id, 'failed', str(e))
-                        logger.info(f"✓ Status updated to FAILED: {report_id}")
+                        logger.info(f"âœ“ Status updated to FAILED: {report_id}")
                     except Exception as e2:
                         logger.warning(f"Could not update status: {e2}")
         
@@ -3942,7 +3957,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             failure_reason = "Report generation did not produce model-generated HTML output"
             try:
                 db_manager.update_detection_status(report_id, 'failed', failure_reason)
-                logger.info(f"✓ Status updated to FAILED: {report_id}")
+                logger.info(f"âœ“ Status updated to FAILED: {report_id}")
             except Exception as e:
                 logger.warning(f"Could not update failed status: {e}")
         
@@ -3962,9 +3977,9 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         metadata_path = violation_dir / 'metadata.json'
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
-        logger.info(f"✓ Metadata saved: {metadata_path}")
+        logger.info(f"âœ“ Metadata saved: {metadata_path}")
         
-        logger.info(f"✅ VIOLATION PROCESSING COMPLETE: {report_id}")
+        logger.info(f"âœ… VIOLATION PROCESSING COMPLETE: {report_id}")
         logger.info(f"   - Location: {violation_dir}")
         logger.info(f"   - Files: original.jpg, annotated.jpg, caption.txt, report.html, metadata.json")
         
@@ -4718,266 +4733,6 @@ def api_system_timezone():
 # =========================================================================
 # API ENDPOINTS - STATUS & MONITORING (from Pipeline_CASM)
 # =========================================================================
-
-def _gather_report_for_batch_doc(report_id: str) -> Optional[Dict[str, Any]]:
-    """Collect the canonical fields needed to render an NCR / JKKP-7 doc.
-
-    Returns a flat dict (or None when the report cannot be located).
-    Pulls from Supabase first, then falls back to the local violations
-    folder so the endpoint also works in offline / standalone mode.
-    """
-    rid = str(report_id or '').strip()
-    if not rid:
-        return None
-
-    record: Dict[str, Any] = {}
-    try:
-        if db_manager is not None and hasattr(db_manager, 'get_violation'):
-            row = db_manager.get_violation(rid)
-            if row:
-                ts = row.get('timestamp')
-                record.update({
-                    'report_id': row.get('report_id') or rid,
-                    'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else (ts or ''),
-                    'severity': row.get('severity') or 'UNKNOWN',
-                    'status': row.get('status') or 'unknown',
-                    'device_id': row.get('device_id') or '',
-                    'person_count': row.get('person_count') or 0,
-                    'violation_count': row.get('violation_count') or 0,
-                    'violation_summary': row.get('violation_summary') or '',
-                    'caption': row.get('caption') or '',
-                    'environment_type': row.get('environment_type') or '',
-                    'missing_ppe': row.get('missing_ppe') or [],
-                    'dosh_regulations_cited': row.get('dosh_regulations_cited') or [],
-                })
-    except Exception as exc:
-        logger.debug(f"batch-docs: Supabase lookup failed for {rid}: {exc}")
-
-    # Local filesystem fallback / enrichment.
-    try:
-        violation_dir = VIOLATIONS_DIR / rid
-        metadata_file = violation_dir / 'metadata.json'
-        if metadata_file.exists():
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                meta = json.load(f) or {}
-            for key in (
-                'severity', 'status', 'device_id', 'person_count', 'violation_count',
-                'violation_summary', 'caption', 'environment_type', 'missing_ppe',
-                'dosh_regulations_cited', 'timestamp'
-            ):
-                if not record.get(key) and meta.get(key) is not None:
-                    record[key] = meta.get(key)
-            if not record.get('report_id'):
-                record['report_id'] = rid
-    except Exception as exc:
-        logger.debug(f"batch-docs: local metadata read failed for {rid}: {exc}")
-
-    if not record:
-        return None
-    record.setdefault('report_id', rid)
-    record.setdefault('timestamp', '')
-    record.setdefault('severity', 'UNKNOWN')
-    record.setdefault('missing_ppe', [])
-    record.setdefault('dosh_regulations_cited', [])
-    return record
-
-
-def _render_ncr_block(rec: Dict[str, Any]) -> str:
-    rid = html.escape(str(rec.get('report_id') or ''))
-    ts = html.escape(str(rec.get('timestamp') or ''))
-    env = html.escape(str(rec.get('environment_type') or 'Construction Site'))
-    severity = html.escape(str(rec.get('severity') or 'UNKNOWN'))
-    summary = html.escape(str(rec.get('violation_summary') or 'PPE non-compliance detected by CASM Safety Monitor.'))
-    missing_ppe_list = rec.get('missing_ppe') or []
-    if isinstance(missing_ppe_list, str):
-        missing_ppe_list = [missing_ppe_list]
-    missing_html = ''.join(
-        f'<li>{html.escape(str(p))}</li>' for p in missing_ppe_list if str(p).strip()
-    ) or '<li>See attached safety report for full details.</li>'
-    regs = rec.get('dosh_regulations_cited') or []
-    reg_rows = []
-    for r in regs:
-        if isinstance(r, dict):
-            reg_name = html.escape(str(r.get('regulation') or r.get('technical_standard') or ''))
-            requirement = html.escape(str(r.get('requirement') or ''))
-            penalty = html.escape(str(r.get('penalty') or r.get('legal_regulatory_consequences') or ''))
-        else:
-            reg_name = html.escape(str(r))
-            requirement = ''
-            penalty = ''
-        if reg_name:
-            reg_rows.append(
-                f'<tr><td><strong>{reg_name}</strong></td>'
-                f'<td>{requirement or "—"}</td>'
-                f'<td>{penalty or "—"}</td></tr>'
-            )
-    reg_table = (
-        '<table class="reg-table"><thead><tr><th>Regulation</th><th>Requirement</th>'
-        '<th>Penalty</th></tr></thead><tbody>' + ''.join(reg_rows) + '</tbody></table>'
-    ) if reg_rows else '<p><em>No specific regulation citations stored for this report.</em></p>'
-
-    return f"""
-    <article class="doc-block ncr">
-        <header>
-            <h1>NON-CONFORMANCE REPORT (NCR)</h1>
-            <p class="ref">NCR No: NCR-{rid}</p>
-        </header>
-        <section>
-            <h2>Incident Details</h2>
-            <table class="kv">
-                <tr><th>Report ID</th><td>{rid}</td></tr>
-                <tr><th>Date / Time</th><td>{ts}</td></tr>
-                <tr><th>Location Type</th><td>{env}</td></tr>
-                <tr><th>Severity</th><td>{severity}</td></tr>
-            </table>
-        </section>
-        <section>
-            <h2>Description of Non-Conformance</h2>
-            <p>{summary}</p>
-        </section>
-        <section>
-            <h2>Missing PPE</h2>
-            <ul>{missing_html}</ul>
-        </section>
-        <section>
-            <h2>Regulations Violated</h2>
-            {reg_table}
-        </section>
-        <section>
-            <h2>Corrective Action Required</h2>
-            <p>Stop work in the affected zone until all missing PPE listed above is issued, fitted and verified by the site supervisor. Schedule a follow-up audit within 48 hours.</p>
-        </section>
-        <section class="signatures">
-            <div><div class="sig-line"></div><p>Issued by (Safety Officer)</p></div>
-            <div><div class="sig-line"></div><p>Acknowledged by (Contractor)</p></div>
-        </section>
-    </article>
-    """
-
-
-def _render_jkkp7_block(rec: Dict[str, Any]) -> str:
-    rid = html.escape(str(rec.get('report_id') or ''))
-    ts = html.escape(str(rec.get('timestamp') or ''))
-    summary = html.escape(str(rec.get('violation_summary') or 'PPE non-compliance detected by CASM Safety Monitor.'))
-    person_count = html.escape(str(rec.get('person_count') or '—'))
-    device_id = html.escape(str(rec.get('device_id') or '—'))
-    severity = html.escape(str(rec.get('severity') or 'UNKNOWN'))
-    return f"""
-    <article class="doc-block jkkp7">
-        <header>
-            <h1>BORANG JKKP 7</h1>
-            <p>NOTIS KEMALANGAN, KEJADIAN BERBAHAYA, KERACUNAN PEKERJAAN ATAU PENYAKIT PEKERJAAN</p>
-            <p class="ref">Reference: {rid}</p>
-        </header>
-        <section>
-            <h2>Bahagian A — Butir-butir Majikan</h2>
-            <table class="kv">
-                <tr><th>Nama Majikan</th><td>____________________________</td></tr>
-                <tr><th>Alamat Tempat Kerja</th><td>____________________________</td></tr>
-                <tr><th>Jenis Industri</th><td>Pembinaan / Construction</td></tr>
-                <tr><th>Device ID (sumber)</th><td>{device_id}</td></tr>
-            </table>
-        </section>
-        <section>
-            <h2>Bahagian B — Butir-butir Kejadian</h2>
-            <table class="kv">
-                <tr><th>Tarikh &amp; Masa</th><td>{ts}</td></tr>
-                <tr><th>Bilangan Pekerja Terlibat</th><td>{person_count}</td></tr>
-                <tr><th>Tahap Severiti</th><td>{severity}</td></tr>
-                <tr><th>Perihal Kejadian</th><td>{summary}</td></tr>
-            </table>
-        </section>
-        <section>
-            <h2>Bahagian C — Pengesahan</h2>
-            <table class="kv">
-                <tr><th>Tandatangan Majikan / Wakil</th><td style="height:50px;"></td></tr>
-                <tr><th>Nama &amp; Jawatan</th><td>____________________________</td></tr>
-                <tr><th>Tarikh</th><td>____________________________</td></tr>
-            </table>
-        </section>
-    </article>
-    """
-
-
-def _render_batch_docs_html(records: List[Dict[str, Any]], fmt: str) -> str:
-    parts = []
-    for rec in records:
-        if fmt in ('ncr', 'both'):
-            parts.append(_render_ncr_block(rec))
-        if fmt in ('jkkp7', 'both'):
-            parts.append(_render_jkkp7_block(rec))
-        parts.append('<div class="page-break"></div>')
-    body = ''.join(parts) or '<p>No reports were resolved for the selected IDs.</p>'
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Batch Documentation — CASM Safety Monitor</title>
-<style>
-  body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 24px; color:#1f2933; }}
-  .toolbar {{ position: sticky; top: 0; background: #fff; padding: 8px 0 16px; border-bottom: 1px solid #e1e5eb; margin-bottom: 16px; }}
-  .toolbar button {{ background:#0d6efd; color:#fff; border:none; padding: 8px 16px; border-radius: 4px; cursor:pointer; }}
-  .doc-block {{ border:1px solid #ced4da; padding: 24px; margin-bottom: 24px; border-radius: 4px; page-break-after: always; }}
-  .doc-block h1 {{ margin: 0 0 4px; font-size: 20px; }}
-  .doc-block h2 {{ font-size: 14px; background:#1f2933; color:#fff; padding: 6px 10px; border-radius: 2px; margin: 18px 0 8px; }}
-  .doc-block .ref {{ background:#fff3cd; display:inline-block; padding: 4px 8px; border-radius: 3px; font-weight: bold; margin-top: 4px; }}
-  .doc-block table.kv {{ width: 100%; border-collapse: collapse; }}
-  .doc-block table.kv th, .doc-block table.kv td {{ border: 1px solid #ced4da; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 13px; }}
-  .doc-block table.kv th {{ width: 35%; background:#f8f9fa; }}
-  .doc-block table.reg-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
-  .doc-block table.reg-table th, .doc-block table.reg-table td {{ border: 1px solid #ced4da; padding: 6px 8px; text-align: left; vertical-align: top; }}
-  .doc-block .signatures {{ display: flex; gap: 24px; margin-top: 32px; }}
-  .doc-block .signatures > div {{ flex:1; text-align:center; }}
-  .doc-block .sig-line {{ height: 50px; border-bottom: 1px solid #1f2933; margin-bottom: 6px; }}
-  .page-break {{ page-break-after: always; }}
-  @media print {{ .toolbar {{ display:none; }} .page-break {{ page-break-after: always; }} }}
-</style>
-</head>
-<body>
-  <div class="toolbar">
-    <strong>CASM Batch Documentation</strong> — {len(records)} report(s), format: {html.escape(fmt)}
-    <button onclick="window.print()" style="float:right;">🖨️ Print / Save as PDF</button>
-  </div>
-  {body}
-</body>
-</html>"""
-
-
-@app.route('/api/reports/batch-docs', methods=['POST'])
-def api_reports_batch_docs():
-    """Generate NCR and/or JKKP-7 documentation for a batch of reports."""
-    try:
-        payload = request.get_json(silent=True) or {}
-    except Exception:
-        payload = {}
-    raw_ids = payload.get('report_ids') or []
-    if not isinstance(raw_ids, list):
-        return jsonify({'error': 'report_ids must be an array'}), 400
-    fmt = str(payload.get('format') or 'both').strip().lower()
-    if fmt not in ('ncr', 'jkkp7', 'both'):
-        return jsonify({'error': "format must be 'ncr', 'jkkp7' or 'both'"}), 400
-
-    ids = [str(x).strip() for x in raw_ids if str(x).strip()]
-    if not ids:
-        return jsonify({'error': 'At least one report_id is required'}), 400
-    if len(ids) > 200:
-        return jsonify({'error': 'A maximum of 200 reports can be batched at once'}), 400
-
-    records: List[Dict[str, Any]] = []
-    missing: List[str] = []
-    for rid in ids:
-        rec = _gather_report_for_batch_doc(rid)
-        if rec is None:
-            missing.append(rid)
-        else:
-            records.append(rec)
-
-    if not records:
-        return jsonify({'error': 'None of the requested reports could be located.', 'missing': missing}), 404
-
-    html_doc = _render_batch_docs_html(records, fmt)
-    return Response(html_doc, mimetype='text/html')
-
 
 @app.route('/api/violation/<report_id>')
 def api_get_violation(report_id):
@@ -6234,7 +5989,7 @@ def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
     """One-shot migration: if a fresh CASM install lands on a machine that was
     previously provisioned under the old LUNA branding, copy the legacy state
     files (provision secret, machine_id) so the operator does not have to
-    request approval again. Safe to call repeatedly — only copies files that
+    request approval again. Safe to call repeatedly â€” only copies files that
     do not already exist in the new location.
     """
     try:
@@ -7314,7 +7069,7 @@ def api_local_mode_provisioning_status():
     # `status='idle'` (NOT empty), with `checked=False`. Without a
     # secret-protected lookup we can still resolve the device's true
     # status by querying the public device-provisioning DB directly by
-    # machine_id — that's the same lookup `/api/provision/status` does
+    # machine_id â€” that's the same lookup `/api/provision/status` does
     # after auth. No secrets are exposed; we only read the public
     # status field ('provisioned', 'approved', 'pending_approval',
     # 'rejected') the admin already controls.
@@ -7419,7 +7174,7 @@ def api_local_mode_installer_redirect():
     # PC's stored provision_secret embedded. Without this loopback gate, any
     # device on the LAN (e.g. a phone on the same Wi-Fi) could fetch the
     # installer for the host PC by hitting http://<PC-IP>:5000/api/local-mode/
-    # installer/redirect. Restrict to loopback only — this endpoint is
+    # installer/redirect. Restrict to loopback only â€” this endpoint is
     # intended exclusively for the host PC's own browser.
     _client_ip_raw = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or (request.remote_addr or '')
     _client_ip = _client_ip_raw.lower()
@@ -7709,13 +7464,13 @@ def _api_local_mode_auto_provisioning_impl():
         }), 502
 
     if status_response.status_code in (401, 404):
-        # PRV3 (relaxed) — A 401/404 from /api/provision/status can mean either:
+        # PRV3 (relaxed) â€” A 401/404 from /api/provision/status can mean either:
         #   (a) the admin deleted the device record (genuine revocation), OR
         #   (b) the cloud secret was rotated by a *different* caller (e.g. the
         #       Vercel browser session also requested provisioning while we held
         #       an older secret). The cloud's /api/provision/request endpoint
         #       only honours unauthenticated re-requests for devices whose
-        #       status is already 'approved'/'provisioned' — so attempting a
+        #       status is already 'approved'/'provisioned' â€” so attempting a
         #       re-request is safe: it will succeed only if the device is still
         #       legitimately approved on the cloud, otherwise it will fail and
         #       we then fall back to the genuine-rejection branch below.
@@ -7742,7 +7497,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_url': cloud_url,
             })
 
-        # Re-request failed — this is the genuine revoked/deleted case. Persist
+        # Re-request failed â€” this is the genuine revoked/deleted case. Persist
         # the rejection so the operator sees an actionable message instead of a
         # silent retry loop.
         if state.get('provision_secret'):
@@ -8500,7 +8255,7 @@ def api_provider_routing_settings():
             })
         except Exception as caption_err:
             logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
-            # M2 — surface the warning to the caller so the UI can show it
+            # M2 â€” surface the warning to the caller so the UI can show it
             caption_settings_warning = f"Caption provider settings could not be applied: {caption_err}"
 
         # Apply to active report generator immediately
@@ -10771,8 +10526,8 @@ def _normalize_report_footer_branding(html_content: str) -> str:
                 'CASM PPE Safety Monitor - FYPA AI Model Development & Integration',
             ),
             (
-                'Powered by YOLOv8 • LLaVA • Llama3 • Computer Vision',
-                'Powered by YOLO PPE Detection • Local + Cloud AI Routing • Supabase-backed Report Pipeline',
+                'Powered by YOLOv8 â€¢ LLaVA â€¢ Llama3 â€¢ Computer Vision',
+                'Powered by YOLO PPE Detection â€¢ Local + Cloud AI Routing â€¢ Supabase-backed Report Pipeline',
             ),
             (
                 'This NCR was auto-generated by CASM PPE Safety Monitor System',
@@ -10790,11 +10545,10 @@ def _normalize_report_footer_branding(html_content: str) -> str:
 def _repair_report_documentation_block(html_content: str, report_id: str) -> str:
         """Strip the legacy in-report NCR / JKKP-7 button block.
 
-        Official documentation is now generated from the dedicated Batch Docs
-        page so officers can export multiple reports at once. For older
-        reports that still embed the per-report buttons (and the malformed
-        generator scripts) we simply remove them on the way out so the page
-        renders cleanly.
+        Older reports embedded per-report 'Generate Official Documentation'
+        buttons and a small inline script. Those buttons depended on the
+        retired Batch Docs page; we strip them on the way out so the report
+        renders cleanly without dead UI.
         """
         if not html_content:
                 return html_content
@@ -10944,7 +10698,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
             # Do NOT auto-start the camera here. The camera must be explicitly started
             # via POST /api/live/start (i.e., the user must click Start). This prevents
             # the camera from opening on page load or any accidental stream URL access.
-            logger.info("Stream requested but no live source is active — ignoring (use /api/live/start)")
+            logger.info("Stream requested but no live source is active â€” ignoring (use /api/live/start)")
             return
         source_name = live_source_adapter.current_source
     
@@ -11018,7 +10772,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                         # Log detected violations
                         violation_classes = [d.get('class_name') for d in violation_detections]
                         logger.info("=" * 80)
-                        logger.info(f"🚨 PPE VIOLATION DETECTED: {violation_classes}")
+                        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_classes}")
                         logger.info(f"Caption generator available: {caption_generator is not None}")
                         logger.info(f"Report generator available: {report_generator is not None}")
                         logger.info(f"Violation queue available: {violation_queue is not None}")
@@ -11032,7 +10786,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                         
                         report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
                         if report_id:
-                            logger.info(f"✓ Violation {report_id} queued for processing")
+                            logger.info(f"âœ“ Violation {report_id} queued for processing")
                         else:
                             logger.debug("Violation not queued (cooldown or already processing)")
                 
@@ -11063,7 +10817,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
     except Exception as e:
         logger.error(f"Stream error: {e}")
     finally:
-        logger.info("Frame generation stopped — releasing camera")
+        logger.info("Frame generation stopped â€” releasing camera")
         with camera_lock:
             _stop_live_source_locked()
 
@@ -11305,7 +11059,7 @@ def upload_inference():
         # If violations detected, use queue system (consistent with live camera)
         if violation_detections and FULL_PIPELINE_AVAILABLE:
             violation_types = [d['class_name'] for d in violation_detections]
-            logger.info(f"🚨 Uploaded image violation detected: {violation_types}")
+            logger.info(f"ðŸš¨ Uploaded image violation detected: {violation_types}")
             
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
@@ -11313,10 +11067,10 @@ def upload_inference():
             queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='upload')
             report_queued = queued_report_id is not None
             if report_queued:
-                logger.info(f"📥 Violation queued for processing: {queued_report_id}")
+                logger.info(f"ðŸ“¥ Violation queued for processing: {queued_report_id}")
             else:
                 report_queue_reason = 'cooldown_or_already_processing'
-                logger.info("📭 Violation not queued (cooldown or already processing)")
+                logger.info("ðŸ“­ Violation not queued (cooldown or already processing)")
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
             report_queue_reason = 'pipeline_components_unavailable'
         
@@ -12041,7 +11795,7 @@ PROVISIONING_STATE_SCHEMA_LOCK = Lock()
 PROVISIONING_STATE_SCHEMA_READY = False
 
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
-# ADMIN_USERNAME — when non-empty, Basic-Auth username is also validated on all admin endpoints.
+# ADMIN_USERNAME â€” when non-empty, Basic-Auth username is also validated on all admin endpoints.
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '')
 # When False (default), /api/provision/request requires an X-Admin-Token header matching ADMIN_PASSWORD.
 # Set to '1'/'true'/'yes' only in isolated trusted networks where unauthenticated self-registration is acceptable.
@@ -13701,7 +13455,7 @@ def provision_request():
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
             rerequest_authenticated_by_secret = True
         else:
-            # Wrong secret on a known approved device → log and reject hard.
+            # Wrong secret on a known approved device â†’ log and reject hard.
             _append_device_audit_event(
                 machine_id,
                 'request_rejected_bad_secret',
@@ -13710,7 +13464,7 @@ def provision_request():
             )
             return jsonify({'error': 'Invalid provision_secret for this machine_id'}), 401
 
-    # PRV1 (hardened) — Require admin authorisation unless either:
+    # PRV1 (hardened) â€” Require admin authorisation unless either:
     #   (a) PROVISION_ALLOW_SELF_REGISTER=true (operator opt-in); or
     #   (b) this is a re-request for an approved/provisioned device AND the
     #       caller proved prior trust by presenting the current
@@ -14007,7 +13761,7 @@ def request_bootstrap_installer():
         if current_status not in ('approved', 'provisioned'):
             return _json_error('Device is not approved for installer access', 403)
 
-        # PRV4 — provision_secret is mandatory for device-initiated installer requests.
+        # PRV4 â€” provision_secret is mandatory for device-initiated installer requests.
         # Removing the "recovery convenience path" prevents unauthenticated callers who
         # only know a machine_id from downloading the installer package.
         if not provision_secret:
@@ -14545,17 +14299,17 @@ if __name__ == '__main__':
     logger.info("=" * 80)
     logger.info("")
     port = int(os.getenv('PORT', '5000'))
-    logger.info(f"🚀 Server starting at: http://localhost:{port}")
-    logger.info(f"🧭 Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
-    logger.info(f"🌐 Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
+    logger.info(f"ðŸš€ Server starting at: http://localhost:{port}")
+    logger.info(f"ðŸ§­ Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
+    logger.info(f"ðŸŒ Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
     logger.info("")
-    logger.info("📊 Features:")
+    logger.info("ðŸ“Š Features:")
     logger.info("   - Modern web interface")
     logger.info("   - Live webcam monitoring with YOLO")
     logger.info("   - Image upload inference")
     logger.info("   - Violation reports and analytics")
     logger.info("")
-    logger.info("🔗 Endpoints:")
+    logger.info("ðŸ”— Endpoints:")
     logger.info("   GET  /                          - Main frontend or API status")
     logger.info("   GET  /api/violations            - List violations")
     logger.info("   GET  /api/stats                 - Statistics")
@@ -14568,16 +14322,16 @@ if __name__ == '__main__':
     logger.info("=" * 80)
     
     # Kick off startup checks asynchronously so frontend can display live progress.
-    logger.info("🔧 Starting startup sequence thread...")
+    logger.info("ðŸ”§ Starting startup sequence thread...")
     ensure_startup_thread()
-    logger.info("ℹ️  Visit /api/system/startup-status to track readiness progress")
+    logger.info("â„¹ï¸  Visit /api/system/startup-status to track readiness progress")
     logger.info("")
     
     # Debug mode should ONLY be enabled for local development, NEVER in production
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     if debug_mode:
-        logger.warning("⚠️  Flask debug mode is ENABLED - This should ONLY be used for local development!")
-        logger.warning("⚠️  NEVER enable debug mode in production as it allows arbitrary code execution!")
+        logger.warning("âš ï¸  Flask debug mode is ENABLED - This should ONLY be used for local development!")
+        logger.warning("âš ï¸  NEVER enable debug mode in production as it allows arbitrary code execution!")
     
     app.run(
         host='0.0.0.0',

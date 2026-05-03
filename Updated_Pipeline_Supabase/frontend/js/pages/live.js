@@ -896,30 +896,65 @@ const LivePage = {
                         this.reportQueueSuppressionActive = false;
                         this.reportQueueSuppressionReason = null;
 
-                        // Fire the rich "PPE Violation Detected!" toast immediately at
-                        // the moment of detection instead of waiting for the polling
-                        // ViolationMonitor to pick it up after the report is generated.
+                        // Build a synthetic violation payload from the same frame's
+                        // detections so the rich "PPE Violation Detected!" toast and
+                        // the voice alert both fire at the moment of detection
+                        // instead of waiting for the polling ViolationMonitor.
+                        const detectedTypes = (Array.isArray(result.detections)
+                            ? result.detections
+                                .map(d => String(d && (d.class_name || d.class) || ''))
+                                .filter(name => name.toLowerCase().startsWith('no-'))
+                            : []);
+                        // Convert raw class names like "no-mask" into friendly
+                        // labels like "Mask" for the TTS / notification text.
+                        const friendlyMissing = detectedTypes.map(t => {
+                            const stripped = t.replace(/^no[-_]?/i, '').trim();
+                            if (!stripped) return t;
+                            return stripped.split(/[-_\s]+/).map(w =>
+                                w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w
+                            ).join(' ');
+                        });
+                        const synthViolation = {
+                            report_id: result.report_id,
+                            timestamp: new Date().toISOString(),
+                            severity: 'HIGH',
+                            missing_ppe: friendlyMissing,
+                            violation_type: friendlyMissing.length
+                                ? `Missing ${friendlyMissing.join(', ')}`
+                                : 'PPE Violation',
+                            violation_summary: friendlyMissing.length
+                                ? `PPE Violation Detected: Missing ${friendlyMissing.join(', ')}`
+                                : 'PPE Violation Detected'
+                        };
+
+                        // Fire the toast via the polling monitor's helper (it also
+                        // de-dupes against the report_id so polling won't show it
+                        // again). The audioAlert.js patch hooks the same helper, so
+                        // voice should fire automatically.
                         try {
                             if (typeof ViolationMonitor !== 'undefined'
                                 && typeof ViolationMonitor._notifyViolationDetected === 'function'
-                                && result.report_id) {
-                                const detectedTypes = (Array.isArray(result.detections)
-                                    ? result.detections
-                                        .map(d => String(d && (d.class_name || d.class) || ''))
-                                        .filter(name => name.toLowerCase().startsWith('no-'))
-                                    : []);
-                                ViolationMonitor._notifyViolationDetected({
-                                    report_id: result.report_id,
-                                    timestamp: new Date().toISOString(),
-                                    severity: 'HIGH',
-                                    missing_ppe: detectedTypes,
-                                    violation_summary: detectedTypes.length
-                                        ? `PPE Violation Detected: ${detectedTypes.join(', ')}`
-                                        : 'PPE Violation Detected'
-                                });
+                                && synthViolation.report_id) {
+                                ViolationMonitor._notifyViolationDetected(synthViolation);
                             }
                         } catch (notifyErr) {
                             console.warn('Could not fire immediate violation notification:', notifyErr);
+                        }
+
+                        // Belt-and-suspenders: directly trigger the voice alert too
+                        // in case audioAlert.js had not yet patched ViolationMonitor
+                        // when the first live capture fired (race on first load).
+                        // speakViolation has its own per-reportId dedup so this is
+                        // safe even if the patched path also runs.
+                        try {
+                            if (typeof window !== 'undefined'
+                                && window.AudioAlert
+                                && typeof window.AudioAlert.speakViolation === 'function'
+                                && synthViolation.report_id) {
+                                window.AudioAlert.speakViolation(synthViolation);
+                            }
+                        } catch (audioErr) {
+                            console.warn('Could not fire voice alert directly:', audioErr);
                         }
                     }
                     if (result.report_queued === false) {

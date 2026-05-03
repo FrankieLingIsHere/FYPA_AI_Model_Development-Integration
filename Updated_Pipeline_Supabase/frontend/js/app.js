@@ -665,7 +665,6 @@ async function initializeWithStartupGate() {
     Router.register('home', HomePage);
     Router.register('live', LivePage);
     Router.register('reports', ReportsPage);
-    Router.register('batch-docs', typeof BatchDocsPage !== 'undefined' ? BatchDocsPage : ReportsPage);
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);
     initializeProvisioningStatusTracker();

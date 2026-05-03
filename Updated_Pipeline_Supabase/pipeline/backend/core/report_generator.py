@@ -1,4 +1,4 @@
-﻿"""
+"""
 Report Generator - NLP-powered report generation with RAG
 ==========================================================
 
@@ -3078,11 +3078,6 @@ RESPONSE FORMAT (JSON):
 
                     <!-- Individual Person Analysis -->
                     {self._generate_person_cards_section(nlp_analysis, report_data)}
-
-                    <!-- Official documentation (NCR / JKKP-7) is now generated
-                         from the dedicated Batch Docs page so officers can
-                         export multiple reports in one go with proper
-                         filtering by timeline / status / violation type. -->
                 </div>
 
                 <div class="report-split-bottom">
@@ -3096,8 +3091,6 @@ RESPONSE FORMAT (JSON):
         </div>
         
         <script>
-        // (NCR / JKKP-7 generators removed; superseded by Batch Docs page.)
-
         (function initReportExpandToggle() {{
             const splitCard = document.getElementById('reportSplitCard');
             const toggle = document.getElementById('reportExpandToggle');

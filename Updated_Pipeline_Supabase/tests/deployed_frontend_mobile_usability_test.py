@@ -56,8 +56,9 @@ def ensure_nav_visible(page, page_name: str):
     if toggle:
         toggle.click()
         page.wait_for_timeout(220)
+        _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220)
 
-    if not _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220):
+    if not _find_visible_nav(page, nav_selector):
         raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 

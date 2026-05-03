@@ -1042,6 +1042,29 @@ LOCAL_PENDING_RECOVERY_SCAN_LIMIT = max(
     20,
     int(os.getenv('LOCAL_PENDING_RECOVERY_SCAN_LIMIT', '300') or 300)
 )
+# Cloud-mode recovery: auto-requeue reports that have their original image in
+# Supabase storage but never got a report.html generated (e.g. interrupted by
+# a Railway restart mid-processing).
+CLOUD_PENDING_RECOVERY_ENABLED = os.getenv(
+    'CLOUD_PENDING_RECOVERY_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS = max(
+    60,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS', '300') or 300)
+)
+CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES = max(
+    5,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES', '20') or 20)
+)
+CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = max(
+    1,
+    min(20, int(os.getenv('CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP', '3') or 3))
+)
+CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD = max(
+    1,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD', '8') or 8)
+)
 supabase_runtime_recovery_lock = Lock()
 last_supabase_runtime_recovery_epoch = 0.0
 SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
@@ -2357,7 +2380,201 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
     return summary
 
 
-def start_queue_worker_watchdog() -> bool:
+def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str, Any]:
+    """
+    Cloud-mode counterpart to _run_local_pending_recovery_sweep.
+
+    Finds detection_events that are stuck in pending/generating status because
+    their report was never finished (e.g. Railway restarted mid-processing) but
+    whose original image is safely stored in Supabase storage.  Downloads the
+    image to the local violations directory and re-enqueues the report so the
+    queue worker can finish it without any manual intervention.
+    """
+    summary: Dict[str, Any] = {
+        'reason': reason,
+        'scanned': 0,
+        'enqueued': 0,
+        'skipped_queue_busy': 0,
+        'skipped_already_queued': 0,
+        'skipped_download_failed': 0,
+        'skipped_enqueue_failed': 0,
+        'skipped_queue_unavailable': 0,
+    }
+
+    if not CLOUD_PENDING_RECOVERY_ENABLED:
+        return summary
+
+    if db_manager is None or not hasattr(db_manager, 'get_cloud_pending_recovery_candidates'):
+        return summary
+
+    if storage_manager is None:
+        return summary
+
+    if not _ensure_violation_queue_runtime_ready(reason=f'cloud_pending_recovery:{reason}'):
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    if violation_queue is None:
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    try:
+        queue_size_now = int(violation_queue.get_queue_size() or 0)
+    except Exception:
+        queue_size_now = 0
+
+    if queue_size_now >= CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD:
+        summary['skipped_queue_busy'] = 1
+        return summary
+
+    try:
+        candidates = db_manager.get_cloud_pending_recovery_candidates(
+            min_age_minutes=CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES,
+            limit=CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP,
+        )
+    except Exception as query_err:
+        logger.debug(f"Cloud pending recovery candidate query failed ({reason}): {query_err}")
+        return summary
+
+    tz_info = get_timezone_info()
+    now_epoch = time.time()
+
+    for candidate in candidates:
+        if summary['enqueued'] >= CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP:
+            break
+
+        report_id = str(candidate.get('report_id') or '').strip()
+        if not report_id:
+            continue
+
+        summary['scanned'] += 1
+
+        if violation_queue.is_report_queued(report_id):
+            summary['skipped_already_queued'] += 1
+            continue
+
+        original_image_key = candidate.get('original_image_key')
+        annotated_image_key = candidate.get('annotated_image_key')
+
+        # Ensure local violation directory exists.
+        violation_dir = VIOLATIONS_DIR / report_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+
+        # Download original image from Supabase storage if not already on disk.
+        if not original_path.exists():
+            try:
+                blob = storage_manager.download_file_content(original_image_key)
+                if not blob:
+                    raise ValueError('Empty download')
+                if isinstance(blob, str):
+                    blob = blob.encode('utf-8')
+                original_path.write_bytes(blob)
+            except Exception as dl_err:
+                logger.warning(
+                    f"Cloud pending recovery: could not download original for {report_id}: {dl_err}"
+                )
+                summary['skipped_download_failed'] += 1
+                continue
+
+        # Optionally download annotated image too.
+        if annotated_image_key and not annotated_path.exists():
+            try:
+                blob = storage_manager.download_file_content(annotated_image_key)
+                if blob:
+                    if isinstance(blob, str):
+                        blob = blob.encode('utf-8')
+                    annotated_path.write_bytes(blob)
+            except Exception:
+                pass  # Annotated image is optional; fall back to original.
+
+        effective_annotated = annotated_path if annotated_path.exists() else original_path
+
+        # Reconstruct detection payload from stored data.
+        raw_detection_data = candidate.get('detection_data') or {}
+        if isinstance(raw_detection_data, str):
+            try:
+                raw_detection_data = json.loads(raw_detection_data)
+            except Exception:
+                raw_detection_data = {}
+        detections: List[Dict[str, Any]] = []
+        if isinstance(raw_detection_data, dict):
+            raw_det = raw_detection_data.get('detections')
+            if isinstance(raw_det, list):
+                detections = [d for d in raw_det if isinstance(d, dict)]
+
+        violation_types, resolved_count = _resolve_violation_types_and_count(
+            detections,
+            event=None,
+            violation_summary=None,
+            fallback_count=None,
+        )
+
+        try:
+            report_ts = candidate.get('timestamp')
+            if report_ts:
+                timestamp_iso = report_ts.isoformat() if hasattr(report_ts, 'isoformat') else str(report_ts)
+            else:
+                timestamp_iso = datetime.fromtimestamp(now_epoch, tz=tz_info).isoformat()
+        except Exception:
+            timestamp_iso = datetime.now(tz_info).isoformat()
+
+        queue_payload = {
+            'report_id': report_id,
+            'timestamp': timestamp_iso,
+            'detections': detections,
+            'violation_types': violation_types,
+            'violation_count': resolved_count,
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(effective_annotated),
+            'violation_dir': str(violation_dir),
+            'source_scope': 'cloud',
+            'sync_source': 'cloud_pending_recovery',
+            'source': 'cloud_pending_recovery',
+            'allow_placeholder_report': True,
+        }
+
+        recovery_device_id = f"cloud_recovery_{report_id}_{time.time_ns()}"
+
+        if not ensure_queue_worker_running():
+            summary['skipped_queue_unavailable'] += 1
+            break
+
+        enqueued = violation_queue.enqueue(
+            violation_data=queue_payload,
+            device_id=recovery_device_id,
+            report_id=report_id,
+            severity='HIGH',
+            expedite=False,
+        )
+
+        if not enqueued:
+            summary['skipped_enqueue_failed'] += 1
+            continue
+
+        summary['enqueued'] += 1
+        logger.info(
+            f"Cloud pending recovery ({reason}): re-enqueued {report_id} "
+            f"(original_image_key={original_image_key})"
+        )
+
+        if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'pending',
+                    f"Queued for cloud recovery ({reason})"
+                )
+            except Exception as status_err:
+                logger.debug(
+                    f"Could not update detection status during cloud recovery for {report_id}: {status_err}"
+                )
+
+    return summary
+
+
+
     """Start watchdog thread that keeps queue worker healthy without manual intervention."""
     global queue_worker_watchdog_thread, queue_worker_watchdog_running
 
@@ -2538,6 +2755,7 @@ def queue_worker_loop():
     last_supabase_recovery_check_epoch = 0.0
     last_stuck_report_sweep_epoch = 0.0
     last_local_pending_recovery_sweep_epoch = 0.0
+    last_cloud_pending_recovery_sweep_epoch = 0.0
     # Delay first autosync attempt to avoid startup burst from historical cache.
     last_supabase_auto_sync_epoch = time.time()
 
@@ -2614,6 +2832,25 @@ def queue_worker_loop():
                     if enqueued_count > 0:
                         logger.info(
                             f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
+                        )
+
+            if (
+                CLOUD_PENDING_RECOVERY_ENABLED
+                and now_epoch - last_cloud_pending_recovery_sweep_epoch >= CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS
+            ):
+                last_cloud_pending_recovery_sweep_epoch = now_epoch
+                # Cloud pending recovery: in cloud mode, find reports whose
+                # original image is in Supabase storage but whose report.html
+                # was never generated (e.g. Railway restarted mid-processing).
+                # Downloads the image and re-enqueues so they complete without
+                # user intervention.
+                _cloud_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+                if _cloud_routing != 'local':
+                    cloud_recovery_summary = _run_cloud_pending_recovery_sweep(reason='queue_worker')
+                    cloud_enqueued = int(cloud_recovery_summary.get('enqueued', 0) or 0)
+                    if cloud_enqueued > 0:
+                        logger.info(
+                            f"Cloud pending recovery queued {cloud_enqueued} stale cloud report(s) for re-generation"
                         )
 
             if violation_queue is None:

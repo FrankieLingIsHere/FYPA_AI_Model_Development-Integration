@@ -473,12 +473,16 @@ class SupabaseDatabaseManager:
     def fix_stuck_reports(self) -> int:
         """
         Fix reports stuck in pending/generating status by checking actual data.
-        
-        This checks each report's actual state:
-        - If has report_html_key -> completed
-        - If has violation record but no report -> failed (likely timed out)
-        - If no violation record and old -> failed
-        
+
+        Decision table (evaluated in order):
+        - Has report_html_key                           → completed
+        - Has original_image_key (recoverable in cloud) → leave as-is; cloud
+          recovery sweep will auto-enqueue (don't mark failed)
+        - Has violation record, no recoverable image,
+          older than STUCK_REPORT_AGE_MINUTES           → failed
+        - No violation record at all,
+          older than STUCK_REPORT_AGE_MINUTES           → failed
+
         Returns:
             Number of reports fixed
         """
@@ -486,7 +490,12 @@ class SupabaseDatabaseManager:
         fixed_count = 0
         statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
         lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '5000'))
-        
+        # How long a report must be stuck before we declare it failed.
+        # Default 20 min — long enough to survive Railway cold-start + worker
+        # startup, which previously caused all in-flight reports to be swept to
+        # 'failed' immediately after every deployment/restart.
+        stuck_age_minutes = max(5, int(os.getenv('STUCK_REPORT_AGE_MINUTES', '20') or 20))
+
         try:
             with self.conn.cursor() as cur:
                 # Avoid blocking startup indefinitely on locks/slow queries.
@@ -499,8 +508,9 @@ class SupabaseDatabaseManager:
                         de.timestamp,
                         de.status,
                         v.id as violation_id,
-                        v.report_html_key,
-                        v.annotated_image_key
+                        v.original_image_key,
+                        v.annotated_image_key,
+                        v.report_html_key
                     FROM public.detection_events de
                     LEFT JOIN public.violations v ON de.report_id = v.report_id
                     WHERE de.status IS NULL 
@@ -508,37 +518,44 @@ class SupabaseDatabaseManager:
                        OR de.status = 'generating'
                        OR de.status = 'unknown'
                 """)
-                
+
                 stuck_reports = cur.fetchall()
-                
+
                 for report in stuck_reports:
                     report_id = report['report_id']
                     has_violation = report['violation_id'] is not None
-                    has_report = report['report_html_key'] is not None
+                    has_original = report['original_image_key'] is not None
                     has_annotated = report['annotated_image_key'] is not None
+                    has_report = report['report_html_key'] is not None
                     report_time = report['timestamp']
-                    
+
+                    is_old = (
+                        report_time is not None
+                        and (datetime.now(timezone.utc) - report_time) > timedelta(minutes=stuck_age_minutes)
+                    )
+
                     # Determine correct status
                     new_status = None
-                    
+
                     if has_report:
-                        # Has full report - mark completed
+                        # Full report uploaded — mark completed regardless of age.
                         new_status = 'completed'
-                    elif has_violation and has_annotated:
-                        # Has violation record with annotated image but no report
-                        # Check if it's old (more than 5 minutes) - likely failed
-                        if report_time and (datetime.now(timezone.utc) - report_time) > timedelta(minutes=5):
-                            new_status = 'partial'  # Has some data but incomplete
-                        # else leave as generating - might still be processing
-                    elif has_violation:
-                        # Has violation record but no images/report
-                        if report_time and (datetime.now(timezone.utc) - report_time) > timedelta(minutes=5):
-                            new_status = 'failed'
-                    else:
-                        # No violation record at all
-                        if report_time and (datetime.now(timezone.utc) - report_time) > timedelta(minutes=5):
-                            new_status = 'failed'  # Timed out without generating anything
-                    
+                    elif has_original:
+                        # Original image exists in cloud storage → the report is
+                        # recoverable by the cloud-pending-recovery sweep.
+                        # Do NOT mark as failed; leave as pending so the sweep
+                        # can re-enqueue it automatically.
+                        pass
+                    elif has_violation and has_annotated and is_old:
+                        # Annotated image exists but no original/report and truly old.
+                        new_status = 'partial'
+                    elif has_violation and not has_original and is_old:
+                        # Violation row exists but no recoverable image and truly old.
+                        new_status = 'failed'
+                    elif not has_violation and is_old:
+                        # No violation record created at all and truly old.
+                        new_status = 'failed'
+
                     if new_status:
                         try:
                             cur.execute("""
@@ -550,15 +567,68 @@ class SupabaseDatabaseManager:
                             logger.info(f"Fixed stuck report {report_id}: {report['status']} -> {new_status}")
                         except Exception as e:
                             logger.warning(f"Could not fix report {report_id}: {e}")
-                
+
                 self.conn.commit()
                 logger.info(f"Fixed {fixed_count} stuck reports")
-                
+
         except Exception as e:
             self.conn.rollback()
             logger.warning(f"Could not fix stuck reports: {e}")
-        
+
         return fixed_count
+
+    def get_cloud_pending_recovery_candidates(
+        self,
+        min_age_minutes: int = 20,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return stuck pending/generating reports that have an original image in
+        cloud storage but no report HTML yet.  These are safely recoverable by
+        downloading the image and re-running the report worker.
+
+        Args:
+            min_age_minutes: Minimum age (minutes) before a report is
+                considered stalled and eligible for recovery.
+            limit: Maximum number of candidates to return per call.
+
+        Returns:
+            List of dicts with keys: report_id, original_image_key,
+            annotated_image_key, detection_data, timestamp, status.
+        """
+        self._ensure_connection()
+        statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
+        lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '5000'))
+        safe_limit = max(1, min(50, int(limit)))
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
+                cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
+                cur.execute("""
+                    SELECT
+                        de.report_id,
+                        de.timestamp,
+                        de.status,
+                        v.original_image_key,
+                        v.annotated_image_key,
+                        v.detection_data
+                    FROM public.detection_events de
+                    JOIN public.violations v ON de.report_id = v.report_id
+                    WHERE (de.status IS NULL OR de.status IN ('pending', 'generating', 'unknown'))
+                      AND v.original_image_key IS NOT NULL
+                      AND v.report_html_key IS NULL
+                      AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                    ORDER BY de.timestamp ASC
+                    LIMIT %s
+                """, (min_age_minutes, safe_limit))
+                rows = cur.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_cloud_pending_recovery_candidates')
+            logger.warning(f"get_cloud_pending_recovery_candidates failed: {e}")
+            return []
     
     def get_detection_event(self, report_id: str) -> Optional[Dict[str, Any]]:
         """

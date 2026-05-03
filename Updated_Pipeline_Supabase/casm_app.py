@@ -2449,6 +2449,29 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
 
         summary['scanned'] += 1
 
+        # Guard: skip any report that originated from a local-mode pipeline
+        # even if the SQL filter missed it (e.g. detection_data stored as
+        # string or cast differently on some rows).
+        raw_dd = candidate.get('detection_data') or {}
+        if isinstance(raw_dd, str):
+            try:
+                raw_dd = json.loads(raw_dd)
+            except Exception:
+                raw_dd = {}
+        if isinstance(raw_dd, dict):
+            _cand_scope = str(raw_dd.get('source_scope') or '').strip().lower()
+            _cand_sync = str(raw_dd.get('sync_source') or '').strip().lower()
+            _local_sync_sources = {
+                'sync_local_cache', 'local_cache', 'local_cache_sync',
+                'local_pending_recovery', 'local', 'auto_reconnect',
+            }
+            if _cand_scope == 'local' or _cand_sync in _local_sync_sources:
+                logger.debug(
+                    f"Cloud pending recovery: skipping local-origin report "
+                    f"{report_id} (source_scope={_cand_scope!r}, sync_source={_cand_sync!r})"
+                )
+                continue
+
         if violation_queue.is_report_queued(report_id):
             summary['skipped_already_queued'] += 1
             continue

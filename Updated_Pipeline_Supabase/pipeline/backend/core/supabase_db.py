@@ -625,6 +625,19 @@ class SupabaseDatabaseManager:
                       AND v.original_image_key IS NOT NULL
                       AND v.report_html_key IS NULL
                       AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                      AND (
+                          v.detection_data IS NULL
+                          OR v.detection_data->>'source_scope' IS NULL
+                          OR v.detection_data->>'source_scope' = 'cloud'
+                      )
+                      AND (
+                          v.detection_data IS NULL
+                          OR v.detection_data->>'sync_source' IS NULL
+                          OR v.detection_data->>'sync_source' NOT IN (
+                              'sync_local_cache', 'local_cache', 'local_cache_sync',
+                              'local_pending_recovery', 'local', 'auto_reconnect'
+                          )
+                      )
                     ORDER BY de.timestamp ASC
                     LIMIT %s
                 """, (min_age_minutes, safe_limit))

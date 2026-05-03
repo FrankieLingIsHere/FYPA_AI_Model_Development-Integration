@@ -2230,32 +2230,64 @@ const GlobalSettingsModal = {
 
                 // Path C — page is on the cloud frontend (Vercel) but the browser's
                 // sessionStorage has no provision_secret (e.g. cleared by an earlier
-                // rejected flow, or a fresh browser session). The local backend on
-                // localhost:5000 still has a valid provision_secret on disk that was
-                // written by the BAT installer at provisioning time. Navigate to the
-                // local backend's installer-redirect endpoint, which will validate
-                // against the cloud and 302 the browser straight to the cloud
-                // installer URL. This is loopback-only on the local backend so it
-                // is safe.
+                // rejected flow, or a fresh browser session). If a local backend is
+                // running on localhost:5000 it has the provision_secret on disk and
+                // can 302 us to the cloud installer URL via its loopback-only
+                // installer/redirect endpoint. We must PROBE first — top-level
+                // navigation to a non-running localhost shows a confusing
+                // "site can't be reached" page, so only redirect if the probe
+                // confirms the local backend is up.
                 if (isRemoteBackend) {
                     const localBase = String(
                         (window.API_CONFIG && window.API_CONFIG.LOCAL_BACKEND_URL)
                         || 'http://localhost:5000'
                     ).replace(/\/+$/, '');
-                    const localProxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
-                    // Top-level navigation HTTPS → HTTP localhost is permitted by
-                    // current browsers (mixed-content downgrade only applies to
-                    // sub-resources / fetch). If the local backend isn't running
-                    // the browser will show a "site can't be reached" page and the
-                    // user can re-attempt after starting the local backend.
-                    window.location.assign(localProxyUrl);
+                    let localBackendUp = false;
+                    try {
+                        const probeController = new AbortController();
+                        const probeTimer = setTimeout(() => probeController.abort(), 1500);
+                        // Use no-cors so a cross-origin HTTPS→HTTP-localhost probe
+                        // doesn't get rejected by CORS preflight. With no-cors,
+                        // a reachable server yields an opaque response (status 0)
+                        // and only true network errors / timeouts throw.
+                        const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
+                            cache: 'no-store',
+                            signal: probeController.signal,
+                            mode: 'no-cors'
+                        }).finally(() => clearTimeout(probeTimer));
+                        if (probeResp) {
+                            localBackendUp = true;
+                        }
+                    } catch (probeErr) {
+                        localBackendUp = false;
+                    }
+
+                    if (localBackendUp) {
+                        const localProxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+                        window.location.assign(localProxyUrl);
+                        return;
+                    }
+
+                    // No local backend reachable AND no browser secret → the user has
+                    // no credentials to authenticate the device-flow installer
+                    // download. Clear, actionable guidance is the only safe option:
+                    // they must either (a) start the local backend so the disk
+                    // secret can be used, or (b) re-run Local Mode Checkup which
+                    // will repopulate sessionStorage with the provision_secret.
+                    this.showNotification(
+                        'Cannot download installer: this browser has no stored provisioning '
+                        + 'credentials and the local backend on localhost:5000 is not running. '
+                        + 'Either start the local backend (run start.bat) and try again, or '
+                        + 'open this dashboard from the local backend URL to re-run Local Mode '
+                        + 'Checkup.',
+                        'error'
+                    );
                     return;
                 }
 
                 this.showNotification(
-                    isRemoteBackend
-                        ? 'Provisioning credentials not found in this browser session. Run Local Mode Checkup first, then re-download.'
-                        : 'Local backend is offline and stored cloud credentials are missing. Run Local Mode Checkup, then try again.',
+                    'Local backend is offline and stored cloud credentials are missing. '
+                    + 'Run Local Mode Checkup, then try again.',
                     'error'
                 );
             });

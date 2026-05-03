@@ -501,7 +501,10 @@ class SupabaseDatabaseManager:
                 # Avoid blocking startup indefinitely on locks/slow queries.
                 cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
                 cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
-                # Get all reports with pending or generating status (or NULL/unknown)
+                # Scan pending/generating/unknown AND failed — a report
+                # already marked 'failed' that actually has report_html_key
+                # (e.g. wrongly swept by a previous server restart) must be
+                # promoted back to 'completed'.
                 cur.execute("""
                     SELECT 
                         de.report_id,
@@ -517,6 +520,8 @@ class SupabaseDatabaseManager:
                        OR de.status = 'pending' 
                        OR de.status = 'generating'
                        OR de.status = 'unknown'
+                       OR de.status = 'failed'
+                       OR de.status = 'partial'
                 """)
 
                 stuck_reports = cur.fetchall()
@@ -615,7 +620,8 @@ class SupabaseDatabaseManager:
                         v.detection_data
                     FROM public.detection_events de
                     JOIN public.violations v ON de.report_id = v.report_id
-                    WHERE (de.status IS NULL OR de.status IN ('pending', 'generating', 'unknown'))
+                    WHERE (de.status IS NULL OR de.status IN
+                           ('pending', 'generating', 'unknown', 'failed', 'partial'))
                       AND v.original_image_key IS NOT NULL
                       AND v.report_html_key IS NULL
                       AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)

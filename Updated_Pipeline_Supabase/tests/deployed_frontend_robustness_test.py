@@ -546,28 +546,18 @@ def main() -> int:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(viewport={"width": 1440, "height": 900})
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"]
+            )
+            context = browser.new_context(
+                viewport={"width": 1440, "height": 900},
+                permissions=["camera"]
+            )
             context.add_init_script(
                 """
                 () => {
                     window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK = true;
-                    if (!navigator.mediaDevices) {
-                        navigator.mediaDevices = {};
-                    }
-                    navigator.mediaDevices.getUserMedia = async () => {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = 32;
-                        canvas.height = 24;
-                        const stream = typeof canvas.captureStream === 'function' ? canvas.captureStream(1) : null;
-                        if (stream) {
-                            return stream;
-                        }
-                        return {
-                            getTracks: () => [],
-                            getVideoTracks: () => []
-                        };
-                    };
                 }
                 """
             )

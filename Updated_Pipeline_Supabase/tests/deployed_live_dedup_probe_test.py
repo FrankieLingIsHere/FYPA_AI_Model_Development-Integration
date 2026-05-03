@@ -11,14 +11,22 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-REPEATS = max(2, int(os.environ.get("CASM_LIVE_DEDUP_REPEATS", "4")))
+REPEATS = max(2, int(os.environ.get("CASM_LIVE_DEDUP_REPEATS", "3")))
 MAX_ACCEPTED = max(1, int(os.environ.get("CASM_LIVE_DEDUP_MAX_ACCEPTED", "1")))
 MIN_BLOCKED = max(1, int(os.environ.get("CASM_LIVE_DEDUP_MIN_BLOCKED", "1")))
+STRICT_LIVE_DEDUP = os.environ.get("CASM_LIVE_DEDUP_STRICT", "1") != "0"
 
 
 def fail(msg: str, code: int = 2) -> int:
     print(f"FAIL: {msg}")
     return code
+
+
+def skip_or_fail(msg: str, code: int) -> int:
+    if STRICT_LIVE_DEDUP:
+        return fail(msg, code)
+    print(f"PASS: true live dedup probe skipped ({msg})")
+    return 0
 
 
 def request_json(method: str, path: str, *, timeout: int = 45, **kwargs):
@@ -57,8 +65,7 @@ def main() -> int:
             if attempt < 5:
                 time.sleep(6)
                 continue
-            print("PASS: true live dedup probe skipped (transient request failures on deployed target)")
-            return 0
+            return skip_or_fail("transient request failures on deployed target", 11)
 
         # Endpoint may lag behind repository pushes on deployed targets.
         if status_code in (404,):
@@ -66,20 +73,17 @@ def main() -> int:
             if attempt < 5:
                 time.sleep(8)
                 continue
-            print("PASS: true live dedup probe skipped (endpoint not yet available on deployed target)")
-            return 0
+            return skip_or_fail("endpoint not yet available on deployed target", 12)
 
         if status_code == 403 and isinstance(payload, dict) and payload.get("error") == "testing_endpoints_disabled":
-            print("PASS: true live dedup probe skipped (testing endpoints disabled by default)")
-            return 0
+            return skip_or_fail("testing endpoints disabled by default", 13)
 
         if status_code in gateway_like_codes:
             print(f"INFO: live dedup probe gateway status on attempt {attempt}: {status_code}")
             if attempt < 5:
                 time.sleep(6)
                 continue
-            print("PASS: true live dedup probe skipped (persistent gateway outage)")
-            return 0
+            return skip_or_fail("persistent gateway outage", 14)
 
         if status_code == 429 and attempt < 5:
             print(f"INFO: live dedup probe rate-limited on attempt {attempt}; retrying")

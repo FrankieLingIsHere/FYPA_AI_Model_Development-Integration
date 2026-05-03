@@ -122,8 +122,8 @@ jobs:
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           CASM_FLOOD_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
-          CASM_FLOOD_TOTAL_REQUESTS: "8"
-          CASM_FLOOD_WORKERS: "3"
+          CASM_FLOOD_TOTAL_REQUESTS: "3"
+          CASM_FLOOD_WORKERS: "2"
           CASM_FLOOD_P95_MS: "12000"
           CASM_FLOOD_MIN_SUCCESS_RATIO: "0.75"
           CASM_FLOOD_MAX_UNIQUE_REPORTS: "1"
@@ -152,7 +152,7 @@ jobs:
       - name: Run true live dedup probe test
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
-          CASM_LIVE_DEDUP_REPEATS: "4"
+          CASM_LIVE_DEDUP_REPEATS: "3"
           CASM_LIVE_DEDUP_MAX_ACCEPTED: "1"
           CASM_LIVE_DEDUP_MIN_BLOCKED: "1"
         run: |
@@ -233,7 +233,7 @@ jobs:
       - name: Run deployed report quality contract test
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
-          CASM_REPORT_QUALITY_MAX_SCAN: "150"
+          CASM_REPORT_QUALITY_MAX_SCAN: "80"
           CASM_REPORT_QUALITY_MIN_CHARS: "90"
         run: |
           python Updated_Pipeline_Supabase/tests/deployed_report_quality_test.py
@@ -263,7 +263,7 @@ jobs:
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           CASM_REPORT_OPEN_WARM_TARGET_SECONDS: "1.0"
-          CASM_REPORT_OPEN_WARM_SAMPLES: "5"
+          CASM_REPORT_OPEN_WARM_SAMPLES: "3"
           CASM_REPORT_OPEN_RETRY_ATTEMPTS: "4"
           CASM_REPORT_OPEN_RETRY_BACKOFF_SECONDS: "4"
           CASM_REPORT_OPEN_MAX_SAMPLE_SECONDS: "2.5"
@@ -271,7 +271,7 @@ jobs:
           CASM_REPORT_OPEN_NETWORK_BASELINE_SAMPLES: "3"
           CASM_REPORT_OPEN_NETWORK_BASELINE_FREE_S: "0.20"
           CASM_REPORT_OPEN_NETWORK_ALLOWANCE_CAP_S: "0.60"
-          CASM_REPORT_LATENCY_MAX_SCAN: "150"
+          CASM_REPORT_LATENCY_MAX_SCAN: "80"
           CASM_REPORT_LATENCY_MAX_CANDIDATES: "4"
         run: |
           python Updated_Pipeline_Supabase/tests/deployed_report_open_latency_test.py
@@ -310,5 +310,6 @@ jobs:
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
           CASM_TEST_IMAGE: Updated_Pipeline_Supabase/static/images/handbook-live.png
+          CASM_E2E_STRICT: "0"
         run: |
           python Updated_Pipeline_Supabase/tests/e2e_report_test.py

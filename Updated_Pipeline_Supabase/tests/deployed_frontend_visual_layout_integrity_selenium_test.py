@@ -11,9 +11,8 @@ MAX_WAIT_SECONDS = int(os.environ.get("CASM_FRONTEND_VISUAL_MAX_WAIT_SECONDS", "
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Keep deployed visual placement check non-blocking like existing frontend action tests.
-    print(f"INFO: non-blocking selenium visual placement issue: {message}")
-    return 0
+    print(f"FAIL: selenium visual placement issue: {message}")
+    return code
 
 
 def main() -> int:

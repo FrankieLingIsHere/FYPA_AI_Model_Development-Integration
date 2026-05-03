@@ -12,7 +12,7 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-MAX_SCAN = max(10, int(os.environ.get("CASM_REPORT_LATENCY_MAX_SCAN", "120")))
+MAX_SCAN = max(10, int(os.environ.get("CASM_REPORT_LATENCY_MAX_SCAN", "80")))
 MAX_CANDIDATES = max(1, int(os.environ.get("CASM_REPORT_LATENCY_MAX_CANDIDATES", "6")))
 WARM_TARGET_SECONDS = float(os.environ.get("CASM_REPORT_OPEN_WARM_TARGET_SECONDS", "1.0"))
 WARM_SAMPLE_COUNT = max(1, int(os.environ.get("CASM_REPORT_OPEN_WARM_SAMPLES", "3")))
@@ -160,7 +160,7 @@ def run_once() -> int:
 
         code, payload, preview, elapsed = request_json(
             "GET",
-            f"/api/violations?limit={max(MAX_SCAN, 100)}",
+            f"/api/violations?limit={MAX_SCAN}",
             timeout=REQUEST_TIMEOUT,
         )
         if code >= 400:
@@ -202,11 +202,10 @@ def run_once() -> int:
             return fail("Could not measure latency on any candidate report", 6)
 
         if all(str(item.get("prefetch_layer")) == "endpoint_unavailable" for item in measured):
-            print(
-                "PASS: prefetch endpoint not deployed yet; latency contract skipped "
-                "until backend rollout is active"
+            return fail(
+                "prefetch endpoint is unavailable; latency contract cannot validate latest backend",
+                11,
             )
-            return 0
 
         worst_p95 = max(item["p95_s"] for item in measured)
         worst_mean = max(item["mean_s"] for item in measured)

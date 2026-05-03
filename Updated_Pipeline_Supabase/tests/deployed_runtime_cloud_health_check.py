@@ -12,7 +12,7 @@ BASE_URL = os.environ.get(
 
 EXPECTED_ROUTING_PROFILE = os.environ.get("CASM_EXPECT_ROUTING_PROFILE", "cloud").strip().lower()
 EXPECTED_NLP_PROVIDER = os.environ.get("CASM_EXPECT_NLP_PROVIDER", "gemini").strip().lower()
-STRICT_RUNTIME = str(os.environ.get("CASM_RUNTIME_HEALTH_STRICT", "0")).strip().lower() in {
+STRICT_RUNTIME = str(os.environ.get("CASM_RUNTIME_HEALTH_STRICT", "1")).strip().lower() in {
     "1",
     "true",
     "yes",

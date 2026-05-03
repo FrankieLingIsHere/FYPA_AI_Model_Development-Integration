@@ -4,17 +4,25 @@ import unittest
 import base64
 import json
 import re
+import tempfile
 from unittest.mock import patch, Mock
 
 # Ensure we can import casm_app (file is in tests/, project root is parent)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Test environment setup
+TEST_STATE_DIR = os.path.join(tempfile.gettempdir(), 'casm_provisioning_action_test_state')
+TEST_ULTRALYTICS_DIR = os.path.join(tempfile.gettempdir(), 'casm_provisioning_action_test_ultralytics')
+os.makedirs(TEST_STATE_DIR, exist_ok=True)
+os.makedirs(TEST_ULTRALYTICS_DIR, exist_ok=True)
+
 os.environ['FLASK_DEBUG'] = 'false'
 os.environ['SERVE_FRONTEND'] = 'false'
 os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
 os.environ['PROVISION_ALLOW_SELF_REGISTER'] = 'true'
 os.environ['BOOTSTRAP_TOKEN_SECRET'] = 'test-bootstrap-secret'
+os.environ['CASM_STATE_DIR'] = TEST_STATE_DIR
+os.environ['YOLO_CONFIG_DIR'] = TEST_ULTRALYTICS_DIR
 os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
 os.environ['SUPABASE_URL'] = 'https://projtest123.supabase.co'
 os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'

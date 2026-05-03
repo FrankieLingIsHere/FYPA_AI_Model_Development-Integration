@@ -11,7 +11,14 @@ import importlib
 import os
 import subprocess
 import sys
+import tempfile
 from typing import List, Tuple
+
+os.environ.setdefault(
+    "YOLO_CONFIG_DIR",
+    os.path.join(tempfile.gettempdir(), "casm_preflight_ultralytics"),
+)
+os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
 
 MANDATORY_IMPORTS: List[Tuple[str, str]] = [
     ("flask", "Flask"),

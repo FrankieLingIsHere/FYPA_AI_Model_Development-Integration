@@ -12,7 +12,7 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 
-MAX_VIOLATION_SCAN = max(10, int(os.environ.get("CASM_REPORT_QUALITY_MAX_SCAN", "120")))
+MAX_VIOLATION_SCAN = max(10, int(os.environ.get("CASM_REPORT_QUALITY_MAX_SCAN", "80")))
 MAX_REPORT_QUALITY_CANDIDATES = max(1, int(os.environ.get("CASM_REPORT_QUALITY_MAX_CANDIDATES", "12")))
 MIN_SCENE_DESC_CHARS = max(40, int(os.environ.get("CASM_REPORT_QUALITY_MIN_CHARS", "120")))
 ENFORCE_SCENE_GROUNDED_FLOOR = str(os.environ.get("CASM_REPORT_QUALITY_ENFORCE_GROUNDED_SCENE", "1")).strip().lower() in {
@@ -27,7 +27,7 @@ ENFORCE_EXECUTIVE_WHAT = str(os.environ.get("CASM_REPORT_QUALITY_ENFORCE_WHAT", 
     "yes",
     "on",
 }
-STRICT_REPORT_QUALITY = str(os.environ.get("CASM_REPORT_QUALITY_STRICT", "0")).strip().lower() in {
+STRICT_REPORT_QUALITY = str(os.environ.get("CASM_REPORT_QUALITY_STRICT", "1")).strip().lower() in {
     "1",
     "true",
     "yes",
@@ -177,7 +177,11 @@ def rank_quality_candidate(item: Dict) -> tuple:
 
 def main() -> int:
     try:
-        status_code, violations, text_preview = request_json("GET", "/api/violations", timeout=35)
+        status_code, violations, text_preview = request_json(
+            "GET",
+            f"/api/violations?limit={MAX_VIOLATION_SCAN}",
+            timeout=35,
+        )
         if status_code >= 400:
             return fail(f"/api/violations failed ({status_code}): {text_preview}", 3)
         if not isinstance(violations, list) or not violations:

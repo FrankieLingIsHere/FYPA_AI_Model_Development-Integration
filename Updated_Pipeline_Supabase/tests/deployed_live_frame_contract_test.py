@@ -11,7 +11,7 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_DEFAULT_IMAGE_PATH = (_SCRIPT_DIR / "static" / "images" / "handbook-live.png").resolve()
+_DEFAULT_IMAGE_PATH = (_SCRIPT_DIR.parent / "static" / "images" / "handbook-live.png").resolve()
 
 IMAGE_PATH = os.environ.get(
     "CASM_LIVE_FRAME_TEST_IMAGE",

@@ -15,9 +15,8 @@ NAV_WAIT_MS = int(os.environ.get("CASM_MOBILE_NAV_WAIT_MS", "20000"))
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Deployed mobile checks can be timing-sensitive; keep non-blocking like other frontend robustness suites.
-    print(f"INFO: non-blocking frontend mobile usability issue: {message}")
-    return 0
+    print(f"FAIL: frontend mobile usability issue: {message}")
+    return code
 
 
 def ensure_nav_visible(page, page_name: str):
@@ -81,17 +80,18 @@ def main() -> int:
             body_classes = page.get_attribute("body", "class") or ""
             if "is-phone-device" not in body_classes:
                 raise RuntimeError("Mobile detection class is-phone-device was not applied")
-            if "mobile-portrait-locked" not in body_classes:
-                raise RuntimeError("Portrait lock class mobile-portrait-locked was not applied")
+            if "mobile-portrait-locked" in body_classes:
+                raise RuntimeError("Portrait lock class mobile-portrait-locked should not be applied in the latest responsive mobile UI")
 
             overlay = page.locator("#mobileOrientationOverlay")
             if overlay.count() > 0:
                 overlay_hidden = overlay.get_attribute("aria-hidden")
-                if overlay_hidden != "false":
-                    raise RuntimeError("Portrait orientation overlay did not activate")
+                overlay_visible = overlay.first.is_visible()
+                if overlay_hidden == "false" or overlay_visible:
+                    raise RuntimeError("Portrait orientation overlay should remain hidden in the latest responsive mobile UI")
             else:
                 print("INFO: mobile orientation overlay not present in this deployed variant")
-            print("PASS: mobile portrait lock behavior")
+            print("PASS: mobile portrait responsive behavior")
 
             # Rotate to landscape to unlock app usage.
             page.set_viewport_size({"width": 844, "height": 390})

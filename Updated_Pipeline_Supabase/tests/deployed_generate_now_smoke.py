@@ -15,6 +15,15 @@ BASE_URL = os.environ.get(
 POLL_SECONDS = int(os.environ.get("CASM_SMOKE_POLL_SECONDS", "45"))
 POLL_INTERVAL = int(os.environ.get("CASM_SMOKE_POLL_INTERVAL", "3"))
 MAX_CANDIDATES = int(os.environ.get("CASM_SMOKE_MAX_CANDIDATES", "15"))
+STRICT_GENERATE_NOW_SMOKE = os.environ.get("CASM_GENERATE_NOW_SMOKE_STRICT", "1") != "0"
+
+
+def skip_or_fail(message: str, code: int) -> int:
+    if STRICT_GENERATE_NOW_SMOKE:
+        print(f"FAIL: {message}")
+        return code
+    print(f"PASS: non-blocking skip, {message}")
+    return 0
 
 
 def get_violations(limit: int = 40):
@@ -62,15 +71,12 @@ def main() -> int:
     try:
         violations = get_violations(limit=60)
     except RequestException as exc:
-        print(f"PASS: non-blocking skip, could not list violations due to transient API/network issue: {exc}")
-        return 0
+        return skip_or_fail(f"could not list violations due to API/network issue: {exc}", 2)
     except Exception as exc:
-        print(f"PASS: non-blocking skip, unexpected error while listing violations: {exc}")
-        return 0
+        return skip_or_fail(f"unexpected error while listing violations: {exc}", 3)
 
     if not violations:
-        print("PASS: no violations available for generate-now smoke candidate selection")
-        return 0
+        return skip_or_fail("no violations available for generate-now smoke candidate selection", 4)
 
     tested = 0
     report_id = None
@@ -111,11 +117,10 @@ def main() -> int:
         break
 
     if not report_id:
-        print(
-            "PASS: no actionable report found within candidate window; "
-            "all tested reports were stale/non-regeneratable"
+        return skip_or_fail(
+            "no actionable report found within candidate window; all tested reports were stale/non-regeneratable",
+            5,
         )
-        return 0
 
     print(f"target-report-id={report_id}")
     print(f"generate-now-status={selected_code}")
@@ -141,8 +146,7 @@ def main() -> int:
         time.sleep(POLL_INTERVAL)
 
     if all(s in ("pending", "queued") for s in statuses):
-        print("PASS: non-blocking skip, report remained queued/pending for smoke window")
-        return 0
+        return skip_or_fail("report remained queued/pending for smoke window", 6)
 
     print("PASS: generate-now path accepted and progressed beyond queued/pending")
     return 0
@@ -152,5 +156,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
+        if STRICT_GENERATE_NOW_SMOKE:
+            print(f"FAIL: unhandled generate-now smoke error: {exc}")
+            raise SystemExit(20)
         print(f"PASS: non-blocking skip, unhandled generate-now smoke error: {exc}")
         raise SystemExit(0)

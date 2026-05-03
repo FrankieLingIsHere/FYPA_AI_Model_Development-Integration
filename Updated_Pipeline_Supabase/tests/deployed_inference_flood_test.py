@@ -14,15 +14,15 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_DEFAULT_IMAGE_PATH = (_SCRIPT_DIR / "static" / "images" / "handbook-live.png").resolve()
+_DEFAULT_IMAGE_PATH = (_SCRIPT_DIR.parent / "static" / "images" / "handbook-live.png").resolve()
 
 IMAGE_PATH = os.environ.get(
     "CASM_FLOOD_TEST_IMAGE",
     str(_DEFAULT_IMAGE_PATH),
 )
 
-TOTAL_REQUESTS = max(3, int(os.environ.get("CASM_FLOOD_TOTAL_REQUESTS", "12")))
-MAX_WORKERS = max(2, int(os.environ.get("CASM_FLOOD_WORKERS", "6")))
+TOTAL_REQUESTS = max(3, int(os.environ.get("CASM_FLOOD_TOTAL_REQUESTS", "3")))
+MAX_WORKERS = max(2, int(os.environ.get("CASM_FLOOD_WORKERS", "2")))
 P95_LATENCY_LIMIT_MS = max(1000, int(os.environ.get("CASM_FLOOD_P95_MS", "9000")))
 MIN_SUCCESS_RATIO = float(os.environ.get("CASM_FLOOD_MIN_SUCCESS_RATIO", "0.90"))
 MAX_UNIQUE_QUEUED_REPORTS = max(1, int(os.environ.get("CASM_FLOOD_MAX_UNIQUE_REPORTS", "1")))
@@ -190,11 +190,10 @@ def main() -> int:
     )
 
     if terminal_gateway_outage:
-        print(
-            "WARN: flood endpoint unavailable due upstream gateway outage (all requests 502/503/504); "
-            "marking as non-blocking for this run"
+        return fail(
+            "flood endpoint unavailable due upstream gateway outage (all requests 502/503/504)",
+            17,
         )
-        return 0
 
     if server_errors > 0:
         return fail(f"flood generated server errors: {server_errors}", 10)

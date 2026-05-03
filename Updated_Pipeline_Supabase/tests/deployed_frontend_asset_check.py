@@ -8,7 +8,7 @@ VERCEL_URL = os.environ.get(
     "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
-STRICT_FRONTEND_ASSETS = os.environ.get("CASM_FRONTEND_ASSETS_STRICT", "0") != "0"
+STRICT_FRONTEND_ASSETS = os.environ.get("CASM_FRONTEND_ASSETS_STRICT", "1") != "0"
 
 
 def _looks_like_html(payload: str) -> bool:
@@ -19,7 +19,8 @@ def _looks_like_html(payload: str) -> bool:
 def fetch_asset_text(base_url: str, candidate_paths, label: str):
     errors = []
     for path in candidate_paths:
-        url = f"{base_url}{path}"
+        separator = "&" if "?" in path else "?"
+        url = f"{base_url}{path}{separator}casm_asset_check=1"
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()

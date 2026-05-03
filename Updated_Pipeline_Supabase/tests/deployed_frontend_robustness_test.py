@@ -25,9 +25,8 @@ IGNORED_ERROR_PATTERNS = (
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Deployed frontend can be transiently inconsistent; treat this as non-blocking.
-    print(f"INFO: non-blocking frontend robustness issue: {message}")
-    return 0
+    print(f"FAIL: frontend robustness issue: {message}")
+    return code
 
 
 def ensure_nav_visible(page, page_name: str):
@@ -180,8 +179,7 @@ def validate_reports_filters_and_list(page):
     try:
         page.wait_for_selector("#reports-list", timeout=MAX_NAV_LATENCY_MS)
     except PlaywrightTimeoutError:
-        print("INFO: reports list container did not load in time; skipping reports list checks")
-        return
+        raise RuntimeError("Reports list container did not load in time")
 
     for selector in ("#search-reports", "#filter-severity", "#filter-date"):
         if page.locator(selector).count() == 0:
@@ -251,8 +249,7 @@ def validate_report_modal_actions(page):
     try:
         page.wait_for_selector("#reports-list", timeout=MAX_NAV_LATENCY_MS)
     except PlaywrightTimeoutError:
-        print("INFO: reports list unavailable for modal validation; skipping modal action check")
-        return
+        raise RuntimeError("Reports list unavailable for modal validation")
 
     # Inject a deterministic modal path so modal action controls are always validated.
     page.evaluate(
@@ -279,8 +276,7 @@ def validate_report_modal_actions(page):
     try:
         page.wait_for_selector("#report-status-modal", timeout=7000)
     except PlaywrightTimeoutError:
-        print("INFO: report modal did not appear within timeout in this deployed variant; skipping modal action check")
-        return
+        raise RuntimeError("Report modal did not appear within timeout")
     required_buttons = (
         "#report-status-modal button:has-text('Close')",
         "#report-status-modal #report-modal-process-btn",
@@ -381,8 +377,7 @@ def validate_network_badges_presence(page):
     startup_badge = page.locator("#startupNetworkStatusBadge")
 
     if nav_badge.count() == 0 and startup_badge.count() == 0:
-        print("INFO: network badge elements missing in deployed variant; skipping strict badge assertion")
-        return
+        raise RuntimeError("Network badge elements are missing from latest UI")
 
     nav_text = ""
     with suppress(Exception):
@@ -404,15 +399,13 @@ def validate_local_mode_checkup_action(page):
     settings_trigger = find_visible_settings_trigger(page)
     settings_modal_exists = page.locator("#settingsModal").count() > 0
     if not settings_trigger or not settings_modal_exists:
-        print("INFO: local-mode checkup action test skipped (settings controls unavailable)")
-        return
+        raise RuntimeError("Local-mode checkup action cannot run because settings controls are unavailable")
 
     page.click(settings_trigger)
     try:
         page.wait_for_selector("#settingsModal[aria-hidden='false']", timeout=5000)
     except PlaywrightTimeoutError:
-        print("INFO: local-mode checkup action test skipped (settings modal not openable)")
-        return
+        raise RuntimeError("Local-mode checkup action cannot run because settings modal is not openable")
 
     processing_tab = page.locator(".settings-tab[data-settings-tab='Psettings']")
     if processing_tab.count() > 0 and processing_tab.first.is_visible():
@@ -433,13 +426,11 @@ def validate_local_mode_checkup_action(page):
     try:
         checkup_btn = page.locator("#runLocalModeCheckupBtn")
         if checkup_btn.count() == 0:
-            print("INFO: local-mode checkup action skipped (button unavailable in this variant)")
-            return
+            raise RuntimeError("Local-mode checkup button is missing")
 
         status_label = page.locator("#localModeCheckupStatus")
         if status_label.count() == 0:
-            print("INFO: local-mode checkup action skipped (status label unavailable in this variant)")
-            return
+            raise RuntimeError("Local-mode checkup status label is missing")
 
         # Stub API endpoints used by the manual checkup action for deterministic behavior.
         page.route(
@@ -586,9 +577,9 @@ def main() -> int:
                 if navigate_and_measure(page, "live", "#app"):
                     successful_navs += 1
                 else:
-                    print("INFO: live navigation check skipped after retries")
+                    raise RuntimeError("Live navigation check failed after retries")
             except Exception as nav_live_err:
-                print(f"INFO: live navigation check skipped due variant/latency: {nav_live_err}")
+                raise RuntimeError(f"Live navigation check failed: {nav_live_err}") from nav_live_err
 
             live_start_control = first_visible_selector(
                 page,
@@ -613,14 +604,14 @@ def main() -> int:
                         print("INFO: settings modal cycle timed out; stopping stress loop for this run")
                         break
             else:
-                print("INFO: settings modal stress check skipped (controls not available in this UI variant)")
+                raise RuntimeError("Settings modal stress check cannot run because controls are unavailable")
 
             if settings_trigger and settings_modal_exists and close_btn_exists and live_start_control:
                 # Explicit stopped-state assertion (best-effort in flaky deployed CI).
                 try:
                     assert_settings_modal_behavior(page, settings_trigger, started=False)
                 except Exception as exc:
-                    print(f"INFO: stopped-state settings assertion skipped due transient condition: {exc}")
+                    raise RuntimeError(f"Stopped-state settings assertion failed: {exc}") from exc
 
                 # Mock backend live start/stop to verify started-state behavior deterministically in CI.
                 start_url = "**/api/live/start"
@@ -655,14 +646,13 @@ def main() -> int:
                 page.wait_for_timeout(600)
                 can_assert_started_state = True
                 if page.locator("#stopLiveBtn").count() > 0 and page.locator("#stopLiveBtn").first.is_disabled():
-                    can_assert_started_state = False
-                    print("INFO: could not transition to started state for settings behavior check; skipping started-state assertion")
+                    raise RuntimeError("Could not transition to started state for settings behavior check")
 
                 if can_assert_started_state:
                     try:
                         assert_settings_modal_behavior(page, settings_trigger, started=True)
                     except Exception as exc:
-                        print(f"INFO: started-state settings assertion skipped due transient condition: {exc}")
+                        raise RuntimeError(f"Started-state settings assertion failed: {exc}") from exc
 
                     with suppress(Exception):
                         page.click("#stopLiveBtn")
@@ -675,17 +665,17 @@ def main() -> int:
                 with suppress(Exception):
                     page.unroute(status_url)
             else:
-                print("INFO: explicit settings state behavior check skipped (controls unavailable)")
+                raise RuntimeError("Explicit settings state behavior check cannot run because controls are unavailable")
 
             try:
                 validate_local_mode_checkup_action(page)
             except Exception as checkup_err:
-                print(f"INFO: local mode checkup action assertion skipped due transient condition: {checkup_err}")
+                raise RuntimeError(f"Local mode checkup action assertion failed: {checkup_err}") from checkup_err
 
             try:
                 validate_live_webcam_backend_fallback(page)
             except Exception as fallback_err:
-                print(f"INFO: live webcam fallback assertion skipped due transient condition: {fallback_err}")
+                raise RuntimeError(f"Live webcam fallback assertion failed: {fallback_err}") from fallback_err
 
             upload_mode_btn = first_visible_selector(page, ("#uploadModeBtn", "button:has-text('Analyze Image')"))
             live_mode_btn = first_visible_selector(page, ("#liveModeBtn", "button:has-text('Camera Stream')"))
@@ -697,7 +687,7 @@ def main() -> int:
                 page.wait_for_timeout(350)
                 print("PASS: live mode switch flow")
             else:
-                print("INFO: live mode switch check skipped (controls not available in this UI variant)")
+                raise RuntimeError("Live mode switch controls are unavailable")
 
             reports_ready = navigate_and_measure(page, "reports", "#reports-list")
             if reports_ready:
@@ -718,17 +708,17 @@ def main() -> int:
                 else:
                     print("INFO: reports refresh control missing in this UI variant; skipping refresh stress")
             else:
-                print("INFO: reports page not ready after retries; skipping reports checks")
+                raise RuntimeError("Reports page not ready after retries")
 
             if navigate_and_measure(page, "analytics", "#app"):
                 successful_navs += 1
             else:
-                print("INFO: analytics navigation check skipped after retries")
+                raise RuntimeError("Analytics navigation check failed after retries")
 
             if navigate_and_measure(page, "about", "#app"):
                 successful_navs += 1
             else:
-                print("INFO: about navigation check skipped after retries")
+                raise RuntimeError("About navigation check failed after retries")
 
             if successful_navs == 0:
                 raise RuntimeError("No page navigation checks succeeded")
@@ -743,10 +733,10 @@ def main() -> int:
         filtered_console_errors = [err for err in console_errors if not is_ignored_error(err)]
 
         if filtered_page_errors:
-            print(f"INFO: non-ignored page errors observed: {filtered_page_errors[:5]}")
+            raise RuntimeError(f"non-ignored page errors observed: {filtered_page_errors[:5]}")
 
         if filtered_console_errors:
-            print(f"INFO: non-ignored console errors observed: {filtered_console_errors[:5]}")
+            raise RuntimeError(f"non-ignored console errors observed: {filtered_console_errors[:5]}")
 
         ignored_total = (len(page_errors) - len(filtered_page_errors)) + (len(console_errors) - len(filtered_console_errors))
         if ignored_total:

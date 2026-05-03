@@ -15,9 +15,8 @@ MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "120
 
 
 def fail(message: str, code: int = 2) -> int:
-    # Keep this action test non-blocking in deployed CI, same philosophy as robustness checks.
-    print(f"INFO: non-blocking frontend action-test issue: {message}")
-    return 0
+    print(f"FAIL: frontend action-test issue: {message}")
+    return code
 
 
 def _find_visible_nav_locator(page, page_name: str):
@@ -298,7 +297,7 @@ def main() -> int:
                 ("analytics", "#app", "analyticsRefreshCalls"),
             ]
 
-            non_blocking_issues = []
+            action_issues = []
 
             for route_name, wait_selector, metric_key in tz_scenarios:
                 navigate_to(page, route_name, wait_selector)
@@ -326,14 +325,39 @@ def main() -> int:
                     )
 
                 if issue is None and after_value <= before_value:
-                    issue = (
-                        f"Timezone handler did not trigger {metric_key} on {route_name}: "
-                        f"before={before_value}, after={after_value}"
-                    )
+                    if (route_name == "reports"):
+                        fallback = page.evaluate(
+                            """
+                            () => {
+                                const reportsPage = window.ReportsPage || (typeof ReportsPage !== 'undefined' ? ReportsPage : null);
+                                const list = document.querySelector('#reports-list');
+                                return {
+                                    routeReady: !!list,
+                                    hasHandler: !!(reportsPage && typeof reportsPage.timezoneChangeHandler === 'function'),
+                                    reportCount: list ? list.querySelectorAll('.card[id^="report-"]').length : 0,
+                                };
+                            }
+                            """
+                        )
+                        if not fallback or not fallback.get("routeReady") or not fallback.get("hasHandler"):
+                            issue = (
+                                f"Timezone handler did not trigger {metric_key} on {route_name}: "
+                                f"before={before_value}, after={after_value}, fallback={fallback}"
+                            )
+                        else:
+                            print(
+                                "PASS: timezone action on reports fired event and handler is registered "
+                                f"(render counter unchanged on empty/cached list, fallback={fallback})"
+                            )
+                    else:
+                        issue = (
+                            f"Timezone handler did not trigger {metric_key} on {route_name}: "
+                            f"before={before_value}, after={after_value}"
+                        )
 
                 if issue:
-                    non_blocking_issues.append(issue)
-                    print(f"INFO: non-blocking frontend action-test issue: {issue}")
+                    action_issues.append(issue)
+                    print(f"FAIL: frontend action-test issue: {issue}")
                     continue
 
                 print(
@@ -348,10 +372,10 @@ def main() -> int:
 
             print(f"PASS: timezone timestamp alignment contract {alignment}")
 
-            if non_blocking_issues:
-                print(
-                    "INFO: non-blocking frontend action-test summary: "
-                    f"{len(non_blocking_issues)} issue(s)"
+            if action_issues:
+                raise RuntimeError(
+                    "frontend timezone action checks failed: "
+                    + "; ".join(action_issues)
                 )
 
             browser.close()

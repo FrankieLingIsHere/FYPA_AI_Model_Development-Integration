@@ -9,7 +9,7 @@ BASE_URL = os.environ.get(
     "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
-STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("CASM_LOCAL_FAILOVER_SYNC_STRICT", "0") != "0"
+STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("CASM_LOCAL_FAILOVER_SYNC_STRICT", "1") != "0"
 
 
 

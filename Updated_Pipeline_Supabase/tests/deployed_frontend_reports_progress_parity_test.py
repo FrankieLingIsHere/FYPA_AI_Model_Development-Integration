@@ -10,7 +10,7 @@ VERCEL_URL = os.environ.get(
     "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
-STRICT_MODE = os.environ.get("CASM_FRONTEND_PARITY_STRICT", "0") != "0"
+STRICT_MODE = os.environ.get("CASM_FRONTEND_PARITY_STRICT", "1") != "0"
 
 
 def fail(message: str, code: int = 2) -> int:
@@ -80,6 +80,24 @@ def run_parity_probe(page):
             };
 
             const runScenario = async (name, reportId, deviceId) => {
+                if (typeof ReportsPage.stopModalPolling === 'function') {
+                    ReportsPage.stopModalPolling();
+                }
+                if (typeof ReportsPage.stopModalCooldown === 'function') {
+                    ReportsPage.stopModalCooldown();
+                }
+                if (typeof ReportsPage.closeModal === 'function') {
+                    ReportsPage.closeModal();
+                }
+                if (ReportsPage.modalRuntime && typeof ReportsPage.modalRuntime === 'object') {
+                    ReportsPage.modalRuntime.reportId = null;
+                    ReportsPage.modalRuntime.pollTimer = null;
+                    ReportsPage.modalRuntime.pollStartedAt = 0;
+                    ReportsPage.modalRuntime.retryCount = 0;
+                    ReportsPage.modalRuntime.lastPollStatus = null;
+                    ReportsPage.modalRuntime.cooldownUntil = 0;
+                }
+
                 const violation = {
                     report_id: reportId,
                     timestamp: new Date().toISOString(),
@@ -94,8 +112,11 @@ def run_parity_probe(page):
                 };
 
                 await ReportsPage.showGeneratingModal(violation);
-                ReportsPage.startModalPolling(reportId, { autoOpen: false });
-                await delay(8500);
+                await ReportsPage.pollReportProgress(reportId, { autoOpen: false });
+                await delay(50);
+                await ReportsPage.pollReportProgress(reportId, { autoOpen: false });
+                await delay(50);
+                await ReportsPage.pollReportProgress(reportId, { autoOpen: false });
 
                 const statusEl = document.getElementById('report-modal-status');
                 const completedStageEl = document.getElementById('report-stage-completed');

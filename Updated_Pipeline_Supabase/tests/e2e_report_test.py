@@ -13,12 +13,28 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 IMAGE_PATH = os.environ.get(
     "CASM_TEST_IMAGE",
-    str(Path("Updated_Pipeline_Supabase/static/images/handbook-live.png").resolve()),
+    str(Path("Updated_Pipeline_Supabase/pipeline/violations/20260420_134116/original.jpg").resolve()),
 )
 
 
-def get_violations():
-    r = requests.get(f"{BASE_URL}/api/violations", timeout=30)
+STRICT_E2E = str(os.environ.get("CASM_E2E_STRICT", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+
+def skip_or_fail(message: str, code: int) -> int:
+    if STRICT_E2E:
+        print(f"FAIL: {message}")
+        return code
+    print(f"PASS: non-blocking skip, {message}")
+    return 0
+
+
+def get_violations(limit: int = 80):
+    r = requests.get(f"{BASE_URL}/api/violations?limit={int(limit)}", timeout=30)
     r.raise_for_status()
     data = r.json()
     if isinstance(data, list):
@@ -53,38 +69,31 @@ def main() -> int:
         startup = requests.get(f"{BASE_URL}/api/system/startup-status", timeout=30)
         print(f"startup-status={startup.status_code}")
     except RequestException as exc:
-        print(f"PASS: non-blocking skip, startup-status request failed: {exc}")
-        return 0
+        return skip_or_fail(f"startup-status request failed: {exc}", 3)
     except Exception as exc:
-        print(f"PASS: non-blocking skip, unexpected startup check error: {exc}")
-        return 0
+        return skip_or_fail(f"unexpected startup check error: {exc}", 4)
 
     try:
         before = get_violations()
     except RequestException as exc:
-        print(f"PASS: non-blocking skip, could not list initial violations: {exc}")
-        return 0
+        return skip_or_fail(f"could not list initial violations: {exc}", 5)
     except Exception as exc:
-        print(f"PASS: non-blocking skip, unexpected initial list error: {exc}")
-        return 0
+        return skip_or_fail(f"unexpected initial list error: {exc}", 6)
 
     before_ids = {v.get("report_id") for v in before if v.get("report_id")}
 
     try:
         code, upload_payload = upload_image(str(image))
     except RequestException as exc:
-        print(f"PASS: non-blocking skip, upload request failed: {exc}")
-        return 0
+        return skip_or_fail(f"upload request failed: {exc}", 7)
     except Exception as exc:
-        print(f"PASS: non-blocking skip, unexpected upload error: {exc}")
-        return 0
+        return skip_or_fail(f"unexpected upload error: {exc}", 8)
 
     print(f"upload-status={code}")
     print("upload-body=" + json.dumps(upload_payload, ensure_ascii=True)[:600])
 
     if code >= 400:
-        print("PASS: non-blocking skip, upload endpoint rejected request")
-        return 0
+        return skip_or_fail(f"upload endpoint rejected request with status={code}", 9)
 
     upload_report_id = None
     report_queued = False
@@ -93,18 +102,15 @@ def main() -> int:
         report_queued = bool(upload_payload.get("report_queued"))
 
     if not upload_report_id and not report_queued:
-        print("PASS: non-blocking skip, upload did not queue a report (likely no violation in test image)")
-        return 0
+        return skip_or_fail("upload did not queue a report (likely no violation in test image)", 10)
 
     time.sleep(4)
     try:
         after = get_violations()
     except RequestException as exc:
-        print(f"PASS: non-blocking skip, could not list post-upload violations: {exc}")
-        return 0
+        return skip_or_fail(f"could not list post-upload violations: {exc}", 11)
     except Exception as exc:
-        print(f"PASS: non-blocking skip, unexpected post-upload list error: {exc}")
-        return 0
+        return skip_or_fail(f"unexpected post-upload list error: {exc}", 12)
 
     after_ids = [v.get("report_id") for v in after if v.get("report_id")]
 
@@ -119,8 +125,7 @@ def main() -> int:
         target = after_ids[0]
 
     if not target:
-        print("PASS: non-blocking skip, no report id found after upload")
-        return 0
+        return skip_or_fail("no report id found after upload", 13)
 
     print(f"target-report-id={target}")
 
@@ -129,11 +134,9 @@ def main() -> int:
         try:
             st = get_status(target)
         except RequestException as exc:
-            print(f"PASS: non-blocking skip, polling request failed: {exc}")
-            return 0
+            return skip_or_fail(f"polling request failed: {exc}", 14)
         except Exception as exc:
-            print(f"PASS: non-blocking skip, unexpected polling error: {exc}")
-            return 0
+            return skip_or_fail(f"unexpected polling error: {exc}", 15)
 
         final = st
         status = st.get("status")
@@ -145,8 +148,7 @@ def main() -> int:
         time.sleep(3)
 
     if not final:
-        print("PASS: non-blocking skip, no final status")
-        return 0
+        return skip_or_fail("no final status", 16)
 
     if final.get("status") == "completed" and final.get("has_report"):
         print("PASS: report completed with artifact")
@@ -157,8 +159,7 @@ def main() -> int:
     if match:
         print("final-error=" + str(match.get("error_message")))
 
-    print("PASS: non-blocking skip, report did not complete successfully within test window")
-    return 0
+    return skip_or_fail("report did not complete successfully within test window", 17)
 
 
 if __name__ == "__main__":

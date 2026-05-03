@@ -162,7 +162,8 @@ def main() -> int:
     effective_min_ratio = MIN_SUCCESS_RATIO
     if total:
         min_successes = int(round(total * MIN_SUCCESS_RATIO))
-        min_successes = min(min_successes, total - 1)
+        if total <= 3:
+            min_successes = min(min_successes, total - 1)
         if min_successes < 1:
             min_successes = 1
         effective_min_ratio = min_successes / total

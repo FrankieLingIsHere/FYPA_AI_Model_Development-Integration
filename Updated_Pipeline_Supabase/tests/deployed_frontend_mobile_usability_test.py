@@ -39,8 +39,7 @@ def _wait_for_visible_nav(page, nav_selector: str, *, attempts: int = 10, pause_
 
 def ensure_nav_visible(page, page_name: str):
     nav_selector = f"[data-page='{page_name}']"
-    locator = page.locator(nav_selector)
-    if locator.count() == 0:
+    if page.locator(nav_selector).count() == 0:
         raise RuntimeError(f"Navigation link not found in DOM for page={page_name}")
 
     if _wait_for_visible_nav(page, nav_selector):

@@ -30,13 +30,22 @@ def _find_visible_nav_locator(page, page_name: str):
     return None
 
 
+def _wait_for_visible_nav_locator(page, page_name: str, *, attempts: int = 10, pause_ms: int = 200):
+    for _ in range(attempts):
+        candidate = _find_visible_nav_locator(page, page_name)
+        if candidate:
+            return candidate
+        page.wait_for_timeout(pause_ms)
+    return None
+
+
 def ensure_nav_visible(page, page_name: str):
     nav_selector = f"[data-page='{page_name}']"
     locator = page.locator(nav_selector)
     if locator.count() == 0:
         raise RuntimeError(f"Navigation link not found for page={page_name}")
 
-    visible_nav = _find_visible_nav_locator(page, page_name)
+    visible_nav = _wait_for_visible_nav_locator(page, page_name)
     if visible_nav:
         return visible_nav
 
@@ -45,7 +54,7 @@ def ensure_nav_visible(page, page_name: str):
         if toggle.count() > 0 and toggle.first.is_visible():
             toggle.first.click()
             page.wait_for_timeout(220)
-            visible_nav = _find_visible_nav_locator(page, page_name)
+            visible_nav = _wait_for_visible_nav_locator(page, page_name, attempts=6, pause_ms=220)
             if visible_nav:
                 return visible_nav
 

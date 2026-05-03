@@ -22,13 +22,30 @@ def fail(message: str, code: int = 2) -> int:
     return 0
 
 
+def _find_visible_nav(page, nav_selector: str):
+    locator = page.locator(nav_selector)
+    for index in range(locator.count()):
+        candidate = locator.nth(index)
+        if candidate.is_visible():
+            return candidate
+    return None
+
+
+def _wait_for_visible_nav(page, nav_selector: str, *, attempts: int = 10, pause_ms: int = 200):
+    for _ in range(attempts):
+        candidate = _find_visible_nav(page, nav_selector)
+        if candidate:
+            return candidate
+        page.wait_for_timeout(pause_ms)
+    return None
+
+
 def ensure_nav_visible(page, page_name: str):
     nav_selector = f"[data-page='{page_name}']"
-    locator = page.locator(nav_selector)
-    if locator.count() == 0:
+    if page.locator(nav_selector).count() == 0:
         raise RuntimeError(f"Navigation link not found in DOM for page={page_name}")
 
-    if locator.first.is_visible():
+    if _wait_for_visible_nav(page, nav_selector):
         return
 
     for toggle_selector in ("#navToggle", "#navMoreToggle"):
@@ -36,10 +53,10 @@ def ensure_nav_visible(page, page_name: str):
         if toggle.count() > 0 and toggle.first.is_visible():
             toggle.first.click()
             page.wait_for_timeout(220)
-            if locator.first.is_visible():
+            if _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220):
                 return
 
-    if not locator.first.is_visible():
+    if not _find_visible_nav(page, nav_selector):
         raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 

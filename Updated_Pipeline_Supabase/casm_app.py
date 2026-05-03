@@ -7760,16 +7760,29 @@ def _api_local_mode_auto_provisioning_impl():
             f"machine_id={machine_id}; requesting approval workflow."
         )
 
-    def _request_new_secret() -> Tuple[bool, str, str]:
+    def _request_new_secret(skip_existing_secret: bool = False) -> Tuple[bool, str, str, int]:
+        """Request a new provision_secret from the cloud backend.
+
+        skip_existing_secret: when True, do NOT include the locally-stored
+        provision_secret in the request body.  Use this for PRV3 retries where
+        the local secret is known-stale so that we don't accidentally trigger
+        PRV5 (credential-desync-recovery) on the cloud and demote an approved
+        device back to pending.
+
+        Returns: (success, new_secret, error_text, http_status_code)
+        """
         try:
             # Include the current provision_secret (if any) so the cloud can
             # authenticate the rotation as a legitimate re-request without
             # admin involvement. For brand-new installs with no stored
             # secret, the operator must approve via /admin/devices.
+            # When skip_existing_secret=True the caller knows the local secret
+            # is stale — omit it to avoid PRV5 on the cloud side.
             request_body = {'machine_id': machine_id}
-            existing_local_secret = str(state.get('provision_secret') or '').strip()
-            if existing_local_secret:
-                request_body['current_provision_secret'] = existing_local_secret
+            if not skip_existing_secret:
+                existing_local_secret = str(state.get('provision_secret') or '').strip()
+                if existing_local_secret:
+                    request_body['current_provision_secret'] = existing_local_secret
 
             request_headers = {}
             local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
@@ -7786,21 +7799,21 @@ def _api_local_mode_auto_provisioning_impl():
         except Exception as e:
             err_text = str(e)
             if _local_mode_is_name_resolution_error(err_text):
-                return False, '', f'cloud_endpoint_unreachable: {err_text}'
-            return False, '', f'Failed to request provisioning approval: {err_text}'
+                return False, '', f'cloud_endpoint_unreachable: {err_text}', 0
+            return False, '', f'Failed to request provisioning approval: {err_text}', 0
 
         if not response.ok:
             err = str((body or {}).get('error') or f'Provision request failed ({response.status_code})')
-            return False, '', err
+            return False, '', err, response.status_code
 
         secret = str((body or {}).get('provision_secret') or '').strip()
         if not secret:
-            return False, '', 'Cloud response missing provision_secret.'
+            return False, '', 'Cloud response missing provision_secret.', response.status_code
 
-        return True, secret, ''
+        return True, secret, '', response.status_code
 
     if not provision_secret or str(state.get('cloud_url') or '') != cloud_url:
-        requested, provision_secret, request_error = _request_new_secret()
+        requested, provision_secret, request_error, _ = _request_new_secret()
         if not requested:
             request_error_text = str(request_error or '').strip()
             if request_error_text.lower().startswith('cloud_endpoint_unreachable:'):
@@ -7896,7 +7909,16 @@ def _api_local_mode_auto_provisioning_impl():
         #       re-request is safe: it will succeed only if the device is still
         #       legitimately approved on the cloud, otherwise it will fail and
         #       we then fall back to the genuine-rejection branch below.
-        retry_ok, retry_secret, retry_error = _request_new_secret()
+        # IMPORTANT: skip_existing_secret=True so that a stale locally-stored
+        # provision_secret is NOT sent to the cloud.  If the local secret is
+        # wrong but the device is still approved, sending it would trigger PRV5
+        # (credential-desync-recovery) which demotes the device to pending
+        # and invalidates the browser still-valid sessionStorage secret,
+        # causing the UI to show rejected by administrator even though the
+        # device was never rejected.
+        retry_ok, retry_secret, retry_error, retry_http_code = _request_new_secret(
+            skip_existing_secret=True
+        )
 
         if retry_ok and retry_secret:
             state = {
@@ -7919,38 +7941,65 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_url': cloud_url,
             })
 
-        # Re-request failed â€” this is the genuine revoked/deleted case. Persist
-        # the rejection so the operator sees an actionable message instead of a
-        # silent retry loop.
-        if state.get('provision_secret'):
+        # Re-request failed.  Distinguish between an explicit admin rejection
+        # (HTTP 403 from /api/provision/request) and all other failures.
+        #
+        # HTTP 403 -> device was explicitly rejected by administrator.
+        # Persist rejection so the operator sees an actionable message.
+        #
+        # Anything else (401 PRV1-gated, 0 network error, etc.) -> the device
+        # is most likely still approved but the local secret is simply stale
+        # (e.g. after a local-backend reinstall). Clear the stale secret and
+        # return idle so the operator knows to re-request via browser/admin.
+        # Do NOT mark as rejected -- the browser sessionStorage secret may
+        # still be valid and we must not invalidate it.
+        if retry_http_code == 403:
             state.update({
                 'machine_id': machine_id,
                 'cloud_url': cloud_url,
                 'status': 'rejected',
                 'updated_at': datetime.now(timezone.utc).isoformat(),
                 'rejection_reason': (
-                    'Device record removed by administrator (secret no longer '
-                    'recognised and re-registration was refused).'
+                    'Device record removed or rejected by administrator '
+                    '(secret no longer recognised and re-registration was refused).'
                 ),
             })
             _local_mode_save_provision_state(state)
             return jsonify({
                 'success': False,
                 'status': 'rejected',
-                'error': 'Device was removed by the administrator. Contact your admin to re-provision.',
+                'error': 'Device was removed or rejected by the administrator. Contact your admin to re-provision.',
                 'machine_id': machine_id,
                 'admin_portal_url': admin_portal_url,
                 'cloud_url': cloud_url,
             }), 403
 
+        # Stale local secret (PRV1 gated) or transient network error.
+        # Clear the bad secret so the next cycle starts fresh.
+        _local_mode_save_provision_state({
+            'machine_id': machine_id,
+            'cloud_url': cloud_url,
+            'provision_secret': '',
+            'status': 'idle',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+        logger.warning(
+            'Local auto-provision: stale local secret could not be refreshed '
+            f'(machine_id={machine_id}, http={retry_http_code}, err={retry_error}). '
+            'Cleared local secret -- device stays approved on cloud; '
+            'operator should re-request via browser or admin portal.'
+        )
         return jsonify({
-            'success': False,
-            'status': 'request_failed',
-            'error': retry_error or 'Provision re-request failed',
+            'success': True,
+            'status': 'idle',
+            'warning': (
+                'Local provision secret is stale and could not be automatically '
+                'refreshed. Re-request provisioning via the admin portal or browser.'
+            ),
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
-        }), 502
+        })
 
     if status_response.status_code == 403:
         state.update({

@@ -289,6 +289,22 @@ const RealtimeSync = {
             const payload = JSON.parse(event.data || '{}');
             this.emitPageUpdate(payload);
             this.emitStatusNotifications(payload);
+            // Trigger ViolationMonitor's "PPE Violation Detected!" toast / voice
+            // alert pipeline immediately whenever the SSE/WS stream pushes a new
+            // report. Without this, in local routing profile (no Supabase
+            // realtime channel) the violation-detected toast and voice alert
+            // would lag up to the polling interval (60s) because the polled
+            // /api/violations is the only path that runs ViolationMonitor's
+            // notify logic.
+            try {
+                if (typeof ViolationMonitor !== 'undefined'
+                    && ViolationMonitor.isMonitoring
+                    && typeof ViolationMonitor.checkForNewViolations === 'function') {
+                    ViolationMonitor.checkForNewViolations();
+                }
+            } catch (vmErr) {
+                console.warn('Realtime -> ViolationMonitor refresh failed:', vmErr);
+            }
         } catch (error) {
             console.error('Invalid realtime payload:', error);
         }

@@ -1,0 +1,15 @@
+{
+    // Suppress false-positive SQL errors from VS Code's generic SQL parser.
+    // The schema files use PostgreSQL/Supabase-specific syntax (ROW LEVEL SECURITY,
+    // POLICY, plpgsql, etc.) which the generic SQL validator does not support.
+    "files.associations": {
+        "*.sql": "plaintext"
+    },
+
+    // Pylance — basic mode avoids spurious import warnings for optional packages
+    // (torch, ultralytics, transformers, etc.) that may not be installed locally.
+    "python.analysis.typeCheckingMode": "basic",
+
+    // Use the existing project virtualenv; do not create or auto-select another one.
+    "python.defaultInterpreterPath": "${workspaceFolder}/Updated_Pipeline_Supabase/venv/Scripts/python.exe"
+}

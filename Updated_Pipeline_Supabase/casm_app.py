@@ -3624,10 +3624,47 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     
     # Save metadata
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
+    # Compute violation/person counts and missing-PPE labels so the reports
+    # page card can display them even when no Supabase violation row was
+    # written (e.g. local routing profile, or Supabase offline).
+    try:
+        _person_count_meta = sum(
+            1 for d in (detections or [])
+            if isinstance(d, dict)
+            and 'person' in str(d.get('class_name') or d.get('class') or '').strip().lower()
+            and not str(d.get('class_name') or d.get('class') or '').strip().lower().startswith('no-')
+        )
+    except Exception:
+        _person_count_meta = 0
+    _missing_ppe_meta: List[str] = []
+    _ppe_tags_meta: List[str] = []
+    for _vt in violation_types_formatted:
+        _label = str(_vt or '').strip()
+        if not _label:
+            continue
+        # Strip leading "NO-" or "Missing " so the card shows clean labels
+        _clean = _label
+        for _prefix in ('NO-', 'No-', 'no-', 'Missing ', 'missing '):
+            if _clean.startswith(_prefix):
+                _clean = _clean[len(_prefix):].strip()
+                break
+        if _clean:
+            _missing_ppe_meta.append(_clean)
+            _ppe_tags_meta.append(_clean.replace(' ', '-').upper())
+    _violation_count_meta = max(len(violation_types_formatted), len(_missing_ppe_meta), 0)
     metadata = {
         'report_id': report_id,
         'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
         'violation_type': violation_types_formatted[0] if violation_types_formatted else 'PPE Violation',
+        'violation_types': violation_types_formatted,
+        'violation_count': _violation_count_meta,
+        'person_count': _person_count_meta,
+        'missing_ppe': _missing_ppe_meta,
+        'ppe_tags': _ppe_tags_meta,
+        'violation_summary': (
+            f"PPE Violation Detected: {', '.join(violation_types_formatted)}"
+            if violation_types_formatted else 'PPE Violation Detected'
+        ),
         'device_id': queue_device_id,
         'severity': 'HIGH',
         'location': 'Live Stream Monitor',
@@ -4464,16 +4501,26 @@ def api_violations():
             formatted_violations.append({
                 'report_id': local_report_id,
                 'timestamp': local_row.get('timestamp'),
-                'person_count': 0,
-                'violation_count': 0,
+                'person_count': int(local_row.get('person_count') or 0),
+                'violation_count': int(local_row.get('violation_count') or 0) if local_row.get('violation_count') is not None else (
+                    len(local_row.get('missing_ppe') or []) if local_row.get('missing_ppe') else (
+                        1 if (local_row.get('has_report') and local_status == 'completed') else 0
+                    )
+                ),
                 'severity': 'HIGH',
                 'status': local_status,
-                'device_id': 'local_cache',
+                'device_id': local_row.get('device_id') or 'local_cache',
                 'error_message': local_row.get('error_message'),
-                'violation_summary': 'Violation queued for report generation',
-                'missing_ppe': [],
-                'ppe_tags': [],
-                'violation_type': 'PPE Violation',
+                'violation_summary': (
+                    local_row.get('violation_summary')
+                    or (
+                        f"PPE Violation Detected: {', '.join(local_row.get('missing_ppe') or [])}"
+                        if (local_row.get('missing_ppe') or []) else 'Violation queued for report generation'
+                    )
+                ),
+                'missing_ppe': list(local_row.get('missing_ppe') or []),
+                'ppe_tags': list(local_row.get('ppe_tags') or []),
+                'violation_type': local_row.get('violation_type') or 'PPE Violation',
                 'has_original': bool(local_row.get('has_original')),
                 'has_annotated': bool(local_row.get('has_annotated')),
                 'has_report': bool(local_row.get('has_report')),
@@ -5328,6 +5375,45 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         except Exception:
             updated_at_value = timestamp_value
 
+        # Read metadata.json so we can surface the actual violation_count
+        # / missing_ppe / violation_summary on the reports page card even
+        # when no Supabase violation row was written (local routing
+        # profile, or Supabase offline). Falls back gracefully when the
+        # file is absent or malformed.
+        metadata_violation_count = None
+        metadata_person_count = None
+        metadata_missing_ppe: List[str] = []
+        metadata_ppe_tags: List[str] = []
+        metadata_violation_summary = None
+        metadata_violation_type = None
+        metadata_device_id = None
+        try:
+            metadata_path = violation_dir / 'metadata.json'
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as _mf:
+                    _meta = json.load(_mf) or {}
+                if isinstance(_meta, dict):
+                    if isinstance(_meta.get('violation_count'), (int, float)):
+                        metadata_violation_count = int(_meta.get('violation_count') or 0)
+                    if isinstance(_meta.get('person_count'), (int, float)):
+                        metadata_person_count = int(_meta.get('person_count') or 0)
+                    if isinstance(_meta.get('missing_ppe'), list):
+                        metadata_missing_ppe = [
+                            str(x).strip() for x in _meta.get('missing_ppe') if str(x).strip()
+                        ]
+                    if isinstance(_meta.get('ppe_tags'), list):
+                        metadata_ppe_tags = [
+                            str(x).strip() for x in _meta.get('ppe_tags') if str(x).strip()
+                        ]
+                    if isinstance(_meta.get('violation_summary'), str):
+                        metadata_violation_summary = _meta.get('violation_summary')
+                    if isinstance(_meta.get('violation_type'), str):
+                        metadata_violation_type = _meta.get('violation_type')
+                    if isinstance(_meta.get('device_id'), str):
+                        metadata_device_id = _meta.get('device_id')
+        except Exception as meta_err:
+            logger.debug(f"Could not parse metadata.json for {report_id}: {meta_err}")
+
         rows.append({
             'report_id': report_id,
             'status': status,
@@ -5337,6 +5423,13 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
             'has_original': has_original,
             'has_annotated': has_annotated,
             'has_report': has_report,
+            'violation_count': metadata_violation_count,
+            'person_count': metadata_person_count,
+            'missing_ppe': metadata_missing_ppe,
+            'ppe_tags': metadata_ppe_tags,
+            'violation_summary': metadata_violation_summary,
+            'violation_type': metadata_violation_type,
+            'device_id': metadata_device_id,
         })
 
     return rows
@@ -8717,33 +8810,16 @@ def _sync_local_cache_candidates(
     reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
     is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
 
-    # Hard guard: in cloud routing profile the live capture path uploads
-    # artifacts to Supabase Storage at the end of NLP generation, so there
-    # is nothing legitimate to "reconcile". Running the sweep anyway races
-    # against just-completed reports (local files exist, DB read-back not
-    # yet visible) and rewrites them as `synced_local` (Local Synced badge)
-    # with the metadata `source_scope='synced_local'`. Skip entirely in
-    # cloud mode for non-dry-run callers (auto-reconnect from frontend,
-    # manual API, queue-worker auto sweep). Dry-run is preserved so the
-    # admin diagnostics still work.
+    # In cloud routing profile we still want the sweep to run so reports
+    # created during a previous local-mode session can be reconciled to
+    # Supabase (and tagged "Local Synced"). However we MUST NOT mistag
+    # in-flight cloud-mode reports, which briefly have a local report.html
+    # before their cloud artifact upload completes. So in cloud mode we
+    # restrict the candidate filter to "true orphans": reports that have
+    # no detection_event row at all. Anything with an event was created by
+    # the live cloud worker and will finish on its own.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-    if active_profile != 'local' and not dry_run:
-        logger.info(
-            f"Skipping local-cache sync sweep ({reason}): cloud routing profile "
-            "uploads artifacts inline, no reconciliation needed."
-        )
-        return {
-            'success': True,
-            'reconcile_reason': reason,
-            'dry_run': False,
-            'scanned': 0,
-            'candidates': 0,
-            'enqueued': 0,
-            'skipped': 0,
-            'errors': [],
-            'worker_running': bool(violation_queue is not None),
-            'skipped_reason': 'cloud_routing_profile',
-        }
+    cloud_mode_orphans_only = (active_profile != 'local')
 
     if (db_manager is None or storage_manager is None) and not dry_run:
         if _is_supabase_offline_backoff_active():
@@ -8882,6 +8958,15 @@ def _sync_local_cache_candidates(
             continue
 
         if local_has_report and event_status in ('pending', 'queued', 'processing', 'generating'):
+            # In cloud mode this is almost always an in-flight cloud worker
+            # that has just finished writing report.html locally and is now
+            # uploading to Supabase. Auto-healing the status here and then
+            # enqueuing a sync job races the live worker and mistags the
+            # report as "Local Synced". Only auto-heal in local mode where
+            # there's no concurrent cloud worker.
+            if cloud_mode_orphans_only:
+                skipped += 1
+                continue
             try:
                 if hasattr(db_manager, 'update_detection_status'):
                     db_manager.update_detection_status(
@@ -8901,12 +8986,20 @@ def _sync_local_cache_candidates(
         has_cloud_annotated = bool((violation or {}).get('annotated_image_key'))
         has_cloud_report = bool((violation or {}).get('report_html_key'))
 
-        needs_sync = (
-            not event
-            or not has_cloud_original
-            or (annotated_path.exists() and not has_cloud_annotated)
-            or (local_has_report and not has_cloud_report)
-        )
+        if cloud_mode_orphans_only:
+            # Cloud routing profile: only reconcile reports that have no
+            # detection event at all (true local-mode orphans). Reports
+            # that already have an event were generated by the live cloud
+            # worker; if any cloud key is briefly missing, that's a
+            # mid-flight upload and the worker will finish it.
+            needs_sync = not event
+        else:
+            needs_sync = (
+                not event
+                or not has_cloud_original
+                or (annotated_path.exists() and not has_cloud_annotated)
+                or (local_has_report and not has_cloud_report)
+            )
 
         if not needs_sync:
             skipped += 1

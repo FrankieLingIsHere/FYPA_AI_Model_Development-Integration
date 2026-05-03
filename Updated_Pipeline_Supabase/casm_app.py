@@ -2574,7 +2574,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
     return summary
 
 
-
+def start_queue_worker_watchdog() -> bool:
     """Start watchdog thread that keeps queue worker healthy without manual intervention."""
     global queue_worker_watchdog_thread, queue_worker_watchdog_running
 

@@ -2380,6 +2380,47 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
     return summary
 
 
+def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
+    """Validate an image downloaded for cloud-pending recovery.
+
+    Returns (is_valid, reason). Rejects when the file is missing, smaller
+    than a JPEG can plausibly be, undecodable by OpenCV, or near-uniform
+    black / extremely dark (mean pixel intensity below threshold AND very
+    low spatial variance — i.e. essentially a solid black frame).
+
+    The thresholds are intentionally conservative so that legitimately dark
+    scenes (night-time CCTV, low-light warehouse) are NOT rejected. Only
+    images that are essentially uniform-zero get filtered.
+    """
+    try:
+        if not image_path or not image_path.exists():
+            return False, 'image_missing'
+        size_bytes = image_path.stat().st_size
+        if size_bytes < 512:
+            return False, f'image_too_small ({size_bytes} bytes)'
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if img is None or img.size == 0:
+            return False, 'image_decode_failed'
+        # mean intensity over all channels; std dev as spatial variance proxy.
+        try:
+            mean_intensity = float(img.mean())
+            std_intensity = float(img.std())
+        except Exception:
+            return True, 'stats_unavailable'  # don't false-reject on numpy weirdness
+        # Solid-black-ish frame: very low mean AND very low variance.
+        # Real dark scenes still have noise/texture giving std > 5.
+        if mean_intensity < 4.0 and std_intensity < 3.0:
+            return False, (
+                f'image_appears_black (mean={mean_intensity:.2f}, std={std_intensity:.2f})'
+            )
+        return True, 'ok'
+    except Exception as validate_err:
+        # On unexpected validator failures, accept the image rather than
+        # blocking recovery on a bug in the validator itself.
+        logger.debug(f"_validate_recovery_image error for {image_path}: {validate_err}")
+        return True, 'validator_error'
+
+
 def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str, Any]:
     """
     Cloud-mode counterpart to _run_local_pending_recovery_sweep.
@@ -2511,6 +2552,39 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                     annotated_path.write_bytes(blob)
             except Exception:
                 pass  # Annotated image is optional; fall back to original.
+
+        # Guard against producing "black picture" recovery reports.
+        # If the downloaded original is empty / undecodable / near-uniform
+        # black (e.g. corrupted Supabase upload from a prior failed run, or
+        # a 0-byte placeholder), do NOT re-enqueue. Mark the original
+        # detection_event as failed so it stops being a recovery candidate.
+        is_image_valid, image_reject_reason = _validate_recovery_image(original_path)
+        if not is_image_valid:
+            logger.warning(
+                f"Cloud pending recovery: rejecting {report_id} ({image_reject_reason}); "
+                "marking as failed to prevent black-picture report regeneration."
+            )
+            try:
+                # Best-effort: remove the bad downloaded file so the next
+                # sweep does not see original_path.exists() and skip the
+                # download attempt entirely.
+                if original_path.exists():
+                    original_path.unlink()
+            except Exception:
+                pass
+            try:
+                if db_manager and hasattr(db_manager, 'update_detection_status'):
+                    db_manager.update_detection_status(
+                        report_id,
+                        'failed',
+                        f'Cloud pending recovery aborted: {image_reject_reason}',
+                    )
+            except Exception as status_err:
+                logger.debug(
+                    f"Cloud pending recovery: could not mark {report_id} failed: {status_err}"
+                )
+            summary['skipped_download_failed'] += 1
+            continue
 
         effective_annotated = annotated_path if annotated_path.exists() else original_path
 

@@ -4348,6 +4348,23 @@ def api_violations():
                 detection_data=detection_data_parsed,
                 local_only=False,
             )
+
+            # Diagnostic: log how each scope decision was made so cloud-mode
+            # mistags ("Local Synced" on a fresh report) can be traced from
+            # Railway logs without needing the full DB row.
+            try:
+                logger.info(
+                    "[scope-debug] report=%s scope=%s reason=%s device_id=%s "
+                    "has_cloud=%s has_local=%s detection_source_scope=%s "
+                    "detection_source=%s detection_sync_source=%s",
+                    report_id, source_scope, source_reason, v.get('device_id'),
+                    has_cloud_artifacts, has_local_artifacts,
+                    (detection_data_parsed or {}).get('source_scope'),
+                    (detection_data_parsed or {}).get('source'),
+                    (detection_data_parsed or {}).get('sync_source'),
+                )
+            except Exception:
+                pass
             
             formatted_violations.append({
                 'report_id': report_id,

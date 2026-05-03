@@ -4136,12 +4136,38 @@ def api_violations():
 
         detection_data = detection_data if isinstance(detection_data, dict) else {}
 
+        # Routing profile of the live runtime. Used below to repair stored
+        # mistags from the historical local-cache sync sweep when the
+        # deployment is actually a cloud-mode runtime.
+        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+
         explicit_scope = _normalize_source_scope(
             detection_data.get('source_scope')
             or detection_data.get('report_scope')
             or detection_data.get('scope')
         )
         if explicit_scope:
+            # Repair: a previous build's local-cache sync sweep stamped
+            # cloud-mode reports with detection_data.source_scope='synced_local'
+            # (and a non-local device_id, often null). When we are running in
+            # cloud mode and the device is not a local marker, ignore the
+            # historical synced_local tag so the badge displays as "Cloud"
+            # again. Genuine local/synced_local rows from a local-mode
+            # runtime are preserved (their device_id starts with local_*
+            # / offline_*).
+            device_key_for_repair = str(device_id or '').strip().lower()
+            is_local_device_for_repair = (
+                device_key_for_repair in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
+                or device_key_for_repair.startswith('local_')
+                or device_key_for_repair.startswith('offline_')
+            )
+            if (
+                explicit_scope == 'synced_local'
+                and active_profile != 'local'
+                and not is_local_device_for_repair
+                and has_cloud_artifacts
+            ):
+                return 'cloud', 'repaired_synced_local_in_cloud_mode'
             return explicit_scope, 'detection_data.scope'
 
         source_marker = str(
@@ -4164,8 +4190,8 @@ def api_violations():
         # ALWAYS writes original.jpg / annotated.jpg to the local violations
         # directory before uploading them to Supabase Storage, so the presence
         # of those local artifacts mid-flight must NOT be misread as a
-        # "Local" report.
-        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        # "Local" report. (active_profile already captured at the top of this
+        # function.)
 
         if has_cloud_artifacts and is_local_device:
             return 'synced_local', 'cloud_record_local_device'
@@ -8690,6 +8716,34 @@ def _sync_local_cache_candidates(
 
     reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
     is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
+
+    # Hard guard: in cloud routing profile the live capture path uploads
+    # artifacts to Supabase Storage at the end of NLP generation, so there
+    # is nothing legitimate to "reconcile". Running the sweep anyway races
+    # against just-completed reports (local files exist, DB read-back not
+    # yet visible) and rewrites them as `synced_local` (Local Synced badge)
+    # with the metadata `source_scope='synced_local'`. Skip entirely in
+    # cloud mode for non-dry-run callers (auto-reconnect from frontend,
+    # manual API, queue-worker auto sweep). Dry-run is preserved so the
+    # admin diagnostics still work.
+    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    if active_profile != 'local' and not dry_run:
+        logger.info(
+            f"Skipping local-cache sync sweep ({reason}): cloud routing profile "
+            "uploads artifacts inline, no reconciliation needed."
+        )
+        return {
+            'success': True,
+            'reconcile_reason': reason,
+            'dry_run': False,
+            'scanned': 0,
+            'candidates': 0,
+            'enqueued': 0,
+            'skipped': 0,
+            'errors': [],
+            'worker_running': bool(violation_queue is not None),
+            'skipped_reason': 'cloud_routing_profile',
+        }
 
     if (db_manager is None or storage_manager is None) and not dry_run:
         if _is_supabase_offline_backoff_active():

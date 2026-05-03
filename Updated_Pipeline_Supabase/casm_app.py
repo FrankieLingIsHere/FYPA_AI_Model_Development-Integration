@@ -13685,6 +13685,18 @@ def provision_request():
     repeated_pending_request = existing_status in ('pending', 'pending_approval')
     effective_status = existing_status if preserve_status else 'pending'
 
+    # Idempotency: when an already-approved/provisioned device re-requests with
+    # proof-of-prior-trust (matching current_provision_secret), DO NOT rotate the
+    # secret. Rotating on every call creates a multi-tab race where one tab/page
+    # rotates the server hash and another tab's cached secret (e.g. the one the
+    # user is about to use to download the installer) becomes invalid, surfacing
+    # as "Invalid provision_secret" at /api/bootstrap/installer/request. Echo back
+    # the same secret the caller already holds so all open clients stay in sync.
+    secret_rotated = True
+    if preserve_status and rerequest_authenticated_by_secret and presented_existing_secret:
+        provision_secret = presented_existing_secret
+        secret_rotated = False
+
     if preserve_status or repeated_pending_request:
         approval_token = str((existing or {}).get('token') or '').strip() or secrets.token_urlsafe(32)
     else:
@@ -13719,7 +13731,11 @@ def provision_request():
         'status': effective_status,
         'requested_at': requested_at_value,
         'token': approval_token,
-        'provision_secret_hash': _hash_provision_secret(provision_secret),
+        'provision_secret_hash': (
+            str((existing or {}).get('provision_secret_hash') or '').strip()
+            if not secret_rotated
+            else _hash_provision_secret(provision_secret)
+        ),
         'approved_at': existing_approved_at if preserve_status else None,
         'provisioned_at': existing_provisioned_at if effective_status == 'provisioned' else None,
     }
@@ -13751,6 +13767,7 @@ def provision_request():
         'device_status': effective_status,
         'machine_id': machine_id,
         'provision_secret': provision_secret,
+        'secret_rotated': secret_rotated,
         'notification_dispatched': bool(notify_pending_request),
         'notification_reason': notification_reason,
     })

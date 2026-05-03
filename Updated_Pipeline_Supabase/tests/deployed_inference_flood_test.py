@@ -160,8 +160,8 @@ def main() -> int:
     success_ratio = (success_like / total) if total else 0.0
     effective_min_ratio = MIN_SUCCESS_RATIO
     if total:
-        one_failure_ratio = (total - 1) / total
-        effective_min_ratio = min(MIN_SUCCESS_RATIO, one_failure_ratio)
+        allow_one_failure_ratio = (total - 1) / total
+        effective_min_ratio = min(MIN_SUCCESS_RATIO, allow_one_failure_ratio)
     min_successes = int(round(total * effective_min_ratio)) if total else 0
     if total and min_successes == 0:
         min_successes = 1

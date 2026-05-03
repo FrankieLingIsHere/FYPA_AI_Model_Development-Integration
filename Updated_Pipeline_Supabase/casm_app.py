@@ -2602,12 +2602,19 @@ def queue_worker_loop():
                 and now_epoch - last_local_pending_recovery_sweep_epoch >= LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
                 last_local_pending_recovery_sweep_epoch = now_epoch
-                recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
-                enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
-                if enqueued_count > 0:
-                    logger.info(
-                        f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
-                    )
+                # Only run local pending recovery in local routing mode.
+                # In cloud mode the live cloud worker handles all new reports;
+                # re-enqueuing stale local violation folders (e.g. dark frames
+                # from a previous local session where the camera wasn't ready)
+                # produces spurious black-picture reports that confuse the UI.
+                _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+                if _queue_worker_routing == 'local':
+                    recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
+                    enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
+                    if enqueued_count > 0:
+                        logger.info(
+                            f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
+                        )
 
             if violation_queue is None:
                 time.sleep(1)

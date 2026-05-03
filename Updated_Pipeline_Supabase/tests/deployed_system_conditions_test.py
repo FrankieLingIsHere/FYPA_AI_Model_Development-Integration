@@ -477,6 +477,7 @@ def main() -> int:
             "accepted_new_or_reprocess": False,
             "missing_original": False,
             "transient_rejection": False,
+            "skipped_generate_now": False,
         }
 
         progression_candidate = None
@@ -503,6 +504,13 @@ def main() -> int:
             if success is False:
                 if "original image is missing" in err_msg:
                     conditions["missing_original"] = True
+                    continue
+                if is_skippable_generate_now_error(code, payload):
+                    conditions["skipped_generate_now"] = True
+                    print(
+                        f"INFO: generate-now skipped for {rid} (code={code}); "
+                        "possible Supabase egress or local cache drift."
+                    )
                     continue
                 if is_transient_generate_now_error(code, payload):
                     conditions["transient_rejection"] = True

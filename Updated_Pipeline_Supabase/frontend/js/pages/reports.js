@@ -1662,15 +1662,15 @@ const ReportsPage = {
         const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
                              (violation.severity === 'MEDIUM' ? 'warning' : 'info');
         
-        return `
-            <div class="report_card" id="report-${violation.report_id}" 
+                return `
+            <div class="report_card ${sourceScope === 'local' ? 'report-card-local' : ''}" id="report-${violation.report_id}" 
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${violation.has_annotated ? 
                         `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async"
-                              onerror="if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
-                              style="width: 100%; height: 100%; object-fit: cover;">
+                               onerror="if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
+                               style="width: 100%; height: 100%; object-fit: cover;">
                          <div data-image-fallback style="display: none; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>
                          </div>` :
@@ -1688,6 +1688,11 @@ const ReportsPage = {
                             </div>
                         </div>
                     ` : ''}
+                    <div class="report-source-indicator" style="position: absolute; top: 0.5rem; left: 0.5rem; z-index: 10;">
+                        <span class="badge badge-${sourceInfo.color}" style="box-shadow: 0 2px 4px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2);">
+                            <i class="fas ${sourceInfo.icon}"></i> ${sourceInfo.label}
+                        </span>
+                    </div>
                 </div>
                 <div class="card-content">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
@@ -1704,15 +1709,12 @@ const ReportsPage = {
                         </span>
                     </div>
                     
-                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
-                        ${violation.has_original ? '<span class="badge badge-success"><i class="fas fa-image"></i> Original</span>' : ''}
-                        ${violation.has_annotated ? '<span class="badge badge-success"><i class="fas fa-draw-polygon"></i> Annotated</span>' : ''}
+                    <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem;">
                         <span class="badge badge-${statusInfo.color}">
                             <i class="fas ${statusInfo.icon}"></i> ${statusInfo.text}
                         </span>
-                        <span class="badge badge-${sourceInfo.color}" title="Report source: ${sourceInfo.label}">
-                            <i class="fas ${sourceInfo.icon}"></i> ${sourceInfo.label}
-                        </span>
+                        ${violation.has_original ? '<span class="badge badge-success"><i class="fas fa-image"></i> Original</span>' : ''}
+                        ${violation.has_annotated ? '<span class="badge badge-success"><i class="fas fa-draw-polygon"></i> Annotated</span>' : ''}
                     </div>
                     
                     <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">

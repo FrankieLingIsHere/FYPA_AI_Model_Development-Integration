@@ -134,7 +134,9 @@ const ViolationMonitor = {
                 // Check if this is a NEW violation (not seen before)
                 if (!previousData) {
                     // Only show real-time notifications for violations created AFTER session started
-                    const isNewDuringSession = violationTime > this.sessionStartTime;
+                    // (with a 5s grace buffer to account for minor clock drift)
+                    const sessionStartWithBuffer = new Date(this.sessionStartTime.getTime() - 5000);
+                    const isNewDuringSession = violationTime > sessionStartWithBuffer;
 
                     if (isNewDuringSession) {
                         console.log(`[ViolationMonitor] 🆕 NEW real-time violation: ${reportId} (status=${status})`);

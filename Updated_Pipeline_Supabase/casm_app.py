@@ -5940,19 +5940,19 @@ def api_realtime_stream():
             )
 
             # Push update when state changes; otherwise keep connection warm.
-            if signature != last_signature or (active_generation and heartbeat_counter >= 3):
+            if signature != last_signature or (active_generation and heartbeat_counter >= 2):
                 data = json.dumps(payload, default=str)
                 yield f"event: update\ndata: {data}\n\n"
                 last_signature = signature
                 heartbeat_counter = 0
             else:
                 heartbeat_counter += 1
-                if heartbeat_counter >= 8:
+                if heartbeat_counter >= 15:
                     heartbeat_counter = 0
                     ping = json.dumps({'server_time': datetime.now(timezone.utc).isoformat()})
                     yield f"event: heartbeat\ndata: {ping}\n\n"
 
-            time.sleep(2)
+            time.sleep(1)
 
     response = Response(_event_stream(), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
@@ -14489,7 +14489,7 @@ def download_bootstrap_installer():
     token_ok, token_payload, token_error = _verify_bootstrap_token(
         token,
         expected_purpose='installer_download',
-        consume=True,
+        consume=False,
     )
     if not token_ok or token_payload is None:
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
@@ -14759,7 +14759,7 @@ def admin_devices():
                                     <button type="submit" name="action" value="reject" class="btn btn-danger">Reject Device</button>
                                 </form>
                                 {% elif status in ['approved', 'provisioned'] %}
-                                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Issue One-Time Installer Download</a>
+                                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Download Installer (Reusable for 10m)</a>
                                 <form method="POST" style="display:inline;" onsubmit="return confirm('Revoke this device? It will no longer be able to refresh credentials and will need to re-request approval.');">
                                     <input type="hidden" name="machine_id" value="{{ m_id }}">
                                     <button type="submit" name="action" value="revoke" class="btn btn-danger">Revoke Access</button>
@@ -14961,7 +14961,7 @@ def admin_devices_quick_approve():
                         Machine <strong>{{ machine_id }}</strong> has been granted access.
                     </p>
                     <div class="approval-actions">
-                        <a href="{{ installer_request_link }}" class="btn btn-primary">Issue One-Time Installer Download</a>
+                        <a href="{{ installer_request_link }}" class="btn btn-primary">Download Installer (Reusable for 10m)</a>
                         <a href="/admin/devices" class="btn btn-secondary">Return to Admin Dashboard</a>
                     </div>
                 </div>

@@ -224,53 +224,83 @@ const API = {
         return `ppe-cache-v1:${scope}`;
     },
 
-    writeJsonCache(scope, payload) {
+    async writeJsonCache(scope, payload) {
+        const envelope = {
+            ts: Date.now(),
+            data: payload
+        };
+        const key = this.getCacheStorageKey(scope);
+        
+        // 1. Always try IndexedDB first (primary)
+        if (typeof IndexedDBManager !== 'undefined') {
+            const success = await IndexedDBManager.setItem(key, envelope);
+            if (success) return;
+        }
+
+        // 2. Fallback to localStorage (best-effort)
         try {
-            const envelope = {
-                ts: Date.now(),
-                data: payload
-            };
-            localStorage.setItem(this.getCacheStorageKey(scope), JSON.stringify(envelope));
+            localStorage.setItem(key, JSON.stringify(envelope));
         } catch (error) {
-            // Best-effort cache only.
+            // Storage quota likely exceeded
         }
     },
 
-    readJsonCache(scope) {
+    async readJsonCache(scope) {
+        const key = this.getCacheStorageKey(scope);
+
+        // 1. Try IndexedDB first
+        if (typeof IndexedDBManager !== 'undefined') {
+            const cached = await IndexedDBManager.getItem(key);
+            if (cached) return cached;
+        }
+
+        // 2. Fallback to localStorage
         try {
-            const raw = localStorage.getItem(this.getCacheStorageKey(scope));
+            const raw = localStorage.getItem(key);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return null;
+            
+            // Migration: Move to IndexedDB for next time if possible
+            if (typeof IndexedDBManager !== 'undefined') {
+                IndexedDBManager.setItem(key, parsed);
+            }
+            
             return parsed;
         } catch (error) {
             return null;
         }
     },
 
-    async fetchJsonWithCache(url, {
-        cacheScope,
-        timeoutMs = 8000,
-        preferFresh = true
-    } = {}) {
-        const scope = cacheScope || url;
-        const cached = this.readJsonCache(scope);
+    async fetchJsonWithCache(url, options = {}) {
+        const scope = options.cacheScope || url;
+        const cached = await this.readJsonCache(scope);
+
+        if (cached && !options.noCache) {
+            const age = Date.now() - cached.ts;
+            if (age < (options.ttl || 300000)) {
+                return cached.data;
+            }
+        }
 
         if (!navigator.onLine && cached) {
             return cached.data;
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || 8000);
 
         try {
             const response = await fetch(url, {
                 signal: controller.signal,
-                cache: preferFresh ? 'no-store' : 'default'
+                cache: options.preferFresh ? 'no-store' : 'default'
             });
             if (!response.ok) throw new Error(`Request failed: ${response.status}`);
             const data = await response.json();
-            this.writeJsonCache(scope, data);
+            if (data && !data.error && Array.isArray(data)) {
+                this.writeJsonCache(scope, data);
+                return data;
+            }
             return data;
         } catch (error) {
             if (cached) {
@@ -283,12 +313,9 @@ const API = {
         }
     },
 
-    async fetchJsonNoCache(url, {
-        cacheScope,
-        timeoutMs = 12000
-    } = {}) {
+    async fetchJsonNoCache(url, options = {}) {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || 12000);
 
         try {
             const response = await fetch(url, {
@@ -297,8 +324,8 @@ const API = {
             });
             if (!response.ok) throw new Error(`Request failed: ${response.status}`);
             const data = await response.json();
-            if (cacheScope) {
-                this.writeJsonCache(cacheScope, data);
+            if (options.cacheScope) {
+                await this.writeJsonCache(options.cacheScope, data);
             }
             return data;
         } finally {
@@ -394,21 +421,24 @@ const API = {
         const noCache = !!options.noCache;
         const cacheScope = `violations:limit:${safeLimit}`;
 
+        if (!noCache) {
+            const cached = await this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                return cached.data;
+            }
+        }
+
         try {
             const url = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
-            let data = noCache
-                ? await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs })
-                : await this.fetchJsonWithCache(url, { cacheScope: null, timeoutMs });
-            let list = Array.isArray(data) ? data : [];
+            let list = await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs });
+            list = Array.isArray(list) ? list : [];
 
             // OPTIMISTIC UI MERGING: Merge cloud reports if in local mode
             const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
             if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase) {
                 try {
                     const cloudUrl = `${cloudUrlBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
-                    const cloudData = noCache
-                        ? await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 })
-                        : await this.fetchJsonWithCache(cloudUrl, { timeoutMs: 5000 });
+                    const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });
                     if (Array.isArray(cloudData)) {
                         list = this._mergeOptimistically(cloudData, list, safeLimit);
                     }
@@ -418,7 +448,7 @@ const API = {
             }
 
             // Fallback merging with cache (retains cloud reports offline)
-            const cached = this.readJsonCache(cacheScope);
+            const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
                 list = this._mergeOptimistically(cached.data, list, safeLimit);
             }
@@ -428,11 +458,9 @@ const API = {
             return list;
         } catch (error) {
             console.error('Error fetching violations:', error);
-            if (noCache) {
-                const cached = this.readJsonCache(cacheScope);
-                if (cached && Array.isArray(cached.data)) {
-                    return cached.data;
-                }
+            const cached = await this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                return cached.data;
             }
             return [];
         }
@@ -468,7 +496,7 @@ const API = {
         } catch (error) {
             console.error('Error fetching report status:', error);
             if (noCache) {
-                const cached = this.readJsonCache(cacheScope);
+                const cached = await this.readJsonCache(cacheScope);
                 if (cached && cached.data && typeof cached.data === 'object') {
                     return cached.data;
                 }
@@ -486,21 +514,24 @@ const API = {
         const noCache = !!options.noCache;
         const cacheScope = 'reports:pending';
 
+        if (!noCache) {
+            const cached = await this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                return cached.data;
+            }
+        }
+
         try {
             const url = `${API_CONFIG.BASE_URL}/api/reports/pending`;
-            let data = noCache
-                ? await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs })
-                : await this.fetchJsonWithCache(url, { cacheScope: null, timeoutMs });
-            let list = Array.isArray(data) ? data : [];
+            let list = await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs });
+            list = Array.isArray(list) ? list : [];
 
             // OPTIMISTIC UI MERGING
             const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
             if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase) {
                 try {
                     const cloudUrl = `${cloudUrlBase}/api/reports/pending`;
-                    const cloudData = noCache
-                        ? await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 })
-                        : await this.fetchJsonWithCache(cloudUrl, { timeoutMs: 5000 });
+                    const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });
                     if (Array.isArray(cloudData)) {
                         list = this._mergeOptimistically(cloudData, list, 100);
                     }
@@ -509,7 +540,7 @@ const API = {
                 }
             }
 
-            const cached = this.readJsonCache(cacheScope);
+            const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
                 list = this._mergeOptimistically(cached.data, list, 100);
             }
@@ -518,11 +549,9 @@ const API = {
             return list;
         } catch (error) {
             console.error('Error fetching pending reports:', error);
-            if (noCache) {
-                const cached = this.readJsonCache(cacheScope);
-                if (cached && Array.isArray(cached.data)) {
-                    return cached.data;
-                }
+            const cached = await this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                return cached.data;
             }
             return [];
         }

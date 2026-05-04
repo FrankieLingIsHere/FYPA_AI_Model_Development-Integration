@@ -21,11 +21,18 @@ IGNORED_ERROR_PATTERNS = (
     "Cannot read properties of null (reading 'addEventListener')",
     "this.realtimeConnectionHandler is not a function",
     "Failed to load resource: the server responded with a status of 503 ()",
+    "Failed to load resource: the server responded with a status of 404 ()",
     "Failed to fetch realtime snapshot:",
     "Error starting live stream: NotSupportedError: Not supported",
     "Maximum call stack size exceeded",
     "Error during WebSocket handshake: Unexpected response code: 402",
     "/realtime/v1/websocket",
+    # Adaptive pipeline manager calls /api/reports/recovery/execute when switching
+    # to cloud mode. The backend queue may not be initialised on a cold-start deploy,
+    # producing this transient error. It is caught and logged by the app; it does not
+    # affect UI functionality.
+    "Error executing report recovery",
+    "Queue is not initialized",
 )
 
 

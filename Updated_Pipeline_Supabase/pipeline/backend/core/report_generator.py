@@ -1631,12 +1631,24 @@ RESPONSE FORMAT (JSON):
 
         self.last_nlp_error = None
         logger.info("[OK] Ollama NLP analysis completed with model '%s'", self.last_ollama_model_used)
-        return nlp_response
-    
-    # =========================================================================
-    # REPORT GENERATION
-    # =========================================================================
-    
+    def get_safety_summary_prompt(self, report_data: Dict[str, Any]) -> str:
+        """Build executive safety summary prompt for Gemini/Ollama."""
+        return (
+            "You are a Senior Safety Compliance Officer in Malaysia. Summarize this safety incident.\n\n"
+            "Style: Executive, professional, authoritative.\n"
+            "Language: UK English (Malaysia standard).\n"
+            "Format: 3-4 bullet points starting with emojis.\n\n"
+            "Required sections:\n"
+            "• [Emoji] Incident Classification (High/Medium/Low based on VISUAL evidence)\n"
+            "• [Emoji] Core Violation (Primary regulation breached, e.g., OSHA 1994 Section 15)\n"
+            "• [Emoji] Immediate Risk (Life-threatening vs standard risk)\n"
+            "• [Emoji] Critical Action (Stop work, issue PPE, or toolbox talk)\n\n"
+            "Rules:\n"
+            "- Do not be generic (e.g., don't say 'worker is not wearing PPE').\n"
+            "- Be specific (e.g., 'Worker exposed to fatal head trauma due to missing rigid hardhat in construction zone').\n"
+            "- Ground every claim in the visual evidence provided.\n"
+        )
+
     def generate_report(self, report_data: Dict[str, Any]) -> Dict[str, Optional[Path]]:
         """
         Generate complete violation report.
@@ -1671,9 +1683,24 @@ RESPONSE FORMAT (JSON):
                 report_data['vlm_caption'] = caption_floor
         
         # Step 1: RAG - Retrieve relevant context
+        # Check for Malaysian regulations context injection
+        regulation_context = ""
+        detections = report_data.get('detections', [])
+        violation_classes = [d.get('class_name') for d in detections if d.get('class_name', '').startswith('NO-')]
+        
+        caption = report_data.get('caption', '')
+        env_type = self._extract_environment_from_caption(caption)
+        
+        if self.regulations_data:
+            regulation_context = build_regulation_context(
+                self.regulations_data, 
+                detected_violations=violation_classes,
+                environment_type=env_type
+            )
+            logger.info("Injected Malaysian regulation context into NLP prompt")
+
         similar_incidents = []
         dosh_context = []
-        regulation_context = ""
         
         if self.rag_enabled:
             query_text = f"{report_data.get('caption', '')} {report_data.get('violation_summary', '')}"
@@ -1703,6 +1730,10 @@ RESPONSE FORMAT (JSON):
         # Step 2: NLP - Generate analysis
         nlp_analysis = None
         prompt = self._build_nlp_prompt(report_data, similar_incidents, dosh_context)
+        
+        # Add safety summary prompt to the instruction set
+        prompt += "\n\n=== SPECIAL INSTRUCTION FOR SUMMARY FIELD ===\n"
+        prompt += self.get_safety_summary_prompt(report_data)
         
         # Inject regulation context into prompt if using Gemini
         if regulation_context:
@@ -1981,6 +2012,11 @@ RESPONSE FORMAT (JSON):
                 "NLP summary appears ungrounded for report %s; replacing with grounded summary",
                 report_data.get('report_id')
             )
+            nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
+
+        # Force a professional Malaysian context summary if it's too short or too generic
+        if len(nlp_analysis.get('summary', '')) < 50 or 'the worker' in nlp_analysis.get('summary', '').lower()[:20]:
+            logger.info("Re-grounding summary with executive Malaysian safety context")
             nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
@@ -3063,10 +3099,10 @@ RESPONSE FORMAT (JSON):
                         </div>
 
                         <div class="card">
-                            <div class="card-header">Summary</div>
+                            <div class="card-header"><i class="fas fa-file-alt" style="margin-right: 0.5rem; color: var(--primary);"></i>Executive Summary</div>
                             <div class="card-content">
                                 {self._format_summary_html(nlp_analysis, report_data)}
-                                {f"<p style='margin-top: 1rem; font-style: italic; color: #7f8c8d;'>{nlp_analysis.get('environment_assessment', '')}</p>" if nlp_analysis.get('environment_assessment') else ''}
+                                {f"<p style='margin-top: 1rem; font-style: italic; color: #7f8c8d; border-left: 3px solid var(--secondary); padding-left: 0.8rem;'>{nlp_analysis.get('environment_assessment', '')}</p>" if nlp_analysis.get('environment_assessment') else ''}
                             </div>
                         </div>
                     </div>
@@ -3197,6 +3233,17 @@ RESPONSE FORMAT (JSON):
     
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
+        # Convert markdown-style bullet points from model summary to clean HTML list
+        text = str(nlp_analysis.get('summary', '') or '').strip()
+        if not text:
+            return "<p>No summary provided.</p>"
+
+        # Handle Malaysian Executive Summary format (bullet points with emojis)
+        if '•' in text or '*' in text:
+            lines = [line.strip(' *•') for line in text.split('\n') if line.strip()]
+            list_items = "".join([f"<li style='margin-bottom: 0.6rem;'>{self._to_safe_html_text(line)}</li>" for line in lines])
+            return f"<ul style='list-style-type: none; padding-left: 0; margin: 0;'>{list_items}</ul>"
+
         import re
 
         summary_text = str(nlp_analysis.get('summary') or '').strip()
@@ -3504,6 +3551,17 @@ RESPONSE FORMAT (JSON):
         </div>
         """
 
+    def _get_malaysian_severity_label(self, likelihood: str) -> str:
+        """Convert likelihood to Malaysian safety severity terminology."""
+        lik = likelihood.lower()
+        if 'very high' in lik or 'fatal' in lik or 'catastrophic' in lik:
+            return "CRITICAL (Immediate Danger to Life & Health)"
+        if 'high' in lik:
+            return "MAJOR (High Potential for LTA)"
+        if 'medium' in lik:
+            return "MODERATE (Standard Risk)"
+        return "MINOR (Administrative Follow-up)"
+
     def _ensure_list_of_strings(self, data: Any) -> List[str]:
         """Helper to ensure data is a list of strings, handling parsing of limiters."""
         if not data:
@@ -3779,6 +3837,11 @@ RESPONSE FORMAT (JSON):
         normalized['persons'] = persons_out
         return normalized
 
+    def _to_safe_html_text(self, text: Any) -> str:
+        """Convert text to safe HTML, handling None/types."""
+        if text is None: return ""
+        return html.escape(str(text))
+
     def _content_tokens(self, text: str) -> List[str]:
         """Extract lightweight content tokens for lexical grounding checks."""
         text = str(text or '').lower()
@@ -3958,6 +4021,20 @@ RESPONSE FORMAT (JSON):
         # Keep the model caption when it is already detailed and grounded.
         return raw_caption_clean
 
+    def _rebuild_scene_from_malaysian_context(self, report_data: Dict[str, Any], env_type: str) -> str:
+        """Helper to inject Malaysian regulatory terminology into scene description."""
+        caption = report_data.get('caption', '')
+        detections = report_data.get('detections', [])
+        
+        desc = f"Visual assessment of {env_type.lower()} zone in Malaysia. "
+        desc += caption if caption else "General work activity observed. "
+        
+        violation_labels = [d.get('class_name', '').replace('NO-', '') for d in detections if d.get('class_name', '').startswith('NO-')]
+        if violation_classes := list(dict.fromkeys(violation_labels)):
+            desc += f" Non-compliance with DOSH guidelines detected for: {', '.join(violation_classes)}."
+            
+        return desc
+
     def _build_grounded_summary_text(self, report_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> str:
         """Build concise grounded summary when model summary is unrelated to visual evidence."""
         detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
@@ -3987,12 +4064,12 @@ RESPONSE FORMAT (JSON):
             issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
 
         summary_parts = [
-            f"• **SCENE CLASS**: {env}",
-            f"• **CRITICAL OBSERVATION**: {issue_text}",
+            f"• 🚨 **INCIDENT**: {env} Safety Violation",
+            f"• 🔍 **CRITICAL GAP**: Missing {', '.join(missing_items[:3]) if missing_items else 'PPE compliance'}",
         ]
         if context_sentence:
-            summary_parts.append(f"• **VISUAL CONTEXT**: {context_sentence}")
-        summary_parts.append("• **LEGAL ORDER**: enforce compliant PPE before work resumes")
+            summary_parts.append(f"• 👁️ **EVIDENCE**: {context_sentence}")
+        summary_parts.append("• 🛑 **DIRECTIVE**: Halt work and enforce PPE per OSHA 1994")
         return '\n'.join(summary_parts)
 
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
@@ -4285,10 +4362,15 @@ RESPONSE FORMAT (JSON):
                 }
                 persons.append(ph)
 
+        # Apply Malaysian terminology to person count heading if needed
+        person_header_suffix = "Individual Analysis"
+        if len(persons) > 0:
+            person_header_suffix += f" ({len(persons)} Operative{'s' if len(persons) > 1 else ''} Identified)"
+
         if not persons:
-            return """
+            return f"""
             <div class="section">
-                <h2 class="section-title"><i class="fas fa-users"></i> Individual Analysis</h2>
+                <h2 class="section-title"><i class="fas fa-users"></i> {person_header_suffix}</h2>
                 <div class="card">
                     <div class="card-content">
                         <p>No person-level analysis returned by model.</p>
@@ -4301,6 +4383,8 @@ RESPONSE FORMAT (JSON):
         person_cards = []
         for i, person in enumerate(persons):
             person_id_raw = str(person.get('id') or f'Person {i + 1}').strip()
+            # In Malaysia, we use 'Operative' or 'Worker' for site personnel
+            person_id = f"Operative {i + 1}" if 'Person' in person_id_raw else person_id_raw
             description = self._to_safe_html_text(person.get('description') or '')
             compliance = str(person.get('compliance_status') or '').strip()
 
@@ -4348,9 +4432,9 @@ RESPONSE FORMAT (JSON):
 
             # Keep model compliance when provided; infer only when absent.
             if not compliance and has_missing_ppe:
-                compliance = 'Non-Compliant'
+                compliance = 'NON-COMPLIANT (Breach of Regulation)'
             elif not compliance:
-                compliance = 'Not Specified'
+                compliance = 'Status Not Verified'
             
             # Build Hazards Faced HTML (hazard-chip style)
             hazards_faced = person.get('hazards_faced', [])
@@ -4432,6 +4516,9 @@ RESPONSE FORMAT (JSON):
                     <div class="likelihood-bar">
                         <div class="bar-fill" style="width: {bar_width}"></div>
                     </div>
+                </div>
+                <div class="severity-footer" style="margin-top: 0.5rem; font-size: 0.8rem; border-top: 1px dashed #ddd; padding-top: 0.4rem; color: #e74c3c; font-weight: bold;">
+                    Severity: {self._get_malaysian_severity_label(likelihood)}
                 </div>
             </div>
         """

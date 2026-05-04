@@ -2239,6 +2239,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         skip_markers = (
             violation_dir / 'SKIPPED_NO_RETRY.txt',
             violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
+            violation_dir / 'SYNCED.txt',  # Skip reports already synced to cloud
         )
         if any(marker.exists() for marker in skip_markers):
             continue
@@ -2247,6 +2248,20 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         if not original_path.exists():
             summary['skipped_missing_original'] += 1
             continue
+
+        # Check database status if available to avoid redundant reprocessing
+        # of already completed or in-progress reports.
+        event = None
+        if db_manager is not None:
+            try:
+                event = db_manager.get_detection_event(report_id)
+                if isinstance(event, dict):
+                    status = str(event.get('status') or '').strip().lower()
+                    if status in {'completed', 'synced', 'generating', 'processing'}:
+                        # Already done or being handled by another worker
+                        continue
+            except Exception as e:
+                logger.debug(f"Could not check DB status for recovery candidate {report_id}: {e}")
 
         try:
             age_seconds = max(0.0, now_epoch - float(violation_dir.stat().st_mtime))
@@ -2263,13 +2278,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
 
         summary['eligible'] += 1
 
-        event = None
+        # Event already fetched above during status check
         violation = None
         if db_manager is not None:
-            try:
-                event = db_manager.get_detection_event(report_id)
-            except Exception:
-                event = None
             try:
                 violation = db_manager.get_violation(report_id)
             except Exception:
@@ -3278,6 +3289,16 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
     if not violation_dir.exists() or not violation_dir.is_dir():
         return {'cleaned': False, 'reason': 'directory_missing'}
 
+    # Write a marker so recovery sweeps know this was intentionally synced and 
+    # artifacts were cleaned up, avoiding redundant re-generation.
+    try:
+        (violation_dir / 'SYNCED.txt').write_text(
+            f"Synced at {datetime.now().isoformat()}\n", 
+            encoding='utf-8'
+        )
+    except Exception as marker_err:
+        logger.debug(f"Could not write SYNCED.txt marker for {report_id}: {marker_err}")
+
     try:
         age_seconds = max(0.0, time.time() - violation_dir.stat().st_mtime)
     except Exception:
@@ -3858,7 +3879,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             import concurrent.futures as _cf
             _report_gen_timeout_seconds = max(
                 30,
-                int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '180') or 180)
+                int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '300') or 300)
             )
             _gen_executor = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'report-gen-{report_id}')
             try:
@@ -4150,10 +4171,32 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"ðŸ“ Created violation directory: {violation_dir}")
+        logger.info(f"ðŸ“  Created violation directory: {violation_dir}")
         
-        # === IMMEDIATE: Insert "pending" detection event ===
-        # This makes the violation visible in the frontend immediately
+        # Save original frame immediately
+        original_path = violation_dir / 'original.jpg'
+        cv2.imwrite(str(original_path), frame)
+        logger.info(f"âœ“ Saved original image: {original_path}")
+
+        # Save preliminary metadata immediately to trigger real-time notification
+        metadata = {
+            'report_id': report_id,
+            'timestamp': timestamp.isoformat(),
+            'violation_type': ', '.join(violation_types),
+            'severity': 'HIGH',
+            'location': 'Live Stream Monitor',
+            'detection_count': len(detections),
+            'violation_count': len(violation_detections),
+            'status': 'pending',
+            'has_caption': False,
+            'has_report': False
+        }
+        metadata_path = violation_dir / 'metadata.json'
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        logger.info(f"âœ“ Preliminary metadata saved: {metadata_path}")
+        
+        # === Insert "pending" detection event ===
         if db_manager:
             try:
                 db_manager.insert_detection_event(
@@ -4165,7 +4208,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"âœ“ Inserted PENDING detection event: {report_id} (visible in frontend now)")
+                logger.info(f"âœ“ Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('process_violation.insert_pending_event', e)
                 logger.warning(
@@ -4173,12 +4216,12 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     f"continuing local report flow ({e})"
                 )
         
-        # Save original frame
-        original_path = violation_dir / 'original.jpg'
-        cv2.imwrite(str(original_path), frame)
-        logger.info(f"âœ“ Saved original image: {original_path}")
-        
         # Save annotated frame
+        _, annotated = predict_image(frame, conf=0.25)
+        annotated_path = violation_dir / 'annotated.jpg'
+        cv2.imwrite(str(annotated_path), annotated)
+        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
+otated frame
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)

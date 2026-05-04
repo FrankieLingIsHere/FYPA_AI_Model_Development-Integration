@@ -209,14 +209,11 @@ const API = {
 
         return {
             ...baseStats,
-            breakdown: baseStats.breakdown && Object.keys(baseStats.breakdown).length
-                ? baseStats.breakdown
-                : this.buildBreakdown(sortedViolations),
-            todayDelta: baseStats.todayDelta !== undefined ? baseStats.todayDelta : deltas.todayDelta,
-            weekDelta: baseStats.weekDelta !== undefined ? baseStats.weekDelta : deltas.weekDelta,
-            recentViolations: baseStats.recentViolations && baseStats.recentViolations.length
-                ? baseStats.recentViolations
-                : sortedViolations.slice(0, 5)
+            total: sortedViolations.length,
+            breakdown: this.buildBreakdown(sortedViolations),
+            todayDelta: deltas.todayDelta,
+            weekDelta: deltas.weekDelta,
+            recentViolations: sortedViolations.slice(0, 5)
         };
     },
 

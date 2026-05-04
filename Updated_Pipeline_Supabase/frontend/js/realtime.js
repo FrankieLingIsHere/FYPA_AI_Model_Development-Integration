@@ -21,6 +21,20 @@ const RealtimeSync = {
     start() {
         if (this.started) return;
         this.started = true;
+
+        // Listen for network state changes to automatically reconnect and 
+        // trigger UI refreshes when switching between cloud/local modes.
+        window.addEventListener('online', () => {
+            console.log('Browser back online; reconnecting realtime...');
+            this.safeReconnect();
+            this.fetchRealtimeSnapshot();
+        });
+        window.addEventListener('offline', () => {
+            console.log('Browser offline; switching to local realtime...');
+            this.safeReconnect();
+            this.fetchRealtimeSnapshot();
+        });
+
         this.connect();
     },
 

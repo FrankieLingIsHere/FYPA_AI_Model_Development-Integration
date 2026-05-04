@@ -18,20 +18,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 SCENARIO_SCRIPTS: Dict[str, List[str]] = {
     "local-reconnect": [
-        "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
+        "Updated_Pipeline_Supabase/tests/local_mode_ui_checkup_reconnect_perf_test.py",
     ],
     "deployed-parity": [
-        "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
-        "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
-        "Updated_Pipeline_Supabase/deployed_runtime_cloud_health_check.py",
-        "Updated_Pipeline_Supabase/deployed_runtime_nlp_metrics_contract_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_frontend_reports_progress_parity_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_frontend_local_reports_label_contract_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_runtime_cloud_health_check.py",
+        "Updated_Pipeline_Supabase/tests/deployed_runtime_nlp_metrics_contract_test.py",
     ],
     "all": [
-        "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
-        "Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py",
-        "Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py",
-        "Updated_Pipeline_Supabase/deployed_runtime_cloud_health_check.py",
-        "Updated_Pipeline_Supabase/deployed_runtime_nlp_metrics_contract_test.py",
+        "Updated_Pipeline_Supabase/tests/local_mode_ui_checkup_reconnect_perf_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_frontend_reports_progress_parity_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_frontend_local_reports_label_contract_test.py",
+        "Updated_Pipeline_Supabase/tests/deployed_runtime_cloud_health_check.py",
+        "Updated_Pipeline_Supabase/tests/deployed_runtime_nlp_metrics_contract_test.py",
     ],
 }
 
@@ -321,12 +321,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frontend-url",
         default="",
-        help="Override LUNA_VERCEL_URL for deployed parity/label scripts.",
+        help="Override CASM_VERCEL_URL for deployed parity/label scripts.",
     )
     parser.add_argument(
         "--local-ui-url",
         default="",
-        help="Override LUNA_LOCAL_UI_URL for local reconnect script.",
+        help="Override CASM_LOCAL_UI_URL for local reconnect script.",
     )
     parser.add_argument(
         "--check-local-backend",
@@ -343,13 +343,17 @@ def main() -> int:
 
     env_overrides: Dict[str, str] = {}
     if args.frontend_url:
-        env_overrides["LUNA_VERCEL_URL"] = str(args.frontend_url).rstrip("/")
+        frontend_url = str(args.frontend_url).rstrip("/")
+        env_overrides["CASM_VERCEL_URL"] = frontend_url
+        env_overrides["LUNA_VERCEL_URL"] = frontend_url
     if args.local_ui_url:
-        env_overrides["LUNA_LOCAL_UI_URL"] = str(args.local_ui_url).rstrip("/")
+        local_ui_url = str(args.local_ui_url).rstrip("/")
+        env_overrides["CASM_LOCAL_UI_URL"] = local_ui_url
+        env_overrides["LUNA_LOCAL_UI_URL"] = local_ui_url
 
     local_ui_effective = (
-        env_overrides.get("LUNA_LOCAL_UI_URL")
-        or str(os.environ.get("LUNA_LOCAL_UI_URL", "http://127.0.0.1:5000")).rstrip("/")
+        env_overrides.get("CASM_LOCAL_UI_URL")
+        or str(os.environ.get("CASM_LOCAL_UI_URL", os.environ.get("LUNA_LOCAL_UI_URL", "http://127.0.0.1:5000"))).rstrip("/")
     )
     preflight: Optional[Dict[str, Any]] = None
 
@@ -367,7 +371,7 @@ def main() -> int:
                 "preflight": preflight,
                 "results": [
                     {
-                        "script": "Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py",
+                        "script": "Updated_Pipeline_Supabase/tests/local_mode_ui_checkup_reconnect_perf_test.py",
                         "status": "FAIL",
                         "exit_code": 111,
                         "duration_ms": 0,

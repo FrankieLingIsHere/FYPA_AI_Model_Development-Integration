@@ -1647,7 +1647,8 @@ const ReportsPage = {
                 ? TimezoneManager.formatDateTime(timestamp)
                 : new Date(timestamp).toLocaleString())
             : 'Unknown time';
-        const imageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg');
+        const imageUrl = violation.local_image_url || API.getImageUrl(violation.report_id, 'annotated.jpg');
+        const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated);
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
         const sourceScope = this.inferSourceScope(violation);
@@ -1667,7 +1668,7 @@ const ReportsPage = {
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
-                    ${violation.has_annotated ? 
+                    ${hasPreviewImage ?
                         `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async"
                                onerror="if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
                                style="width: 100%; height: 100%; object-fit: cover;">

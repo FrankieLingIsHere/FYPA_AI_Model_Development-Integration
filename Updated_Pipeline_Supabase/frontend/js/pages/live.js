@@ -930,6 +930,26 @@ const LivePage = {
                                 : 'PPE Violation Detected'
                         };
 
+                        try {
+                            if (typeof API !== 'undefined'
+                                && typeof API.upsertLocalReportDraft === 'function'
+                                && synthViolation.report_id) {
+                                await API.upsertLocalReportDraft({
+                                    ...synthViolation,
+                                    original_blob: blob,
+                                    has_original: true,
+                                    has_annotated: false,
+                                    source_scope: 'local',
+                                    source_label: 'Local',
+                                    sync_state: 'pending_local_generation',
+                                    status: 'pending',
+                                    violation_count: Number(result.violation_count || friendlyMissing.length || 1)
+                                });
+                            }
+                        } catch (draftErr) {
+                            console.debug('Could not persist local violation draft:', draftErr);
+                        }
+
                         // Fire the immediate rich notification. ViolationMonitor owns
                         // the matching voice alert and report-id de-duplication.
                         try {
@@ -1301,6 +1321,30 @@ const LivePage = {
                 }
                 
                 const result = await response.json();
+
+                if (result && result.violations_detected && result.report_id) {
+                    try {
+                        if (typeof API !== 'undefined' && typeof API.upsertLocalReportDraft === 'function') {
+                            await API.upsertLocalReportDraft({
+                                report_id: result.report_id,
+                                timestamp: new Date().toISOString(),
+                                status: 'pending',
+                                severity: 'HIGH',
+                                original_blob: selectedFile,
+                                has_original: true,
+                                has_annotated: false,
+                                source_scope: 'local',
+                                source_label: 'Local',
+                                sync_state: 'pending_local_generation',
+                                violation_count: Number(result.violation_count || 1),
+                                missing_ppe: [],
+                                violation_summary: 'PPE Violation Detected'
+                            });
+                        }
+                    } catch (draftErr) {
+                        console.debug('Could not persist uploaded violation draft:', draftErr);
+                    }
+                }
                 
                 // Display results
                 uploadResultsContent.innerHTML = `

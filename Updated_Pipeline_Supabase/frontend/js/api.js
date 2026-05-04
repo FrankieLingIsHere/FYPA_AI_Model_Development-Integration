@@ -5,6 +5,8 @@ const API = {
         inFlight: new Set(),
         lastBatchAt: 0
     },
+    localDraftObjectUrls: new Map(),
+    LOCAL_REPORT_DRAFTS_SCOPE: 'reports:local-drafts',
 
     /**
      * fetch() with a hard client-side timeout via AbortController. Used for
@@ -269,6 +271,163 @@ const API = {
         }
     },
 
+    async readLocalReportDrafts() {
+        const cached = await this.readJsonCache(this.LOCAL_REPORT_DRAFTS_SCOPE);
+        const drafts = cached && Array.isArray(cached.data) ? cached.data : [];
+        return drafts
+            .filter((draft) => draft && draft.report_id)
+            .map((draft) => this.normalizeLocalReportDraft(draft))
+            .filter(Boolean);
+    },
+
+    async writeLocalReportDrafts(drafts) {
+        const normalized = Array.isArray(drafts)
+            ? drafts.map((draft) => this.normalizeLocalReportDraft(draft)).filter(Boolean)
+            : [];
+        await this.writeJsonCache(this.LOCAL_REPORT_DRAFTS_SCOPE, normalized);
+        return normalized;
+    },
+
+    normalizeLocalReportDraft(draft) {
+        const reportId = String((draft && draft.report_id) || '').trim();
+        if (!reportId) return null;
+        const sourceScope = String(draft.source_scope || '').trim() || 'local';
+        const syncState = String(draft.sync_state || '').trim() || 'pending_local_generation';
+        const status = String(draft.status || '').trim() || (
+            syncState === 'synced' || sourceScope === 'synced_local' ? 'completed' : 'pending'
+        );
+
+        return {
+            ...draft,
+            report_id: reportId,
+            timestamp: draft.timestamp || new Date().toISOString(),
+            status,
+            severity: draft.severity || 'HIGH',
+            missing_ppe: Array.isArray(draft.missing_ppe) ? draft.missing_ppe : [],
+            violation_count: Number(draft.violation_count || (Array.isArray(draft.missing_ppe) ? draft.missing_ppe.length : 0) || 0),
+            violation_summary: draft.violation_summary || 'Violation queued for local report generation',
+            has_original: draft.has_original !== false,
+            has_annotated: !!draft.has_annotated,
+            has_report: !!draft.has_report,
+            source_scope: syncState === 'synced' ? 'synced_local' : sourceScope,
+            source_label: draft.source_label || (syncState === 'synced' ? 'Local Synced' : 'Local'),
+            sync_state: syncState,
+            updated_at: draft.updated_at || new Date().toISOString()
+        };
+    },
+
+    async upsertLocalReportDraft(draft) {
+        const normalized = this.normalizeLocalReportDraft(draft);
+        if (!normalized) return null;
+
+        const drafts = await this.readLocalReportDrafts();
+        const byId = new Map(drafts.map((item) => [item.report_id, item]));
+        const existing = byId.get(normalized.report_id) || {};
+        byId.set(normalized.report_id, {
+            ...existing,
+            ...normalized,
+            original_blob: normalized.original_blob || existing.original_blob || null,
+            annotated_blob: normalized.annotated_blob || existing.annotated_blob || null,
+            has_original: !!(normalized.has_original || existing.has_original || normalized.original_blob || existing.original_blob),
+            has_annotated: !!(normalized.has_annotated || existing.has_annotated || normalized.annotated_blob || existing.annotated_blob),
+            updated_at: new Date().toISOString()
+        });
+
+        await this.writeLocalReportDrafts(Array.from(byId.values()));
+        return byId.get(normalized.report_id);
+    },
+
+    async removeLocalReportDraft(reportId) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return false;
+        this.revokeLocalDraftObjectUrl(rid);
+        const drafts = await this.readLocalReportDrafts();
+        await this.writeLocalReportDrafts(drafts.filter((draft) => draft.report_id !== rid));
+        return true;
+    },
+
+    revokeLocalDraftObjectUrl(reportId) {
+        const rid = String(reportId || '').trim();
+        if (!rid || !this.localDraftObjectUrls.has(rid)) return;
+        try {
+            URL.revokeObjectURL(this.localDraftObjectUrls.get(rid));
+        } catch (e) {
+            // Ignore stale object URLs.
+        }
+        this.localDraftObjectUrls.delete(rid);
+    },
+
+    attachLocalDraftImageUrls(drafts = []) {
+        return drafts.map((draft) => {
+            if (!draft || !draft.report_id) return draft;
+            const blob = draft.annotated_blob || draft.original_blob || null;
+            if (!blob || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+                return draft;
+            }
+
+            if (!this.localDraftObjectUrls.has(draft.report_id)) {
+                try {
+                    this.localDraftObjectUrls.set(draft.report_id, URL.createObjectURL(blob));
+                } catch (e) {
+                    return draft;
+                }
+            }
+
+            return {
+                ...draft,
+                local_image_url: this.localDraftObjectUrls.get(draft.report_id),
+                has_original: true,
+                has_annotated: !!draft.has_annotated
+            };
+        });
+    },
+
+    async mergeLocalReportDrafts(list, maxLimit = 1000) {
+        const drafts = this.attachLocalDraftImageUrls(await this.readLocalReportDrafts());
+        if (!drafts.length) return Array.isArray(list) ? list : [];
+        return this._mergeOptimistically(Array.isArray(list) ? list : [], drafts, maxLimit);
+    },
+
+    async reconcileLocalReportDrafts(list = []) {
+        const drafts = await this.readLocalReportDrafts();
+        if (!drafts.length || !Array.isArray(list)) return;
+
+        const byId = new Map(list.map((item) => [String((item && item.report_id) || '').trim(), item]));
+        const retained = [];
+        for (const draft of drafts) {
+            const current = byId.get(draft.report_id);
+            const sourceScope = String((current && current.source_scope) || '').trim().toLowerCase();
+            const syncSource = String((current && (current.sync_source || current.source)) || '').trim().toLowerCase();
+            const status = String((current && current.status) || '').trim().toLowerCase();
+            const synced = sourceScope === 'synced_local'
+                || syncSource === 'sync_local_cache'
+                || (current && current.has_report && status === 'completed' && sourceScope !== 'local');
+            if (synced) {
+                this.revokeLocalDraftObjectUrl(draft.report_id);
+                continue;
+            }
+            retained.push(draft);
+        }
+
+        if (retained.length !== drafts.length) {
+            await this.writeLocalReportDrafts(retained);
+        }
+    },
+
+    stripLocalDraftRuntimeFields(list = []) {
+        if (!Array.isArray(list)) return [];
+        return list.map((item) => {
+            if (!item || typeof item !== 'object') return item;
+            const {
+                original_blob,
+                annotated_blob,
+                local_image_url,
+                ...rest
+            } = item;
+            return rest;
+        });
+    },
+
     async fetchJsonWithCache(url, options = {}) {
         const scope = options.cacheScope || url;
         const cached = await this.readJsonCache(scope);
@@ -346,6 +505,7 @@ const API = {
         const candidates = [];
         violations.slice(0, 12).forEach((violation) => {
             if (!violation || !violation.report_id) return;
+            if (violation.local_image_url || String(violation.source_scope || '').toLowerCase() === 'local') return;
             if (violation.has_original) {
                 candidates.push({
                     key: `${violation.report_id}:original.jpg`,
@@ -421,7 +581,7 @@ const API = {
         if (!noCache) {
             const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
-                return cached.data;
+                return await this.mergeLocalReportDrafts(cached.data, safeLimit);
             }
         }
 
@@ -450,16 +610,18 @@ const API = {
                 list = this._mergeOptimistically(cached.data, list, safeLimit);
             }
 
-            this.writeJsonCache(cacheScope, list);
+            list = await this.mergeLocalReportDrafts(list, safeLimit);
+            await this.reconcileLocalReportDrafts(list);
+            this.writeJsonCache(cacheScope, this.stripLocalDraftRuntimeFields(list));
             this.prefetchViolationImages(list);
             return list;
         } catch (error) {
             console.error('Error fetching violations:', error);
             const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
-                return cached.data;
+                return await this.mergeLocalReportDrafts(cached.data, safeLimit);
             }
-            return [];
+            return await this.mergeLocalReportDrafts([], safeLimit);
         }
     },
 
@@ -514,7 +676,7 @@ const API = {
         if (!noCache) {
             const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
-                return cached.data;
+                return await this.mergeLocalReportDrafts(cached.data, 100);
             }
         }
 
@@ -542,15 +704,16 @@ const API = {
                 list = this._mergeOptimistically(cached.data, list, 100);
             }
 
-            this.writeJsonCache(cacheScope, list);
+            list = await this.mergeLocalReportDrafts(list, 100);
+            this.writeJsonCache(cacheScope, this.stripLocalDraftRuntimeFields(list));
             return list;
         } catch (error) {
             console.error('Error fetching pending reports:', error);
             const cached = await this.readJsonCache(cacheScope);
             if (cached && Array.isArray(cached.data)) {
-                return cached.data;
+                return await this.mergeLocalReportDrafts(cached.data, 100);
             }
-            return [];
+            return await this.mergeLocalReportDrafts([], 100);
         }
     },
 
@@ -1137,3 +1300,9 @@ const API = {
         };
     }
 };
+
+try {
+    window.API = window.API || API;
+} catch (e) {
+    // Ignore non-browser contexts used by syntax checks.
+}

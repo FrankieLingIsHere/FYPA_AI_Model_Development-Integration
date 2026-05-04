@@ -66,7 +66,7 @@ def routing_profile_of(payload):
 
 
 def collect_local_report_candidates(limit: int = 80):
-    base_dir = Path(__file__).resolve().parent / "pipeline" / "violations"
+    base_dir = Path(__file__).resolve().parents[1] / "pipeline" / "violations"
     if not base_dir.exists():
         return []
 

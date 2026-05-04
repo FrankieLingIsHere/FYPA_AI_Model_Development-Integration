@@ -48,8 +48,8 @@ When patching frontend/runtime behavior, do not finalize the patch until all rep
 
 Run from repository root:
 
-python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
-python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
+python Updated_Pipeline_Supabase/tests/deployed_frontend_navigation_timezone_action_test.py
+python Updated_Pipeline_Supabase/tests/deployed_provisioning_action_test.py
 
 Timezone-specific enforcement (Reports + sidebar timezone changes):
 
@@ -127,9 +127,9 @@ After each run, report the exact evidence fields from the runner JSON:
 
 ## Repository-Specific Notes
 
-- Local reconnect test script: Updated_Pipeline_Supabase/local_mode_ui_checkup_reconnect_perf_test.py
-- Deployed parity script: Updated_Pipeline_Supabase/deployed_frontend_reports_progress_parity_test.py
-- Deployed local-label contract script: Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py
+- Local reconnect test script: Updated_Pipeline_Supabase/tests/local_mode_ui_checkup_reconnect_perf_test.py
+- Deployed parity script: Updated_Pipeline_Supabase/tests/deployed_frontend_reports_progress_parity_test.py
+- Deployed local-label contract script: Updated_Pipeline_Supabase/tests/deployed_frontend_local_reports_label_contract_test.py
 - Skill runner script: .agents/skills/local-mode-playwright-validation/run_playwright_validation.py
 - Avoid broad Playwright route interception for this reconnect flow; this project uses in-page fetch telemetry for more reliable evidence.
 
@@ -148,7 +148,7 @@ Contract target:
 
 Script:
 
-- `Updated_Pipeline_Supabase/deployed_frontend_local_reports_label_contract_test.py`
+- `Updated_Pipeline_Supabase/tests/deployed_frontend_local_reports_label_contract_test.py`
 
 Runner integration:
 
@@ -394,7 +394,7 @@ Use this when `report_id` clock fragments (for example `YYYYMMDD_HHMMSS`) do not
 
 3. Validate with action test:
 
-   python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
+   python Updated_Pipeline_Supabase/tests/deployed_frontend_navigation_timezone_action_test.py
 
 4. If action test fails only on deployed target but passes locally with same commit, treat as deployment lag/runtime drift and re-check after redeploy.
 
@@ -454,12 +454,12 @@ Common log signatures:
 
 2. Start/stop contract:
 
-   python Updated_Pipeline_Supabase/deployed_live_start_contract_test.py
+   python Updated_Pipeline_Supabase/tests/deployed_live_start_contract_test.py
 
 3. Required action tests (must remain green after runtime/frontend changes):
 
-   python Updated_Pipeline_Supabase/deployed_frontend_navigation_timezone_action_test.py
-   python Updated_Pipeline_Supabase/deployed_provisioning_action_test.py
+   python Updated_Pipeline_Supabase/tests/deployed_frontend_navigation_timezone_action_test.py
+   python Updated_Pipeline_Supabase/tests/deployed_provisioning_action_test.py
 
 Interpretation guidance:
 

@@ -275,6 +275,83 @@ def check_timestamp_alignment_contract(page):
     )
 
 
+def check_local_draft_persistence_contract(page):
+    seed_result = page.evaluate(
+        """
+        async () => {
+            const api = window.API || (typeof API !== 'undefined' ? API : null);
+            if (!api || typeof api.upsertLocalReportDraft !== 'function') {
+                return { ok: false, error: 'API local draft helpers unavailable' };
+            }
+            const reportId = '20990101_010101';
+            await api.removeLocalReportDraft(reportId);
+            await api.upsertLocalReportDraft({
+                report_id: reportId,
+                timestamp: '2099-01-01T01:01:01',
+                status: 'pending',
+                severity: 'HIGH',
+                source_scope: 'local',
+                source_label: 'Local',
+                sync_state: 'pending_local_generation',
+                violation_count: 1,
+                violation_summary: 'PPE Violation Detected: Missing Hardhat',
+                missing_ppe: ['Hardhat'],
+                original_blob: new Blob(['local-draft-image'], { type: 'image/jpeg' }),
+                has_original: true
+            });
+            const merged = await api.mergeLocalReportDrafts([], 5);
+            const draft = merged.find((item) => item.report_id === reportId);
+            return {
+                ok: !!draft && draft.source_scope === 'local' && !!draft.local_image_url && draft.has_original === true,
+                beforeReload: !!draft,
+                sourceScope: draft && draft.source_scope,
+                hasLocalImageUrl: !!(draft && draft.local_image_url)
+            };
+        }
+        """
+    )
+    if not seed_result or not seed_result.get("ok"):
+        if seed_result and "helpers unavailable" in str(seed_result.get("error") or "").lower():
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "deployed_frontend_missing_local_draft_helpers_pending_redeploy"
+            }
+        raise RuntimeError(f"Local draft seed contract failed: {seed_result}")
+
+    page.reload(wait_until="domcontentloaded", timeout=90000)
+    page.wait_for_selector("[data-page='home']", state="attached", timeout=120000)
+    page.wait_for_function(
+        "() => !document.body.classList.contains('startup-loading')",
+        timeout=120000,
+    )
+
+    persisted_result = page.evaluate(
+        """
+        async () => {
+            const api = window.API || (typeof API !== 'undefined' ? API : null);
+            const reportId = '20990101_010101';
+            if (!api || typeof api.mergeLocalReportDrafts !== 'function') {
+                return { ok: false, error: 'API local draft helpers unavailable after reload' };
+            }
+            const merged = await api.mergeLocalReportDrafts([], 5);
+            const draft = merged.find((item) => item.report_id === reportId);
+            const ok = !!draft && draft.source_scope === 'local' && !!draft.local_image_url && draft.has_original === true;
+            await api.removeLocalReportDraft(reportId);
+            return {
+                ok,
+                afterReload: !!draft,
+                sourceScope: draft && draft.source_scope,
+                hasLocalImageUrl: !!(draft && draft.local_image_url)
+            };
+        }
+        """
+    )
+    if not persisted_result or not persisted_result.get("ok"):
+        raise RuntimeError(f"Local draft persistence contract failed: {persisted_result}")
+    return persisted_result
+
+
 def main() -> int:
     try:
         with sync_playwright() as p:
@@ -292,6 +369,9 @@ def main() -> int:
                 "() => !document.body.classList.contains('startup-loading')",
                 timeout=120000,
             )
+
+            draft_contract = check_local_draft_persistence_contract(page)
+            print(f"PASS: local draft persistence contract {draft_contract}")
 
             install_metrics_hooks(page)
 

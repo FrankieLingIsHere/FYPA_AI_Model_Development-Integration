@@ -1087,6 +1087,18 @@ LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
     'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_PARTIAL_HANDOFF_ENABLED = os.getenv(
+    'LOCAL_CACHE_PARTIAL_HANDOFF_ENABLED',
+    'true' if ALLOW_OFFLINE_LOCAL_MODE else 'false'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS = max(
+    30,
+    int(os.getenv('LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS', '330') or 330)
+)
+BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES = max(
+    128 * 1024,
+    int(os.getenv('BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES', str(5 * 1024 * 1024)) or (5 * 1024 * 1024))
+)
 LOCAL_CACHE_SYNC_CLEANUP_ENABLED = os.getenv(
     'LOCAL_CACHE_SYNC_CLEANUP_ENABLED',
     'true'
@@ -2448,6 +2460,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
         'enqueued': 0,
         'skipped_queue_busy': 0,
         'skipped_already_queued': 0,
+        'skipped_handoff_grace': 0,
         'skipped_download_failed': 0,
         'skipped_enqueue_failed': 0,
         'skipped_queue_unavailable': 0,
@@ -2501,23 +2514,52 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
 
         summary['scanned'] += 1
 
-        # Guard: skip any report that originated from a local-mode pipeline
-        # even if the SQL filter missed it (e.g. detection_data stored as
-        # string or cast differently on some rows).
+        # Guard: skip local-origin rows unless they were explicitly handed off
+        # as cloud-continuable partial reports. The adopt-after timestamp gives
+        # the local backend a bounded chance to finish first; if it disappears,
+        # cloud recovery takes over after the grace window.
         raw_dd = candidate.get('detection_data') or {}
         if isinstance(raw_dd, str):
             try:
                 raw_dd = json.loads(raw_dd)
             except Exception:
                 raw_dd = {}
+        adoptable_local_handoff = False
+        handoff_source_scope = 'cloud'
+        handoff_sync_source = 'cloud_pending_recovery'
         if isinstance(raw_dd, dict):
             _cand_scope = str(raw_dd.get('source_scope') or '').strip().lower()
             _cand_sync = str(raw_dd.get('sync_source') or '').strip().lower()
+            _cloud_adoptable_local_sources = {
+                'sync_local_cache_partial',
+                'browser_local_draft_handoff',
+                'cloud_pending_local_handoff',
+            }
+            adoptable_local_handoff = _cand_sync in _cloud_adoptable_local_sources
+            if adoptable_local_handoff:
+                handoff_meta = raw_dd.get('cloud_handoff') if isinstance(raw_dd.get('cloud_handoff'), dict) else {}
+                adopt_after = raw_dd.get('cloud_adopt_after_epoch')
+                if adopt_after is None:
+                    adopt_after = handoff_meta.get('adopt_after_epoch')
+                try:
+                    adopt_after_epoch = float(adopt_after or 0)
+                except Exception:
+                    adopt_after_epoch = 0.0
+                if adopt_after_epoch > now_epoch:
+                    summary['skipped_handoff_grace'] += 1
+                    logger.debug(
+                        f"Cloud pending recovery: deferring local handoff {report_id} "
+                        f"until adopt_after_epoch={adopt_after_epoch}"
+                    )
+                    continue
+                handoff_source_scope = 'synced_local'
+                handoff_sync_source = 'cloud_pending_local_handoff'
             _local_sync_sources = {
                 'sync_local_cache', 'local_cache', 'local_cache_sync',
                 'local_pending_recovery', 'local', 'auto_reconnect',
+                'sync_local_cache_partial', 'browser_local_draft_handoff',
             }
-            if _cand_scope == 'local' or _cand_sync in _local_sync_sources:
+            if (_cand_scope == 'local' or _cand_sync in _local_sync_sources) and not adoptable_local_handoff:
                 logger.debug(
                     f"Cloud pending recovery: skipping local-origin report "
                     f"{report_id} (source_scope={_cand_scope!r}, sync_source={_cand_sync!r})"
@@ -2637,9 +2679,9 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             'original_image_path': str(original_path),
             'annotated_image_path': str(effective_annotated),
             'violation_dir': str(violation_dir),
-            'source_scope': 'cloud',
-            'sync_source': 'cloud_pending_recovery',
-            'source': 'cloud_pending_recovery',
+            'source_scope': handoff_source_scope,
+            'sync_source': handoff_sync_source,
+            'source': handoff_sync_source,
             'allow_placeholder_report': True,
         }
 
@@ -2880,18 +2922,12 @@ def queue_worker_loop():
                 last_supabase_recovery_check_epoch = now_epoch
                 recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
                 # Auto-reconnect local-cache sync is meant for reports captured
-                # while the runtime was forced offline (local mode or Supabase
-                # outage) that now need to be uploaded back to the cloud once
-                # connectivity returns. In a pure cloud-mode runtime the live
-                # pipeline already uploads directly, so re-enqueueing those
-                # local-staged artifacts as 'sync_local_cache' jobs incorrectly
-                # tags freshly-generated cloud reports with the orange
-                # 'Local Synced' badge. Skip the sweep when the active routing
-                # profile is cloud (per-report cloud upload failures are
-                # handled by the dedicated stuck-report sweep, not by the bulk
-                # local-cache sync).
-                worker_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-                worker_skip_local_cache_sync = worker_routing_profile != 'local'
+                # while the runtime was forced offline that now need cloud
+                # reconciliation. The candidate scan is source-scoped, so cloud
+                # profile local backends may still run it to catch local-origin
+                # reports that finished after reconnect. Hosted cloud runtimes
+                # have no user-local filesystem to reconcile.
+                worker_skip_local_cache_sync = _is_hosted_runtime_environment()
                 if (
                     recovery.get('success')
                     and SUPABASE_AUTO_SYNC_BATCH_SIZE > 0
@@ -3351,6 +3387,219 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
         'cleaned': bool(removed_files),
         'reason': 'removed_selected_files' if removed_files else 'no_files_removed',
         'removed_files': removed_files,
+    }
+
+
+def _safe_report_id(raw_report_id: Any = None) -> str:
+    """Normalize report ids accepted from browser/local handoff payloads."""
+    value = str(raw_report_id or '').strip()
+    value = re.sub(r'[^A-Za-z0-9_.:-]+', '', value)
+    if not value:
+        value = get_local_time().strftime('%Y%m%d_%H%M%S')
+    return value[:96]
+
+
+def _handoff_partial_local_report_to_cloud(
+    *,
+    report_id: str,
+    violation_dir: Path,
+    timestamp: Any,
+    detections: List[Dict[str, Any]],
+    queued_violation_count: Any,
+    original_path: Path,
+    annotated_path: Path,
+    device_id: str,
+    source_scope: str = 'synced_local',
+    sync_source: str = 'sync_local_cache_partial',
+    reason: str = 'partial_handoff',
+    cloud_adopt_after_epoch: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Upload original/annotated artifacts for an unfinished local report.
+
+    This deliberately does not enqueue a sync-only job and does not regenerate
+    the report. It creates enough Supabase state for cloud pending recovery to
+    adopt the report later if the local backend disappears before report.html is
+    produced.
+    """
+    global db_manager, storage_manager
+
+    if not LOCAL_CACHE_PARTIAL_HANDOFF_ENABLED:
+        return {'success': False, 'error': 'partial_handoff_disabled'}
+
+    report_id = _safe_report_id(report_id)
+    if not report_id:
+        return {'success': False, 'error': 'invalid_report_id'}
+
+    if not original_path.exists():
+        return {'success': False, 'error': 'original_image_missing'}
+
+    if db_manager is None or storage_manager is None:
+        _attempt_supabase_runtime_recovery(reason=f'partial_local_handoff:{reason}:{report_id}', force=True)
+
+    if db_manager is None:
+        return {'success': False, 'error': 'database_manager_unavailable'}
+    if storage_manager is None:
+        return {'success': False, 'error': 'storage_manager_unavailable'}
+
+    violation_dir.mkdir(parents=True, exist_ok=True)
+    if not annotated_path.exists():
+        try:
+            frame = cv2.imread(str(original_path))
+            if frame is not None:
+                _, annotated = predict_image(frame, conf=0.25)
+                cv2.imwrite(str(annotated_path), annotated)
+        except Exception as annotate_err:
+            logger.debug(f"Partial handoff annotation skipped for {report_id}: {annotate_err}")
+
+    effective_annotated = annotated_path if annotated_path.exists() else original_path
+
+    storage_keys: Dict[str, Any] = {}
+    try:
+        storage_keys = storage_manager.upload_violation_artifacts(
+            report_id=report_id,
+            original_image_path=original_path,
+            annotated_image_path=effective_annotated,
+            report_html_path=None,
+            report_pdf_path=None,
+            upsert=True,
+        ) or {}
+    except Exception as upload_err:
+        logger.warning(f"Partial local handoff upload failed for {report_id}: {upload_err}")
+        return {'success': False, 'error': f'upload_failed: {upload_err}'}
+
+    if not storage_keys.get('original_image_key'):
+        return {'success': False, 'error': 'original_upload_failed', 'storage_keys': storage_keys}
+
+    try:
+        ts_value = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
+    except Exception:
+        ts_value = _parse_report_id_timestamp(report_id).isoformat()
+
+    violation_types_raw = _extract_violation_types_from_detections(detections)
+    if not violation_types_raw:
+        violation_types_raw = []
+    violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
+    violation_summary_text = (
+        ', '.join(violation_types_formatted)
+        if violation_types_formatted
+        else 'PPE Violation Detected'
+    )
+    try:
+        queued_count_int = int(queued_violation_count or 0)
+    except Exception:
+        queued_count_int = 0
+    resolved_violation_count = max(
+        len(violation_types_raw),
+        queued_count_int,
+        1,
+    )
+    person_count = max(
+        0,
+        len([
+            d for d in (detections or [])
+            if isinstance(d, dict)
+            and 'person' in str(d.get('class_name') or d.get('class') or '').lower()
+        ])
+    )
+
+    source_scope_marker = str(source_scope or 'synced_local').strip().lower() or 'synced_local'
+    sync_source_marker = str(sync_source or 'sync_local_cache_partial').strip().lower() or 'sync_local_cache_partial'
+    adopt_after = (
+        float(cloud_adopt_after_epoch)
+        if cloud_adopt_after_epoch is not None
+        else time.time() + float(LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS)
+    )
+
+    metadata: Dict[str, Any] = {
+        'detections': detections if isinstance(detections, list) else [],
+        'source_scope': source_scope_marker,
+        'sync_source': sync_source_marker,
+        'source': sync_source_marker,
+        'device_id': device_id,
+        'cloud_handoff': {
+            'state': 'partial_artifacts_uploaded',
+            'reason': reason,
+            'partial': True,
+            'adopt_after_epoch': adopt_after,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+    try:
+        event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+        if not event and hasattr(db_manager, 'insert_detection_event'):
+            db_manager.insert_detection_event(
+                report_id=report_id,
+                timestamp=ts_value,
+                person_count=person_count,
+                violation_count=resolved_violation_count,
+                severity='HIGH',
+                device_id=device_id,
+                status='pending',
+            )
+
+        existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+        if existing_violation and hasattr(db_manager, 'update_violation'):
+            db_manager.update_violation(
+                report_id=report_id,
+                violation_summary=violation_summary_text,
+                caption='Local report image handed off; cloud report generation pending',
+                detection_data=metadata,
+                original_image_key=storage_keys.get('original_image_key'),
+                annotated_image_key=storage_keys.get('annotated_image_key'),
+            )
+        elif hasattr(db_manager, 'insert_violation'):
+            db_manager.insert_violation(
+                report_id=report_id,
+                violation_summary=violation_summary_text,
+                caption='Local report image handed off; cloud report generation pending',
+                nlp_analysis={},
+                detection_data=metadata,
+                original_image_key=storage_keys.get('original_image_key'),
+                annotated_image_key=storage_keys.get('annotated_image_key'),
+                report_html_key=None,
+                report_pdf_key=None,
+                device_id=device_id,
+            )
+
+        if hasattr(db_manager, 'update_detection_status'):
+            db_manager.update_detection_status(
+                report_id,
+                'pending',
+                f'Local partial report handed off for cloud continuation ({reason})',
+            )
+
+        if hasattr(db_manager, 'log_event'):
+            try:
+                db_manager.log_event(
+                    event_type='local_partial_handoff',
+                    message=f'Uploaded partial local report artifacts for cloud continuation ({reason})',
+                    report_id=report_id,
+                    device_id=device_id,
+                    metadata={
+                        'reason': reason,
+                        'sync_source': sync_source_marker,
+                        'source_scope': source_scope_marker,
+                        'cloud_adopt_after_epoch': adopt_after,
+                        'storage_keys': {
+                            'original': bool(storage_keys.get('original_image_key')),
+                            'annotated': bool(storage_keys.get('annotated_image_key')),
+                        },
+                    },
+                )
+            except Exception as log_err:
+                logger.debug(f"Could not log partial handoff for {report_id}: {log_err}")
+    except Exception as db_err:
+        _activate_local_offline_runtime('partial_local_handoff.db', db_err)
+        return {'success': False, 'error': f'db_reconcile_failed: {db_err}', 'storage_keys': storage_keys}
+
+    return {
+        'success': True,
+        'report_id': report_id,
+        'storage_keys': storage_keys,
+        'cloud_adopt_after_epoch': adopt_after,
+        'sync_source': sync_source_marker,
+        'source_scope': source_scope_marker,
     }
 
 
@@ -9382,6 +9631,7 @@ def _sync_local_cache_candidates(
     enqueued = 0
     skipped = 0
     candidates = 0
+    partial_handoffs = 0
     errors = []
     enqueue_cap_reached = False
 
@@ -9427,10 +9677,6 @@ def _sync_local_cache_candidates(
             continue
 
         event_status = str((event or {}).get('status') or '').strip().lower()
-        if event_status in ('pending', 'queued', 'processing', 'generating') and not local_has_report:
-            skipped += 1
-            continue
-
         if local_has_report and event_status in ('pending', 'queued', 'processing', 'generating'):
             # In cloud mode this is almost always an in-flight cloud worker
             # that has just finished writing report.html locally and is now
@@ -9519,6 +9765,60 @@ def _sync_local_cache_candidates(
         candidates += 1
 
         if dry_run:
+            continue
+
+        if not local_has_report:
+            local_metadata = _read_local_violation_metadata(violation_dir)
+            local_detections = []
+            detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
+            if isinstance(detection_data, str):
+                try:
+                    detection_data = json.loads(detection_data)
+                except Exception:
+                    detection_data = {}
+            if isinstance(detection_data, dict) and isinstance(detection_data.get('detections'), list):
+                local_detections = [d for d in detection_data.get('detections') if isinstance(d, dict)]
+
+            if not local_detections and isinstance(local_metadata.get('detections'), list):
+                local_detections = [d for d in local_metadata.get('detections') if isinstance(d, dict)]
+
+            partial_count = (
+                event.get('violation_count') if isinstance(event, dict) else None
+            ) or local_metadata.get('violation_count') or local_metadata.get('detection_count') or 1
+            event_device_id = (
+                (event.get('device_id') if isinstance(event, dict) else None)
+                or local_metadata.get('device_id')
+                or 'local_cache_partial'
+            )
+            if event and event.get('timestamp'):
+                ts = event.get('timestamp')
+                ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
+            else:
+                ts_value = local_metadata.get('timestamp') or _parse_report_id_timestamp(report_id).isoformat()
+
+            handoff_summary = _handoff_partial_local_report_to_cloud(
+                report_id=report_id,
+                violation_dir=violation_dir,
+                timestamp=ts_value,
+                detections=local_detections,
+                queued_violation_count=partial_count,
+                original_path=original_path,
+                annotated_path=annotated_path,
+                device_id=str(event_device_id or 'local_cache_partial'),
+                source_scope='synced_local',
+                sync_source='sync_local_cache_partial',
+                reason=reason,
+                cloud_adopt_after_epoch=time.time() + float(LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS),
+            )
+            if handoff_summary.get('success'):
+                partial_handoffs += 1
+                logger.info(
+                    f"Partial local report handoff uploaded for {report_id}; "
+                    "cloud recovery may adopt if local generation does not finish"
+                )
+            else:
+                skipped += 1
+                errors.append(f"{report_id}: partial handoff failed ({handoff_summary.get('error')})")
             continue
 
         detections = []
@@ -9649,6 +9949,7 @@ def _sync_local_cache_candidates(
         'scanned': scanned,
         'candidates': candidates,
         'enqueued': enqueued,
+        'partial_handoffs': partial_handoffs,
         'skipped': skipped,
         'errors': errors[:20],
         'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None),
@@ -9688,6 +9989,176 @@ def api_sync_local_cache_to_supabase():
     ):
         return jsonify(result), 503
     return jsonify(result), 500
+
+
+@app.route('/api/reports/local-draft-handoff', methods=['POST'])
+def api_report_local_draft_handoff():
+    """Accept a browser-persisted local draft and let cloud generation continue it."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
+    if 'image' not in request.files:
+        return jsonify({'success': False, 'error': 'No image provided'}), 400
+
+    file = request.files['image']
+    if not file or file.filename == '':
+        return jsonify({'success': False, 'error': 'No image selected'}), 400
+
+    try:
+        raw_metadata = request.form.get('metadata') or '{}'
+        try:
+            metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else {}
+        except Exception:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        img_bytes = file.read()
+        if len(img_bytes) > BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES:
+            return jsonify({
+                'success': False,
+                'error': 'Image is too large for local draft handoff',
+                'max_bytes': BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES,
+            }), 413
+
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({'success': False, 'error': 'Invalid image format'}), 400
+
+        report_id = _safe_report_id(
+            request.form.get('report_id') or metadata.get('report_id')
+        )
+        violation_dir = VIOLATIONS_DIR.absolute() / report_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+
+        cv2.imwrite(str(original_path), frame)
+
+        detections = metadata.get('detections') if isinstance(metadata.get('detections'), list) else []
+        try:
+            model_detections, annotated = predict_image(frame, conf=0.25)
+            if not detections and isinstance(model_detections, list):
+                detections = model_detections
+            cv2.imwrite(str(annotated_path), annotated)
+        except Exception as infer_err:
+            logger.debug(f"Local draft handoff annotation skipped for {report_id}: {infer_err}")
+            cv2.imwrite(str(annotated_path), frame)
+
+        timestamp_value = (
+            metadata.get('timestamp')
+            or request.form.get('timestamp')
+            or _parse_report_id_timestamp(report_id).isoformat()
+        )
+        device_id = str(
+            metadata.get('device_id')
+            or request.form.get('device_id')
+            or 'browser_local_draft'
+        ).strip() or 'browser_local_draft'
+
+        if db_manager is not None:
+            try:
+                existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+                if isinstance(existing_violation, dict) and existing_violation.get('report_html_key'):
+                    return jsonify({
+                        'success': True,
+                        'report_id': report_id,
+                        'already_completed': True,
+                        'queued': False,
+                    })
+            except Exception as lookup_err:
+                logger.debug(f"Local draft handoff existing report lookup skipped for {report_id}: {lookup_err}")
+
+        handoff_summary = _handoff_partial_local_report_to_cloud(
+            report_id=report_id,
+            violation_dir=violation_dir,
+            timestamp=timestamp_value,
+            detections=[d for d in detections if isinstance(d, dict)],
+            queued_violation_count=metadata.get('violation_count') or metadata.get('detection_count') or 1,
+            original_path=original_path,
+            annotated_path=annotated_path,
+            device_id=device_id,
+            source_scope='synced_local',
+            sync_source='browser_local_draft_handoff',
+            reason=str(request.form.get('reason') or metadata.get('handoff_reason') or 'browser_reconnect'),
+            cloud_adopt_after_epoch=time.time(),
+        )
+
+        if not handoff_summary.get('success'):
+            return jsonify({
+                'success': False,
+                'report_id': report_id,
+                'error': handoff_summary.get('error') or 'partial_handoff_failed',
+            }), 503
+
+        queued = False
+        queue_unavailable = False
+        already_generating = False
+
+        event = None
+        if db_manager is not None:
+            try:
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+                event_status = str((event or {}).get('status') or '').strip().lower()
+                already_generating = event_status in ('generating', 'processing')
+            except Exception:
+                event = None
+
+        if not already_generating:
+            if ensure_queue_worker_running() and violation_queue is not None:
+                if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
+                    queued = True
+                else:
+                    queue_payload = {
+                        'report_id': report_id,
+                        'timestamp': timestamp_value,
+                        'detections': [d for d in detections if isinstance(d, dict)],
+                        'violation_types': _extract_violation_types_from_detections(detections),
+                        'violation_count': metadata.get('violation_count') or 1,
+                        'original_image_path': str(original_path),
+                        'annotated_image_path': str(annotated_path),
+                        'violation_dir': str(violation_dir),
+                        'source_scope': 'synced_local',
+                        'sync_source': 'browser_local_draft_handoff',
+                        'source': 'browser_local_draft_handoff',
+                    }
+                    queued = bool(violation_queue.enqueue(
+                        violation_data=queue_payload,
+                        device_id=device_id,
+                        report_id=report_id,
+                        severity='CRITICAL',
+                        expedite=True,
+                    ))
+            else:
+                queue_unavailable = True
+
+        if queued and db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'pending',
+                    'Browser local draft queued for cloud report generation',
+                )
+            except Exception as status_err:
+                logger.debug(f"Could not mark browser local draft queued for {report_id}: {status_err}")
+
+        return jsonify({
+            'success': True,
+            'report_id': report_id,
+            'queued': queued,
+            'already_generating': already_generating,
+            'queue_unavailable': queue_unavailable,
+            'partial_handoff': True,
+            'cloud_adopt_after_epoch': handoff_summary.get('cloud_adopt_after_epoch'),
+            'source_scope': 'synced_local',
+            'sync_source': 'browser_local_draft_handoff',
+        })
+
+    except Exception as e:
+        logger.error(f"Local draft handoff error: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/fix-stuck-reports', methods=['POST'])

@@ -333,7 +333,19 @@ class SupabaseReportGenerator(ReportGenerator):
                     'summary': validation_result['validation_summary']
                 }
 
-            if is_reprocessing and hasattr(self.db_manager, 'update_violation'):
+            existing_violation = None
+            if hasattr(self.db_manager, 'get_violation'):
+                try:
+                    existing_violation = self.db_manager.get_violation(report_id)
+                except Exception as existing_lookup_err:
+                    logger.debug(
+                        f"Could not check existing violation before persistence for {report_id}: "
+                        f"{existing_lookup_err}"
+                    )
+
+            should_update_existing = bool(is_reprocessing or existing_violation)
+
+            if should_update_existing and hasattr(self.db_manager, 'update_violation'):
                 updated = self.db_manager.update_violation(
                     report_id=report_id,
                     violation_summary=violation_summary,
@@ -346,9 +358,9 @@ class SupabaseReportGenerator(ReportGenerator):
                     report_pdf_key=storage_keys.get('report_pdf_key')
                 )
                 if updated:
-                    logger.info(f"Updated violation record for reprocessing: {report_id}")
+                    logger.info(f"Updated violation record with generated report artifacts: {report_id}")
                 else:
-                    logger.warning(f"Reprocessing update affected no rows, falling back to insert: {report_id}")
+                    logger.warning(f"Violation update affected no rows, falling back to insert: {report_id}")
                     violation_id = self.db_manager.insert_violation(
                         report_id=report_id,
                         violation_summary=violation_summary,

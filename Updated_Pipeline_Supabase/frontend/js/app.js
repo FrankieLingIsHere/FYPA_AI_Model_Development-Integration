@@ -1092,6 +1092,9 @@ function initializeAdaptivePipelineModeManager() {
         minBacklogSyncIntervalMs: 20 * 1000,
         lastDirectReconnectSyncAt: 0,
         minDirectReconnectSyncIntervalMs: 20 * 1000,
+        lastDraftHandoffAt: 0,
+        minDraftHandoffIntervalMs: 60 * 1000,
+        draftHandoffInFlight: false,
         maxBacklogSyncInFlightMs: 90 * 1000,
         pendingBacklogSyncReason: '',
         deferredBacklogSyncTimer: null,
@@ -1129,6 +1132,55 @@ function initializeAdaptivePipelineModeManager() {
             return (Date.now() - this.lastDirectReconnectSyncAt) >= this.minDirectReconnectSyncIntervalMs;
         },
 
+        canAttemptDraftHandoff(force = false) {
+            if (force) return true;
+            return (Date.now() - this.lastDraftHandoffAt) >= this.minDraftHandoffIntervalMs;
+        },
+
+        async handoffBrowserLocalDrafts(reason, options = {}) {
+            const force = !!options.force;
+            if (navigator.onLine === false) {
+                return null;
+            }
+            if (!this.canAttemptDraftHandoff(force)) {
+                return null;
+            }
+            if (this.draftHandoffInFlight) {
+                return null;
+            }
+            if (typeof API === 'undefined' || typeof API.handoffLocalReportDraftsToCloud !== 'function') {
+                return null;
+            }
+
+            this.lastDraftHandoffAt = Date.now();
+            this.draftHandoffInFlight = true;
+            try {
+                const result = await API.handoffLocalReportDraftsToCloud({
+                    limit: Number(options.limit || 10),
+                    reason: 'reconnect_auto',
+                    force,
+                    retryWindowMs: force ? 15000 : 120000
+                });
+                const attempted = Number((result && result.attempted) || 0);
+                const queued = Number((result && result.queued) || 0);
+                if (attempted > 0) {
+                    console.info('Browser local draft handoff result:', {
+                        reason,
+                        attempted,
+                        queued,
+                        completed: Number((result && result.completed) || 0),
+                        errors: (result && result.errors) || []
+                    });
+                }
+                return result;
+            } catch (error) {
+                console.warn('Browser local draft handoff failed:', error);
+                return { success: false, error: error.message };
+            } finally {
+                this.draftHandoffInFlight = false;
+            }
+        },
+
         async directReconnectSync(reason, options = {}) {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
@@ -1147,6 +1199,7 @@ function initializeAdaptivePipelineModeManager() {
                     reason: 'reconnect_auto'
                 });
                 if (!syncRes || syncRes.success === false) {
+                    await this.handoffBrowserLocalDrafts(`${reason} (sync warning)`, { force: true, limit: 10 });
                     return syncRes || { success: false };
                 }
 
@@ -1157,9 +1210,11 @@ function initializeAdaptivePipelineModeManager() {
                         dedupeTtlMs: 20000
                     });
                 }
+                await this.handoffBrowserLocalDrafts(reason, { force, limit: 10 });
                 return syncRes;
             } catch (error) {
                 console.warn('Direct reconnect sync failed:', error);
+                await this.handoffBrowserLocalDrafts(`${reason} (backend sync failed)`, { force: true, limit: 10 });
                 return { success: false, error: error.message };
             }
         },
@@ -1205,6 +1260,7 @@ function initializeAdaptivePipelineModeManager() {
                 });
                 if (!syncRes || syncRes.success === false) {
                     console.warn('Local-cache reconciliation returned warning:', (syncRes && syncRes.error) || syncRes);
+                    await this.handoffBrowserLocalDrafts(`${reason} (sync warning)`, { force: true, limit: 10 });
                     return syncRes || { success: false };
                 }
 
@@ -1215,9 +1271,11 @@ function initializeAdaptivePipelineModeManager() {
                         dedupeTtlMs: 20000
                     });
                 }
+                await this.handoffBrowserLocalDrafts(reason, { force, limit: 10 });
                 return syncRes;
             } catch (error) {
                 console.warn('Adaptive backlog sync failed:', error);
+                await this.handoffBrowserLocalDrafts(`${reason} (backend sync failed)`, { force: true, limit: 10 });
                 return { success: false, error: error.message };
             } finally {
                 this.backlogSyncInFlight = false;
@@ -1275,6 +1333,12 @@ function initializeAdaptivePipelineModeManager() {
                 preferLocal: this.shouldUseLocal(networkState),
                 force: this.shouldUseLocal(networkState)
             });
+            if (!this.shouldUseLocal(networkState) && navigator.onLine !== false) {
+                await this.handoffBrowserLocalDrafts(`resolved cloud backend for ${networkState}`, {
+                    force,
+                    limit: 10
+                });
+            }
 
             if (this.shouldUseLocal(networkState)) {
                 if (this.currentMode === 'local') return;
@@ -1402,6 +1466,7 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 await API.executeReportRecovery('failover');
+                await this.handoffBrowserLocalDrafts(reason, { force: true, limit: 10 });
                 this.currentMode = 'cloud';
                 this.notify(`Pipeline switched to CLOUD mode and sync queued (${reason}).`, 'info', {
                     dedupeKey: 'adaptive-switch-cloud-success',
@@ -1413,6 +1478,10 @@ function initializeAdaptivePipelineModeManager() {
                 await this.syncBacklogToSupabase(`${reason} (cloud switch fallback)`, {
                     force: true,
                     notifyOnEnqueue: false
+                });
+                await this.handoffBrowserLocalDrafts(`${reason} (cloud switch fallback)`, {
+                    force: true,
+                    limit: 10
                 });
             } finally {
                 this.switchInFlight = false;

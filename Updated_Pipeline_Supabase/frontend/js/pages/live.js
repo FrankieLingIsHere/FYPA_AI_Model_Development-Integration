@@ -943,6 +943,7 @@ const LivePage = {
                                     source_label: 'Local',
                                     sync_state: 'pending_local_generation',
                                     status: 'pending',
+                                    detections: Array.isArray(result.detections) ? result.detections : [],
                                     violation_count: Number(result.violation_count || friendlyMissing.length || 1)
                                 });
                             }
@@ -1337,6 +1338,7 @@ const LivePage = {
                                 source_label: 'Local',
                                 sync_state: 'pending_local_generation',
                                 violation_count: Number(result.violation_count || 1),
+                                detections: Array.isArray(result.detections) ? result.detections : [],
                                 missing_ppe: [],
                                 violation_summary: 'PPE Violation Detected'
                             });

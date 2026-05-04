@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 import sys
 
 import requests
@@ -10,6 +11,55 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("CASM_LOCAL_FAILOVER_SYNC_STRICT", "1") != "0"
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def ensure_source_contracts() -> None:
+    """Guard the local-to-cloud handoff path without consuming cloud/Gemini egress."""
+    app_source = (REPO_ROOT / "Updated_Pipeline_Supabase" / "casm_app.py").read_text(encoding="utf-8")
+    db_source = (
+        REPO_ROOT
+        / "Updated_Pipeline_Supabase"
+        / "pipeline"
+        / "backend"
+        / "core"
+        / "supabase_db.py"
+    ).read_text(encoding="utf-8")
+    report_generator_source = (
+        REPO_ROOT
+        / "Updated_Pipeline_Supabase"
+        / "pipeline"
+        / "backend"
+        / "core"
+        / "supabase_report_generator.py"
+    ).read_text(encoding="utf-8")
+    api_source = (
+        REPO_ROOT / "Updated_Pipeline_Supabase" / "frontend" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    app_js_source = (
+        REPO_ROOT / "Updated_Pipeline_Supabase" / "frontend" / "js" / "app.js"
+    ).read_text(encoding="utf-8")
+    live_source = (
+        REPO_ROOT / "Updated_Pipeline_Supabase" / "frontend" / "js" / "pages" / "live.js"
+    ).read_text(encoding="utf-8")
+
+    required_markers = {
+        "backend partial handoff endpoint": "/api/reports/local-draft-handoff" in app_source,
+        "backend partial sync marker": "sync_local_cache_partial" in app_source,
+        "browser draft handoff marker": "browser_local_draft_handoff" in app_source,
+        "handoff adoption timestamp": "cloud_adopt_after_epoch" in app_source,
+        "cloud recovery adopts partial local handoffs": "sync_local_cache_partial" in db_source
+        and "browser_local_draft_handoff" in db_source,
+        "cloud generation updates pre-existing handoff row": "should_update_existing" in report_generator_source,
+        "frontend IndexedDB draft handoff helper": "handoffLocalReportDraftsToCloud" in api_source,
+        "adaptive reconnect invokes browser draft handoff": "handoffBrowserLocalDrafts" in app_js_source,
+        "live drafts preserve detections for cloud continuation": "detections: Array.isArray(result.detections)" in live_source,
+    }
+    missing = [name for name, ok in required_markers.items() if not ok]
+    if missing:
+        raise RuntimeError(f"source handoff contract missing markers: {missing}")
 
 
 
@@ -40,6 +90,9 @@ def ensure_dict(payload, context: str):
 
 def main() -> int:
     try:
+        ensure_source_contracts()
+        print("PASS: local partial handoff source contracts")
+
         code, startup, preview = request_json("GET", "/api/system/startup-status")
         if code >= 500:
             return fail(f"startup status failed with {code}: {preview}", 3)

@@ -624,18 +624,36 @@ class SupabaseDatabaseManager:
                            ('pending', 'generating', 'unknown', 'failed', 'partial'))
                       AND v.original_image_key IS NOT NULL
                       AND v.report_html_key IS NULL
-                      AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
                       AND (
-                          v.detection_data IS NULL
-                          OR v.detection_data->>'source_scope' IS NULL
-                          OR v.detection_data->>'source_scope' = 'cloud'
+                          de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                          OR v.detection_data->>'sync_source' IN (
+                              'sync_local_cache_partial',
+                              'browser_local_draft_handoff',
+                              'cloud_pending_local_handoff'
+                          )
                       )
                       AND (
-                          v.detection_data IS NULL
-                          OR v.detection_data->>'sync_source' IS NULL
-                          OR v.detection_data->>'sync_source' NOT IN (
-                              'sync_local_cache', 'local_cache', 'local_cache_sync',
-                              'local_pending_recovery', 'local', 'auto_reconnect'
+                          (
+                              (
+                                  v.detection_data IS NULL
+                                  OR v.detection_data->>'source_scope' IS NULL
+                                  OR v.detection_data->>'source_scope' = 'cloud'
+                              )
+                              AND (
+                                  v.detection_data IS NULL
+                                  OR v.detection_data->>'sync_source' IS NULL
+                                  OR v.detection_data->>'sync_source' NOT IN (
+                                      'sync_local_cache', 'local_cache', 'local_cache_sync',
+                                      'local_pending_recovery', 'local', 'auto_reconnect'
+                                  )
+                              )
+                          )
+                          OR (
+                              v.detection_data->>'sync_source' IN (
+                                  'sync_local_cache_partial',
+                                  'browser_local_draft_handoff',
+                                  'cloud_pending_local_handoff'
+                              )
                           )
                       )
                     ORDER BY de.timestamp ASC

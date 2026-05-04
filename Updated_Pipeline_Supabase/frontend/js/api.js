@@ -1284,6 +1284,114 @@ const API = {
         }
     },
 
+    async handoffLocalReportDraftsToCloud(options = {}) {
+        const limit = Math.max(1, Math.min(Number(options.limit || 10), 50));
+        const reason = String(options.reason || '').trim() || 'browser_reconnect';
+        const force = !!options.force;
+        const retryWindowMs = Math.max(15000, Number(options.retryWindowMs || 120000));
+        const drafts = await this.readLocalReportDrafts();
+        const now = Date.now();
+        let attempted = 0;
+        let queued = 0;
+        let completed = 0;
+        let skipped = 0;
+        const errors = [];
+
+        for (const draft of drafts) {
+            if (attempted >= limit) break;
+            if (!draft || !draft.report_id || !draft.original_blob) {
+                skipped += 1;
+                continue;
+            }
+
+            const syncState = String(draft.sync_state || '').toLowerCase();
+            if (['synced', 'completed', 'cloud_completed'].includes(syncState)) {
+                skipped += 1;
+                continue;
+            }
+
+            const lastHandoffAt = Date.parse(draft.cloud_handoff_at || draft.handoff_attempted_at || '');
+            const recentHandoff = Number.isFinite(lastHandoffAt) && now - lastHandoffAt < retryWindowMs;
+            if (
+                recentHandoff
+                && (
+                    !force
+                    || ['cloud_generation_queued', 'cloud_handoff_uploaded'].includes(syncState)
+                )
+            ) {
+                skipped += 1;
+                continue;
+            }
+
+            attempted += 1;
+            const metadata = this.stripLocalDraftRuntimeFields([{
+                ...draft,
+                handoff_reason: reason,
+                handoff_client: 'browser_indexeddb_draft'
+            }])[0] || {};
+
+            const form = new FormData();
+            form.append('report_id', draft.report_id);
+            form.append('reason', reason);
+            form.append('metadata', JSON.stringify(metadata));
+            form.append('image', draft.original_blob, `${draft.report_id}.jpg`);
+
+            try {
+                const response = await this._fetchWithTimeout(
+                    `${API_CONFIG.BASE_URL}/api/reports/local-draft-handoff`,
+                    {
+                        method: 'POST',
+                        body: form
+                    },
+                    Number(options.timeoutMs || 25000)
+                );
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || data.success === false) {
+                    throw new Error(data.error || 'Local draft handoff failed');
+                }
+
+                if (data.already_completed) {
+                    completed += 1;
+                    await this.removeLocalReportDraft(draft.report_id);
+                    continue;
+                }
+
+                if (data.queued) queued += 1;
+                await this.upsertLocalReportDraft({
+                    ...draft,
+                    source_scope: data.source_scope || 'synced_local',
+                    source_label: 'Local Synced',
+                    sync_state: data.queued ? 'cloud_generation_queued' : 'cloud_handoff_uploaded',
+                    cloud_handoff_at: new Date().toISOString(),
+                    cloud_adopt_after_epoch: data.cloud_adopt_after_epoch || null,
+                    handoff_attempted_at: new Date().toISOString(),
+                    status: data.queued ? 'pending' : (draft.status || 'pending')
+                });
+            } catch (error) {
+                errors.push(`${draft.report_id}: ${error.message}`);
+                try {
+                    await this.upsertLocalReportDraft({
+                        ...draft,
+                        sync_state: 'cloud_handoff_retry',
+                        handoff_attempted_at: new Date().toISOString(),
+                        handoff_error: error.message
+                    });
+                } catch (writeErr) {
+                    // Keep the original draft if the status update cannot be saved.
+                }
+            }
+        }
+
+        return {
+            success: errors.length === 0,
+            attempted,
+            queued,
+            completed,
+            skipped,
+            errors
+        };
+    },
+
     getRealtimeStreamUrl() {
         return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REALTIME_STREAM}`;
     },

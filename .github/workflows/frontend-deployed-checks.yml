@@ -8,8 +8,6 @@ on:
         description: "Vercel frontend URL"
         required: false
         default: "https://fypa-ai-model-development-integrati.vercel.app"
-  schedule:
-    - cron: "30 */6 * * *"
 
 jobs:
   frontend-assets-and-routing:

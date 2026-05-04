@@ -3113,7 +3113,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"ðŸ“ Created violation directory: {violation_dir}")
+        logger.info(f"ðŸ“  Created violation directory: {violation_dir}")
         
         # === IMMEDIATE: Save images (fast operation) ===
         # Save original frame
@@ -4208,7 +4208,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"âœ“ Inserted PENDING detection event: {report_id}")
+                logger.info(f"✓ Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('process_violation.insert_pending_event', e)
                 logger.warning(
@@ -4217,11 +4217,6 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 )
         
         # Save annotated frame
-        _, annotated = predict_image(frame, conf=0.25)
-        annotated_path = violation_dir / 'annotated.jpg'
-        cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
-otated frame
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)

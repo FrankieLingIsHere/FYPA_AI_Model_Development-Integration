@@ -860,7 +860,7 @@ function normalizeBaseUrl(base) {
 
 function buildBackendCandidates(preferLocal) {
     const explicitApiOverride = normalizeBaseUrl(window.PPE_API_URL || '');
-    const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || API_CONFIG.BASE_URL || '');
+    const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '');
     const sameOrigin = '';
     // Backend listens on 5000 (see start.bat). Port 5001 was a legacy
     // view_reports.py port; including it here causes the resolver to
@@ -922,29 +922,8 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
     // concurrent caller entering this function before the microtask queue yields will
     // see a non-null backendResolutionInFlight and dedup correctly (M3 race fix).
     const resolution = (async () => {
-        const currentHost = String(window.location.hostname || '').toLowerCase();
-        const hostLooksLocal = currentHost === 'localhost'
-            || currentHost === '127.0.0.1'
-            || currentHost === '0.0.0.0'
-            || currentHost.endsWith('.local');
-
-        if (hostLooksLocal) {
-            const sameOriginReachable = await probeBackend('', STARTUP_STATUS_ENDPOINT);
-            if (sameOriginReachable) {
-                API_CONFIG.BASE_URL = '';
-                lastResolvedBackendBaseUrl = '';
-                window.dispatchEvent(new CustomEvent('ppe-backend:resolved', {
-                    detail: {
-                        baseUrl: '',
-                        preferLocal: true,
-                        measuredAt: Date.now(),
-                        pinnedLocalhost: true
-                    }
-                }));
-                return '';
-            }
-        }
-
+        // hostLooksLocal short-circuit removed: It was forcing localhost even when preferLocal=false.
+        // buildBackendCandidates handles the proper ordering of sameOrigin vs configured URL.
         const preferLocalNow = preferLocal || navigator.onLine === false;
         const candidates = buildBackendCandidates(preferLocalNow);
 

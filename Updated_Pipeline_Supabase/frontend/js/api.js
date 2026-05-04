@@ -359,6 +359,28 @@ const API = {
         });
     },
 
+    _mergeOptimistically(listA, listB, maxLimit = 1000) {
+        if (!Array.isArray(listA)) listA = [];
+        if (!Array.isArray(listB)) listB = [];
+        const byId = new Map();
+        
+        // listB overwrites listA
+        listA.forEach(v => {
+            if (v && v.report_id) byId.set(v.report_id, v);
+        });
+        listB.forEach(v => {
+            if (v && v.report_id) byId.set(v.report_id, v);
+        });
+        
+        const merged = Array.from(byId.values());
+        merged.sort((a, b) => {
+            const aTime = new Date(a.timestamp || 0).getTime();
+            const bTime = new Date(b.timestamp || 0).getTime();
+            return bTime - aTime;
+        });
+        return merged.slice(0, maxLimit);
+    },
+
     // Fetch all violations with status info
     async getViolations(options = {}) {
         const requestedLimit = Number(options.limit);
@@ -374,10 +396,34 @@ const API = {
 
         try {
             const url = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
-            const data = noCache
-                ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
-                : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
-            const list = Array.isArray(data) ? data : [];
+            let data = noCache
+                ? await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs })
+                : await this.fetchJsonWithCache(url, { cacheScope: null, timeoutMs });
+            let list = Array.isArray(data) ? data : [];
+
+            // OPTIMISTIC UI MERGING: Merge cloud reports if in local mode
+            const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
+            if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase) {
+                try {
+                    const cloudUrl = `${cloudUrlBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
+                    const cloudData = noCache
+                        ? await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 })
+                        : await this.fetchJsonWithCache(cloudUrl, { timeoutMs: 5000 });
+                    if (Array.isArray(cloudData)) {
+                        list = this._mergeOptimistically(cloudData, list, safeLimit);
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch cloud reports for merge:', e);
+                }
+            }
+
+            // Fallback merging with cache (retains cloud reports offline)
+            const cached = this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                list = this._mergeOptimistically(cached.data, list, safeLimit);
+            }
+
+            this.writeJsonCache(cacheScope, list);
             this.prefetchViolationImages(list);
             return list;
         } catch (error) {
@@ -442,10 +488,34 @@ const API = {
 
         try {
             const url = `${API_CONFIG.BASE_URL}/api/reports/pending`;
-            const data = noCache
-                ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
-                : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
-            return Array.isArray(data) ? data : [];
+            let data = noCache
+                ? await this.fetchJsonNoCache(url, { cacheScope: null, timeoutMs })
+                : await this.fetchJsonWithCache(url, { cacheScope: null, timeoutMs });
+            let list = Array.isArray(data) ? data : [];
+
+            // OPTIMISTIC UI MERGING
+            const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
+            if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase) {
+                try {
+                    const cloudUrl = `${cloudUrlBase}/api/reports/pending`;
+                    const cloudData = noCache
+                        ? await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 })
+                        : await this.fetchJsonWithCache(cloudUrl, { timeoutMs: 5000 });
+                    if (Array.isArray(cloudData)) {
+                        list = this._mergeOptimistically(cloudData, list, 100);
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch cloud pending for merge:', e);
+                }
+            }
+
+            const cached = this.readJsonCache(cacheScope);
+            if (cached && Array.isArray(cached.data)) {
+                list = this._mergeOptimistically(cached.data, list, 100);
+            }
+
+            this.writeJsonCache(cacheScope, list);
+            return list;
         } catch (error) {
             console.error('Error fetching pending reports:', error);
             if (noCache) {

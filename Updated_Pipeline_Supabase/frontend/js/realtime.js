@@ -348,77 +348,9 @@ const RealtimeSync = {
             return isRecentRow(row);
         };
 
-        reports.forEach((row) => {
-            const reportId = row.report_id;
-            const status = (row.status || 'unknown').toLowerCase();
-            if (!reportId) return;
-
-            const prev = this.reportStatusCache[reportId];
-            this.reportStatusCache[reportId] = status;
-
-            if (!prev) {
-                if (!shouldTreatRowAsRecent(row)) {
-                    return;
-                }
-
-                if (status === 'pending' || status === 'queued') {
-                    NotificationManager.reportGenerating(reportId, {
-                        title: 'Report Queued'
-                    });
-                    return;
-                }
-
-                if (status === 'generating' || status === 'processing') {
-                    NotificationManager.reportGenerating(reportId, {
-                        title: 'Report Generating'
-                    });
-                    return;
-                }
-
-                if (status === 'completed') {
-                    NotificationManager.reportReady(reportId);
-                    return;
-                }
-
-                if (status === 'failed' || status === 'partial' || status === 'skipped') {
-                    NotificationManager.error(`Report ${reportId} failed: ${row.error_message || 'Unknown error'}`, {
-                        title: 'Report Generation Issue',
-                        duration: 8000
-                    });
-                }
-                return;
-            }
-
-            if (prev === status) {
-                return;
-            }
-
-            if (status === 'completed') {
-                NotificationManager.reportReady(reportId);
-                return;
-            }
-
-            if (status === 'failed' || status === 'partial' || status === 'skipped') {
-                NotificationManager.error(`Report ${reportId} failed: ${row.error_message || 'Unknown error'}`, {
-                    title: 'Report Generation Issue',
-                    duration: 8000
-                });
-                return;
-            }
-
-            if (status === 'pending' || status === 'queued') {
-                NotificationManager.reportGenerating(reportId, {
-                    title: 'Report Queued'
-                });
-                return;
-            }
-
-            if ((status === 'generating' || status === 'processing') && (prev === 'pending' || prev === 'queued')) {
-                NotificationManager.reportGenerating(reportId, {
-                    title: 'Report Generating'
-                });
-            }
-        });
+        // DB row notifications are now exclusively handled by ViolationMonitor
+        // to prevent duplication. RealtimeSync already triggers ViolationMonitor
+        // immediately upon receiving a push payload.
 
         // Fallback path: when DB-backed report rows are unavailable, use pipeline progress.
         // This keeps UX visibility in local/offline runs while generation is still active.

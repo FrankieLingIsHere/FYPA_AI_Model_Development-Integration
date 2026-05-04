@@ -208,8 +208,8 @@ class ReportGenerator:
         self.gemini_monthly_budget_usd = float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0)
         self.gemini_cost_per_1m_input_tokens = float(os.getenv('GEMINI_COST_PER_1M_INPUT_TOKENS', '0.30') or 0.30)
         self.gemini_cost_per_1m_output_tokens = float(os.getenv('GEMINI_COST_PER_1M_OUTPUT_TOKENS', '2.50') or 2.50)
-        self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '900') or 900)
-        self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900)
+        self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '1800') or 1800)
+        self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200)
         self.gemini_budget_state_path = Path(
             os.getenv(
                 'GEMINI_BUDGET_STATE_PATH',

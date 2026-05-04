@@ -32,13 +32,8 @@ const API_CONFIG = {
 
         const normalized = normalizeApiBaseUrl(value);
         runtimeApiBaseOverride = normalized;
-
-        if (normalized) {
-            window.PPE_API_URL = normalized;
-            if (window.__PPE_CONFIG__ && typeof window.__PPE_CONFIG__ === 'object') {
-                window.__PPE_CONFIG__.API_BASE_URL = normalized;
-            }
-        }
+        // Removed destructive overwriting of window.PPE_API_URL and window.__PPE_CONFIG__ here.
+        // Mutating those global constants destroys the original cloud URL during local-mode switches.
     },
     LOCAL_BACKEND_URL: 'http://localhost:5000',
     ENDPOINTS: {

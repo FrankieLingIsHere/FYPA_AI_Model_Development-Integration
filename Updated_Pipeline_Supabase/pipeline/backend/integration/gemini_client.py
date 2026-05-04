@@ -131,7 +131,7 @@ class GeminiClient:
         prompt_budget = os.getenv('GEMINI_REPORT_PROMPT_MAX_CHARS', '').strip()
         self.report_prompt_max_chars = int(prompt_budget) if prompt_budget.isdigit() else 22000
         output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
-        self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 1100
+        self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 2200
         temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
         try:
             self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2

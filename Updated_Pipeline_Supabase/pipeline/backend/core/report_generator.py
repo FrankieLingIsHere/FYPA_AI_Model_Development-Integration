@@ -1637,13 +1637,14 @@ RESPONSE FORMAT (JSON):
             "You are a Senior Safety Compliance Officer in Malaysia. Summarize this safety incident.\n\n"
             "Style: Executive, professional, authoritative.\n"
             "Language: UK English (Malaysia standard).\n"
-            "Format: 3-4 bullet points starting with emojis.\n\n"
+            "Format: 3-4 professional bullet points.\n\n"
             "Required sections:\n"
-            "• [Emoji] Incident Classification (High/Medium/Low based on VISUAL evidence)\n"
-            "• [Emoji] Core Violation (Primary regulation breached, e.g., OSHA 1994 Section 15)\n"
-            "• [Emoji] Immediate Risk (Life-threatening vs standard risk)\n"
-            "• [Emoji] Critical Action (Stop work, issue PPE, or toolbox talk)\n\n"
+            "• Incident Classification (High/Medium/Low based on VISUAL evidence)\n"
+            "• Core Violation (Primary regulation breached, e.g., OSHA 1994 Section 15)\n"
+            "• Immediate Risk (Life-threatening vs standard risk)\n"
+            "• Critical Action (Stop work, issue PPE, or toolbox talk)\n\n"
             "Rules:\n"
+            "- Do not use emojis.\n"
             "- Do not be generic (e.g., don't say 'worker is not wearing PPE').\n"
             "- Be specific (e.g., 'Worker exposed to fatal head trauma due to missing rigid hardhat in construction zone').\n"
             "- Ground every claim in the visual evidence provided.\n"
@@ -3233,17 +3234,6 @@ RESPONSE FORMAT (JSON):
     
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
-        # Convert markdown-style bullet points from model summary to clean HTML list
-        text = str(nlp_analysis.get('summary', '') or '').strip()
-        if not text:
-            return "<p>No summary provided.</p>"
-
-        # Handle Malaysian Executive Summary format (bullet points with emojis)
-        if '•' in text or '*' in text:
-            lines = [line.strip(' *•') for line in text.split('\n') if line.strip()]
-            list_items = "".join([f"<li style='margin-bottom: 0.6rem;'>{self._to_safe_html_text(line)}</li>" for line in lines])
-            return f"<ul style='list-style-type: none; padding-left: 0; margin: 0;'>{list_items}</ul>"
-
         import re
 
         summary_text = str(nlp_analysis.get('summary') or '').strip()
@@ -3417,7 +3407,15 @@ RESPONSE FORMAT (JSON):
         )
 
         if _is_meaningful_summary(summary_text):
-            what_text = summary_text
+            # Handle Malaysian Executive Summary format (bullet points with emojis)
+            # If the model provides a bulleted list, we wrap it in a clean HTML list
+            # but keep it inside the 'WHAT' table cell.
+            if '•' in summary_text or '*' in summary_text:
+                lines = [line.strip(' *•') for line in summary_text.split('\n') if line.strip()]
+                list_items = "".join([f"<li style='margin-bottom: 0.4rem;'>{self._to_safe_html_text(line)}</li>" for line in lines])
+                what_text = f"<ul style='list-style-type: none; padding-left: 0; margin: 0;'>{list_items}</ul>"
+            else:
+                what_text = summary_text
         else:
             if no_concrete_ppe_evidence and caption_safety_neutral:
                 what_text = (

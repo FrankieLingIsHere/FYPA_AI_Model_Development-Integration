@@ -498,21 +498,17 @@ class GeminiClient:
             return "Image captioning not available — Gemini API not configured"
         
         # Default safety-focused prompt with stronger people/action/situation structure.
+        # Aligned with Local Mode successful pattern for maximum descriptive quality.
         prompt = custom_prompt or (
-            "You are a workplace visual analyst. Write a factual caption from this image only.\n\n"
-            "Output rules (single paragraph, 6-9 sentences):\n"
-            "1. Start with total visible people count and scene type.\n"
-            "2. For each visible person, describe their action, visible body region, and immediate situation/context.\n"
-            "3. Describe nearby safety-relevant context (machines, vehicles, stacked materials, barriers, wet/slippery surfaces, tools) only if visible.\n"
-            "4. Mention PPE only when clearly visible and certain.\n"
-            "5. If PPE region is not visible, explicitly state it is not visible.\n"
-            "6. End with concise safety context grounded in visible facts.\n\n"
-            "Strict grounding:\n"
-            "- Do not invent hazards, tools, or PPE.\n"
-            "- Do not assume construction/worksite unless visual evidence supports it.\n"
-            "- Hardhat must be a rigid safety helmet (hair/cap/hood is not hardhat).\n"
-            "- Safety vest must be fluorescent and reflective.\n\n"
-            "Style: professional natural English, no markdown, no bullet points, avoid 'In the image'."
+            "You are a professional workplace safety inspector. Analyze this image and describe:\n"
+            "1. The total number of visible people and the specific scene type.\n"
+            "2. What each person is doing, their visible body region, and their immediate context.\n"
+            "3. Safety equipment they are wearing or missing (be very specific).\n"
+            "4. Visible hazards (machines, vehicles, slippery floors, tools).\n"
+            "Output rules:\n"
+            "- Write a single paragraph (3-6 sentences).\n"
+            "- Be specific and factual. Do not invent details.\n"
+            "- Professional natural English, no markdown, avoid 'In the image'."
         )
         
         # Load image

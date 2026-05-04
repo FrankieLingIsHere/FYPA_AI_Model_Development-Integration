@@ -927,42 +927,23 @@ const LivePage = {
                                 : 'PPE Violation Detected'
                         };
 
-                        // Fire the toast via the polling monitor's helper (it also
-                        // de-dupes against the report_id so polling won't show it
-                        // again). The audioAlert.js patch hooks the same helper, so
-                        // voice should fire automatically.
+                        // Fire the immediate notification and voice alert.
+                        // ViolationMonitor and AudioAlert use report_id de-duplication
+                        // to ensure this only fires ONCE, even if polling catches it later.
                         try {
                             if (typeof ViolationMonitor !== 'undefined'
                                 && typeof ViolationMonitor._notifyViolationDetected === 'function'
                                 && synthViolation.report_id) {
                                 ViolationMonitor._notifyViolationDetected(synthViolation);
                             }
-                        } catch (notifyErr) {
-                            console.warn('Could not fire immediate violation notification:', notifyErr);
-                        }
-
-                        // Belt-and-suspenders: directly trigger the voice alert too
-                        // in case audioAlert.js had not yet patched ViolationMonitor
-                        // when the first live capture fired (race on first load).
-                        // speakViolation has its own per-reportId dedup so this is
-                        // safe even if the patched path also runs.
-                        try {
                             if (typeof window !== 'undefined'
                                 && window.AudioAlert
                                 && typeof window.AudioAlert.speakViolation === 'function'
                                 && synthViolation.report_id) {
-                                const alertEnabled = (typeof window.AudioAlert.isEnabled === 'function')
-                                    ? !!window.AudioAlert.isEnabled() : 'unknown';
-                                console.log('[live.js] firing direct AudioAlert.speakViolation for',
-                                    synthViolation.report_id, 'enabled=', alertEnabled);
                                 window.AudioAlert.speakViolation(synthViolation);
-                            } else {
-                                console.warn('[live.js] AudioAlert unavailable for direct speakViolation',
-                                    { hasAudioAlert: !!window.AudioAlert,
-                                      hasReportId: !!synthViolation.report_id });
                             }
-                        } catch (audioErr) {
-                            console.warn('Could not fire voice alert directly:', audioErr);
+                        } catch (notifyErr) {
+                            console.warn('Could not fire immediate violation notice:', notifyErr);
                         }
                     }
                     if (result.report_queued === false) {

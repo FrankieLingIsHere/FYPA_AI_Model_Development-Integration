@@ -139,22 +139,17 @@ const ViolationMonitor = {
                     const isNewDuringSession = violationTime > sessionStartWithBuffer;
 
                     if (isNewDuringSession) {
-                        console.log(`[ViolationMonitor] 🆕 NEW real-time violation: ${reportId} (status=${status})`);
-
-                        // The "PPE Violation Detected!" toast is meant to alert the user at
-                        // the *moment of detection*. If the polling tick is the first time
-                        // we're seeing this report and it is already terminal (completed
-                        // or failed), the detection moment has already passed, so showing
-                        // a "Violation Detected!" toast right next to the "Report Complete!"
-                        // toast is misleading. The live capture path (live.js) is now
-                        // responsible for firing the immediate detection toast.
-                        const isTerminalOnFirstSight = status === 'completed' || status === 'failed';
-                        if (!isTerminalOnFirstSight) {
-                            this._notifyViolationDetected(violation);
-                        }
+                        console.log(`[ViolationMonitor] 🆕 NEW real-time violation detected via polling fallback: ${reportId}`);
+                        
+                        // We call the notification helpers. 
+                        // These helpers already contain the de-duplication check:
+                        // 'if (this.notifiedEvents.has(key)) return;'
+                        // So if live.js already fired the notification, these calls 
+                        // will do absolutely nothing, preventing duplicates.
+                        this._notifyViolationDetected(violation);
 
                         if (status === 'generating') {
-                            setTimeout(() => this._notifyReportGenerating(violation), 1500);
+                            this._notifyReportGenerating(violation);
                         } else if (status === 'completed') {
                             this._notifyReportReady(violation);
                         } else if (status === 'failed') {

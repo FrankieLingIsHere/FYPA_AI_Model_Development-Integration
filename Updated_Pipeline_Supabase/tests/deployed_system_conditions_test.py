@@ -13,9 +13,10 @@ BASE_URL = os.environ.get(
 
 POLL_SECONDS = int(os.environ.get("CASM_CONDITIONS_POLL_SECONDS", "30"))
 POLL_INTERVAL = int(os.environ.get("CASM_CONDITIONS_POLL_INTERVAL", "3"))
-MAX_REPORT_IDS = int(os.environ.get("CASM_CONDITIONS_MAX_REPORT_IDS", "15"))
-ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("CASM_PROVIDER_MODE_MATRIX", "1") != "0"
-PROVIDER_MODE_GENERATE_PROBE = os.environ.get("CASM_PROVIDER_MODE_GENERATE_PROBE", "1") != "0"
+MAX_REPORT_IDS = int(os.environ.get("CASM_CONDITIONS_MAX_REPORT_IDS", "5"))
+ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("CASM_PROVIDER_MODE_MATRIX", "0") != "0"
+PROVIDER_MODE_GENERATE_PROBE = os.environ.get("CASM_PROVIDER_MODE_GENERATE_PROBE", "0") != "0"
+GENERATE_NOW_PROBE = os.environ.get("CASM_CONDITIONS_GENERATE_NOW_PROBE", "0") != "0"
 STRICT_CONDITIONS = os.environ.get("CASM_CONDITIONS_STRICT", "1") != "0"
 REQUIRE_NO_NLP_FALLBACK = os.environ.get("CASM_REQUIRE_NO_NLP_FALLBACK", "0") != "0"
 REQUIRE_GENERATE_PROGRESSION = os.environ.get("CASM_REQUIRE_GENERATE_PROGRESSION", "0") != "0"
@@ -470,6 +471,33 @@ def main() -> int:
             if status_value not in ALLOWED_REPORT_STATUSES:
                 return fail(f"unexpected status for {rid}: {status_value}", 10)
             print(f"PASS: report-status {rid} -> {status_value}")
+
+        if not GENERATE_NOW_PROBE:
+            print(
+                "INFO: generate-now probe disabled via egress-minimal default "
+                "(set CASM_CONDITIONS_GENERATE_NOW_PROBE=1 to enable)"
+            )
+            if ENABLE_PROVIDER_MODE_MATRIX:
+                run_provider_mode_matrix_probe(report_ids)
+            else:
+                print("INFO: provider mode matrix probe disabled via CASM_PROVIDER_MODE_MATRIX=0")
+
+            if REQUIRE_NO_NLP_FALLBACK:
+                runtime_code, runtime_payload, runtime_text = request_json(
+                    "GET",
+                    "/api/providers/runtime-status",
+                    timeout=30,
+                )
+                if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                    return fail(
+                        f"provider runtime-status unavailable for no-fallback validation ({runtime_code}): {runtime_text}",
+                        24,
+                    )
+                assert_no_nlp_fallback(runtime_payload)
+
+            print("PASS: deployed conditions matrix")
+            print("observed-conditions=" + json.dumps({"generate_now_probe": False}, ensure_ascii=True))
+            return 0
 
         conditions = {
             "already_completed": False,

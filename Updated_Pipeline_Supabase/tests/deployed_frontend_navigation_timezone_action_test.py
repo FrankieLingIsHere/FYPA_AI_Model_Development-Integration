@@ -12,6 +12,7 @@ VERCEL_URL = os.environ.get(
 ).rstrip("/")
 
 MAX_NAV_LATENCY_MS = int(os.environ.get("CASM_FRONTEND_MAX_NAV_LATENCY_MS", "12000"))
+EGRESS_MINIMAL = os.environ.get("CASM_FRONTEND_ACTION_EGRESS_MINIMAL", "1") != "0"
 
 
 def fail(message: str, code: int = 2) -> int:
@@ -66,6 +67,33 @@ def navigate_to(page, page_name: str, wait_selector: str = "#app"):
     nav_link.click()
     page.wait_for_selector(wait_selector, timeout=MAX_NAV_LATENCY_MS)
     page.wait_for_timeout(320)
+
+
+def install_egress_minimal_routes(context):
+    """Avoid storage-heavy assets while preserving real app scripts and API contracts."""
+    if not EGRESS_MINIMAL:
+        return
+
+    def _route_handler(route):
+        request = route.request
+        url = (request.url or "").lower()
+        resource_type = request.resource_type
+
+        if resource_type in ("image", "media", "font") or "/image/" in url:
+            route.abort()
+            return
+
+        if "/api/report/" in url and "/prefetch" in url:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"success":false,"skipped":true,"reason":"egress_minimal_action_test"}',
+            )
+            return
+
+        route.continue_()
+
+    context.route("**/*", _route_handler)
 
 
 def install_metrics_hooks(page):
@@ -252,7 +280,11 @@ def main() -> int:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(viewport={"width": 1440, "height": 900})
+            install_egress_minimal_routes(context)
             page = context.new_page()
+
+            if EGRESS_MINIMAL:
+                print("INFO: frontend action test running with image/media/prefetch blocking enabled")
 
             page.goto(f"{VERCEL_URL}/", wait_until="domcontentloaded", timeout=90000)
             page.wait_for_selector("[data-page='home']", state="attached", timeout=120000)

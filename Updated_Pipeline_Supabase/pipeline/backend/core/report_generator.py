@@ -4004,7 +4004,7 @@ RESPONSE FORMAT (JSON):
         has_ppe_detail = any(tok in raw_lower for tok in ('ppe', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'no '))
         has_scene_detail = any(tok in raw_lower for tok in ('scene', 'environment', 'work', 'office', 'construction', 'warehouse', 'roadside'))
 
-        if len(raw_caption_clean) < 140 or not (has_person_detail and has_scene_detail):
+        if len(raw_caption_clean) < 100 or not has_person_detail:
             return floor_caption
 
         detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []

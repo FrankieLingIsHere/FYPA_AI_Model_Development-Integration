@@ -9011,7 +9011,7 @@ def api_report_recovery_execute():
     if mode not in ('local', 'failover'):
         return jsonify({'success': False, 'error': 'mode must be either "local" or "failover"'}), 400
 
-    if violation_queue is None:
+    if not _ensure_violation_queue_runtime_ready(reason=f'recovery_execute:{mode}'):
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
 
     local_mode_warning = None
@@ -9328,7 +9328,17 @@ def _sync_local_cache_candidates(
         return {'success': False, 'error': 'Database manager unavailable'}
     if storage_manager is None:
         return {'success': False, 'error': 'Storage manager unavailable'}
+
     if violation_queue is None:
+        if dry_run:
+            _ensure_violation_queue_runtime_ready(reason=f'sync_local_cache_dry_run:{reason}')
+        elif require_worker:
+            if not ensure_queue_worker_running():
+                return {'success': False, 'error': 'Queue worker is not running'}
+        elif not _ensure_violation_queue_runtime_ready(reason=f'sync_local_cache:{reason}'):
+            return {'success': False, 'error': 'Queue is not initialized'}
+
+    if violation_queue is None and not dry_run:
         return {'success': False, 'error': 'Queue is not initialized'}
     if not dry_run and require_worker and not ensure_queue_worker_running():
         return {'success': False, 'error': 'Queue worker is not running'}
@@ -14527,7 +14537,7 @@ def download_bootstrap_installer():
     token_ok, token_payload, token_error = _verify_bootstrap_token(
         token,
         expected_purpose='installer_download',
-        consume=False,
+        consume=True,
     )
     if not token_ok or token_payload is None:
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
@@ -14797,7 +14807,7 @@ def admin_devices():
                                     <button type="submit" name="action" value="reject" class="btn btn-danger">Reject Device</button>
                                 </form>
                                 {% elif status in ['approved', 'provisioned'] %}
-                                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Download Installer (Reusable for 10m)</a>
+                                <a href="/api/bootstrap/installer/request?machine_id={{ m_id | urlencode }}" class="btn btn-primary">Download Installer</a>
                                 <form method="POST" style="display:inline;" onsubmit="return confirm('Revoke this device? It will no longer be able to refresh credentials and will need to re-request approval.');">
                                     <input type="hidden" name="machine_id" value="{{ m_id }}">
                                     <button type="submit" name="action" value="revoke" class="btn btn-danger">Revoke Access</button>
@@ -14999,7 +15009,7 @@ def admin_devices_quick_approve():
                         Machine <strong>{{ machine_id }}</strong> has been granted access.
                     </p>
                     <div class="approval-actions">
-                        <a href="{{ installer_request_link }}" class="btn btn-primary">Download Installer (Reusable for 10m)</a>
+                        <a href="{{ installer_request_link }}" class="btn btn-primary">Download Installer</a>
                         <a href="/admin/devices" class="btn btn-secondary">Return to Admin Dashboard</a>
                     </div>
                 </div>

@@ -320,7 +320,9 @@ const ViolationMonitor = {
                 action: {
                     text: 'View Report',
                     onClickFn: () => this.navigateToReport(reportId)
-                }
+                },
+                dedupeKey: reportId ? `violation:${reportId}` : undefined,
+                dedupeTtlMs: 12000
             }
         );
 

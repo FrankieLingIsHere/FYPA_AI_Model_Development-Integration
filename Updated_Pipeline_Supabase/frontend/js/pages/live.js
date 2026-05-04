@@ -886,12 +886,15 @@ const LivePage = {
                     }
                 }
                 if (result && result.violations_detected) {
-                    const now = Date.now();
-                    if (now - this.phoneLastViolationNoticeAt > 10000) {
-                        this.phoneLastViolationNoticeAt = now;
-                        showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
+                    const reportQueued = result.report_queued === true;
+                    if (!reportQueued) {
+                        const now = Date.now();
+                        if (now - this.phoneLastViolationNoticeAt > 10000) {
+                            this.phoneLastViolationNoticeAt = now;
+                            showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
+                        }
                     }
-                    if (result.report_queued === true) {
+                    if (reportQueued) {
                         // Reset suppression state only when a new violation is successfully enqueued.
                         this.reportQueueSuppressionActive = false;
                         this.reportQueueSuppressionReason = null;
@@ -927,16 +930,18 @@ const LivePage = {
                                 : 'PPE Violation Detected'
                         };
 
-                        // Fire the immediate notification and voice alert.
-                        // ViolationMonitor and AudioAlert use report_id de-duplication
-                        // to ensure this only fires ONCE, even if polling catches it later.
+                        // Fire the immediate rich notification. ViolationMonitor owns
+                        // the matching voice alert and report-id de-duplication.
                         try {
+                            let monitorNotified = false;
                             if (typeof ViolationMonitor !== 'undefined'
                                 && typeof ViolationMonitor._notifyViolationDetected === 'function'
                                 && synthViolation.report_id) {
                                 ViolationMonitor._notifyViolationDetected(synthViolation);
+                                monitorNotified = true;
                             }
-                            if (typeof window !== 'undefined'
+                            if (!monitorNotified
+                                && typeof window !== 'undefined'
                                 && window.AudioAlert
                                 && typeof window.AudioAlert.speakViolation === 'function'
                                 && synthViolation.report_id) {

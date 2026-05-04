@@ -240,8 +240,8 @@ const AudioAlert = (function () {
                 }
             }, 600);
 
-            // Optionally notify visually
-            NotificationManager.violation(message, reportId);
+            // Visual violation toasts are owned by ViolationMonitor so each
+            // report produces only one on-screen "violation detected" notice.
         } catch (e) {
             console.warn('Speech synthesis failed:', e);
         }
@@ -353,8 +353,7 @@ const AudioAlert = (function () {
 
             _updateButtonVisual();
 
-            // Patch monitor to play audio on new violations
-            patchViolationMonitor();
+            // ViolationMonitor calls AudioAlert.speakViolation directly.
 
             // Chrome keep-alive: speechSynthesis goes silent after ~15s of
             // idle. Periodically pause+resume to keep the engine warm so

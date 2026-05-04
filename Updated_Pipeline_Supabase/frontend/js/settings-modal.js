@@ -503,7 +503,24 @@ const GlobalSettingsModal = {
 
     loadRemoteProvisionState() {
         try {
-            const raw = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+            // Provisioning state (machineId + provision_secret + status) is
+            // persisted to localStorage so that tab close, hard refresh, or
+            // browser restart does not wipe the credentials needed to
+            // re-download the installer BAT from the cloud frontend when no
+            // local backend is running. Storing on disk is no more sensitive
+            // than the BAT installer's on-disk secret file, and avoids the
+            // user being locked out of installer downloads after every
+            // refresh.  One-time migration from the legacy sessionStorage
+            // location preserves any in-flight session data.
+            let raw = localStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+            if (!raw) {
+                const legacy = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+                if (legacy) {
+                    try { localStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, legacy); } catch (_) {}
+                    try { sessionStorage.removeItem(this.REMOTE_PROVISION_STATE_KEY); } catch (_) {}
+                    raw = legacy;
+                }
+            }
             if (!raw) return {};
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return {};
@@ -542,7 +559,11 @@ const GlobalSettingsModal = {
                 updatedAt: new Date().toISOString()
             };
             if (!merged.machineId) return merged;
-            sessionStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            // Persist to localStorage so credentials survive tab close /
+            // refresh / browser restart (see loadRemoteProvisionState).
+            localStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, JSON.stringify(merged));
+            // Clean up any legacy sessionStorage copy.
+            try { sessionStorage.removeItem(this.REMOTE_PROVISION_STATE_KEY); } catch (_) {}
             // Also persist the confirmed machineId to localStorage so future sessions
             // (tab close/reopen, hard refresh) still know which edge device to check
             // instead of falling back to a freshly-generated Web-XXXX browser ID.
@@ -740,6 +761,29 @@ const GlobalSettingsModal = {
                     machine_id: machineId,
                     admin_portal_url: adminPortalUrl,
                     cloud_local_heartbeat: options.cloud_local_heartbeat || null
+                };
+            }
+
+            // PRV5-frontend — when the cloud explicitly rejects our cached
+            // provision_secret, scrub it from sessionStorage so the next
+            // checkup (or any code reading loadRemoteProvisionState) does not
+            // keep displaying a stale "approved" status. Without this, a
+            // checkup that runs with allowRequest:false will silently fall
+            // back to the cached status and the UI will show green even
+            // though the installer download will 401.
+            if (isAuthError) {
+                this.saveRemoteProvisionState({
+                    machineId,
+                    provisionSecret: '',
+                    status: 'rejected',
+                    adminPortalUrl
+                });
+                return {
+                    success: false,
+                    status: 'rejected',
+                    machine_id: machineId,
+                    admin_portal_url: adminPortalUrl,
+                    error: String((statusResult && statusResult.error) || 'Cached provision_secret is no longer valid; re-request provisioning.')
                 };
             }
 
@@ -1677,7 +1721,11 @@ const GlobalSettingsModal = {
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provisioning request is pending admin approval.', 'warning');
                 this.ensureLocalProvisionPolling();
-            } else if (status === 'rejected') {
+            } else if (status === 'rejected' && isLikelyRemoteBackend) {
+                // Only show 'rejected' immediately when connected to the remote backend
+                // (where the response is authoritative). When connected to the local
+                // backend the disk state may be stale — defer to the finalStatus block
+                // after refreshProvisioningState() has done a live cloud check.
                 this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             } else if (ready) {
                 // No provisioning info yet — health check passed, prompt user to use the button
@@ -1723,6 +1771,8 @@ const GlobalSettingsModal = {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
             } else if (finalStatus === 'approved') {
                 this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
+            } else if (finalStatus === 'rejected') {
+                this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             }
         } catch (error) {
             console.error('GlobalSettingsModal: local checkup failed', error);
@@ -2199,10 +2249,66 @@ const GlobalSettingsModal = {
                     return;
                 }
 
+                // Path C — page is on the cloud frontend (Vercel) but the browser's
+                // sessionStorage has no provision_secret (e.g. cleared by an earlier
+                // rejected flow, or a fresh browser session). If a local backend is
+                // running on localhost:5000 it has the provision_secret on disk and
+                // can 302 us to the cloud installer URL via its loopback-only
+                // installer/redirect endpoint. We must PROBE first — top-level
+                // navigation to a non-running localhost shows a confusing
+                // "site can't be reached" page, so only redirect if the probe
+                // confirms the local backend is up.
+                if (isRemoteBackend) {
+                    const localBase = String(
+                        (window.API_CONFIG && window.API_CONFIG.LOCAL_BACKEND_URL)
+                        || 'http://localhost:5000'
+                    ).replace(/\/+$/, '');
+                    let localBackendUp = false;
+                    try {
+                        const probeController = new AbortController();
+                        const probeTimer = setTimeout(() => probeController.abort(), 1500);
+                        // Use no-cors so a cross-origin HTTPS→HTTP-localhost probe
+                        // doesn't get rejected by CORS preflight. With no-cors,
+                        // a reachable server yields an opaque response (status 0)
+                        // and only true network errors / timeouts throw.
+                        const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
+                            cache: 'no-store',
+                            signal: probeController.signal,
+                            mode: 'no-cors'
+                        }).finally(() => clearTimeout(probeTimer));
+                        if (probeResp) {
+                            localBackendUp = true;
+                        }
+                    } catch (probeErr) {
+                        localBackendUp = false;
+                    }
+
+                    if (localBackendUp) {
+                        const localProxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+                        window.location.assign(localProxyUrl);
+                        return;
+                    }
+
+                    // No local backend reachable AND no browser secret → the user has
+                    // no credentials to authenticate the device-flow installer
+                    // download. Clear, actionable guidance is the only safe option:
+                    // they must either (a) start the local backend so the disk
+                    // secret can be used, or (b) re-run Local Mode Checkup which
+                    // will repopulate sessionStorage with the provision_secret.
+                    this.showNotification(
+                        'Cannot download installer: this browser has no stored provisioning '
+                        + 'credentials and the local backend on localhost:5000 is not running. '
+                        + 'Either start the local backend (run start.bat) and try again, or '
+                        + 'open this dashboard from the local backend URL to re-run Local Mode '
+                        + 'Checkup.',
+                        'error'
+                    );
+                    return;
+                }
+
                 this.showNotification(
-                    isRemoteBackend
-                        ? 'Provisioning credentials not found in this browser session. Run Local Mode Checkup first, then re-download.'
-                        : 'Local backend is offline and stored cloud credentials are missing. Run Local Mode Checkup, then try again.',
+                    'Local backend is offline and stored cloud credentials are missing. '
+                    + 'Run Local Mode Checkup, then try again.',
                     'error'
                 );
             });

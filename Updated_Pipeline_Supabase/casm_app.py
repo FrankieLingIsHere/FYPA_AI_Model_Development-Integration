@@ -1042,6 +1042,29 @@ LOCAL_PENDING_RECOVERY_SCAN_LIMIT = max(
     20,
     int(os.getenv('LOCAL_PENDING_RECOVERY_SCAN_LIMIT', '300') or 300)
 )
+# Cloud-mode recovery: auto-requeue reports that have their original image in
+# Supabase storage but never got a report.html generated (e.g. interrupted by
+# a Railway restart mid-processing).
+CLOUD_PENDING_RECOVERY_ENABLED = os.getenv(
+    'CLOUD_PENDING_RECOVERY_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS = max(
+    60,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS', '300') or 300)
+)
+CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES = max(
+    5,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES', '20') or 20)
+)
+CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = max(
+    1,
+    min(20, int(os.getenv('CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP', '3') or 3))
+)
+CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD = max(
+    1,
+    int(os.getenv('CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD', '8') or 8)
+)
 supabase_runtime_recovery_lock = Lock()
 last_supabase_runtime_recovery_epoch = 0.0
 SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
@@ -2357,6 +2380,297 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
     return summary
 
 
+def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
+    """Validate an image downloaded for cloud-pending recovery.
+
+    Returns (is_valid, reason). Rejects when the file is missing, smaller
+    than a JPEG can plausibly be, undecodable by OpenCV, or near-uniform
+    black / extremely dark (mean pixel intensity below threshold AND very
+    low spatial variance — i.e. essentially a solid black frame).
+
+    The thresholds are intentionally conservative so that legitimately dark
+    scenes (night-time CCTV, low-light warehouse) are NOT rejected. Only
+    images that are essentially uniform-zero get filtered.
+    """
+    try:
+        if not image_path or not image_path.exists():
+            return False, 'image_missing'
+        size_bytes = image_path.stat().st_size
+        if size_bytes < 512:
+            return False, f'image_too_small ({size_bytes} bytes)'
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if img is None or img.size == 0:
+            return False, 'image_decode_failed'
+        # mean intensity over all channels; std dev as spatial variance proxy.
+        try:
+            mean_intensity = float(img.mean())
+            std_intensity = float(img.std())
+        except Exception:
+            return True, 'stats_unavailable'  # don't false-reject on numpy weirdness
+        # Solid-black-ish frame: very low mean AND very low variance.
+        # Real dark scenes still have noise/texture giving std > 5.
+        if mean_intensity < 4.0 and std_intensity < 3.0:
+            return False, (
+                f'image_appears_black (mean={mean_intensity:.2f}, std={std_intensity:.2f})'
+            )
+        return True, 'ok'
+    except Exception as validate_err:
+        # On unexpected validator failures, accept the image rather than
+        # blocking recovery on a bug in the validator itself.
+        logger.debug(f"_validate_recovery_image error for {image_path}: {validate_err}")
+        return True, 'validator_error'
+
+
+def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str, Any]:
+    """
+    Cloud-mode counterpart to _run_local_pending_recovery_sweep.
+
+    Finds detection_events that are stuck in pending/generating status because
+    their report was never finished (e.g. Railway restarted mid-processing) but
+    whose original image is safely stored in Supabase storage.  Downloads the
+    image to the local violations directory and re-enqueues the report so the
+    queue worker can finish it without any manual intervention.
+    """
+    summary: Dict[str, Any] = {
+        'reason': reason,
+        'scanned': 0,
+        'enqueued': 0,
+        'skipped_queue_busy': 0,
+        'skipped_already_queued': 0,
+        'skipped_download_failed': 0,
+        'skipped_enqueue_failed': 0,
+        'skipped_queue_unavailable': 0,
+    }
+
+    if not CLOUD_PENDING_RECOVERY_ENABLED:
+        return summary
+
+    if db_manager is None or not hasattr(db_manager, 'get_cloud_pending_recovery_candidates'):
+        return summary
+
+    if storage_manager is None:
+        return summary
+
+    if not _ensure_violation_queue_runtime_ready(reason=f'cloud_pending_recovery:{reason}'):
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    if violation_queue is None:
+        summary['skipped_queue_unavailable'] = 1
+        return summary
+
+    try:
+        queue_size_now = int(violation_queue.get_queue_size() or 0)
+    except Exception:
+        queue_size_now = 0
+
+    if queue_size_now >= CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD:
+        summary['skipped_queue_busy'] = 1
+        return summary
+
+    try:
+        candidates = db_manager.get_cloud_pending_recovery_candidates(
+            min_age_minutes=CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES,
+            limit=CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP,
+        )
+    except Exception as query_err:
+        logger.debug(f"Cloud pending recovery candidate query failed ({reason}): {query_err}")
+        return summary
+
+    tz_info = get_timezone_info()
+    now_epoch = time.time()
+
+    for candidate in candidates:
+        if summary['enqueued'] >= CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP:
+            break
+
+        report_id = str(candidate.get('report_id') or '').strip()
+        if not report_id:
+            continue
+
+        summary['scanned'] += 1
+
+        # Guard: skip any report that originated from a local-mode pipeline
+        # even if the SQL filter missed it (e.g. detection_data stored as
+        # string or cast differently on some rows).
+        raw_dd = candidate.get('detection_data') or {}
+        if isinstance(raw_dd, str):
+            try:
+                raw_dd = json.loads(raw_dd)
+            except Exception:
+                raw_dd = {}
+        if isinstance(raw_dd, dict):
+            _cand_scope = str(raw_dd.get('source_scope') or '').strip().lower()
+            _cand_sync = str(raw_dd.get('sync_source') or '').strip().lower()
+            _local_sync_sources = {
+                'sync_local_cache', 'local_cache', 'local_cache_sync',
+                'local_pending_recovery', 'local', 'auto_reconnect',
+            }
+            if _cand_scope == 'local' or _cand_sync in _local_sync_sources:
+                logger.debug(
+                    f"Cloud pending recovery: skipping local-origin report "
+                    f"{report_id} (source_scope={_cand_scope!r}, sync_source={_cand_sync!r})"
+                )
+                continue
+
+        if violation_queue.is_report_queued(report_id):
+            summary['skipped_already_queued'] += 1
+            continue
+
+        original_image_key = candidate.get('original_image_key')
+        annotated_image_key = candidate.get('annotated_image_key')
+
+        # Ensure local violation directory exists.
+        violation_dir = VIOLATIONS_DIR / report_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+        original_path = violation_dir / 'original.jpg'
+        annotated_path = violation_dir / 'annotated.jpg'
+
+        # Download original image from Supabase storage if not already on disk.
+        if not original_path.exists():
+            try:
+                blob = storage_manager.download_file_content(original_image_key)
+                if not blob:
+                    raise ValueError('Empty download')
+                if isinstance(blob, str):
+                    blob = blob.encode('utf-8')
+                original_path.write_bytes(blob)
+            except Exception as dl_err:
+                logger.warning(
+                    f"Cloud pending recovery: could not download original for {report_id}: {dl_err}"
+                )
+                summary['skipped_download_failed'] += 1
+                continue
+
+        # Optionally download annotated image too.
+        if annotated_image_key and not annotated_path.exists():
+            try:
+                blob = storage_manager.download_file_content(annotated_image_key)
+                if blob:
+                    if isinstance(blob, str):
+                        blob = blob.encode('utf-8')
+                    annotated_path.write_bytes(blob)
+            except Exception:
+                pass  # Annotated image is optional; fall back to original.
+
+        # Guard against producing "black picture" recovery reports.
+        # If the downloaded original is empty / undecodable / near-uniform
+        # black (e.g. corrupted Supabase upload from a prior failed run, or
+        # a 0-byte placeholder), do NOT re-enqueue. Mark the original
+        # detection_event as failed so it stops being a recovery candidate.
+        is_image_valid, image_reject_reason = _validate_recovery_image(original_path)
+        if not is_image_valid:
+            logger.warning(
+                f"Cloud pending recovery: rejecting {report_id} ({image_reject_reason}); "
+                "marking as failed to prevent black-picture report regeneration."
+            )
+            try:
+                # Best-effort: remove the bad downloaded file so the next
+                # sweep does not see original_path.exists() and skip the
+                # download attempt entirely.
+                if original_path.exists():
+                    original_path.unlink()
+            except Exception:
+                pass
+            try:
+                if db_manager and hasattr(db_manager, 'update_detection_status'):
+                    db_manager.update_detection_status(
+                        report_id,
+                        'failed',
+                        f'Cloud pending recovery aborted: {image_reject_reason}',
+                    )
+            except Exception as status_err:
+                logger.debug(
+                    f"Cloud pending recovery: could not mark {report_id} failed: {status_err}"
+                )
+            summary['skipped_download_failed'] += 1
+            continue
+
+        effective_annotated = annotated_path if annotated_path.exists() else original_path
+
+        # Reconstruct detection payload from stored data.
+        raw_detection_data = candidate.get('detection_data') or {}
+        if isinstance(raw_detection_data, str):
+            try:
+                raw_detection_data = json.loads(raw_detection_data)
+            except Exception:
+                raw_detection_data = {}
+        detections: List[Dict[str, Any]] = []
+        if isinstance(raw_detection_data, dict):
+            raw_det = raw_detection_data.get('detections')
+            if isinstance(raw_det, list):
+                detections = [d for d in raw_det if isinstance(d, dict)]
+
+        violation_types, resolved_count = _resolve_violation_types_and_count(
+            detections,
+            event=None,
+            violation_summary=None,
+            fallback_count=None,
+        )
+
+        try:
+            report_ts = candidate.get('timestamp')
+            if report_ts:
+                timestamp_iso = report_ts.isoformat() if hasattr(report_ts, 'isoformat') else str(report_ts)
+            else:
+                timestamp_iso = datetime.fromtimestamp(now_epoch, tz=tz_info).isoformat()
+        except Exception:
+            timestamp_iso = datetime.now(tz_info).isoformat()
+
+        queue_payload = {
+            'report_id': report_id,
+            'timestamp': timestamp_iso,
+            'detections': detections,
+            'violation_types': violation_types,
+            'violation_count': resolved_count,
+            'original_image_path': str(original_path),
+            'annotated_image_path': str(effective_annotated),
+            'violation_dir': str(violation_dir),
+            'source_scope': 'cloud',
+            'sync_source': 'cloud_pending_recovery',
+            'source': 'cloud_pending_recovery',
+            'allow_placeholder_report': True,
+        }
+
+        recovery_device_id = f"cloud_recovery_{report_id}_{time.time_ns()}"
+
+        if not ensure_queue_worker_running():
+            summary['skipped_queue_unavailable'] += 1
+            break
+
+        enqueued = violation_queue.enqueue(
+            violation_data=queue_payload,
+            device_id=recovery_device_id,
+            report_id=report_id,
+            severity='HIGH',
+            expedite=False,
+        )
+
+        if not enqueued:
+            summary['skipped_enqueue_failed'] += 1
+            continue
+
+        summary['enqueued'] += 1
+        logger.info(
+            f"Cloud pending recovery ({reason}): re-enqueued {report_id} "
+            f"(original_image_key={original_image_key})"
+        )
+
+        if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            try:
+                db_manager.update_detection_status(
+                    report_id,
+                    'pending',
+                    f"Queued for cloud recovery ({reason})"
+                )
+            except Exception as status_err:
+                logger.debug(
+                    f"Could not update detection status during cloud recovery for {report_id}: {status_err}"
+                )
+
+    return summary
+
+
 def start_queue_worker_watchdog() -> bool:
     """Start watchdog thread that keeps queue worker healthy without manual intervention."""
     global queue_worker_watchdog_thread, queue_worker_watchdog_running
@@ -2538,6 +2852,7 @@ def queue_worker_loop():
     last_supabase_recovery_check_epoch = 0.0
     last_stuck_report_sweep_epoch = 0.0
     last_local_pending_recovery_sweep_epoch = 0.0
+    last_cloud_pending_recovery_sweep_epoch = 0.0
     # Delay first autosync attempt to avoid startup burst from historical cache.
     last_supabase_auto_sync_epoch = time.time()
 
@@ -2602,12 +2917,38 @@ def queue_worker_loop():
                 and now_epoch - last_local_pending_recovery_sweep_epoch >= LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
                 last_local_pending_recovery_sweep_epoch = now_epoch
-                recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
-                enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
-                if enqueued_count > 0:
-                    logger.info(
-                        f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
-                    )
+                # Only run local pending recovery in local routing mode.
+                # In cloud mode the live cloud worker handles all new reports;
+                # re-enqueuing stale local violation folders (e.g. dark frames
+                # from a previous local session where the camera wasn't ready)
+                # produces spurious black-picture reports that confuse the UI.
+                _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+                if _queue_worker_routing == 'local':
+                    recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
+                    enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
+                    if enqueued_count > 0:
+                        logger.info(
+                            f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
+                        )
+
+            if (
+                CLOUD_PENDING_RECOVERY_ENABLED
+                and now_epoch - last_cloud_pending_recovery_sweep_epoch >= CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS
+            ):
+                last_cloud_pending_recovery_sweep_epoch = now_epoch
+                # Cloud pending recovery: in cloud mode, find reports whose
+                # original image is in Supabase storage but whose report.html
+                # was never generated (e.g. Railway restarted mid-processing).
+                # Downloads the image and re-enqueues so they complete without
+                # user intervention.
+                _cloud_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+                if _cloud_routing != 'local':
+                    cloud_recovery_summary = _run_cloud_pending_recovery_sweep(reason='queue_worker')
+                    cloud_enqueued = int(cloud_recovery_summary.get('enqueued', 0) or 0)
+                    if cloud_enqueued > 0:
+                        logger.info(
+                            f"Cloud pending recovery queued {cloud_enqueued} stale cloud report(s) for re-generation"
+                        )
 
             if violation_queue is None:
                 time.sleep(1)
@@ -7367,9 +7708,39 @@ def api_local_mode_installer_redirect():
         }), 503
 
     if status not in ('approved', 'provisioned'):
-        return jsonify({
-            'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
-        }), 403
+        # Disk state may be stale (e.g. written as 'rejected' by an old bug or by
+        # a previous failed auto-provision cycle).  Do a live cloud check before
+        # blocking — if the cloud confirms 'approved' we can proceed and heal the
+        # disk state at the same time.
+        if provision_secret and cloud_url:
+            live_check = _local_mode_fetch_authoritative_status(
+                cloud_url=cloud_url,
+                machine_id=machine_id,
+                provision_secret=provision_secret,
+                timeout_seconds=8,
+            )
+            live_status = str(live_check.get('status') or '').strip().lower()
+            if live_status in ('approved', 'provisioned'):
+                # Heal the disk state so subsequent calls pass the fast path.
+                state['status'] = live_status
+                state['updated_at'] = datetime.now(timezone.utc).isoformat()
+                try:
+                    _local_mode_save_provision_state(state)
+                except Exception:
+                    pass
+                status = live_status  # allow the redirect below
+            else:
+                return jsonify({
+                    'error': (
+                        f'Device is not approved yet (disk status={status or "unknown"}, '
+                        f'cloud status={live_status or "unknown"}). '
+                        'Wait for admin approval, then retry.'
+                    )
+                }), 403
+        else:
+            return jsonify({
+                'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
+            }), 403
 
     target = (
         f"{cloud_url.rstrip('/')}/api/bootstrap/installer/request"
@@ -7493,16 +7864,29 @@ def _api_local_mode_auto_provisioning_impl():
             f"machine_id={machine_id}; requesting approval workflow."
         )
 
-    def _request_new_secret() -> Tuple[bool, str, str]:
+    def _request_new_secret(skip_existing_secret: bool = False) -> Tuple[bool, str, str, int]:
+        """Request a new provision_secret from the cloud backend.
+
+        skip_existing_secret: when True, do NOT include the locally-stored
+        provision_secret in the request body.  Use this for PRV3 retries where
+        the local secret is known-stale so that we don't accidentally trigger
+        PRV5 (credential-desync-recovery) on the cloud and demote an approved
+        device back to pending.
+
+        Returns: (success, new_secret, error_text, http_status_code)
+        """
         try:
             # Include the current provision_secret (if any) so the cloud can
             # authenticate the rotation as a legitimate re-request without
             # admin involvement. For brand-new installs with no stored
             # secret, the operator must approve via /admin/devices.
+            # When skip_existing_secret=True the caller knows the local secret
+            # is stale — omit it to avoid PRV5 on the cloud side.
             request_body = {'machine_id': machine_id}
-            existing_local_secret = str(state.get('provision_secret') or '').strip()
-            if existing_local_secret:
-                request_body['current_provision_secret'] = existing_local_secret
+            if not skip_existing_secret:
+                existing_local_secret = str(state.get('provision_secret') or '').strip()
+                if existing_local_secret:
+                    request_body['current_provision_secret'] = existing_local_secret
 
             request_headers = {}
             local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
@@ -7519,21 +7903,21 @@ def _api_local_mode_auto_provisioning_impl():
         except Exception as e:
             err_text = str(e)
             if _local_mode_is_name_resolution_error(err_text):
-                return False, '', f'cloud_endpoint_unreachable: {err_text}'
-            return False, '', f'Failed to request provisioning approval: {err_text}'
+                return False, '', f'cloud_endpoint_unreachable: {err_text}', 0
+            return False, '', f'Failed to request provisioning approval: {err_text}', 0
 
         if not response.ok:
             err = str((body or {}).get('error') or f'Provision request failed ({response.status_code})')
-            return False, '', err
+            return False, '', err, response.status_code
 
         secret = str((body or {}).get('provision_secret') or '').strip()
         if not secret:
-            return False, '', 'Cloud response missing provision_secret.'
+            return False, '', 'Cloud response missing provision_secret.', response.status_code
 
-        return True, secret, ''
+        return True, secret, '', response.status_code
 
     if not provision_secret or str(state.get('cloud_url') or '') != cloud_url:
-        requested, provision_secret, request_error = _request_new_secret()
+        requested, provision_secret, request_error, _ = _request_new_secret()
         if not requested:
             request_error_text = str(request_error or '').strip()
             if request_error_text.lower().startswith('cloud_endpoint_unreachable:'):
@@ -7629,7 +8013,16 @@ def _api_local_mode_auto_provisioning_impl():
         #       re-request is safe: it will succeed only if the device is still
         #       legitimately approved on the cloud, otherwise it will fail and
         #       we then fall back to the genuine-rejection branch below.
-        retry_ok, retry_secret, retry_error = _request_new_secret()
+        # IMPORTANT: skip_existing_secret=True so that a stale locally-stored
+        # provision_secret is NOT sent to the cloud.  If the local secret is
+        # wrong but the device is still approved, sending it would trigger PRV5
+        # (credential-desync-recovery) which demotes the device to pending
+        # and invalidates the browser still-valid sessionStorage secret,
+        # causing the UI to show rejected by administrator even though the
+        # device was never rejected.
+        retry_ok, retry_secret, retry_error, retry_http_code = _request_new_secret(
+            skip_existing_secret=True
+        )
 
         if retry_ok and retry_secret:
             state = {
@@ -7652,38 +8045,65 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_url': cloud_url,
             })
 
-        # Re-request failed â€” this is the genuine revoked/deleted case. Persist
-        # the rejection so the operator sees an actionable message instead of a
-        # silent retry loop.
-        if state.get('provision_secret'):
+        # Re-request failed.  Distinguish between an explicit admin rejection
+        # (HTTP 403 from /api/provision/request) and all other failures.
+        #
+        # HTTP 403 -> device was explicitly rejected by administrator.
+        # Persist rejection so the operator sees an actionable message.
+        #
+        # Anything else (401 PRV1-gated, 0 network error, etc.) -> the device
+        # is most likely still approved but the local secret is simply stale
+        # (e.g. after a local-backend reinstall). Clear the stale secret and
+        # return idle so the operator knows to re-request via browser/admin.
+        # Do NOT mark as rejected -- the browser sessionStorage secret may
+        # still be valid and we must not invalidate it.
+        if retry_http_code == 403:
             state.update({
                 'machine_id': machine_id,
                 'cloud_url': cloud_url,
                 'status': 'rejected',
                 'updated_at': datetime.now(timezone.utc).isoformat(),
                 'rejection_reason': (
-                    'Device record removed by administrator (secret no longer '
-                    'recognised and re-registration was refused).'
+                    'Device record removed or rejected by administrator '
+                    '(secret no longer recognised and re-registration was refused).'
                 ),
             })
             _local_mode_save_provision_state(state)
             return jsonify({
                 'success': False,
                 'status': 'rejected',
-                'error': 'Device was removed by the administrator. Contact your admin to re-provision.',
+                'error': 'Device was removed or rejected by the administrator. Contact your admin to re-provision.',
                 'machine_id': machine_id,
                 'admin_portal_url': admin_portal_url,
                 'cloud_url': cloud_url,
             }), 403
 
+        # Stale local secret (PRV1 gated) or transient network error.
+        # Clear the bad secret so the next cycle starts fresh.
+        _local_mode_save_provision_state({
+            'machine_id': machine_id,
+            'cloud_url': cloud_url,
+            'provision_secret': '',
+            'status': 'idle',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+        logger.warning(
+            'Local auto-provision: stale local secret could not be refreshed '
+            f'(machine_id={machine_id}, http={retry_http_code}, err={retry_error}). '
+            'Cleared local secret -- device stays approved on cloud; '
+            'operator should re-request via browser or admin portal.'
+        )
         return jsonify({
-            'success': False,
-            'status': 'request_failed',
-            'error': retry_error or 'Provision re-request failed',
+            'success': True,
+            'status': 'idle',
+            'warning': (
+                'Local provision secret is stale and could not be automatically '
+                'refreshed. Re-request provisioning via the admin portal or browser.'
+            ),
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
-        }), 502
+        })
 
     if status_response.status_code == 403:
         state.update({
@@ -8993,12 +9413,49 @@ def _sync_local_cache_candidates(
         has_cloud_report = bool((violation or {}).get('report_html_key'))
 
         if cloud_mode_orphans_only:
-            # Cloud routing profile: only reconcile reports that have no
-            # detection event at all (true local-mode orphans). Reports
-            # that already have an event were generated by the live cloud
-            # worker; if any cloud key is briefly missing, that's a
-            # mid-flight upload and the worker will finish it.
-            needs_sync = not event
+            # Cloud routing profile: reconcile two kinds of unsynced reports:
+            #
+            # (A) True orphans — no detection_event at all. These were created
+            #     by the local pipeline before any Supabase connection existed.
+            #
+            # (B) Local-pipeline events — the local backend created a
+            #     detection_event (source_scope='local') but never uploaded the
+            #     artifacts to cloud storage (original_image_key is empty).
+            #     When the user switches to cloud mode these reports disappear
+            #     from the UI because the cloud worker never knew about them.
+            #
+            # We must NOT sync events whose source_scope is 'cloud': those were
+            # created by the live cloud worker and any missing key is a
+            # mid-flight upload that will finish on its own.
+            event_detection_data = {}
+            if event:
+                raw_dd = event.get('detection_data')
+                if isinstance(raw_dd, dict):
+                    event_detection_data = raw_dd
+                elif isinstance(raw_dd, str):
+                    try:
+                        import json as _json
+                        event_detection_data = _json.loads(raw_dd) or {}
+                    except Exception:
+                        event_detection_data = {}
+            event_source_scope = str(event_detection_data.get('source_scope') or '').strip().lower()
+            event_sync_source = str(event_detection_data.get('sync_source') or '').strip().lower()
+            is_local_origin = (
+                event_source_scope in ('local', 'synced_local')
+                or 'local' in event_sync_source
+            )
+
+            needs_sync = (
+                not event  # (A) true orphan
+                or (                         # (B) local-pipeline event missing cloud artifacts
+                    is_local_origin
+                    and (
+                        not has_cloud_original
+                        or (annotated_path.exists() and not has_cloud_annotated)
+                        or (local_has_report and not has_cloud_report)
+                    )
+                )
+            )
         else:
             needs_sync = (
                 not event
@@ -13634,18 +14091,38 @@ def provision_request():
     # Validate proof-of-prior-trust if presented. Both the secret-bearer path
     # and the admin-token path are accepted; either is sufficient.
     rerequest_authenticated_by_secret = False
+    credential_desync_recovery = False
     if is_rerequest_for_known_device and presented_existing_secret:
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
             rerequest_authenticated_by_secret = True
         else:
-            # Wrong secret on a known approved device â†’ log and reject hard.
+            # Wrong secret on a known approved device. Historically this returned
+            # a hard 401, which created a permanent deadlock when the browser's
+            # cached secret drifted (e.g. sessionStorage cleared, multi-tab race
+            # before the idempotency fix, or a different browser profile). The
+            # only escape was admin-side revoke + re-approve.
+            #
+            # PRV5 (self-healing recovery) — instead of a hard 401, treat this
+            # as a credential-desync recovery request: demote the device back to
+            # `pending`, issue a fresh provision_secret, and notify the admin so
+            # they can re-approve. The legitimate device's already-installed
+            # local backend keeps running on its existing in-process credentials
+            # until its next bootstrap exchange, so this does NOT silently
+            # de-authenticate a working install.
+            #
+            # Security trade-off: a network attacker who guesses the
+            # deterministic machine_id can force a device into `pending`
+            # (denial-of-approval), but the attacker still needs admin approval
+            # before any secret is usable. Admin sees an explicit audit event.
             _append_device_audit_event(
                 machine_id,
-                'request_rejected_bad_secret',
+                'request_secret_mismatch_demoted',
                 actor='device',
                 metadata=_capture_request_metadata(),
             )
-            return jsonify({'error': 'Invalid provision_secret for this machine_id'}), 401
+            credential_desync_recovery = True
+            is_rerequest_for_known_device = False
+            _existing_status_for_auth = 'pending'
 
     # PRV1 (hardened) â€” Require admin authorisation unless either:
     #   (a) PROVISION_ALLOW_SELF_REGISTER=true (operator opt-in); or
@@ -13656,7 +14133,7 @@ def provision_request():
     #   (c) this is a re-application from a previously-rejected device
     #       (secret was rotated on revocation so proof of prior trust is
     #       impossible; admin will review and decide again).
-    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest:
+    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest and not credential_desync_recovery:
         token_header = request.headers.get('X-Admin-Token', '').strip()
         if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
             _append_device_audit_event(
@@ -13684,6 +14161,16 @@ def provision_request():
     preserve_status = existing_status in ('approved', 'provisioned')
     repeated_pending_request = existing_status in ('pending', 'pending_approval')
     effective_status = existing_status if preserve_status else 'pending'
+
+    # PRV5 — credential-desync recovery overrides preservation. When a device
+    # presents a wrong current_provision_secret, we MUST demote it back to
+    # `pending` so admin re-approval is required before the new secret is
+    # usable. Without this, an attacker who guesses machine_id could obtain
+    # a working secret without admin involvement.
+    if credential_desync_recovery:
+        preserve_status = False
+        repeated_pending_request = False
+        effective_status = 'pending'
 
     # Idempotency: when an already-approved/provisioned device re-requests with
     # proof-of-prior-trust (matching current_provision_secret), DO NOT rotate the
@@ -13745,9 +14232,13 @@ def provision_request():
     # Capture request metadata for admin risk view + audit log
     request_meta = _capture_request_metadata()
     audit_event = (
-        'request_existing' if preserve_status
-        else ('request_repeat_pending' if repeated_pending_request else 'request_new')
+        'request_secret_mismatch_recovered' if credential_desync_recovery
+        else ('request_existing' if preserve_status
+              else ('request_repeat_pending' if repeated_pending_request else 'request_new'))
     )
+    if credential_desync_recovery:
+        notification_reason = 'credential_desync_recovery'
+        notify_pending_request = True
     _append_device_audit_event(
         machine_id,
         audit_event,

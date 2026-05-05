@@ -697,6 +697,8 @@ const GlobalSettingsModal = {
             provisionSecret
         });
 
+        let attemptedSecretlessRecovery = false;
+        let secretlessRecoveryError = '';
         if ((statusResult && statusResult.success === false) && allowRequest) {
             const statusError = String((statusResult && statusResult.error) || '').toLowerCase();
             const invalidSecret = statusError.includes('invalid provision_secret');
@@ -720,9 +722,15 @@ const GlobalSettingsModal = {
             const refreshedError = String((statusResult && statusResult.error) || '').toLowerCase();
             const shouldRetryRequest = invalidSecret || (!hasStoredProvisionSecret && refreshedError.includes('not_found'));
             if ((statusResult && statusResult.success === false) && shouldRetryRequest) {
+                attemptedSecretlessRecovery = !!invalidSecret;
                 const retryRequest = await API.requestCloudProvisioningApproval({
                     machineId,
-                    currentProvisionSecret: provisionSecret || ''
+                    // If the cloud explicitly rejected the cached secret, do
+                    // not present it again. Sending a known-bad secret can
+                    // trigger credential-desync demotion on the cloud side;
+                    // a secretless re-request either refreshes an approved
+                    // device or fails without downgrading it.
+                    currentProvisionSecret: invalidSecret ? '' : (provisionSecret || '')
                 });
                 if (retryRequest && retryRequest.success) {
                     machineId = this.resolveStableMachineId(
@@ -741,6 +749,8 @@ const GlobalSettingsModal = {
                         machineId,
                         provisionSecret
                     });
+                } else if (attemptedSecretlessRecovery) {
+                    secretlessRecoveryError = String((retryRequest && retryRequest.error) || 'Secretless recovery request failed');
                 }
             }
         }
@@ -772,6 +782,25 @@ const GlobalSettingsModal = {
             // back to the cached status and the UI will show green even
             // though the installer download will 401.
             if (isAuthError) {
+                if (attemptedSecretlessRecovery) {
+                    const fallbackStatus = (storedStatus === 'approved' || storedStatus === 'provisioned')
+                        ? storedStatus
+                        : 'idle';
+                    this.saveRemoteProvisionState({
+                        machineId,
+                        provisionSecret: '',
+                        status: fallbackStatus,
+                        adminPortalUrl
+                    });
+                    return {
+                        success: false,
+                        status: fallbackStatus,
+                        machine_id: machineId,
+                        admin_portal_url: adminPortalUrl,
+                        error: secretlessRecoveryError || String((statusResult && statusResult.error) || 'Cached provision_secret expired; run checkup from the host PC.')
+                    };
+                }
+
                 this.saveRemoteProvisionState({
                     machineId,
                     provisionSecret: '',
@@ -1080,6 +1109,57 @@ const GlobalSettingsModal = {
         // Only allow re-download for explicitly admin-approved or provisioned devices.
         // credentials_present is NOT sufficient — those credentials may not be admin-authorised.
         return status === 'approved' || status === 'provisioned';
+    },
+
+    getStoredProvisionSecretForMachine(machineIdRaw = '') {
+        const stored = this.loadRemoteProvisionState() || {};
+        const requestedMachineId = String(machineIdRaw || '').trim();
+        const storedMachineId = String(stored.machineId || '').trim();
+        const provisionSecret = String(stored.provisionSecret || '').trim();
+        if (!provisionSecret) return '';
+        if (requestedMachineId && storedMachineId && requestedMachineId !== storedMachineId) {
+            return '';
+        }
+        return provisionSecret;
+    },
+
+    async recoverRemoteInstallerCredentials(machineIdRaw = '') {
+        if (!this.isLikelyRemoteBackend()) {
+            return this.loadRemoteProvisionState() || {};
+        }
+
+        const machineId = String(
+            machineIdRaw
+            || this.localProvisionState.machineId
+            || (this.loadRemoteProvisionState() || {}).machineId
+            || ''
+        ).trim();
+        if (!machineId) {
+            return this.loadRemoteProvisionState() || {};
+        }
+
+        if (this.getStoredProvisionSecretForMachine(machineId)) {
+            return this.loadRemoteProvisionState() || {};
+        }
+
+        const knownStatus = this.normalizeLocalProvisionStatus(
+            this.localProvisionState.status
+            || (this.loadRemoteProvisionState() || {}).status
+            || 'idle'
+        );
+        if (knownStatus !== 'approved' && knownStatus !== 'provisioned') {
+            return this.loadRemoteProvisionState() || {};
+        }
+
+        const refreshed = await this.refreshRemoteProvisioningStatus({
+            allowRequest: true,
+            forceRequest: true,
+            machineIdHint: machineId
+        });
+        if (refreshed && typeof refreshed === 'object') {
+            this.syncLocalProvisionStateFromPayload(refreshed);
+        }
+        return this.loadRemoteProvisionState() || {};
     },
 
     updateInstallerRedownloadButton() {
@@ -1767,6 +1847,24 @@ const GlobalSettingsModal = {
                 this.updateLocalModeCheckupStatus();
             }
 
+            if (
+                isLikelyRemoteBackend
+                && (finalStatus === 'approved' || finalStatus === 'provisioned')
+                && !this.getStoredProvisionSecretForMachine(this.localProvisionState.machineId)
+            ) {
+                try {
+                    const refreshedStored = await this.recoverRemoteInstallerCredentials(this.localProvisionState.machineId);
+                    if (String((refreshedStored || {}).provisionSecret || '').trim()) {
+                        finalStatus = this.normalizeLocalProvisionStatus(
+                            this.localProvisionState.status || refreshedStored.status || finalStatus
+                        );
+                        this.setProviderStatus('Installer access refreshed. You can re-download the BAT now.', 'success');
+                    }
+                } catch (installerRefreshErr) {
+                    console.warn('GlobalSettingsModal: installer access refresh during checkup failed', installerRefreshErr);
+                }
+            }
+
             if (finalStatus === 'provisioned') {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
             } else if (finalStatus === 'approved') {
@@ -2038,6 +2136,159 @@ const GlobalSettingsModal = {
         }
     },
 
+    async redownloadInstaller() {
+        const storedBefore = this.loadRemoteProvisionState() || {};
+        if (
+            storedBefore.machineId
+            && (storedBefore.status === 'approved' || storedBefore.status === 'provisioned')
+            && this.normalizeLocalProvisionStatus(this.localProvisionState.status) !== 'approved'
+            && this.normalizeLocalProvisionStatus(this.localProvisionState.status) !== 'provisioned'
+        ) {
+            this.syncLocalProvisionStateFromPayload({
+                machine_id: storedBefore.machineId,
+                status: storedBefore.status,
+                admin_portal_url: storedBefore.adminPortalUrl || ''
+            });
+        }
+
+        let status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+        let machineId = String(this.localProvisionState.machineId || '').trim();
+
+        if (!this.canIssueInstallerRedownload(status, machineId)) {
+            if (!machineId) {
+                this.showNotification('Run Local Mode Checkup first so this device can obtain machine ID.', 'warning');
+                return;
+            }
+
+            if (status === 'pending_approval') {
+                this.showNotification('Installer re-download is available after admin approval.', 'warning');
+                return;
+            }
+
+            if (status === 'rejected') {
+                this.showNotification('Provision request was rejected. Contact admin and rerun Local Mode Checkup.', 'error');
+                return;
+            }
+
+            this.showNotification('Installer re-download is available after this device is approved.', 'warning');
+            return;
+        }
+
+        const currentProtocol = String(window.location.protocol || '').toLowerCase();
+        if (currentProtocol === 'chrome-error:' || currentProtocol === 'about:' || currentProtocol === 'data:') {
+            this.showNotification(
+                'This page is in an error state. Refresh the tab from the backend URL and try again.',
+                'error'
+            );
+            return;
+        }
+
+        const apiBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
+        const isRemoteBackend = this.isLikelyRemoteBackend();
+
+        if (isRemoteBackend && !this.getStoredProvisionSecretForMachine(machineId)) {
+            try {
+                this.setProviderStatus('Refreshing installer access for this approved device...', 'info');
+                await this.recoverRemoteInstallerCredentials(machineId);
+                status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+                machineId = String(this.localProvisionState.machineId || machineId || '').trim();
+            } catch (recoverErr) {
+                console.warn('GlobalSettingsModal: installer credential refresh failed', recoverErr);
+            }
+        }
+
+        const tryDirectCloudDownload = () => {
+            const stored = this.loadRemoteProvisionState() || {};
+            const machineIdStored = String(stored.machineId || this.localProvisionState.machineId || machineId || '').trim();
+            const provisionSecretStored = String(stored.provisionSecret || '').trim();
+
+            if (!machineIdStored || !provisionSecretStored) {
+                return false;
+            }
+
+            let cloudBase = '';
+            if (isRemoteBackend) {
+                cloudBase = apiBase;
+            } else {
+                cloudBase = String(stored.cloudUrl || window.CLOUD_URL || '').replace(/\/+$/, '');
+            }
+
+            if (!cloudBase) {
+                return false;
+            }
+
+            const params = new URLSearchParams({
+                machine_id: machineIdStored,
+                provision_secret: provisionSecretStored,
+                _ts: String(Date.now())
+            });
+            window.location.assign(`${cloudBase}/api/bootstrap/installer/request?${params.toString()}`);
+            return true;
+        };
+
+        if (!isRemoteBackend) {
+            const proxyUrl = `${apiBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+            try {
+                const probeController = new AbortController();
+                const probeTimer = setTimeout(() => probeController.abort(), 4000);
+                const probeResp = await fetch(`${apiBase}/api/system/startup-status`, {
+                    cache: 'no-store',
+                    signal: probeController.signal
+                }).finally(() => clearTimeout(probeTimer));
+                if (probeResp && (probeResp.status < 500 || probeResp.status === 503)) {
+                    window.location.assign(proxyUrl);
+                    return;
+                }
+            } catch (probeErr) {
+                console.warn('GlobalSettingsModal: local backend probe failed; falling back to direct cloud download', probeErr);
+            }
+        }
+
+        if (tryDirectCloudDownload()) {
+            return;
+        }
+
+        if (isRemoteBackend) {
+            const localBase = String(
+                (window.API_CONFIG && window.API_CONFIG.LOCAL_BACKEND_URL)
+                || 'http://localhost:5000'
+            ).replace(/\/+$/, '');
+            let localBackendUp = false;
+            try {
+                const probeController = new AbortController();
+                const probeTimer = setTimeout(() => probeController.abort(), 1500);
+                const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
+                    cache: 'no-store',
+                    signal: probeController.signal,
+                    mode: 'no-cors'
+                }).finally(() => clearTimeout(probeTimer));
+                if (probeResp) {
+                    localBackendUp = true;
+                }
+            } catch (probeErr) {
+                localBackendUp = false;
+            }
+
+            if (localBackendUp) {
+                window.location.assign(`${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`);
+                return;
+            }
+
+            this.showNotification(
+                'Cannot download installer: provisioning credentials could not be refreshed in this browser '
+                + 'and the local backend on localhost:5000 is not running. Start the local backend or rerun '
+                + 'Local Mode Checkup from the host PC.',
+                'error'
+            );
+            return;
+        }
+
+        this.showNotification(
+            'Local backend is offline and stored cloud credentials are missing. Run Local Mode Checkup, then try again.',
+            'error'
+        );
+    },
+
     bindEvents() {
         const modal = this.getEl('globalSettingsModal');
         const windowEl = this.getEl('globalSettingsWindow');
@@ -2140,6 +2391,9 @@ const GlobalSettingsModal = {
 
         if (redownloadInstallerBtn) {
             redownloadInstallerBtn.addEventListener('click', async () => {
+                await this.redownloadInstaller();
+                return;
+
                 const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
                 const machineId = String(this.localProvisionState.machineId || '').trim();
 

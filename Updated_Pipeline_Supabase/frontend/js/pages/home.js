@@ -250,11 +250,11 @@ const HomePage = {
 
         const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
         if (redownloadInstallerBtn) {
-            this._redownloadInstallerHandler = () => {
+            this._redownloadInstallerHandler = async () => {
                 const latest = this._latestProvisioningStatus || {};
                 const status = String(latest.status || '').toLowerCase();
                 const machineId = String(latest.machineId || latest.machine_id || '').trim();
-                const isProvisioned = status === 'provisioned';
+                const isProvisioned = status === 'provisioned' || status === 'approved';
 
                 if (!isProvisioned || !machineId) {
                     const message = 'Installer re-download is available after this device is fully provisioned.';
@@ -266,9 +266,45 @@ const HomePage = {
                     return;
                 }
 
-                window.location.assign(
-                    `${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?machine_id=${encodeURIComponent(machineId)}`
-                );
+                if (
+                    typeof GlobalSettingsModal !== 'undefined'
+                    && GlobalSettingsModal
+                    && typeof GlobalSettingsModal.redownloadInstaller === 'function'
+                ) {
+                    if (typeof GlobalSettingsModal.init === 'function') {
+                        GlobalSettingsModal.init();
+                    }
+                    if (typeof GlobalSettingsModal.syncLocalProvisionStateFromPayload === 'function') {
+                        GlobalSettingsModal.syncLocalProvisionStateFromPayload(latest);
+                    }
+                    await GlobalSettingsModal.redownloadInstaller();
+                    return;
+                }
+
+                const stored = (() => {
+                    try {
+                        return JSON.parse(localStorage.getItem('ppe.remoteProvisioningState.v1') || '{}') || {};
+                    } catch (_) {
+                        return {};
+                    }
+                })();
+                const provisionSecret = String(stored.provisionSecret || '').trim();
+                if (provisionSecret) {
+                    const params = new URLSearchParams({
+                        machine_id: machineId,
+                        provision_secret: provisionSecret,
+                        _ts: String(Date.now())
+                    });
+                    window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${params.toString()}`);
+                    return;
+                }
+
+                const message = 'Run Local Mode Checkup to refresh installer access, then try again.';
+                if (typeof NotificationManager !== 'undefined') {
+                    NotificationManager.warning(message);
+                } else {
+                    alert(message);
+                }
             };
             redownloadInstallerBtn.addEventListener('click', this._redownloadInstallerHandler);
         }
@@ -450,7 +486,7 @@ const HomePage = {
         const status = String((statusPayload && statusPayload.status) || 'idle').toLowerCase();
         const machineId = String((statusPayload && (statusPayload.machineId || statusPayload.machine_id)) || '').trim();
         const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
-            const isProvisioned = status === 'provisioned';
+            const isProvisioned = status === 'provisioned' || status === 'approved';
 
         if (redownloadInstallerBtn) {
             const canRedownload = isProvisioned && !!machineId;

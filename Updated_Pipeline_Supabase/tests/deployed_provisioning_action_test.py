@@ -443,6 +443,31 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertGreaterEqual(installer_bat.count(token_map_key), 2)
         self.assertGreaterEqual(installer_bat.count('$lineMap = [ordered]@{}'), 2)
 
+    def test_frontend_redownload_flow_refreshes_missing_provision_secret(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        home_js_path = os.path.join(repo_root, 'frontend', 'js', 'pages', 'home.js')
+        settings_js_path = os.path.join(repo_root, 'frontend', 'js', 'settings-modal.js')
+
+        with open(home_js_path, 'r', encoding='utf-8') as f:
+            home_js = f.read()
+        with open(settings_js_path, 'r', encoding='utf-8') as f:
+            settings_js = f.read()
+
+        self.assertIn('GlobalSettingsModal.redownloadInstaller', home_js)
+        self.assertIn('recoverRemoteInstallerCredentials', settings_js)
+        self.assertIn('forceRequest: true', settings_js)
+        self.assertIn('getStoredProvisionSecretForMachine', settings_js)
+        self.assertIn("currentProvisionSecret: invalidSecret ? ''", settings_js)
+        self.assertIn('attemptedSecretlessRecovery', settings_js)
+
+        # Regression guard: the Home button must not navigate to the hardened
+        # installer endpoint with only machine_id. Device-initiated downloads
+        # require provision_secret, and the settings flow can refresh it first.
+        self.assertNotIn(
+            '/api/bootstrap/installer/request?machine_id=${encodeURIComponent(machineId)}',
+            home_js,
+        )
+
     def test_machine_only_installer_request_rejects_pending_device(self):
         machine_id = 'TEST-EDGE-INSTALLER-PENDING-001'
         _ = self._request_device(machine_id)

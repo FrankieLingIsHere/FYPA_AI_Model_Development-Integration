@@ -13,6 +13,8 @@ const ViolationMonitor = {
     sessionStartTime: null,           // When this session started
     isInitialLoad: true,              // First load flag - shows summary only
     lastVisitTime: null,              // From localStorage
+    isChecking: false,
+    pendingCheckOptions: null,
 
     // LocalStorage key for tracking last visit
     STORAGE_KEY: 'casm_last_visit_time',
@@ -25,12 +27,14 @@ const ViolationMonitor = {
         this.sessionStartTime = new Date();
         this.knownViolations = new Map();
         this.notifiedEvents = new Set();
+        this.isChecking = false;
+        this.pendingCheckOptions = null;
 
         // Get last visit time from localStorage
         this.lastVisitTime = this._getLastVisitTime();
 
         // Initial check - will show summary notification only
-        this.checkForNewViolations();
+        this.checkForNewViolations({ noCache: true, reason: 'initial-load' });
 
         // Egress guard:
         //  - Default polling cadence raised from 3s -> 15s (5x reduction in API hits).
@@ -59,7 +63,12 @@ const ViolationMonitor = {
         };
         armPolling();
 
-        this._pollAdjustHandler = () => armPolling();
+        this._pollAdjustHandler = () => {
+            armPolling();
+            if (typeof document === 'undefined' || !document.hidden) {
+                this.checkForNewViolations({ noCache: true, reason: 'visibility-or-realtime-connection' });
+            }
+        };
         window.addEventListener('ppe-realtime:connection', this._pollAdjustHandler);
         if (typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', this._pollAdjustHandler);
@@ -113,9 +122,36 @@ const ViolationMonitor = {
         }
     },
 
-    async checkForNewViolations() {
+    _mergeCheckOptions(existing = null, incoming = {}) {
+        return {
+            noCache: !!((existing && existing.noCache) || (incoming && incoming.noCache)),
+            reason: String((incoming && incoming.reason) || (existing && existing.reason) || '').trim()
+        };
+    },
+
+    async checkForNewViolations(options = {}) {
+        const requestedOptions = this._mergeCheckOptions(null, options);
+        if (this.isChecking) {
+            this.pendingCheckOptions = this._mergeCheckOptions(this.pendingCheckOptions, requestedOptions);
+            return;
+        }
+
+        this.isChecking = true;
         try {
-            const violations = await API.getViolations();
+            let currentOptions = requestedOptions;
+            while (currentOptions) {
+                await this._runViolationCheck(currentOptions);
+                currentOptions = this.pendingCheckOptions;
+                this.pendingCheckOptions = null;
+            }
+        } finally {
+            this.isChecking = false;
+        }
+    },
+
+    async _runViolationCheck(options = {}) {
+        try {
+            const violations = await this.fetchMonitorViolations(options);
 
             if (this.isInitialLoad) {
                 // INITIAL LOAD: Show summary notification, not individual ones
@@ -127,7 +163,8 @@ const ViolationMonitor = {
             // REAL-TIME MODE: Only notify for violations detected AFTER session started
             for (const violation of violations) {
                 const reportId = violation.report_id;
-                const status = violation.status || (violation.has_report ? 'completed' : 'pending');
+                if (!reportId) continue;
+                const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
                 const violationTime = new Date(violation.timestamp);
                 const previousData = this.knownViolations.get(reportId);
 
@@ -191,6 +228,168 @@ const ViolationMonitor = {
         }
     },
 
+    async fetchMonitorViolations(options = {}) {
+        const noCache = !!(options && options.noCache);
+        const requestOptions = noCache
+            ? { noCache: true, timeoutMs: 12000 }
+            : {};
+
+        const [violationsResult, pendingResult] = await Promise.allSettled([
+            API.getViolations(requestOptions),
+            API.getPendingReports(requestOptions)
+        ]);
+
+        if (violationsResult.status === 'rejected' && pendingResult.status === 'rejected') {
+            throw violationsResult.reason || pendingResult.reason;
+        }
+
+        if (violationsResult.status === 'rejected') {
+            console.warn('[ViolationMonitor] getViolations failed; using pending reports fallback:', violationsResult.reason);
+        }
+        if (pendingResult.status === 'rejected') {
+            console.warn('[ViolationMonitor] getPendingReports failed; using violations only:', pendingResult.reason);
+        }
+
+        const violations = violationsResult.status === 'fulfilled' && Array.isArray(violationsResult.value)
+            ? violationsResult.value
+            : [];
+        const pendingReports = pendingResult.status === 'fulfilled' && Array.isArray(pendingResult.value)
+            ? pendingResult.value
+            : [];
+
+        return this.mergePendingReportsForNotifications(violations, pendingReports);
+    },
+
+    mergePendingReportsForNotifications(violations, pendingReports) {
+        const byId = new Map();
+        const base = Array.isArray(violations) ? violations : [];
+        const pending = Array.isArray(pendingReports) ? pendingReports : [];
+
+        base.forEach((item) => {
+            const reportId = String((item && item.report_id) || '').trim();
+            if (!reportId) return;
+            const normalized = { ...item, report_id: reportId };
+            normalized.status = this.normalizeStatusValue(normalized.status, !!normalized.has_report);
+            byId.set(reportId, normalized);
+        });
+
+        pending.forEach((item) => {
+            const reportId = String((item && item.report_id) || '').trim();
+            if (!reportId) return;
+
+            const pendingStatus = this.normalizeStatusValue(item && item.status, !!(item && item.has_report));
+            const existing = byId.get(reportId);
+            if (existing) {
+                const existingStatus = this.normalizeStatusValue(existing.status, !!existing.has_report);
+                const allowRetryTransition = (
+                    (pendingStatus === 'pending' || pendingStatus === 'generating')
+                    && !existing.has_report
+                    && (existingStatus === 'failed' || existingStatus === 'skipped')
+                );
+                if (
+                    (
+                        this.getStatusPriority(pendingStatus) > this.getStatusPriority(existingStatus)
+                        && !existing.has_report
+                    )
+                    || allowRetryTransition
+                ) {
+                    existing.status = pendingStatus;
+                }
+                existing.timestamp = existing.timestamp || item.timestamp || item.updated_at;
+                existing.updated_at = existing.updated_at || item.updated_at;
+                existing.device_id = existing.device_id || item.device_id || null;
+                existing.severity = existing.severity || item.severity || 'HIGH';
+                existing.violation_count = Number(existing.violation_count || item.violation_count || 0);
+                existing.missing_ppe = Array.isArray(existing.missing_ppe) && existing.missing_ppe.length
+                    ? existing.missing_ppe
+                    : (Array.isArray(item.missing_ppe) ? item.missing_ppe : []);
+                existing.violation_summary = existing.violation_summary
+                    || item.violation_summary
+                    || 'Violation queued for report generation';
+                existing.has_original = !!existing.has_original || !!item.has_original;
+                existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
+                existing.has_report = !!existing.has_report || !!item.has_report;
+                return;
+            }
+
+            byId.set(reportId, {
+                report_id: reportId,
+                timestamp: item.timestamp || item.updated_at || new Date().toISOString(),
+                updated_at: item.updated_at || item.timestamp || null,
+                status: pendingStatus,
+                severity: item.severity || 'HIGH',
+                device_id: item.device_id || null,
+                violation_count: Number(item.violation_count || 0),
+                missing_ppe: Array.isArray(item.missing_ppe) ? item.missing_ppe : [],
+                violation_summary: item.violation_summary || 'Violation queued for report generation',
+                has_original: !!item.has_original,
+                has_annotated: !!item.has_annotated,
+                has_report: !!item.has_report,
+                source_scope: item.source_scope || 'local',
+                source_label: item.source_label || 'Local'
+            });
+        });
+
+        const merged = Array.from(byId.values());
+        merged.sort((a, b) => {
+            const aTime = Date.parse(a.timestamp || a.updated_at || '') || 0;
+            const bTime = Date.parse(b.timestamp || b.updated_at || '') || 0;
+            return bTime - aTime;
+        });
+        return merged;
+    },
+
+    normalizeStatusValue(status, hasReport = false) {
+        const raw = String(status || '').trim().toLowerCase();
+        if (!raw) return hasReport ? 'completed' : 'pending';
+        if (raw === 'completed' || raw === 'ready' || raw === 'done' || raw === 'success') return 'completed';
+        if (raw === 'partial' || raw === 'degraded') return 'partial';
+        if (raw === 'failed' || raw === 'error' || raw === 'errored') return 'failed';
+        if (raw === 'skipped' || raw === 'cancelled' || raw === 'canceled') return 'skipped';
+        if (hasReport && (
+            raw === 'generating'
+            || raw === 'processing'
+            || raw === 'in_progress'
+            || raw === 'in-progress'
+            || raw === 'running'
+            || raw === 'pending'
+            || raw === 'queued'
+            || raw === 'queue'
+            || raw === 'waiting'
+            || raw === 'enqueued'
+        )) {
+            return 'completed';
+        }
+        if (
+            raw === 'generating'
+            || raw === 'processing'
+            || raw === 'in_progress'
+            || raw === 'in-progress'
+            || raw === 'running'
+        ) {
+            return 'generating';
+        }
+        if (
+            raw === 'pending'
+            || raw === 'queued'
+            || raw === 'queue'
+            || raw === 'waiting'
+            || raw === 'enqueued'
+        ) {
+            return 'pending';
+        }
+        return hasReport ? 'completed' : raw;
+    },
+
+    getStatusPriority(status) {
+        const normalized = this.normalizeStatusValue(status);
+        if (normalized === 'completed') return 50;
+        if (normalized === 'failed' || normalized === 'skipped' || normalized === 'partial') return 40;
+        if (normalized === 'generating') return 30;
+        if (normalized === 'pending') return 20;
+        return 0;
+    },
+
     _handleInitialLoad(violations) {
         if (!violations || violations.length === 0) {
             console.log('[ViolationMonitor] No violations in database');
@@ -204,11 +403,13 @@ const ViolationMonitor = {
         let failedCount = 0;
 
         for (const v of violations) {
+            const reportId = String((v && v.report_id) || '').trim();
+            if (!reportId) continue;
             const violationTime = new Date(v.timestamp);
-            const status = v.status || (v.has_report ? 'completed' : 'pending');
+            const status = this.normalizeStatusValue(v.status, !!v.has_report);
 
             // Track all violations
-            this.knownViolations.set(v.report_id, { status, timestamp: violationTime });
+            this.knownViolations.set(reportId, { status, timestamp: violationTime });
 
             // Count new violations since last visit
             if (this.lastVisitTime && violationTime > this.lastVisitTime) {

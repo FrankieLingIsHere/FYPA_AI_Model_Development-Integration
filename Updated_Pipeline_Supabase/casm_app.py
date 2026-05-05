@@ -3157,11 +3157,87 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         cv2.imwrite(str(original_path), frame)
         logger.info(f"âœ“ Saved original image: {original_path}")
         
-        # Save annotated frame
-        _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
-        cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
+
+        missing_ppe_metadata: List[str] = []
+        ppe_tags_metadata: List[str] = []
+        for violation_label in violation_types:
+            clean_label = str(violation_label or '').strip()
+            if not clean_label:
+                continue
+            for prefix in ('NO-', 'No-', 'no-', 'Missing ', 'missing '):
+                if clean_label.startswith(prefix):
+                    clean_label = clean_label[len(prefix):].strip()
+                    break
+            if clean_label:
+                missing_ppe_metadata.append(clean_label)
+                ppe_tags_metadata.append(clean_label.replace(' ', '-').upper())
+
+        person_count_metadata = sum(
+            1 for d in (detections or [])
+            if isinstance(d, dict)
+            and 'person' in str(d.get('class_name') or d.get('class') or '').strip().lower()
+        )
+
+        metadata_path = violation_dir / 'metadata.json'
+        preliminary_metadata = {
+            'report_id': report_id,
+            'timestamp': timestamp.isoformat(),
+            'violation_type': violation_types[0] if violation_types else 'PPE Violation',
+            'violation_types': violation_types,
+            'violation_count': len(violation_detections),
+            'person_count': person_count_metadata,
+            'missing_ppe': missing_ppe_metadata,
+            'ppe_tags': ppe_tags_metadata,
+            'violation_summary': (
+                f"PPE Violation Detected: {', '.join(violation_types)}"
+                if violation_types else 'PPE Violation Detected'
+            ),
+            'device_id': runtime_device_id,
+            'severity': 'HIGH',
+            'location': 'Live Stream Monitor',
+            'detection_count': len(detections or []),
+            'status': 'pending',
+            'source_scope': 'local' if force_local_scope else 'cloud',
+            'sync_source': 'local_pipeline' if force_local_scope else 'live_capture',
+            'has_original': True,
+            'has_annotated': False,
+            'has_caption': False,
+            'has_report': False,
+        }
+        try:
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(preliminary_metadata, f, indent=2)
+            logger.info(f"Preliminary metadata saved: {metadata_path}")
+        except Exception as meta_err:
+            logger.warning(f"Could not save preliminary metadata for {report_id}: {meta_err}")
+
+        def _mark_local_capture_failed(reason: str):
+            try:
+                failure_path = violation_dir / 'generation_failure.txt'
+                with open(failure_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Report ID: {report_id}\n")
+                    f.write(f"Timestamp: {timestamp.isoformat()}\n")
+                    f.write(f"Reason: {reason}\n")
+            except Exception as failure_write_err:
+                logger.debug(f"Could not persist local enqueue failure marker: {failure_write_err}")
+
+            try:
+                metadata_update = {}
+                if metadata_path.exists():
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        loaded_metadata = json.load(f) or {}
+                    if isinstance(loaded_metadata, dict):
+                        metadata_update.update(loaded_metadata)
+                metadata_update.update({
+                    'status': 'failed',
+                    'failure_reason': reason,
+                    'has_report': False,
+                })
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata_update, f, indent=2)
+            except Exception as metadata_update_err:
+                logger.debug(f"Could not update local enqueue failure metadata: {metadata_update_err}")
         
         # === IMMEDIATE: Insert pending detection event ===
         # Local-first profile must not depend on cloud DB availability during capture.
@@ -3194,10 +3270,12 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 "Violation queue worker is unavailable after recovery attempt; "
                 "captured frame cannot be queued"
             )
+            _mark_local_capture_failed('Violation queue worker unavailable; report was not queued.')
             return None
 
         if violation_queue is None:
             logger.error("Violation queue manager unavailable after runtime recovery attempt")
+            _mark_local_capture_failed('Violation queue manager unavailable; report was not queued.')
             return None
 
         violation_data = {
@@ -3271,6 +3349,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 )
             except Exception as status_err:
                 logger.warning(f"Could not mark un-enqueued report {report_id} as failed: {status_err}")
+        _mark_local_capture_failed(
+            'Could not enqueue violation (queue full or device rate-limited). Use Reprocess Now to retry.'
+        )
         return None
         
         return None
@@ -3888,6 +3969,22 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.info(f"âœ… Local-cache sync job completed without regeneration: {report_id}")
             return
     
+    if not annotated_path.exists() and original_path.exists():
+        try:
+            update_report_progress(
+                current=report_id,
+                current_step='Preparing annotated frame'
+            )
+            frame_for_annotation = cv2.imread(str(original_path))
+            if frame_for_annotation is not None:
+                _, annotated_frame = predict_image(frame_for_annotation, conf=0.25)
+                cv2.imwrite(str(annotated_path), annotated_frame)
+                logger.info(f"Saved annotated image in queue worker: {annotated_path}")
+            else:
+                logger.warning(f"Could not read original image for annotation: {original_path}")
+        except Exception as annotate_err:
+            logger.warning(f"Could not create annotated image for {report_id}: {annotate_err}")
+
     # Update progress
     update_report_progress(
         current=report_id,
@@ -4082,6 +4179,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 and str(d.get('class_name') or d.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
                 in {'person', 'worker', 'man', 'woman', 'people'}
             )
+            effective_annotated_path = annotated_path if annotated_path.exists() else original_path
             
             report_data = {
                 'report_id': report_id,
@@ -4097,7 +4195,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'caption_quality_fallback_applied': caption_quality_fallback_applied,
                 'caption_quality_reason': caption_quality_reason,
                 'original_image_path': str(original_path),
-                'annotated_image_path': str(annotated_path),
+                'annotated_image_path': str(effective_annotated_path),
                 'location': 'Live Stream Monitor',
                 'severity': 'HIGH',
                 'person_count': detected_person_count,

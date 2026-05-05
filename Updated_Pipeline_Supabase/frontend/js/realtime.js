@@ -307,14 +307,14 @@ const RealtimeSync = {
             // alert pipeline immediately whenever the SSE/WS stream pushes a new
             // report. Without this, in local routing profile (no Supabase
             // realtime channel) the violation-detected toast and voice alert
-            // would lag up to the polling interval (60s) because the polled
-            // /api/violations is the only path that runs ViolationMonitor's
-            // notify logic.
+            // would lag up to the polling interval (60s). The monitor now
+            // forces a fresh violations + pending-reports merge so local
+            // filesystem rows notify at the same time the Reports page updates.
             try {
                 if (typeof ViolationMonitor !== 'undefined'
                     && ViolationMonitor.isMonitoring
                     && typeof ViolationMonitor.checkForNewViolations === 'function') {
-                    ViolationMonitor.checkForNewViolations();
+                    ViolationMonitor.checkForNewViolations({ noCache: true, reason: 'realtime-update' });
                 }
             } catch (vmErr) {
                 console.warn('Realtime -> ViolationMonitor refresh failed:', vmErr);

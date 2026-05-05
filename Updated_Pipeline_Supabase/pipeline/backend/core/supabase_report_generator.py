@@ -109,6 +109,60 @@ class SupabaseReportGenerator(ReportGenerator):
                 self.db_manager.conn.rollback()
         except Exception:
             pass
+
+        cloud_upload_disabled = bool(report_data.get('cloud_upload_disabled'))
+        person_count = report_data.get('person_count', 0)
+        violation_count = report_data.get('violation_count', 0)
+        severity = report_data.get('severity', 'HIGH')
+        device_id = str(report_data.get('device_id') or '').strip()
+        if not device_id:
+            detection_metadata = report_data.get('detection_data')
+            if isinstance(detection_metadata, dict):
+                device_id = str(detection_metadata.get('device_id') or '').strip()
+
+        def _ensure_detection_event_started() -> None:
+            """Persist the cloud row before slow NLP/storage work begins."""
+            if cloud_upload_disabled:
+                return
+            if not report_id or self.db_manager is None:
+                return
+
+            try:
+                timestamp = report_data.get('timestamp', datetime.now())
+
+                existing_event = None
+                if hasattr(self.db_manager, 'get_detection_event'):
+                    existing_event = self.db_manager.get_detection_event(report_id)
+
+                if existing_event and hasattr(self.db_manager, 'update_detection_event'):
+                    self.db_manager.update_detection_event(
+                        report_id=report_id,
+                        person_count=person_count,
+                        violation_count=violation_count,
+                        severity=severity,
+                        status='generating'
+                    )
+                    logger.info(f"Marked detection event generating before report work: {report_id}")
+                elif not existing_event and hasattr(self.db_manager, 'insert_detection_event'):
+                    detection_result = self.db_manager.insert_detection_event(
+                        report_id=report_id,
+                        timestamp=timestamp,
+                        person_count=person_count,
+                        violation_count=violation_count,
+                        severity=severity,
+                        device_id=device_id or None,
+                        status='generating'
+                    )
+                    if detection_result:
+                        logger.info(f"Inserted detection event before report work: {report_id}")
+                    else:
+                        logger.warning(f"Initial detection event insert returned empty: {report_id}")
+
+                _safe_update_progress('generating_report')
+            except Exception as e:
+                logger.error(f"Error ensuring initial detection event for {report_id}: {e}")
+
+        _ensure_detection_event_started()
         
         # Step 1: Generate local files using parent class
         result = super().generate_report(report_data)
@@ -117,8 +171,6 @@ class SupabaseReportGenerator(ReportGenerator):
             logger.error(f"Failed to generate local report: {report_id}")
             return result
 
-        cloud_upload_disabled = bool(report_data.get('cloud_upload_disabled'))
-        
         # Step 1.5: Validate caption against annotations
         caption = report_data.get('caption', '')
         detections = report_data.get('detections', [])
@@ -150,15 +202,6 @@ class SupabaseReportGenerator(ReportGenerator):
             result['cloud_upload_skipped'] = True
             return result
 
-        person_count = report_data.get('person_count', 0)
-        violation_count = report_data.get('violation_count', 0)
-        severity = report_data.get('severity', 'HIGH')
-        device_id = str(report_data.get('device_id') or '').strip()
-        if not device_id:
-            detection_metadata = report_data.get('detection_data')
-            if isinstance(detection_metadata, dict):
-                device_id = str(detection_metadata.get('device_id') or '').strip()
-        
         # Step 2: Ensure detection event exists in Supabase Postgres
         try:
             timestamp = report_data.get('timestamp', datetime.now())

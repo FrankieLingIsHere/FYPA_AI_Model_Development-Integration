@@ -4101,33 +4101,17 @@ RESPONSE FORMAT (JSON):
         return ' '.join(part for part in sentences if part).strip()
 
     def _ensure_caption_quality_floor(self, report_data: Dict[str, Any]) -> str:
-        """Return a caption that meets minimum grounding/detail requirements."""
+        """Return model caption text, using detection text only for real failures."""
         raw_caption = str(report_data.get('caption') or report_data.get('vlm_caption') or '').strip()
-        floor_caption = self._build_caption_quality_floor(report_data, raw_caption)
 
         if self._is_caption_placeholder_text(raw_caption):
-            return floor_caption
+            return self._build_caption_quality_floor(report_data, raw_caption)
 
         raw_caption_clean = re.sub(r'\s+', ' ', raw_caption).strip()
-        raw_lower = raw_caption_clean.lower()
 
-        has_person_detail = any(tok in raw_lower for tok in ('person', 'worker', 'individual', 'people'))
-        has_ppe_detail = any(tok in raw_lower for tok in ('ppe', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'no '))
-        has_scene_detail = any(tok in raw_lower for tok in ('scene', 'environment', 'work', 'office', 'construction', 'warehouse', 'roadside'))
-
-        if len(raw_caption_clean) < 100 or not has_person_detail:
-            return floor_caption
-
-        detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
-        has_no_violation = any(str((d or {}).get('class_name') or '').startswith('NO-') for d in detections if isinstance(d, dict))
-        summary_lower = str(report_data.get('violation_summary') or '').strip().lower()
-        has_violation_summary_flag = any(tok in summary_lower for tok in ('missing ppe', 'no-', 'violation', 'non-compliance'))
-        if has_no_violation and not has_ppe_detail:
-            return floor_caption
-        if has_violation_summary_flag and not has_ppe_detail:
-            return floor_caption
-
-        # Keep the model caption when it is already detailed and grounded.
+        # Keep all non-placeholder VLM text. YOLO facts are injected into the
+        # NLP prompt separately, so replacing a short/weak caption here makes
+        # cloud and local reports collapse into the same deterministic prose.
         return raw_caption_clean
 
     def _rebuild_scene_from_malaysian_context(self, report_data: Dict[str, Any], env_type: str) -> str:

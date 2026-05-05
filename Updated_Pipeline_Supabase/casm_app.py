@@ -727,24 +727,26 @@ def _resolve_violation_types_and_count(
     return violation_types, resolved_count
 
 
+_CAPTION_HARD_FAILURE_MARKERS = (
+    'caption generation failed',
+    'caption generation returned empty',
+    'image captioning not available',
+    'failed to generate caption after multiple attempts',
+    'error generating caption',
+    'could not process image for captioning',
+    'alert_local_mode_unavailable',
+    'local mode is unavailable on this device',
+)
+
+
 def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
-    """Return whether caption should be replaced with a deterministic detection-based summary."""
+    """Return whether caption needs replacement or YOLO-grounded augmentation."""
     normalized = str(caption or '').strip()
     if not normalized:
         return True, 'empty_caption'
 
     lowered = normalized.lower()
-    known_markers = (
-        'caption generation failed',
-        'caption generation returned empty',
-        'image captioning not available',
-        'failed to generate caption after multiple attempts',
-        'error generating caption',
-        'could not process image for captioning',
-        'alert_local_mode_unavailable',
-        'local mode is unavailable on this device',
-    )
-    for marker in known_markers:
+    for marker in _CAPTION_HARD_FAILURE_MARKERS:
         if marker in lowered:
             return True, marker
 
@@ -755,12 +757,10 @@ def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
     generic_markers = (
         'person is visible',
         'people are visible',
-        'indoor setting',
-        'outdoor setting',
         'unable to determine',
         'cannot determine',
     )
-    if any(marker in lowered for marker in generic_markers):
+    if any(marker in lowered for marker in generic_markers) and len(words) < 24:
         return True, 'generic_caption'
 
     unique_ratio = (len(set(words)) / len(words)) if words else 0.0
@@ -774,7 +774,7 @@ def _build_detection_grounded_caption(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> str:
-    """Build a factual fallback caption from detections when VLM text quality is poor."""
+    """Build a factual detection-only caption when VLM text truly failed."""
     detection_rows = detections if isinstance(detections, list) else []
     person_count = 0
     for det in detection_rows:
@@ -805,7 +805,7 @@ def _build_detection_grounded_caption(
 
     if formatted_types:
         return (
-            f"Auto-generated safety summary: {worker_phrase} observed with PPE non-compliance indicators "
+            f"Detection-only safety summary: {worker_phrase} observed with PPE non-compliance indicators "
             f"({', '.join(formatted_types)}). The frame has been queued for supervisor review and "
             "corrective action follow-up."
         )
@@ -813,15 +813,35 @@ def _build_detection_grounded_caption(
     total_detections = len(detection_rows)
     if total_detections > 0:
         return (
-            f"Auto-generated safety summary: {worker_phrase} observed in the monitored area with "
+            f"Detection-only safety summary: {worker_phrase} observed in the monitored area with "
             f"{total_detections} detected object(s). PPE details were inconclusive in this frame, "
             "so manual verification is recommended."
         )
 
     return (
-        "Auto-generated safety summary: PPE compliance alert captured, but visual details were limited. "
+        "Detection-only safety summary: PPE compliance alert captured, but visual details were limited. "
         "Manual review is recommended."
     )
+
+
+def _build_detection_caption_context(
+    detections: List[Dict[str, Any]],
+    violation_types: Optional[List[str]] = None
+) -> str:
+    """Build a short YOLO evidence addendum without replacing model prose."""
+    fallback_caption = _build_detection_grounded_caption(
+        detections,
+        violation_types=violation_types,
+    )
+    context = re.sub(
+        r'^(?:auto-generated|detection-only)\s+safety\s+summary:\s*',
+        '',
+        fallback_caption,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not context:
+        return ''
+    return f"YOLO evidence: {context}"
 
 
 def _enforce_caption_quality_floor(
@@ -829,14 +849,35 @@ def _enforce_caption_quality_floor(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> Tuple[str, bool, str]:
-    """Apply quality floor so reports never persist blank/error-like captions."""
+    """Apply quality floor without erasing real model output."""
     normalized = str(caption or '').strip()
     needs_fallback, reason = _caption_requires_quality_fallback(normalized)
     if not needs_fallback:
         return normalized, False, ''
 
-    fallback_caption = _build_detection_grounded_caption(detections, violation_types=violation_types)
-    return fallback_caption, True, reason
+    hard_failure = (
+        reason == 'empty_caption'
+        or any(marker in reason for marker in _CAPTION_HARD_FAILURE_MARKERS)
+    )
+    if hard_failure or not normalized:
+        fallback_caption = _build_detection_grounded_caption(
+            detections,
+            violation_types=violation_types,
+        )
+        return fallback_caption, True, reason
+
+    context_caption = _build_detection_caption_context(
+        detections,
+        violation_types=violation_types,
+    )
+    if not context_caption:
+        return normalized, False, ''
+
+    normalized_single = re.sub(r'\s+', ' ', normalized).strip()
+    if context_caption.lower() in normalized_single.lower():
+        return normalized_single, False, ''
+    return f"{normalized_single.rstrip(' .')}. {context_caption}", True, f"augmented_{reason}"
+
 
 
 def _safe_bbox(det: Dict[str, Any]) -> List[float]:

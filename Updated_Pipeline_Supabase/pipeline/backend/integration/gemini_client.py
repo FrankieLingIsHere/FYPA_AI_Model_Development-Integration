@@ -707,8 +707,18 @@ class GeminiClient:
                 upper = err_text.upper()
                 quota_or_exhausted = ('RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper)
                 service_unavailable = ('UNAVAILABLE' in upper or '503' in upper or 'HIGH DEMAND' in upper)
-                if quota_or_exhausted or service_unavailable:
-                    reason = 'quota/resource exhaustion' if quota_or_exhausted else 'service temporarily unavailable'
+                model_not_found = (
+                    'NOT_FOUND' in upper
+                    or '404' in upper
+                    or 'NOT SUPPORTED FOR GENERATECONTENT' in upper
+                )
+                if quota_or_exhausted or service_unavailable or model_not_found:
+                    if quota_or_exhausted:
+                        reason = 'quota/resource exhaustion'
+                    elif model_not_found:
+                        reason = 'configured Gemini model unavailable'
+                    else:
+                        reason = 'service temporarily unavailable'
                     switched_key = self._switch_to_next_api_key(reason)
                     if switched_key:
                         continue

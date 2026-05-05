@@ -6406,6 +6406,146 @@ def _get_provider_profile_preset(profile: str) -> Dict[str, Any]:
     }
 
 
+def _sync_report_generator_provider_runtime(
+    *,
+    routing_profile: str,
+    model_api_enabled: bool,
+    gemini_enabled: bool,
+    nlp_provider_order: List[str],
+    embedding_provider_order: List[str],
+    gemini_daily_budget_usd: Optional[float] = None,
+    gemini_monthly_budget_usd: Optional[float] = None,
+    gemini_max_output_tokens_per_report: Optional[int] = None,
+    reason: str = 'provider-route-switch',
+) -> bool:
+    """Apply provider routing to the live report generator and reset stale state."""
+    global report_generator
+
+    if report_generator is None or not hasattr(report_generator, 'nlp_provider_order'):
+        return False
+
+    normalized_profile = _normalize_provider_profile(routing_profile)
+
+    try:
+        if hasattr(report_generator, 'notify_provider_route_changed'):
+            report_generator.notify_provider_route_changed(normalized_profile, reason=reason)
+        else:
+            report_generator.routing_profile = normalized_profile
+            if hasattr(report_generator, 'sticky_nlp_provider'):
+                report_generator.sticky_nlp_provider = None
+            if hasattr(report_generator, 'sticky_nlp_provider_until_epoch'):
+                report_generator.sticky_nlp_provider_until_epoch = 0.0
+    except Exception as route_epoch_err:
+        logger.warning(f"Could not invalidate report generator provider epoch: {route_epoch_err}")
+
+    report_generator.routing_profile = normalized_profile
+    if hasattr(report_generator, 'strict_local_profile'):
+        report_generator.strict_local_profile = bool(
+            getattr(report_generator, 'enforce_strict_provider_split', False)
+            and normalized_profile == 'local'
+        )
+
+    allow_nlp_fallback_default = (
+        str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower()
+        in ('1', 'true', 'yes', 'on')
+    )
+    if hasattr(report_generator, 'allow_nlp_fallback'):
+        report_generator.allow_nlp_fallback = (
+            False if getattr(report_generator, 'strict_local_profile', False)
+            else allow_nlp_fallback_default
+        )
+
+    report_generator.model_api_enabled = bool(model_api_enabled)
+    report_generator.nlp_provider_order = list(nlp_provider_order)
+    report_generator.embedding_provider_order = list(embedding_provider_order)
+    report_generator.model = OLLAMA_CONFIG.get('model', getattr(report_generator, 'model', None))
+    report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
+    report_generator.embedding_api_model = MODEL_API_CONFIG.get(
+        'embedding_model',
+        getattr(report_generator, 'embedding_model', None)
+    )
+
+    def _float_or_env(value: Optional[float], env_name: str, default: float = 0.0) -> float:
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float(default)
+        try:
+            return float(os.getenv(env_name, str(default)) or default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _int_or_env(value: Optional[int], env_name: str, default: int) -> int:
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return int(default)
+        try:
+            return int(os.getenv(env_name, str(default)) or default)
+        except (TypeError, ValueError):
+            return int(default)
+
+    report_generator.gemini_daily_budget_usd = max(
+        0.0,
+        _float_or_env(gemini_daily_budget_usd, 'GEMINI_DAILY_BUDGET_USD', 0.0)
+    )
+    report_generator.gemini_monthly_budget_usd = max(
+        0.0,
+        _float_or_env(gemini_monthly_budget_usd, 'GEMINI_MONTHLY_BUDGET_USD', 0.0)
+    )
+    report_generator.gemini_max_output_tokens_per_report = max(
+        1,
+        _int_or_env(
+            gemini_max_output_tokens_per_report,
+            'GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT',
+            getattr(report_generator, 'gemini_max_output_tokens_per_report', 2200)
+        )
+    )
+
+    gemini_runtime_available = False
+    if normalized_profile == 'cloud' and gemini_enabled:
+        try:
+            from pipeline.backend.integration.gemini_client import GeminiClient
+
+            refreshed_config = dict(getattr(report_generator, 'config', {}) or _build_report_generator_config())
+            refreshed_config['GEMINI_CONFIG'] = dict(GEMINI_CONFIG)
+            refreshed_config['MODEL_API_CONFIG'] = dict(MODEL_API_CONFIG)
+            refreshed_config['OLLAMA_CONFIG'] = dict(OLLAMA_CONFIG)
+            refreshed_client = GeminiClient(refreshed_config)
+            if getattr(refreshed_client, 'is_available', False):
+                report_generator.gemini_client = refreshed_client
+                gemini_runtime_available = True
+                logger.info("Gemini client reinitialized after provider switch to cloud")
+            else:
+                report_generator.gemini_client = None
+                logger.warning(
+                    "Gemini client refresh after cloud switch did not become available: %s",
+                    getattr(refreshed_client, 'last_error', 'unknown error'),
+                )
+        except Exception as gemini_init_err:
+            report_generator.gemini_client = None
+            logger.warning(f"Could not initialize Gemini client after routing switch to cloud: {gemini_init_err}")
+    else:
+        report_generator.use_gemini = False
+
+    report_generator.use_gemini = (
+        normalized_profile == 'cloud'
+        and bool(gemini_enabled)
+        and gemini_runtime_available
+        and not getattr(report_generator, 'strict_local_profile', False)
+    )
+
+    if getattr(report_generator, 'gemini_client', None) is not None:
+        report_generator.gemini_client.max_tokens = min(
+            report_generator.gemini_client.max_tokens,
+            report_generator.gemini_max_output_tokens_per_report
+        )
+
+    return True
+
+
 def _apply_provider_profile(profile: str) -> Dict[str, Any]:
     """Apply strict provider profile to in-memory + env + active modules."""
     global report_generator
@@ -6447,28 +6587,14 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
     except Exception as caption_err:
         logger.warning(f"Could not apply strict vision provider profile at runtime: {caption_err}")
 
-    if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
-        report_generator.routing_profile = routing_profile
-        if hasattr(report_generator, 'strict_local_profile'):
-            report_generator.strict_local_profile = bool(
-                getattr(report_generator, 'enforce_strict_provider_split', False)
-                and routing_profile == 'local'
-            )
-        if hasattr(report_generator, 'allow_nlp_fallback'):
-            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
-            report_generator.allow_nlp_fallback = (
-                False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
-            )
-        report_generator.model_api_enabled = model_api_enabled
-        report_generator.use_gemini = bool(
-            gemini_enabled and report_generator.gemini_client is not None and getattr(report_generator.gemini_client, 'is_available', False)
-        )
-        report_generator.nlp_provider_order = list(nlp_provider_order)
-        report_generator.embedding_provider_order = list(embedding_provider_order)
-        if hasattr(report_generator, 'sticky_nlp_provider'):
-            report_generator.sticky_nlp_provider = None
-        if hasattr(report_generator, 'sticky_nlp_provider_until_epoch'):
-            report_generator.sticky_nlp_provider_until_epoch = 0.0
+    _sync_report_generator_provider_runtime(
+        routing_profile=routing_profile,
+        model_api_enabled=model_api_enabled,
+        gemini_enabled=gemini_enabled,
+        nlp_provider_order=nlp_provider_order,
+        embedding_provider_order=embedding_provider_order,
+        reason=f'apply_provider_profile:{routing_profile}',
+    )
 
     return applied
 
@@ -9066,7 +9192,14 @@ def api_provider_routing_settings():
 
         GEMINI_CONFIG['enabled'] = gemini_enabled
         if data.get('gemini_model'):
-            GEMINI_CONFIG['model'] = str(data['gemini_model']).strip()
+            selected_gemini_model = str(data['gemini_model']).strip()
+            GEMINI_CONFIG['model'] = selected_gemini_model
+            GEMINI_CONFIG['report_model'] = str(
+                data.get('gemini_report_model') or selected_gemini_model
+            ).strip()
+            GEMINI_CONFIG['vision_model'] = str(
+                data.get('gemini_vision_model') or selected_gemini_model
+            ).strip()
 
         if STRICT_PROVIDER_MODE_SPLIT and routing_profile == 'local':
             requested_local_model = STRICT_LOCAL_OLLAMA_MODEL
@@ -9100,6 +9233,10 @@ def api_provider_routing_settings():
             os.environ['EMBEDDING_API_MODEL'] = MODEL_API_CONFIG['embedding_model']
         if GEMINI_CONFIG.get('model'):
             os.environ['GEMINI_MODEL'] = GEMINI_CONFIG['model']
+        if GEMINI_CONFIG.get('report_model'):
+            os.environ['GEMINI_REPORT_MODEL'] = GEMINI_CONFIG['report_model']
+        if GEMINI_CONFIG.get('vision_model'):
+            os.environ['GEMINI_VISION_MODEL'] = GEMINI_CONFIG['vision_model']
         if OLLAMA_CONFIG.get('model'):
             os.environ['OLLAMA_MODEL'] = OLLAMA_CONFIG['model']
             os.environ['OLLAMA_VISION_MODEL'] = OLLAMA_CONFIG['model']
@@ -9120,67 +9257,27 @@ def api_provider_routing_settings():
             # M2 â€” surface the warning to the caller so the UI can show it
             caption_settings_warning = f"Caption provider settings could not be applied: {caption_err}"
 
-        # Apply to active report generator immediately
-        if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
-            report_generator.routing_profile = routing_profile
-            if hasattr(report_generator, 'enforce_strict_provider_split'):
-                report_generator.strict_local_profile = bool(
-                    getattr(report_generator, 'enforce_strict_provider_split', False)
-                    and routing_profile == 'local'
-                )
-
-            allow_nlp_fallback_default = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
-            if hasattr(report_generator, 'allow_nlp_fallback'):
-                report_generator.allow_nlp_fallback = False if getattr(report_generator, 'strict_local_profile', False) else allow_nlp_fallback_default
-
-            report_generator.model_api_enabled = MODEL_API_CONFIG.get('enabled', False)
-            report_generator.nlp_provider_order = MODEL_API_CONFIG.get(
+        # Apply to active report generator immediately and invalidate in-flight
+        # local/cloud work from the previous provider epoch.
+        _sync_report_generator_provider_runtime(
+            routing_profile=routing_profile,
+            model_api_enabled=MODEL_API_CONFIG.get('enabled', False),
+            gemini_enabled=GEMINI_CONFIG.get('enabled', True),
+            nlp_provider_order=MODEL_API_CONFIG.get(
                 'nlp_provider_order',
                 _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini'])
                 if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
-            )
-            report_generator.embedding_provider_order = MODEL_API_CONFIG.get(
+            ),
+            embedding_provider_order=MODEL_API_CONFIG.get(
                 'embedding_provider_order',
                 _get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('embedding_provider_order', ['model_api'])
                 if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
-            )
-
-            gemini_runtime_available = bool(
-                getattr(report_generator, 'gemini_client', None) is not None
-                and getattr(report_generator.gemini_client, 'is_available', False)
-            )
-            if routing_profile == 'cloud' and GEMINI_CONFIG.get('enabled', True) and not gemini_runtime_available:
-                try:
-                    from pipeline.backend.integration.gemini_client import GeminiClient
-                    refreshed_config = dict(getattr(report_generator, 'config', {}) or {})
-                    refreshed_config['GEMINI_CONFIG'] = dict(GEMINI_CONFIG)
-                    refreshed_client = GeminiClient(refreshed_config)
-                    if getattr(refreshed_client, 'is_available', False):
-                        report_generator.gemini_client = refreshed_client
-                        gemini_runtime_available = True
-                    else:
-                        report_generator.gemini_client = None
-                except Exception as gemini_init_err:
-                    report_generator.gemini_client = None
-                    logger.warning(f"Could not initialize Gemini client after routing switch to cloud: {gemini_init_err}")
-
-            report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
-            report_generator.embedding_api_model = MODEL_API_CONFIG.get('embedding_model', report_generator.embedding_model)
-            report_generator.use_gemini = (
-                routing_profile == 'cloud'
-                and GEMINI_CONFIG.get('enabled', True)
-                and gemini_runtime_available
-                and not getattr(report_generator, 'strict_local_profile', False)
-            )
-            report_generator.model = OLLAMA_CONFIG.get('model', report_generator.model)
-            report_generator.gemini_daily_budget_usd = gemini_daily_budget_usd
-            report_generator.gemini_monthly_budget_usd = gemini_monthly_budget_usd
-            report_generator.gemini_max_output_tokens_per_report = gemini_max_output_tokens_per_report
-            if getattr(report_generator, 'gemini_client', None) is not None:
-                report_generator.gemini_client.max_tokens = min(
-                    report_generator.gemini_client.max_tokens,
-                    gemini_max_output_tokens_per_report
-                )
+            ),
+            gemini_daily_budget_usd=gemini_daily_budget_usd,
+            gemini_monthly_budget_usd=gemini_monthly_budget_usd,
+            gemini_max_output_tokens_per_report=gemini_max_output_tokens_per_report,
+            reason='api_provider_routing_settings',
+        )
 
         resp_body = {
             'success': True,

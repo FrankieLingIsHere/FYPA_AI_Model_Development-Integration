@@ -72,7 +72,7 @@ GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL',
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
-OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 0)
+OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)
 OLLAMA_AUTO_RECOVER_ENABLED = os.getenv('OLLAMA_AUTO_RECOVER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
 OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS = max(5, _safe_int_env('OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS', 45))
 OLLAMA_AUTO_RECOVER_WAIT_SECONDS = max(1, _safe_int_env('OLLAMA_AUTO_RECOVER_WAIT_SECONDS', 8))
@@ -94,9 +94,9 @@ _ollama_auto_recover_next_allowed_ts = 0.0
 
 
 def _get_ollama_request_timeout():
-    """Use finite connect timeout but optional unlimited read timeout for slow local hardware."""
+    """Use finite connect/read timeouts so a stalled local model cannot wedge routing."""
     if OLLAMA_VISION_READ_TIMEOUT_SECONDS <= 0:
-        return (OLLAMA_CONNECT_TIMEOUT_SECONDS, None)
+        return (OLLAMA_CONNECT_TIMEOUT_SECONDS, 120)
     return (OLLAMA_CONNECT_TIMEOUT_SECONDS, max(1, OLLAMA_VISION_READ_TIMEOUT_SECONDS))
 
 
@@ -633,6 +633,9 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
         if not text:
             _record_provider_failure('ollama', 'Empty response text')
         return text
+    except requests.exceptions.Timeout as e:
+        _record_provider_failure('ollama', f"Ollama vision request timed out: {e}")
+        return ''
     except Exception as e:
         recovery = attempt_ollama_auto_recover(
             reason=str(e),

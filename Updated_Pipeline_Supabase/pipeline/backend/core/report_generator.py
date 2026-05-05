@@ -171,6 +171,8 @@ class ReportGenerator:
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
         self.last_nlp_completed_at = None
+        self.provider_runtime_lock = threading.RLock()
+        self.provider_runtime_epoch = 0
         self.routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
         # strict_local_profile is now a computed property â€” see below; do not set it here
@@ -282,12 +284,23 @@ class ReportGenerator:
         self.cloud_api_timeout = max(30, int(os.getenv('CLOUD_API_TIMEOUT_SECONDS', '120') or 120))
         self.ollama_connect_timeout = max(1, int(os.getenv('OLLAMA_CONNECT_TIMEOUT_SECONDS', '8') or 8))
         try:
-            self.ollama_read_timeout = int(os.getenv('OLLAMA_REPORT_READ_TIMEOUT_SECONDS', '0') or 0)
+            self.ollama_read_timeout = int(
+                os.getenv(
+                    'OLLAMA_REPORT_READ_TIMEOUT_SECONDS',
+                    os.getenv('OLLAMA_TIMEOUT', '180')
+                ) or 180
+            )
         except (TypeError, ValueError):
-            self.ollama_read_timeout = 0
+            self.ollama_read_timeout = 180
+        if self.ollama_read_timeout <= 0:
+            logger.warning(
+                "Ignoring unbounded OLLAMA_REPORT_READ_TIMEOUT_SECONDS=%s; using 180s circuit breaker",
+                self.ollama_read_timeout,
+            )
+            self.ollama_read_timeout = 180
         self.ollama_timeout = (
             self.ollama_connect_timeout,
-            None if self.ollama_read_timeout <= 0 else max(1, self.ollama_read_timeout)
+            max(30, self.ollama_read_timeout)
         )
 
         # =====================================================================
@@ -395,6 +408,45 @@ class ReportGenerator:
         # Ignored â€” value is always computed from routing_profile.
         # Setter exists for backward compatibility with code that assigns to this attribute.
         pass
+
+    def notify_provider_route_changed(self, routing_profile: Optional[str] = None, reason: str = 'runtime switch') -> int:
+        """Invalidate in-flight provider work after a local/cloud routing change."""
+        with self.provider_runtime_lock:
+            if routing_profile:
+                self.routing_profile = str(routing_profile or '').strip().lower()
+            self.provider_runtime_epoch += 1
+            self.sticky_nlp_provider = None
+            self.sticky_nlp_provider_until_epoch = 0.0
+            self.last_nlp_error = None
+            self.last_nlp_provider = None
+            self.last_nlp_model = None
+            self.last_nlp_fallback_reason = None
+            self.last_gemini_budget_block_reason = None
+            epoch = self.provider_runtime_epoch
+        logger.info(
+            "Provider route changed to %s; invalidated in-flight NLP work (epoch=%s, reason=%s)",
+            self.routing_profile or 'cloud',
+            epoch,
+            reason,
+        )
+        return epoch
+
+    def get_provider_runtime_epoch(self) -> int:
+        with self.provider_runtime_lock:
+            return int(self.provider_runtime_epoch)
+
+    def _assert_generation_epoch_current(self, start_epoch: int, report_id: str, stage: str) -> None:
+        current_epoch = self.get_provider_runtime_epoch()
+        if current_epoch != start_epoch:
+            detail = (
+                "Report generation aborted because provider routing changed mid-generation "
+                f"(report_id={report_id}, stage={stage}, epoch={start_epoch}->{current_epoch}). "
+                "Retry under the current mode."
+            )
+            with self.provider_runtime_lock:
+                self.last_nlp_error = detail
+                self.last_nlp_fallback_reason = detail
+            raise RuntimeError(detail)
 
     def get_runtime_provider_diagnostics(self) -> Dict[str, Any]:
         """Expose NLP routing runtime details for operator visibility."""
@@ -1544,6 +1596,11 @@ RESPONSE FORMAT (JSON):
                     last_error = f"Failed to parse Ollama JSON response: {e}"
                     logger.warning(last_error)
                     logger.debug(f"Raw response: {data.get('response', 'N/A') if isinstance(data, dict) else 'N/A'}")
+                except requests.exceptions.Timeout as e:
+                    read_timeout = request_timeout[1] if isinstance(request_timeout, tuple) else request_timeout
+                    last_error = f"Ollama API request timed out after {read_timeout}s: {e}"
+                    logger.warning(last_error)
+                    return None, last_error
                 except requests.exceptions.RequestException as e:
                     last_error = f"Ollama API request failed: {e}"
                     if callable(recovery_helper):
@@ -1631,6 +1688,8 @@ RESPONSE FORMAT (JSON):
 
         self.last_nlp_error = None
         logger.info("[OK] Ollama NLP analysis completed with model '%s'", self.last_ollama_model_used)
+        return nlp_response
+
     def get_safety_summary_prompt(self, report_data: Dict[str, Any]) -> str:
         """Build executive safety summary prompt for Gemini/Ollama."""
         return (
@@ -1673,7 +1732,14 @@ RESPONSE FORMAT (JSON):
                 - pdf: Path to PDF report (if enabled)
                 - nlp_analysis: NLP analysis data
         """
-        logger.info(f"Generating report: {report_data.get('report_id')}")
+        report_id = str(report_data.get('report_id') or '').strip() or 'unknown'
+        generation_epoch = self.get_provider_runtime_epoch()
+        logger.info(
+            "Generating report: %s (routing_profile=%s, provider_epoch=%s)",
+            report_id,
+            self.routing_profile or 'cloud',
+            generation_epoch,
+        )
 
         # Apply a grounded caption quality floor before building prompts so both
         # cloud/local providers receive structured visual context.
@@ -1814,6 +1880,11 @@ RESPONSE FORMAT (JSON):
                 break
 
             provider_name = provider.strip().lower()
+            self._assert_generation_epoch_current(
+                generation_epoch,
+                report_id,
+                f'before {provider_name} provider',
+            )
             if provider_name == 'model_api':
                 logger.info("Trying model-specific cloud NLP API...")
                 nlp_analysis = self._call_model_api_nlp(prompt)
@@ -1878,6 +1949,12 @@ RESPONSE FORMAT (JSON):
                 self.last_nlp_model = self.last_ollama_model_used if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
                     self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
+
+            self._assert_generation_epoch_current(
+                generation_epoch,
+                report_id,
+                f'after {provider_name} provider',
+            )
 
             if nlp_analysis:
                 self.last_nlp_provider = provider_name
@@ -2025,6 +2102,7 @@ RESPONSE FORMAT (JSON):
 
         
         # Step 3: Generate HTML report
+        self._assert_generation_epoch_current(generation_epoch, report_id, 'before html render')
         html_path = self._generate_html_report(report_data, nlp_analysis)
 
         # Step 3b: Write a traceability sidecar JSON next to the local report

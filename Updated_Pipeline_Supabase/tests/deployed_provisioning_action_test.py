@@ -5,6 +5,7 @@ import base64
 import json
 import re
 import tempfile
+from pathlib import Path
 from unittest.mock import patch, Mock
 
 # Ensure we can import casm_app (file is in tests/, project root is parent)
@@ -36,6 +37,7 @@ from casm_app import (
     BOOTSTRAP_TOKEN_STATE_FILE,
     LOCAL_MODE_PROVISION_STATE_FILE,
     LOCAL_MODE_MACHINE_ID_FILE,
+    LOCAL_MODE_HEARTBEAT_FILE,
 )
 
 
@@ -53,6 +55,8 @@ class ProvisioningActionTest(unittest.TestCase):
             LOCAL_MODE_PROVISION_STATE_FILE.unlink()
         if LOCAL_MODE_MACHINE_ID_FILE.exists():
             LOCAL_MODE_MACHINE_ID_FILE.unlink()
+        if LOCAL_MODE_HEARTBEAT_FILE.exists():
+            LOCAL_MODE_HEARTBEAT_FILE.unlink()
 
     @classmethod
     def tearDownClass(cls):
@@ -64,6 +68,8 @@ class ProvisioningActionTest(unittest.TestCase):
             LOCAL_MODE_PROVISION_STATE_FILE.unlink()
         if LOCAL_MODE_MACHINE_ID_FILE.exists():
             LOCAL_MODE_MACHINE_ID_FILE.unlink()
+        if LOCAL_MODE_HEARTBEAT_FILE.exists():
+            LOCAL_MODE_HEARTBEAT_FILE.unlink()
 
     def _mock_http_response(self, status_code, payload):
         response = Mock()
@@ -204,6 +210,60 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('status'), 'approved')
         self.assertTrue(payload.get('bootstrap_exchange_ready'))
         self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
+
+    def test_active_heartbeat_is_terminal_provisioning_state(self):
+        machine_id = 'TEST-EDGE-ACTIVE-001'
+        provision_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        })
+        self.assertEqual(heartbeat.status_code, 200)
+
+        status_response = self.client.get(
+            f'/api/local-mode/provisioning/status?machine_id={machine_id}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+        status_payload = status_response.json or {}
+        self.assertEqual(status_payload.get('status'), 'active')
+        self.assertEqual(status_payload.get('device_status'), 'approved')
+        self.assertTrue(status_payload.get('active'))
+        self.assertTrue(status_payload.get('provisioned'))
+        self.assertEqual(
+            (status_payload.get('cloud_local_heartbeat') or {}).get('provision_status'),
+            'provisioned',
+        )
+
+        rerequest = self.client.post('/api/provision/request', json={'machine_id': machine_id})
+        self.assertEqual(rerequest.status_code, 200)
+        rerequest_payload = rerequest.json or {}
+        self.assertEqual(rerequest_payload.get('status'), 'stored')
+        self.assertEqual(rerequest_payload.get('device_status'), 'active')
+        self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
+        self.assertTrue(rerequest_payload.get('active'))
+
+    def test_frontend_maps_active_provisioning_state(self):
+        root = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        settings_js = (root / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
+        app_js = (root / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
+        home_js = (root / 'frontend' / 'js' / 'pages' / 'home.js').read_text(encoding='utf-8')
+        api_js = (root / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
+
+        self.assertIn("normalized === 'active'", settings_js)
+        self.assertIn("normalized === 'active'", app_js)
+        self.assertIn('Device provisioned and active. Local backend is running.', settings_js)
+        self.assertIn('Device provisioned and active. Local backend is running.', home_js)
+        self.assertIn("requestResult.status || requestResult.device_status", settings_js)
+        self.assertIn('request_status', api_js)
 
     @patch('casm_app.notify_admin')
     def test_re_request_pending_device_respects_notification_cooldown(self, mock_notify_admin):

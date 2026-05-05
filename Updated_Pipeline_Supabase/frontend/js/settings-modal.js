@@ -467,6 +467,8 @@ const GlobalSettingsModal = {
         const normalized = String(statusRaw || '').toLowerCase().trim();
         if (normalized === 'pending' || normalized === 'pending_approval') return 'pending_approval';
         if (normalized === 'credentials_present') return 'credentials_present';
+        if (normalized === 'active') return 'active';
+        if (normalized === 'approved') return 'approved';
         if (normalized === 'provisioned') return 'provisioned';
         if (normalized === 'rejected') return 'rejected';
         if (normalized === 'error') return 'error';
@@ -764,7 +766,7 @@ const GlobalSettingsModal = {
             const isAuthError = statusError.includes('invalid provision_secret')
                 || statusError.includes('401')
                 || statusError.includes('403');
-            if (!isAuthError && (storedStatus === 'approved' || storedStatus === 'provisioned')) {
+            if (!isAuthError && (storedStatus === 'approved' || storedStatus === 'provisioned' || storedStatus === 'active')) {
                 return {
                     success: true,
                     status: storedStatus,
@@ -783,7 +785,7 @@ const GlobalSettingsModal = {
             // though the installer download will 401.
             if (isAuthError) {
                 if (attemptedSecretlessRecovery) {
-                    const fallbackStatus = (storedStatus === 'approved' || storedStatus === 'provisioned')
+                    const fallbackStatus = (storedStatus === 'approved' || storedStatus === 'provisioned' || storedStatus === 'active')
                         ? storedStatus
                         : 'idle';
                     this.saveRemoteProvisionState({
@@ -1030,10 +1032,13 @@ const GlobalSettingsModal = {
         );
         const previousStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
         const previousMeasuredAt = Number(this.localProvisionState.measuredAt || 0);
-        let normalizedStatus = this.normalizeLocalProvisionStatus(source.status || previousStatus);
+        const sourceStatus = String(source.status || '').trim().toLowerCase() === 'stored'
+            ? (source.device_status || source.provisioning_status || source.status)
+            : source.status;
+        let normalizedStatus = this.normalizeLocalProvisionStatus(sourceStatus || previousStatus);
         const heartbeatProvisionStatus = this.normalizeLocalProvisionStatus(normalizedHeartbeat.provisionStatus || 'idle');
         if (this.isLikelyRemoteBackend()) {
-            const previousIsApprovedLike = previousStatus === 'approved' || previousStatus === 'provisioned';
+            const previousIsApprovedLike = previousStatus === 'approved' || previousStatus === 'provisioned' || previousStatus === 'active';
             const incomingIsWeakerStatus = (
                 normalizedStatus === 'idle'
                 || normalizedStatus === 'pending_approval'
@@ -1108,7 +1113,7 @@ const GlobalSettingsModal = {
         if (!machineId) return false;
         // Only allow re-download for explicitly admin-approved or provisioned devices.
         // credentials_present is NOT sufficient — those credentials may not be admin-authorised.
-        return status === 'approved' || status === 'provisioned';
+        return status === 'approved' || status === 'provisioned' || status === 'active';
     },
 
     getStoredProvisionSecretForMachine(machineIdRaw = '') {
@@ -1147,7 +1152,7 @@ const GlobalSettingsModal = {
             || (this.loadRemoteProvisionState() || {}).status
             || 'idle'
         );
-        if (knownStatus !== 'approved' && knownStatus !== 'provisioned') {
+        if (knownStatus !== 'approved' && knownStatus !== 'provisioned' && knownStatus !== 'active') {
             return this.loadRemoteProvisionState() || {};
         }
 
@@ -1204,7 +1209,7 @@ const GlobalSettingsModal = {
         const btn = this.getEl('globalRequestProvisioningBtn');
         if (!btn) return;
         const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
-        const isApproved = status === 'approved' || status === 'provisioned';
+        const isApproved = status === 'approved' || status === 'provisioned' || status === 'active';
         const isPending = status === 'pending_approval';
 
         btn.disabled = isApproved || isPending;
@@ -1255,26 +1260,38 @@ const GlobalSettingsModal = {
             const newMachineId = String(requestResult.machine_id || machineId).trim() || machineId;
             const newSecret = String(requestResult.provision_secret || '').trim();
             const adminPortalUrl = `${API_CONFIG.BASE_URL}/admin/devices`;
+            const requestStatus = this.normalizeLocalProvisionStatus(
+                requestResult.status || requestResult.device_status || 'pending_approval'
+            );
 
             this.saveRemoteProvisionState({
                 machineId: newMachineId,
                 provisionSecret: newSecret,
-                status: 'pending_approval',
+                status: requestStatus,
                 adminPortalUrl
             });
             this.syncLocalProvisionStateFromPayload({
                 machine_id: newMachineId,
-                status: 'pending_approval',
+                status: requestStatus,
                 admin_portal_url: adminPortalUrl
             });
 
             this.updateLocalModeCheckupStatus();
             this.updateRequestProvisioningButton();
-            this.ensureLocalProvisionPolling();
-
-            const successMsg = `Provisioning request sent for machine ${newMachineId}. Waiting for admin approval.`;
-            this.setProviderStatus(successMsg, 'warning');
-            this.showNotification('Provisioning request submitted. Waiting for admin approval.', 'warning');
+            if (requestStatus === 'pending_approval') {
+                this.ensureLocalProvisionPolling();
+                const successMsg = `Provisioning request sent for machine ${newMachineId}. Waiting for admin approval.`;
+                this.setProviderStatus(successMsg, 'warning');
+                this.showNotification('Provisioning request submitted. Waiting for admin approval.', 'warning');
+            } else if (requestStatus === 'active') {
+                this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
+                this.showNotification('Device provisioned and active.', 'success');
+            } else if (requestStatus === 'approved' || requestStatus === 'provisioned') {
+                this.setProviderStatus('Device is already provisioned. Installer access is available.', 'success');
+                this.showNotification('Device is already provisioned.', 'success');
+            } else {
+                this.setProviderStatus(`Provisioning status: ${requestStatus}`, 'info');
+            }
         } catch (error) {
             const errMsg = (error && error.message) || 'Failed to submit provisioning request.';
             this.setProviderStatus(errMsg, 'error');
@@ -1299,6 +1316,12 @@ const GlobalSettingsModal = {
             const portalText = adminPortalUrl ? ` Admin portal: ${adminPortalUrl}` : '';
             statusEl.textContent = `Provision request submitted${machineText}. Waiting for admin approval.${portalText}`;
             statusEl.style.color = 'var(--warning-color)';
+            return;
+        }
+
+        if (status === 'active') {
+            statusEl.textContent = 'Device provisioned and active. Local backend is running.';
+            statusEl.style.color = 'var(--success-color)';
             return;
         }
 
@@ -1621,7 +1644,7 @@ const GlobalSettingsModal = {
                     allowRequest: false,
                     machineIdHint: this.localProvisionState.machineId
                 });
-                if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'rejected')) {
+                if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'rejected')) {
                     this.syncLocalProvisionStateFromPayload(remoteState);
                 }
             }
@@ -1639,7 +1662,7 @@ const GlobalSettingsModal = {
                 allowRequest: false,
                 machineIdHint: this.localProvisionState.machineId
             });
-            if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'rejected')) {
+            if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'rejected')) {
                 this.syncLocalProvisionStateFromPayload(remoteState);
             }
         }
@@ -1728,8 +1751,10 @@ const GlobalSettingsModal = {
                     const isProvisioned = (
                         provisionStatus === 'provisioned'
                         || provisionStatus === 'approved'
+                        || provisionStatus === 'active'
                         || globalProvisionStatus === 'provisioned'
                         || globalProvisionStatus === 'approved'
+                        || globalProvisionStatus === 'active'
                     );
 
                     if (heartbeatRecent) {
@@ -1792,7 +1817,9 @@ const GlobalSettingsModal = {
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
             const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
-            if (status === 'provisioned') {
+            if (status === 'active') {
+                this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
+            } else if (status === 'provisioned') {
                 this.setProviderStatus('Device is provisioned. Cloud sync is active.', 'success');
             } else if (status === 'approved') {
                 this.setProviderStatus('Device is approved. Cloud sync is available.', 'success');
@@ -1824,6 +1851,7 @@ const GlobalSettingsModal = {
                     status === 'pending_approval'
                     || status === 'approved'
                     || status === 'provisioned'
+                    || status === 'active'
                     || status === 'rejected'
                 );
             if (!shouldSkipRemoteRefresh) {
@@ -1841,7 +1869,7 @@ const GlobalSettingsModal = {
                 || finalStatus === 'credentials_present'
                 || finalStatus === 'error'
             );
-            if ((provisionResultStatus === 'approved' || provisionResultStatus === 'provisioned') && finalIsWeaker) {
+            if ((provisionResultStatus === 'approved' || provisionResultStatus === 'provisioned' || provisionResultStatus === 'active') && finalIsWeaker) {
                 finalStatus = provisionResultStatus;
                 this.localProvisionState.status = provisionResultStatus;
                 this.updateLocalModeCheckupStatus();
@@ -1849,7 +1877,7 @@ const GlobalSettingsModal = {
 
             if (
                 isLikelyRemoteBackend
-                && (finalStatus === 'approved' || finalStatus === 'provisioned')
+                && (finalStatus === 'approved' || finalStatus === 'provisioned' || finalStatus === 'active')
                 && !this.getStoredProvisionSecretForMachine(this.localProvisionState.machineId)
             ) {
                 try {
@@ -1865,7 +1893,9 @@ const GlobalSettingsModal = {
                 }
             }
 
-            if (finalStatus === 'provisioned') {
+            if (finalStatus === 'active') {
+                this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
+            } else if (finalStatus === 'provisioned') {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
             } else if (finalStatus === 'approved') {
                 this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
@@ -2026,7 +2056,7 @@ const GlobalSettingsModal = {
                     : await API.autoProvisionLocalModeCredentials();
                 this.syncLocalProvisionStateFromPayload(pollResult || {});
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
-                if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
+                if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'active' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
                     this.stopLocalProvisionPolling();
                     return;
                 }
@@ -2140,9 +2170,10 @@ const GlobalSettingsModal = {
         const storedBefore = this.loadRemoteProvisionState() || {};
         if (
             storedBefore.machineId
-            && (storedBefore.status === 'approved' || storedBefore.status === 'provisioned')
+            && (storedBefore.status === 'approved' || storedBefore.status === 'provisioned' || storedBefore.status === 'active')
             && this.normalizeLocalProvisionStatus(this.localProvisionState.status) !== 'approved'
             && this.normalizeLocalProvisionStatus(this.localProvisionState.status) !== 'provisioned'
+            && this.normalizeLocalProvisionStatus(this.localProvisionState.status) !== 'active'
         ) {
             this.syncLocalProvisionStateFromPayload({
                 machine_id: storedBefore.machineId,

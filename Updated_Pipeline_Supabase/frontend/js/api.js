@@ -1120,9 +1120,25 @@ const API = {
                 };
             }
 
+            const rawRequestStatus = String((data && data.status) || '').trim().toLowerCase();
+            const rawDeviceStatus = String(
+                (data && (data.device_status || data.provisioning_status)) || rawRequestStatus || ''
+            ).trim().toLowerCase();
+            const normalizedDeviceStatus = (() => {
+                if (rawDeviceStatus === 'pending' || rawDeviceStatus === 'pending_approval') return 'pending_approval';
+                if (rawDeviceStatus === 'approved') return 'approved';
+                if (rawDeviceStatus === 'provisioned') return 'provisioned';
+                if (rawDeviceStatus === 'active') return 'active';
+                if (rawDeviceStatus === 'rejected') return 'rejected';
+                if (rawRequestStatus === 'stored') return 'pending_approval';
+                return rawDeviceStatus || 'idle';
+            })();
+
             return {
                 success: true,
                 ...data,
+                request_status: rawRequestStatus || undefined,
+                status: normalizedDeviceStatus,
                 machine_id: String(data.machine_id || machineId).trim()
             };
         } catch (error) {

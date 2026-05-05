@@ -7467,7 +7467,7 @@ def _normalize_cloud_provision_status(raw_status: Any) -> str:
     normalized = str(raw_status or '').strip().lower()
     if normalized in ('pending', 'pending_approval'):
         return 'pending_approval'
-    if normalized in ('approved', 'provisioned', 'rejected'):
+    if normalized in ('approved', 'provisioned', 'active', 'rejected'):
         return normalized
     if normalized in ('not_found', 'missing', 'unknown'):
         return 'idle'
@@ -7478,7 +7478,7 @@ def _normalize_heartbeat_provision_status(raw_status: Any) -> str:
     normalized = str(raw_status or '').strip().lower()
     if normalized in ('pending', 'pending_approval'):
         return 'pending_approval'
-    if normalized in ('approved', 'provisioned', 'rejected', 'credentials_present'):
+    if normalized in ('approved', 'provisioned', 'active', 'rejected', 'credentials_present'):
         return normalized
     if normalized in ('not_found', 'missing', 'unknown'):
         return 'idle'
@@ -7538,10 +7538,10 @@ def _local_mode_fetch_authoritative_status(
     elif response.status_code in (401, 404):
         normalized_status = 'idle'
     elif response.status_code == 503:
-        if normalized_status not in ('approved', 'provisioned', 'pending_approval'):
+        if normalized_status not in ('approved', 'provisioned', 'active', 'pending_approval'):
             normalized_status = 'idle'
     elif not response.ok:
-        if normalized_status not in ('approved', 'provisioned', 'pending_approval', 'rejected'):
+        if normalized_status not in ('approved', 'provisioned', 'active', 'pending_approval', 'rejected'):
             normalized_status = 'idle'
 
     result.update({
@@ -7690,7 +7690,7 @@ def _send_local_mode_cloud_heartbeat_once(
             timeout_seconds=max(3, min(int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS), 8)),
         )
         authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
-    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
         provision_status = authoritative_status
 
     diagnostics = submission.get('diagnostics') if isinstance(submission.get('diagnostics'), dict) else {}
@@ -7874,7 +7874,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
             # Adaptive backoff: double interval up to MAX while steady; reset
             # to MIN whenever status changes, an error happens, or we're not
             # yet provisioned.
-            if steady_streak >= 1 and current_status in ('approved', 'provisioned'):
+            if steady_streak >= 1 and current_status in ('approved', 'provisioned', 'active'):
                 current_interval = min(
                     LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS,
                     max(current_interval * 2, LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS),
@@ -8127,7 +8127,7 @@ def api_local_mode_provisioning_status():
             _public_device = _public_devices.get(machine_id) if isinstance(_public_devices, dict) else None
             if isinstance(_public_device, dict):
                 _public_status = str(_public_device.get('status') or '').strip().lower()
-                if _public_status in ('pending_approval', 'pending', 'approved', 'provisioned', 'rejected'):
+                if _public_status in ('pending_approval', 'pending', 'approved', 'provisioned', 'active', 'rejected'):
                     if _public_status == 'pending':
                         _public_status = 'pending_approval'
                     authoritative_status = _public_status
@@ -8142,7 +8142,7 @@ def api_local_mode_provisioning_status():
                 f"Public device-status fallback lookup failed for machine_id={machine_id}: {_public_lookup_err}"
             )
 
-    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+    if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
         normalized_status = authoritative_status
     elif credentials_present:
         normalized_status = 'credentials_present'
@@ -8152,14 +8152,29 @@ def api_local_mode_provisioning_status():
     heartbeat_provision_status = _normalize_heartbeat_provision_status(
         heartbeat_summary.get('provision_status')
     )
-    if heartbeat_provision_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
+    if heartbeat_provision_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
         if normalized_status in ('idle', 'credentials_present'):
             normalized_status = heartbeat_provision_status
     elif heartbeat_provision_status == 'credentials_present' and normalized_status == 'idle':
         normalized_status = 'credentials_present'
 
-    if cloud_state.get('checked') and normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected'):
-        cached_status = 'pending' if normalized_status == 'pending_approval' else normalized_status
+    heartbeat_active = bool(
+        heartbeat_summary.get('available')
+        and heartbeat_summary.get('is_recent')
+        and heartbeat_summary.get('local_mode_possible')
+    )
+    device_status = normalized_status
+    response_status = normalized_status
+    if (
+        heartbeat_active
+        and normalized_status in ('approved', 'provisioned', 'active', 'credentials_present')
+    ):
+        response_status = 'active'
+        if device_status == 'credentials_present':
+            device_status = 'provisioned'
+
+    if cloud_state.get('checked') and device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
+        cached_status = 'pending' if device_status == 'pending_approval' else device_status
         current_cached_status = str(state.get('status') or '').strip().lower()
         if current_cached_status != cached_status:
             state['status'] = cached_status
@@ -8170,18 +8185,23 @@ def api_local_mode_provisioning_status():
                 logger.debug(f"Unable to sync local cached status from cloud authority: {persist_status_err}")
 
     if (
-        normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected')
+        device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected')
         and bool(cloud_state.get('checked'))
     ):
         status_source = 'cloud'
-    elif normalized_status in ('pending_approval', 'approved', 'provisioned', 'rejected', 'credentials_present'):
-        status_source = 'heartbeat' if heartbeat_provision_status == normalized_status else 'credentials'
+    elif response_status == 'active':
+        status_source = 'heartbeat'
+    elif device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected', 'credentials_present'):
+        status_source = 'heartbeat' if heartbeat_provision_status == device_status else 'credentials'
     else:
         status_source = 'idle'
 
     response = jsonify({
         'success': True,
-        'status': normalized_status,
+        'status': response_status,
+        'device_status': device_status,
+        'active': response_status == 'active',
+        'provisioned': response_status == 'active' or device_status in ('approved', 'provisioned', 'active'),
         'machine_id': machine_id,
         'cloud_url': cloud_url,
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
@@ -8259,7 +8279,7 @@ def api_local_mode_installer_redirect():
             'error': 'CLOUD_URL is not configured. Set CLOUD_URL in the backend .env and restart.'
         }), 503
 
-    if status not in ('approved', 'provisioned'):
+    if status not in ('approved', 'provisioned', 'active'):
         # Disk state may be stale (e.g. written as 'rejected' by an old bug or by
         # a previous failed auto-provision cycle).  Do a live cloud check before
         # blocking — if the cloud confirms 'approved' we can proceed and heal the
@@ -8272,7 +8292,7 @@ def api_local_mode_installer_redirect():
                 timeout_seconds=8,
             )
             live_status = str(live_check.get('status') or '').strip().lower()
-            if live_status in ('approved', 'provisioned'):
+            if live_status in ('approved', 'provisioned', 'active'):
                 # Heal the disk state so subsequent calls pass the fast path.
                 state['status'] = live_status
                 state['updated_at'] = datetime.now(timezone.utc).isoformat()
@@ -8395,17 +8415,28 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_status_code': cloud_state.get('status_code'),
         })
 
-    if credentials_present and authoritative_status in ('approved', 'provisioned'):
+    if credentials_present and authoritative_status in ('approved', 'provisioned', 'active'):
         effective_status = authoritative_status
-        _send_local_mode_cloud_heartbeat_once()
+        heartbeat_result = _send_local_mode_cloud_heartbeat_once()
+        heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
+        heartbeat_active = bool(
+            heartbeat_summary.get('available')
+            and heartbeat_summary.get('is_recent')
+            and heartbeat_summary.get('local_mode_possible')
+        )
+        response_status = 'active' if heartbeat_active else effective_status
         return jsonify({
             'success': True,
-            'status': effective_status,
-            'provisioned': effective_status == 'provisioned',
+            'status': response_status,
+            'device_status': effective_status,
+            'active': response_status == 'active',
+            'provisioned': response_status == 'active' or effective_status in ('approved', 'provisioned', 'active'),
             'machine_id': machine_id,
             'admin_portal_url': admin_portal_url,
             'cloud_url': cloud_url,
             'credentials_present': credentials_present,
+            'cloud_local_heartbeat': heartbeat_summary,
+            'heartbeat_sent': bool(heartbeat_result.get('sent')) if isinstance(heartbeat_result, dict) else False,
             'cloud_status_checked': bool(cloud_state.get('checked')),
             'cloud_status_code': cloud_state.get('status_code'),
         })
@@ -15008,9 +15039,23 @@ def provision_request():
     if notify_pending_request:
         notify_admin(machine_id, 'pending', token=approval_token)
 
+    heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
+    heartbeat_active = bool(
+        heartbeat_summary.get('available')
+        and heartbeat_summary.get('is_recent')
+        and heartbeat_summary.get('local_mode_possible')
+    )
+    public_device_status = (
+        'active'
+        if heartbeat_active and effective_status in ('approved', 'provisioned', 'active')
+        else effective_status
+    )
+
     return jsonify({
         'status': 'stored',
-        'device_status': effective_status,
+        'device_status': public_device_status,
+        'provisioning_status': effective_status,
+        'active': public_device_status == 'active',
         'machine_id': machine_id,
         'provision_secret': provision_secret,
         'secret_rotated': secret_rotated,

@@ -254,7 +254,7 @@ const HomePage = {
                 const latest = this._latestProvisioningStatus || {};
                 const status = String(latest.status || '').toLowerCase();
                 const machineId = String(latest.machineId || latest.machine_id || '').trim();
-                const isProvisioned = status === 'provisioned' || status === 'approved';
+                const isProvisioned = status === 'provisioned' || status === 'approved' || status === 'active';
 
                 if (!isProvisioned || !machineId) {
                     const message = 'Installer re-download is available after this device is fully provisioned.';
@@ -486,7 +486,7 @@ const HomePage = {
         const status = String((statusPayload && statusPayload.status) || 'idle').toLowerCase();
         const machineId = String((statusPayload && (statusPayload.machineId || statusPayload.machine_id)) || '').trim();
         const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
-            const isProvisioned = status === 'provisioned' || status === 'approved';
+            const isProvisioned = status === 'provisioned' || status === 'approved' || status === 'active';
 
         if (redownloadInstallerBtn) {
             const canRedownload = isProvisioned && !!machineId;
@@ -507,7 +507,10 @@ const HomePage = {
 
         machineEl.textContent = '';
 
-        if (status === 'provisioned') {
+        if (status === 'active') {
+            setBadge('badge badge-success', 'Active');
+            messageEl.textContent = 'Device provisioned and active. Local backend is running.';
+        } else if (status === 'provisioned') {
             setBadge('badge badge-success', 'Provisioned');
             messageEl.textContent = 'Approved and active. Cloud credentials are already configured on this backend.';
         } else if (status === 'approved') {

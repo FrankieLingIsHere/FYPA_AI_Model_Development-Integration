@@ -286,6 +286,9 @@ function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     if (normalized === 'approved') {
         return 'approved';
     }
+    if (normalized === 'active') {
+        return 'active';
+    }
     if (normalized === 'credentials_present') {
         return 'credentials_present';
     }
@@ -387,8 +390,12 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         fallback.credentialsPresent
     );
 
+    const rawStatus = String(input.status ?? '').trim().toLowerCase();
+    const statusCandidate = rawStatus === 'stored'
+        ? (input.device_status ?? input.provisioning_status ?? input.status)
+        : (input.status ?? input.device_status);
     let status = normalizeProvisioningStatus(
-        input.status ?? input.device_status ?? fallback.status,
+        statusCandidate ?? fallback.status,
         credentialsPresent
     );
 
@@ -435,7 +442,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         // the secret), or it came from a trusted source in this
         // session.
         const fallbackStatus = String(fallback.status || '').toLowerCase();
-        const previousIsApprovedLike = fallbackStatus === 'approved' || fallbackStatus === 'provisioned';
+        const previousIsApprovedLike = fallbackStatus === 'approved' || fallbackStatus === 'provisioned' || fallbackStatus === 'active';
         const incomingIsWeaker = (
             status === 'idle'
             || status === 'credentials_present'
@@ -490,7 +497,9 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
     if (!previousState || previousState.status === nextState.status) return;
     if (provisioningLastAnnouncedStatus === nextState.status) return;
 
-    if (nextState.status === 'provisioned') {
+    if (nextState.status === 'active') {
+        notifyApp('Device provisioned and active. Local backend is running.', 'success');
+    } else if (nextState.status === 'provisioned') {
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
     } else if (nextState.status === 'approved') {
         notifyApp('Local mode request is approved. You can re-issue installer access for this machine.', 'success');

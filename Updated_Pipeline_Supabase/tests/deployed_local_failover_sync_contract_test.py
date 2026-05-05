@@ -56,6 +56,7 @@ def ensure_source_contracts() -> None:
         "frontend IndexedDB draft handoff helper": "handoffLocalReportDraftsToCloud" in api_source,
         "adaptive reconnect invokes browser draft handoff": "handoffBrowserLocalDrafts" in app_js_source,
         "live drafts preserve detections for cloud continuation": "detections: Array.isArray(result.detections)" in live_source,
+        "live notification is not blocked by draft persistence": "void API.upsertLocalReportDraft" in live_source,
     }
     missing = [name for name, ok in required_markers.items() if not ok]
     if missing:

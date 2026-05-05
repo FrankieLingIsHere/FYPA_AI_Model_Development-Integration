@@ -934,7 +934,7 @@ const LivePage = {
                             if (typeof API !== 'undefined'
                                 && typeof API.upsertLocalReportDraft === 'function'
                                 && synthViolation.report_id) {
-                                await API.upsertLocalReportDraft({
+                                void API.upsertLocalReportDraft({
                                     ...synthViolation,
                                     original_blob: blob,
                                     has_original: true,
@@ -945,6 +945,8 @@ const LivePage = {
                                     status: 'pending',
                                     detections: Array.isArray(result.detections) ? result.detections : [],
                                     violation_count: Number(result.violation_count || friendlyMissing.length || 1)
+                                }).catch((draftErr) => {
+                                    console.debug('Could not persist local violation draft:', draftErr);
                                 });
                             }
                         } catch (draftErr) {
@@ -1326,7 +1328,7 @@ const LivePage = {
                 if (result && result.violations_detected && result.report_id) {
                     try {
                         if (typeof API !== 'undefined' && typeof API.upsertLocalReportDraft === 'function') {
-                            await API.upsertLocalReportDraft({
+                            void API.upsertLocalReportDraft({
                                 report_id: result.report_id,
                                 timestamp: new Date().toISOString(),
                                 status: 'pending',
@@ -1341,6 +1343,8 @@ const LivePage = {
                                 detections: Array.isArray(result.detections) ? result.detections : [],
                                 missing_ppe: [],
                                 violation_summary: 'PPE Violation Detected'
+                            }).catch((draftErr) => {
+                                console.debug('Could not persist uploaded violation draft:', draftErr);
                             });
                         }
                     } catch (draftErr) {

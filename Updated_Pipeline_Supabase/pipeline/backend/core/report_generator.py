@@ -1082,16 +1082,32 @@ class ReportGenerator:
         except Exception:
             pass
         
-        # Build detection description and identify missing PPE
+        # Build detection description and identify missing PPE.
+        # This block is injected into the NLP prompt so Gemini/Ollama never
+        # depend on caption text alone for YOLO-grounded PPE facts.
         detection_desc = []
         missing_ppe = []
         for det in detections:
+            if not isinstance(det, dict):
+                continue
             # Handle both 'confidence' and 'score' keys
             conf_value = det.get('confidence', det.get('score', 0.0))
-            class_name = det['class_name']
-            detection_desc.append(
-                f"- {class_name} (confidence: {conf_value:.2f})"
-            )
+            try:
+                conf_float = float(conf_value)
+            except (TypeError, ValueError):
+                conf_float = 0.0
+            class_name = str(det.get('class_name') or det.get('class') or 'Unknown').strip() or 'Unknown'
+            bbox = det.get('bbox') or det.get('box') or []
+            bbox_text = ''
+            if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+                try:
+                    bbox_text = (
+                        f", bbox=[{float(bbox[0]):.1f}, {float(bbox[1]):.1f}, "
+                        f"{float(bbox[2]):.1f}, {float(bbox[3]):.1f}]"
+                    )
+                except (TypeError, ValueError):
+                    bbox_text = ''
+            detection_desc.append(f"- {class_name} (confidence: {conf_float:.2f}{bbox_text})")
             
             # Identify missing PPE from NO-X detections
             if class_name.startswith('NO-'):
@@ -1127,6 +1143,14 @@ class ReportGenerator:
         # Combine detected and caption-identified missing PPE
         all_missing = list(set(missing_ppe + caption_missing))
         missing_ppe_text = f"**CONFIRMED MISSING PPE**: {', '.join(all_missing)} (Mark these as 'Missing' in PPE status)" if all_missing else "All required PPE present"
+        yolo_detection_text = "\n".join(detection_desc) if detection_desc else "- No YOLO detections were provided."
+        yolo_violation_classes = [
+            str((det or {}).get('class_name') or (det or {}).get('class') or '').strip()
+            for det in detections
+            if isinstance(det, dict)
+            and str((det or {}).get('class_name') or (det or {}).get('class') or '').strip().startswith('NO-')
+        ]
+        yolo_violation_text = ', '.join(yolo_violation_classes) if yolo_violation_classes else 'None'
         
         # Build context from DOSH documentation (primary source)
         dosh_text = ""
@@ -1157,8 +1181,17 @@ CONTEXT: Strict adherence to Malaysian Safety Standards (JKR/DOSH/CIDB).
 *** VLM VISUAL CAPTION (Primary Visual Evidence) ***
 "{vlm_caption}"
 
+*** YOLO DETECTION PAYLOAD (Hard Evidence - Do Not Ignore) ***
+Detected objects and PPE classifier outputs:
+{yolo_detection_text}
+
+YOLO violation classes: {yolo_violation_text}
+{missing_ppe_text}
+
+Use the VLM caption for scene/action context, but use this YOLO payload as the authoritative source for detected PPE compliance gaps, object counts, confidence values, and visible classifier outputs. If the VLM caption and YOLO disagree about missing PPE, explicitly prefer YOLO for PPE status and explain the uncertainty only when visibility is genuinely ambiguous.
+
 *** INSTRUCTION 1: SCENE CLASSIFICATION ***
-Analyze the VLM visual caption above. Based ONLY on the contents described in the caption, classify the scene into ONE of these categories:
+Analyze the VLM visual caption and YOLO detection payload above. Based ONLY on the provided visual evidence, classify the scene into ONE of these categories:
 1. "Construction Site": Active building/infrastructure construction with heavy equipment.
 2. "Roadside Work Zone": Active public highway/road with MOVING traffic. (Parked vehicles alone do NOT count.)
 3. "Work at Height": Scaffolding, roof, edge of building, suspended platform (>2m elevation).

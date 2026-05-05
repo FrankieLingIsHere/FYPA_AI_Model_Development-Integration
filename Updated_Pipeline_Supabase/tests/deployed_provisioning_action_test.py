@@ -251,6 +251,33 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
         self.assertTrue(rerequest_payload.get('active'))
 
+    def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
+        machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
+        provision_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        })
+        self.assertEqual(heartbeat.status_code, 200)
+
+        checkup = self.client.post('/api/provision/request', json={})
+        self.assertEqual(checkup.status_code, 200)
+        payload = checkup.json or {}
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('device_status'), 'active')
+        self.assertEqual(payload.get('machine_id'), machine_id)
+        self.assertTrue(payload.get('active'))
+        self.assertIn('Existing active local backend heartbeat found', payload.get('message') or '')
+
     def test_frontend_maps_active_provisioning_state(self):
         root = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
         settings_js = (root / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')

@@ -580,7 +580,12 @@ const ViolationMonitor = {
                 title: '✅ Report Complete!',
                 action: {
                     text: 'Open Report',
-                    onClick: `window.open('${API_CONFIG.BASE_URL}/report/${violation.report_id}', '_blank')`
+                    onClickFn: () => {
+                        const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
+                            ? API.getReportUrl(violation.report_id, violation)
+                            : `${API_CONFIG.BASE_URL}/report/${violation.report_id}`;
+                        window.open(url, '_blank');
+                    }
                 }
             }
         );

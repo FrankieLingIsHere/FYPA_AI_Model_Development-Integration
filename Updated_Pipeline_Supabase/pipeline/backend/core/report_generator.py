@@ -1533,7 +1533,7 @@ RESPONSE FORMAT (JSON):
             schema_regen_attempts = 0
             forced_read_timeout = max(
                 30,
-                int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '120') or 120),
+                int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '240') or 240),
             )
             connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
             request_timeout = (connect_timeout, forced_read_timeout)

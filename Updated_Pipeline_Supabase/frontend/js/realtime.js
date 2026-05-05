@@ -107,6 +107,18 @@ const RealtimeSync = {
         if (Date.now() < this.supabaseDisabledUntil) {
             return false;
         }
+        try {
+            const activeBase = (typeof API !== 'undefined' && typeof API._normalizeBaseUrl === 'function')
+                ? API._normalizeBaseUrl(API_CONFIG.BASE_URL || '')
+                : String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
+            const resolved = new URL(activeBase || window.location.origin, window.location.origin);
+            const host = String(resolved.hostname || '').toLowerCase();
+            if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') {
+                return false;
+            }
+        } catch (error) {
+            // If URL parsing fails, fall through to the normal capability check.
+        }
         return !!(window.supabase && cfg.url && cfg.anonKey);
     },
 

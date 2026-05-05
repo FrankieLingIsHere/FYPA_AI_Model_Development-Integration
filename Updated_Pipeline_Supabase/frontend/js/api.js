@@ -52,6 +52,103 @@ const API = {
         }
     },
 
+    _normalizeBaseUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw || (typeof window !== 'undefined' && raw === window.location.origin)) {
+            return '';
+        }
+        return raw.replace(/\/+$/, '');
+    },
+
+    getCloudBackendBaseUrl() {
+        return this._normalizeBaseUrl(
+            window.PPE_API_URL
+            || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL)
+            || ''
+        );
+    },
+
+    getLocalBackendBaseUrl() {
+        return this._normalizeBaseUrl((API_CONFIG && API_CONFIG.LOCAL_BACKEND_URL) || 'http://localhost:5000');
+    },
+
+    isLocalBackendBase(baseUrl) {
+        try {
+            const resolved = new URL(
+                this._normalizeBaseUrl(baseUrl) || window.location.origin,
+                window.location.origin
+            );
+            const host = String(resolved.hostname || '').toLowerCase();
+            return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
+        } catch (error) {
+            return false;
+        }
+    },
+
+    inferReportSourceScope(sourceHint = null) {
+        if (typeof sourceHint === 'string') {
+            const normalized = sourceHint.trim().toLowerCase();
+            if (['local', 'cloud', 'shared', 'synced_local'].includes(normalized)) {
+                return normalized;
+            }
+            if (normalized.includes('local synced')) return 'synced_local';
+            if (normalized.includes('cloud')) return 'cloud';
+            if (normalized.includes('local')) return 'local';
+            return '';
+        }
+
+        const record = sourceHint && typeof sourceHint === 'object' ? sourceHint : {};
+        const explicit = String(record.source_scope || record.report_scope || record.scope || '').trim().toLowerCase();
+        if (['local', 'cloud', 'shared', 'synced_local'].includes(explicit)) {
+            return explicit;
+        }
+
+        const sourceMarker = String(record.sync_source || record.source || record.source_reason || '').trim().toLowerCase();
+        if (sourceMarker === 'sync_local_cache' || sourceMarker === 'local_cache_sync' || sourceMarker === 'browser_local_draft_handoff') {
+            return 'synced_local';
+        }
+
+        const label = String(record.source_label || '').trim().toLowerCase();
+        if (label.includes('local synced')) return 'synced_local';
+        if (label.includes('cloud')) return 'cloud';
+        if (label.includes('local')) return 'local';
+
+        const deviceId = String(record.device_id || '').trim().toLowerCase();
+        if (
+            deviceId === 'local_cache'
+            || deviceId === 'offline_local_cache'
+            || deviceId === 'local_cache_sync'
+            || deviceId.startsWith('local_')
+            || deviceId.startsWith('offline_')
+        ) {
+            return 'local';
+        }
+        return '';
+    },
+
+    getReportBackendBase(sourceHint = null) {
+        const scope = this.inferReportSourceScope(sourceHint);
+        const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
+        const cloudBase = this.getCloudBackendBaseUrl();
+        const localBase = this.getLocalBackendBaseUrl();
+
+        if (scope === 'cloud' || scope === 'synced_local' || scope === 'shared') {
+            if (cloudBase) return cloudBase;
+            return this.isLocalBackendBase(currentBase) ? '' : currentBase;
+        }
+
+        if (scope === 'local') {
+            return localBase || currentBase;
+        }
+
+        return currentBase;
+    },
+
+    buildReportScopedUrl(path, sourceHint = null) {
+        const base = this.getReportBackendBase(sourceHint);
+        return `${base || ''}${path}`;
+    },
+
     canonicalViolationKey(rawKey) {
         if (!rawKey) return null;
 
@@ -217,6 +314,46 @@ const API = {
             weekDelta: deltas.weekDelta,
             recentViolations: sortedViolations.slice(0, 5)
         };
+    },
+
+    calculateStatsFromViolations(violations) {
+        const list = Array.isArray(violations) ? violations : [];
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekAgo = new Date(today);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+
+        const stats = {
+            total: list.length,
+            today: 0,
+            thisWeek: 0,
+            pending: 0,
+            completed: 0,
+            failed: 0,
+            severity: { high: 0, medium: 0, low: 0 },
+            breakdown: {},
+            recentViolations: []
+        };
+
+        list.forEach((v) => {
+            const vDate = new Date(v && v.timestamp ? v.timestamp : 0);
+            if (!Number.isNaN(vDate.getTime())) {
+                if (vDate >= today) stats.today += 1;
+                if (vDate >= weekAgo) stats.thisWeek += 1;
+            }
+
+            const status = String((v && (v.status || (v.has_report ? 'completed' : 'pending'))) || 'pending').toLowerCase();
+            if (status === 'completed') stats.completed += 1;
+            else if (status === 'failed') stats.failed += 1;
+            else stats.pending += 1;
+
+            const severity = String((v && v.severity) || 'HIGH').toLowerCase();
+            if (severity === 'high' || severity === 'critical') stats.severity.high += 1;
+            else if (severity === 'medium') stats.severity.medium += 1;
+            else stats.severity.low += 1;
+        });
+
+        return this.enrichStatsWithViolations(stats, list);
     },
 
     getCacheStorageKey(scope) {
@@ -509,13 +646,13 @@ const API = {
             if (violation.has_original) {
                 candidates.push({
                     key: `${violation.report_id}:original.jpg`,
-                    url: this.getImageUrl(violation.report_id, 'original.jpg')
+                    url: this.getImageUrl(violation.report_id, 'original.jpg', violation)
                 });
             }
             if (violation.has_annotated) {
                 candidates.push({
                     key: `${violation.report_id}:annotated.jpg`,
-                    url: this.getImageUrl(violation.report_id, 'annotated.jpg')
+                    url: this.getImageUrl(violation.report_id, 'annotated.jpg', violation)
                 });
             }
         });
@@ -626,11 +763,14 @@ const API = {
     },
 
     // Get violation by ID with status info
-    async getViolation(reportId) {
+    async getViolation(reportId, options = {}) {
         try {
-            const url = `${API_CONFIG.BASE_URL}/api/violation/${reportId}`;
+            const sourceHint = options.source || options.violation || options;
+            const base = this.getReportBackendBase(sourceHint);
+            const baseKey = base || 'same-origin';
+            const url = this.buildReportScopedUrl(`/api/violation/${reportId}`, sourceHint);
             return await this.fetchJsonWithCache(url, {
-                cacheScope: `violation:${reportId}`
+                cacheScope: `violation:${baseKey}:${reportId}`
             });
         } catch (error) {
             console.error('Error fetching violation:', error);
@@ -645,10 +785,13 @@ const API = {
             ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
             : 7000;
         const noCache = !!options.noCache;
-        const cacheScope = `report-status:${reportId}`;
+        const sourceHint = options.source || options.violation || options.sourceHint || options;
+        const base = this.getReportBackendBase(sourceHint);
+        const baseKey = base || 'same-origin';
+        const cacheScope = `report-status:${baseKey}:${reportId}`;
 
         try {
-            const url = `${API_CONFIG.BASE_URL}/api/report/${reportId}/status`;
+            const url = this.buildReportScopedUrl(`/api/report/${reportId}/status`, sourceHint);
             return noCache
                 ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
                 : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
@@ -719,6 +862,35 @@ const API = {
 
     // Get violation statistics with status breakdown
     async getStats() {
+        const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
+        const cloudBase = this.getCloudBackendBaseUrl();
+        const localBase = this.getLocalBackendBaseUrl();
+        if (cloudBase && this.isLocalBackendBase(currentBase)) {
+            try {
+                const safeLimit = 5000;
+                const urls = [
+                    `${cloudBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`,
+                    `${localBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`
+                ];
+                const results = await Promise.allSettled(
+                    urls.map((url) => this.fetchJsonNoCache(url, { timeoutMs: 9000 }))
+                );
+
+                let merged = [];
+                results.forEach((result) => {
+                    if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+                        merged = this._mergeOptimistically(merged, result.value, safeLimit);
+                    }
+                });
+                merged = await this.mergeLocalReportDrafts(merged, safeLimit);
+                if (merged.length > 0) {
+                    return this.calculateStatsFromViolations(merged);
+                }
+            } catch (unifiedError) {
+                console.warn('Unified local/cloud stats fetch failed, falling back to active backend:', unifiedError);
+            }
+        }
+
         try {
             // Try fetching pre-calculated stats from backend first (includes breakdown & deltas)
             const data = await this.fetchJsonWithCache(`${API_CONFIG.BASE_URL}/api/stats`, {
@@ -746,53 +918,7 @@ const API = {
 
         try {
             const violations = await this.getViolations({ limit: 1000 });
-
-            const now = new Date();
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const yesterday = new Date(today);
-            yesterday.setDate(yesterday.getDate() - 1);
-            const weekAgo = new Date(today);
-            weekAgo.setDate(weekAgo.getDate() - 7);
-
-            // Client-side fallback (Delta will be 0 as we don't have historical snapshots)
-            const stats = {
-                total: violations.length,
-                today: 0,
-                todayDelta: 0,
-                thisWeek: 0,
-                weekDelta: 0,
-                pending: 0,
-                completed: 0,
-                failed: 0,
-                severity: {
-                    high: 0,
-                    medium: 0,
-                    low: 0
-                },
-                breakdown: {}, // Cannot reliably calc breakdown client-side without deep parsing
-                recentViolations: violations.slice(0, 5)
-            };
-
-            violations.forEach(v => {
-                const vDate = new Date(v.timestamp);
-
-                if (vDate >= today) stats.today++;
-                if (vDate >= weekAgo) stats.thisWeek++;
-
-                // Count by status
-                const status = v.status || (v.has_report ? 'completed' : 'pending');
-                if (status === 'completed') stats.completed++;
-                else if (status === 'failed') stats.failed++;
-                else stats.pending++;
-
-                // Count by severity
-                const severity = (v.severity || 'HIGH').toLowerCase();
-                if (severity === 'high' || severity === 'critical') stats.severity.high++;
-                else if (severity === 'medium') stats.severity.medium++;
-                else stats.severity.low++;
-            });
-
-            return this.enrichStatsWithViolations(stats, violations);
+            return this.calculateStatsFromViolations(violations);
         } catch (error) {
             console.error('Error calculating stats:', error);
             return {
@@ -810,18 +936,19 @@ const API = {
     },
 
     // Get image URL
-    getImageUrl(reportId, filename) {
-        return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.IMAGE(reportId, filename)}`;
+    getImageUrl(reportId, filename, sourceHint = null) {
+        return this.buildReportScopedUrl(API_CONFIG.ENDPOINTS.IMAGE(reportId, filename), sourceHint);
     },
 
     // Get report URL
-    getReportUrl(reportId) {
-        return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REPORT(reportId)}`;
+    getReportUrl(reportId, sourceHint = null) {
+        return this.buildReportScopedUrl(API_CONFIG.ENDPOINTS.REPORT(reportId), sourceHint);
     },
 
-    async prefetchReport(reportId) {
+    async prefetchReport(reportId, options = {}) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/prefetch`, {
+            const sourceHint = options.source || options.violation || options.sourceHint || options;
+            const response = await fetch(this.buildReportScopedUrl(`/api/report/${reportId}/prefetch`, sourceHint), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 cache: 'no-store'

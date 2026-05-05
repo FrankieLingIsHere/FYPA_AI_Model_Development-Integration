@@ -451,12 +451,12 @@ const ReportsPage = {
             const reportId = String(v.report_id || '').trim();
             if (!reportId) return;
             setTimeout(() => {
-                this.prefetchReport(reportId);
+                this.prefetchReport(reportId, v);
             }, 120 * idx);
         });
     },
 
-    async prefetchReport(reportId) {
+    async prefetchReport(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
         if (this.prefetchState.completed.has(rid)) return;
@@ -464,7 +464,7 @@ const ReportsPage = {
 
         this.prefetchState.inFlight.add(rid);
         try {
-            const result = await API.prefetchReport(rid);
+            const result = await API.prefetchReport(rid, { source: sourceHint });
             if (result && result.success) {
                 this.prefetchState.completed.add(rid);
             }
@@ -785,20 +785,21 @@ const ReportsPage = {
         }
     },
 
-    async openReport(reportId) {
+    async openReport(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
+        const resolvedSourceHint = sourceHint || this.violations.find((v) => String(v.report_id) === rid) || null;
 
         try {
             await Promise.race([
-                this.prefetchReport(rid),
+                this.prefetchReport(rid, resolvedSourceHint),
                 new Promise((resolve) => setTimeout(resolve, 250))
             ]);
         } catch (error) {
             // Fall through to open even if prefetch fails or times out.
         }
 
-        const url = API.getReportUrl(reportId);
+        const url = API.getReportUrl(reportId, resolvedSourceHint);
         window.open(url, '_blank');
         this.notify(`Opening report ${reportId}`, 'info');
     },
@@ -970,7 +971,7 @@ const ReportsPage = {
     // Handle report click with fallback for generating reports
     handleReportClick(violation) {
         if (this.isReportReady(violation)) {
-            this.openReport(violation.report_id);
+            this.openReport(violation.report_id, violation);
         } else {
             this.showGeneratingModal(violation);
         }
@@ -986,7 +987,7 @@ const ReportsPage = {
         let detailedError = violation.error_message;
         if (this.normalizeStatus(violation) === 'failed') {
             try {
-                const data = await API.getReportStatus(violation.report_id);
+                const data = await API.getReportStatus(violation.report_id, { source: violation });
                 detailedError = (data && data.error_message) || detailedError;
             } catch (e) {
                 console.error('Failed to fetch detailed error:', e);
@@ -1392,7 +1393,8 @@ const ReportsPage = {
     },
 
     async pollReportProgress(reportId, { autoOpen = false } = {}) {
-        const data = await API.getReportStatus(reportId);
+        const sourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
+        const data = await API.getReportStatus(reportId, { source: sourceHint });
         const status = this.normalizeStatusValue(data && data.status, !!(data && data.has_report));
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
@@ -1416,7 +1418,7 @@ const ReportsPage = {
                     NotificationManager.reportReady(reportId, {
                         action: {
                             text: 'Open Report',
-                            onClickFn: () => this.openReport(reportId)
+                            onClickFn: () => this.openReport(reportId, sourceHint)
                         }
                     });
                 }
@@ -1455,7 +1457,7 @@ const ReportsPage = {
             this.setModalStatusText('Report completed. Opening now...');
             await this.loadReports({ noCache: true, targetedReportId: reportId });
             if (autoOpen) {
-                this.openReport(reportId);
+                this.openReport(reportId, sourceHint);
                 this.closeModal();
             }
             return true;
@@ -1647,7 +1649,7 @@ const ReportsPage = {
                 ? TimezoneManager.formatDateTime(timestamp)
                 : new Date(timestamp).toLocaleString())
             : 'Unknown time';
-        const imageUrl = violation.local_image_url || API.getImageUrl(violation.report_id, 'annotated.jpg');
+        const imageUrl = violation.local_image_url || API.getImageUrl(violation.report_id, 'annotated.jpg', violation);
         const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated);
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);

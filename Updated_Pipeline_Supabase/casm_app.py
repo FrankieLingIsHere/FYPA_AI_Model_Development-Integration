@@ -36,6 +36,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import json
 import time
 import uuid
+from collections import deque
 
 # Import timezone utility (configurable via .env)
 from timezone_utils import get_local_time, to_local_time, get_timezone_info
@@ -72,6 +73,9 @@ report_progress = {
     'updated_at': None
 }
 report_progress_lock = Lock()
+
+realtime_event_lock = Lock()
+realtime_report_events = deque(maxlen=80)
 
 # Global startup/readiness tracking for frontend loading gate
 startup_state_lock = Lock()
@@ -3240,6 +3244,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'detection_count': len(detections or []),
             'status': 'pending',
             'source_scope': 'local' if force_local_scope else 'cloud',
+            'source_label': 'Local' if force_local_scope else 'Cloud',
             'sync_source': 'local_pipeline' if force_local_scope else 'live_capture',
             'has_original': True,
             'has_annotated': False,
@@ -3252,6 +3257,8 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             logger.info(f"Preliminary metadata saved: {metadata_path}")
         except Exception as meta_err:
             logger.warning(f"Could not save preliminary metadata for {report_id}: {meta_err}")
+
+        _push_realtime_report_event(preliminary_metadata, event_type='violation_detected')
 
         def _mark_local_capture_failed(reason: str):
             try:
@@ -3809,8 +3816,10 @@ def _handle_local_cache_sync_job(
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
     violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
 
-    source_scope_marker = str(queued_source_scope or 'local').strip().lower() or 'local'
     sync_source_marker = str(queued_sync_source or 'sync_local_cache').strip().lower() or 'sync_local_cache'
+    source_scope_marker = str(queued_source_scope or 'synced_local').strip().lower() or 'synced_local'
+    if _is_local_cache_sync_job_marker(sync_source=sync_source_marker, device_id=queue_device_id):
+        source_scope_marker = 'synced_local'
 
     metadata: Dict[str, Any] = {
         'detections': detections,
@@ -4971,10 +4980,23 @@ def api_violations():
                 or device_key_for_repair.startswith('local_')
                 or device_key_for_repair.startswith('offline_')
             )
+            source_marker_for_repair = str(
+                detection_data.get('source')
+                or detection_data.get('sync_source')
+                or ''
+            ).strip().lower()
+            is_local_sync_marker_for_repair = source_marker_for_repair in {
+                'sync_local_cache',
+                'local_cache_sync',
+                'offline_local_cache_sync',
+                'sync_local_cache_partial',
+                'browser_local_draft_handoff',
+            }
             if (
                 explicit_scope == 'synced_local'
                 and active_profile != 'local'
                 and not is_local_device_for_repair
+                and not is_local_sync_marker_for_repair
                 and has_cloud_artifacts
             ):
                 return 'cloud', 'repaired_synced_local_in_cloud_mode'
@@ -6054,6 +6076,47 @@ def _read_generation_failure_reason(failure_path: Path) -> Optional[str]:
         return None
 
 
+def _push_realtime_report_event(report_row: Dict[str, Any], event_type: str = 'violation_detected') -> None:
+    """Publish an in-memory realtime row immediately after YOLO capture."""
+    if not isinstance(report_row, dict):
+        return
+
+    report_id = str(report_row.get('report_id') or '').strip()
+    if not report_id:
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_row = {
+        'report_id': report_id,
+        'status': str(report_row.get('status') or 'pending').strip().lower() or 'pending',
+        'error_message': report_row.get('error_message'),
+        'timestamp': report_row.get('timestamp') or now_iso,
+        'updated_at': report_row.get('updated_at') or now_iso,
+        'has_original': bool(report_row.get('has_original', True)),
+        'has_annotated': bool(report_row.get('has_annotated', False)),
+        'has_report': bool(report_row.get('has_report', False)),
+        'violation_count': report_row.get('violation_count'),
+        'person_count': report_row.get('person_count'),
+        'missing_ppe': list(report_row.get('missing_ppe') or []),
+        'ppe_tags': list(report_row.get('ppe_tags') or []),
+        'violation_summary': report_row.get('violation_summary') or 'PPE Violation Detected',
+        'violation_type': report_row.get('violation_type') or 'PPE Violation',
+        'device_id': report_row.get('device_id'),
+        'source_scope': report_row.get('source_scope'),
+        'source_label': report_row.get('source_label'),
+        'event_type': event_type,
+    }
+
+    with realtime_event_lock:
+        realtime_report_events.append(event_row)
+
+
+def _get_realtime_report_events(limit: int = 40) -> List[Dict[str, Any]]:
+    with realtime_event_lock:
+        rows = list(realtime_report_events)[-max(1, int(limit or 1)):]
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
 def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
     """Collect local report lifecycle rows from filesystem artifacts."""
     if not VIOLATIONS_DIR.exists():
@@ -6234,7 +6297,7 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
     queue_size = int(queue_data.get('queue_size') or 0)
     active_local = queue_size > 0 or progress_status in ('waiting', 'processing', 'generating')
 
-    report_rows = []
+    report_rows = _get_realtime_report_events(limit=max(40, int(limit) * 2))
     if (
         db_manager is not None
         and getattr(db_manager, 'conn', None) is not None
@@ -6248,7 +6311,7 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
         if should_poll:
             now_epoch = time.time()
             if cached_rows and (now_epoch - cached_at) < REALTIME_SUPABASE_POLL_INTERVAL_SECONDS:
-                report_rows = cached_rows
+                report_rows = list(report_rows) + list(cached_rows)
             else:
                 try:
                     with db_manager.conn.cursor() as cur:
@@ -6263,6 +6326,8 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                         )
                         rows = cur.fetchall()
 
+                    existing_realtime_rows = list(report_rows)
+                    report_rows = existing_realtime_rows
                     for row in rows:
                         report_rows.append({
                             'report_id': row.get('report_id'),
@@ -6274,9 +6339,9 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                     _set_realtime_supabase_cached_rows(report_rows)
                 except Exception as e:
                     logger.debug(f"Realtime report snapshot query failed: {e}")
-                    report_rows = cached_rows
+                    report_rows = list(report_rows) + list(cached_rows)
         else:
-            report_rows = cached_rows
+            report_rows = list(report_rows) + list(cached_rows)
 
     local_rows = _collect_local_report_state_rows(limit=max(40, int(limit) * 2))
     if local_rows:
@@ -6322,6 +6387,41 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
             }
             report_rows.append(snapshot_row)
             by_id[report_id] = snapshot_row
+
+    if report_rows:
+        status_priority = {
+            'completed': 50,
+            'failed': 45,
+            'skipped': 45,
+            'partial': 40,
+            'generating': 35,
+            'processing': 35,
+            'pending': 25,
+            'queued': 25,
+            'unknown': 0,
+        }
+        deduped_rows: Dict[str, Dict[str, Any]] = {}
+        for row in report_rows:
+            report_id = str((row or {}).get('report_id') or '').strip()
+            if not report_id:
+                continue
+            existing = deduped_rows.get(report_id)
+            if not existing:
+                deduped_rows[report_id] = row
+                continue
+
+            row_status = str(row.get('status') or '').strip().lower()
+            existing_status = str(existing.get('status') or '').strip().lower()
+            row_updated = str(row.get('updated_at') or row.get('timestamp') or '')
+            existing_updated = str(existing.get('updated_at') or existing.get('timestamp') or '')
+            if (
+                status_priority.get(row_status, 0) > status_priority.get(existing_status, 0)
+                or row_updated > existing_updated
+            ):
+                deduped_rows[report_id] = {**existing, **row}
+            else:
+                deduped_rows[report_id] = {**row, **existing}
+        report_rows = list(deduped_rows.values())
 
     report_rows.sort(
         key=lambda item: str(item.get('updated_at') or item.get('timestamp') or ''),
@@ -14840,6 +14940,27 @@ def provision_request():
     data = request.get_json() or {}
     machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
+        heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot('')
+        heartbeat_machine_id = _local_mode_normalize_machine_id(heartbeat_summary.get('machine_id'))
+        heartbeat_active = bool(
+            heartbeat_machine_id
+            and heartbeat_summary.get('available')
+            and heartbeat_summary.get('is_recent')
+            and heartbeat_summary.get('local_mode_possible')
+            and _normalize_heartbeat_provision_status(heartbeat_summary.get('provision_status')) in (
+                'approved', 'provisioned', 'active', 'credentials_present'
+            )
+        )
+        if heartbeat_active:
+            return jsonify({
+                'status': 'stored',
+                'device_status': 'active',
+                'provisioning_status': _normalize_heartbeat_provision_status(heartbeat_summary.get('provision_status')),
+                'active': True,
+                'machine_id': heartbeat_machine_id,
+                'cloud_local_heartbeat': heartbeat_summary,
+                'message': 'Existing active local backend heartbeat found; no new provisioning request was created.',
+            })
         return jsonify({'error': 'Missing machine_id'}), 400
 
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):

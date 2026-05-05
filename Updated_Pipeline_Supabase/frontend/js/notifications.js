@@ -796,7 +796,12 @@ const NotificationManager = {
                 title: '✅ Complete',
                 action: {
                     text: 'Open',
-                    onClick: `window.open('${API_CONFIG.BASE_URL}/report/${reportId}', '_blank')`
+                    onClickFn: () => {
+                        const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
+                            ? API.getReportUrl(reportId)
+                            : `${API_CONFIG.BASE_URL}/report/${reportId}`;
+                        window.open(url, '_blank');
+                    }
                 },
                 dedupeKey: reportId ? `report-ready:${reportId}` : 'report-ready:unknown',
                 dedupeTtlMs: 60000,

@@ -1514,6 +1514,13 @@ RESPONSE FORMAT (JSON):
             try:
                 is_running = bool(check_running())
                 model_ready = bool(check_model(self.model)) if is_running and callable(check_model) else is_running
+                logger.info(
+                    "[NLP:ollama] preflight model=%s running=%s model_ready=%s api_url=%s",
+                    self.model,
+                    is_running,
+                    model_ready,
+                    self.api_url,
+                )
                 if (not is_running or not model_ready) and callable(recovery_helper):
                     recovery_helper(
                         reason='NLP provider preflight',
@@ -1623,6 +1630,13 @@ RESPONSE FORMAT (JSON):
                             continue
                         return None, last_error
 
+                    logger.info(
+                        "[NLP:ollama] parsed JSON model=%s attempt=%s output_chars=%s keys=%s",
+                        model_name,
+                        attempt_no,
+                        len(str(raw_json or '')),
+                        sorted(list(nlp_response.keys()))[:12],
+                    )
                     return nlp_response, None
 
                 except json.JSONDecodeError as e:
@@ -1684,7 +1698,7 @@ RESPONSE FORMAT (JSON):
 
         if not nlp_response:
             self.last_nlp_error = error_detail
-            logger.error(error_detail or "Ollama NLP analysis failed")
+            logger.error("[NLP:ollama] failed model_chain=%s error=%s", model_chain, error_detail or "Ollama NLP analysis failed")
             return None
 
         self.last_ollama_model_used = selected_model or self.model
@@ -1720,7 +1734,11 @@ RESPONSE FORMAT (JSON):
             )
 
         self.last_nlp_error = None
-        logger.info("[OK] Ollama NLP analysis completed with model '%s'", self.last_ollama_model_used)
+        logger.info(
+            "[NLP:ollama] completed with model=%s keys=%s",
+            self.last_ollama_model_used,
+            sorted(list(nlp_response.keys()))[:12],
+        )
         return nlp_response
 
     def get_safety_summary_prompt(self, report_data: Dict[str, Any]) -> str:
@@ -1908,6 +1926,19 @@ RESPONSE FORMAT (JSON):
             else:
                 effective_provider_order = ['gemini', 'model_api', 'ollama', 'local']
 
+        logger.info(
+            "[NLP_ROUTE] report=%s routing_profile=%s force_local_nlp=%s strict_local=%s "
+            "allow_nlp_fallback=%s allow_forced_local_fallback=%s providers=%s prompt_chars=%s",
+            report_id,
+            self.routing_profile or 'cloud',
+            force_local_nlp,
+            self.strict_local_profile,
+            self.allow_nlp_fallback,
+            allow_forced_local_fallback,
+            effective_provider_order,
+            len(prompt or ''),
+        )
+
         for provider in effective_provider_order:
             if nlp_analysis:
                 break
@@ -1963,7 +1994,13 @@ RESPONSE FORMAT (JSON):
                     self.last_nlp_error = detail
                     logger.warning(f"Skipping Gemini provider: {detail}")
             elif provider_name == 'ollama':
-                logger.info("Trying Ollama NLP API...")
+                logger.info(
+                    "[NLP:ollama] report=%s trying Ollama NLP API model=%s api_url=%s fast_mode=%s",
+                    report_id,
+                    self.model,
+                    self.api_url,
+                    force_local_nlp,
+                )
                 nlp_analysis = self._call_ollama_api(
                     prompt,
                     allow_local_fallback=False,
@@ -2004,8 +2041,30 @@ RESPONSE FORMAT (JSON):
             allow_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
             if self.strict_report_generation and not allow_fallback:
                 self.last_nlp_fallback_reason = detail
+                logger.error(
+                    "[NLP_FALLBACK_BLOCKED] report=%s strict_report_generation=%s allow_fallback=%s "
+                    "routing_profile=%s providers=%s reason=%s",
+                    report_id,
+                    self.strict_report_generation,
+                    allow_fallback,
+                    self.routing_profile or 'cloud',
+                    effective_provider_order,
+                    detail,
+                )
                 raise RuntimeError(f"NLP analysis failed: {detail}")
-            logger.warning(f"NLP analysis failed ({detail}), using fallback")
+            logger.warning(
+                "[NLP_FALLBACK_APPLIED] report=%s allow_nlp_fallback=%s force_local_nlp=%s "
+                "allow_forced_local_fallback=%s strict_report_generation=%s routing_profile=%s "
+                "providers=%s reason=%s",
+                report_id,
+                self.allow_nlp_fallback,
+                force_local_nlp,
+                allow_forced_local_fallback,
+                self.strict_report_generation,
+                self.routing_profile or 'cloud',
+                effective_provider_order,
+                detail,
+            )
             nlp_analysis = self._generate_fallback_analysis(report_data)
             self.last_nlp_provider = 'fallback'
             self.last_nlp_model = 'rule-based-fallback'

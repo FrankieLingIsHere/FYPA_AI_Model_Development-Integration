@@ -4,6 +4,7 @@ const ReportsPage = {
     providerRuntimeInterval: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
+    localSyncHandler: null,
     timezoneChangeHandler: null,
     realtimeRefreshTimer: null,
     pendingFocusRequest: null,
@@ -20,6 +21,7 @@ const ReportsPage = {
         completed: new Set(),
         inFlight: new Set()
     },
+    cacheWarmTimer: null,
     modalRuntime: {
         reportId: null,
         pollTimer: null,
@@ -134,6 +136,9 @@ const ReportsPage = {
         this.realtimeConnectionHandler = () => this.syncFallbackPolling();
         window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
 
+        this.localSyncHandler = (event) => this.applyLocalSyncUpdate((event && event.detail) || {});
+        window.addEventListener('ppe-local-report-sync:update', this.localSyncHandler);
+
         this.timezoneChangeHandler = () => this.renderReports();
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
     },
@@ -146,6 +151,10 @@ const ReportsPage = {
         if (this.pendingFocusRetryTimer) {
             clearTimeout(this.pendingFocusRetryTimer);
             this.pendingFocusRetryTimer = null;
+        }
+        if (this.cacheWarmTimer) {
+            clearTimeout(this.cacheWarmTimer);
+            this.cacheWarmTimer = null;
         }
         if (this.providerRuntimeInterval) {
             clearInterval(this.providerRuntimeInterval);
@@ -162,6 +171,10 @@ const ReportsPage = {
         if (this.realtimeConnectionHandler) {
             window.removeEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
             this.realtimeConnectionHandler = null;
+        }
+        if (this.localSyncHandler) {
+            window.removeEventListener('ppe-local-report-sync:update', this.localSyncHandler);
+            this.localSyncHandler = null;
         }
         if (this.timezoneChangeHandler) {
             window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
@@ -223,7 +236,68 @@ const ReportsPage = {
             await this.hydrateFocusedReport(targetedReportId, { noCache: true });
         }
         this.renderReports();
+        this.scheduleReportPrefetch({ reason: noCache ? 'fresh-load' : 'cached-load' });
         this.applyPendingFocusRequest();
+    },
+
+    applyLocalSyncUpdate(detail = {}) {
+        const reportIds = Array.from(new Set([
+            ...(Array.isArray(detail.report_ids) ? detail.report_ids : []),
+            ...(Array.isArray(detail.queued_report_ids) ? detail.queued_report_ids : []),
+            ...(Array.isArray(detail.completed_report_ids) ? detail.completed_report_ids : []),
+            ...(detail.report_id ? [detail.report_id] : [])
+        ].map((id) => String(id || '').trim()).filter(Boolean)));
+
+        if (!reportIds.length) {
+            if (detail && detail.success) {
+                setTimeout(() => this.loadReports({ noCache: true }), 1200);
+            }
+            return;
+        }
+
+        const idSet = new Set(reportIds);
+        let changed = false;
+        this.violations = this.violations.map((violation) => {
+            const reportId = String((violation && violation.report_id) || '').trim();
+            if (!idSet.has(reportId)) return violation;
+            changed = true;
+            return {
+                ...violation,
+                source_scope: 'synced_local',
+                source_label: 'Local Synced',
+                origin: 'local_synced',
+                sync_source: detail.sync_source || violation.sync_source || 'sync_local_cache',
+                source: detail.source || violation.source || 'sync_local_cache',
+                sync_state: detail.sync_state || violation.sync_state || 'cloud_sync_queued',
+                updated_at: new Date().toISOString()
+            };
+        });
+
+        if (changed) {
+            this.renderReports();
+            this.notify(`${reportIds.length} local report${reportIds.length === 1 ? '' : 's'} queued for cloud sync.`, 'success', {
+                dedupeKey: `local-sync-${reportIds.join('-')}`,
+                dedupeTtlMs: 12000
+            });
+        }
+
+        reportIds.slice(0, 8).forEach((reportId, index) => {
+            const warmCache = async (attempt = 1) => {
+                if (typeof API !== 'undefined' && typeof API.cacheReportHtml === 'function') {
+                    const cached = await API.cacheReportHtml(reportId, {
+                        source_scope: 'synced_local',
+                        origin: 'local_synced',
+                        sync_source: 'sync_local_cache'
+                    });
+                    if (!cached && attempt < 3) {
+                        setTimeout(() => warmCache(attempt + 1), 2500 * attempt);
+                    }
+                }
+            };
+            setTimeout(() => warmCache(1), 1000 + (index * 600));
+        });
+
+        setTimeout(() => this.loadReports({ noCache: true }), 1800);
     },
 
     hasReportInList(reportId) {
@@ -295,6 +369,10 @@ const ReportsPage = {
                 const bTime = Date.parse(b.timestamp || '') || 0;
                 return bTime - aTime;
             });
+
+            if (this.isReportReady(hydrated)) {
+                void this.prefetchReport(rid, hydrated);
+            }
         } catch (error) {
             console.debug('Focused report hydration failed:', error);
         }
@@ -442,18 +520,46 @@ const ReportsPage = {
         return merged;
     },
 
-    scheduleReportPrefetch() {
+    scheduleReportPrefetch(options = {}) {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+        if (this.cacheWarmTimer) {
+            clearTimeout(this.cacheWarmTimer);
+            this.cacheWarmTimer = null;
+        }
+
+        const seen = new Set();
         const ready = this.violations
             .filter((v) => this.isReportReady(v))
-            .slice(0, 8);
+            .filter((v) => {
+                const reportId = String((v && v.report_id) || '').trim();
+                if (!reportId || seen.has(reportId)) return false;
+                seen.add(reportId);
+                const scope = this.inferSourceScope(v);
+                return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
+            })
+            .slice(0, Math.max(8, Math.min(Number(options.limit || 60), 120)));
 
-        ready.forEach((v, idx) => {
-            const reportId = String(v.report_id || '').trim();
-            if (!reportId) return;
-            setTimeout(() => {
-                this.prefetchReport(reportId, v);
-            }, 120 * idx);
-        });
+        let index = 0;
+        const pump = () => {
+            const batch = ready.slice(index, index + 4);
+            batch.forEach((v, batchIndex) => {
+                const reportId = String(v.report_id || '').trim();
+                if (!reportId) return;
+                setTimeout(() => {
+                    this.prefetchReport(reportId, v);
+                }, 120 * batchIndex);
+            });
+            index += batch.length;
+            if (index < ready.length) {
+                this.cacheWarmTimer = setTimeout(pump, 1500);
+            } else {
+                this.cacheWarmTimer = null;
+            }
+        };
+
+        if (ready.length) {
+            this.cacheWarmTimer = setTimeout(pump, 250);
+        }
     },
 
     async prefetchReport(reportId, sourceHint = null) {
@@ -746,9 +852,9 @@ const ReportsPage = {
         if (explicit) return explicit;
 
         const sourceMarker = String(
-            (violation && (violation.sync_source || violation.source || violation.source_reason)) || ''
+            (violation && (violation.origin || violation.sync_source || violation.source || violation.source_reason)) || ''
         ).trim().toLowerCase();
-        if (sourceMarker === 'sync_local_cache' || sourceMarker === 'local_cache_sync') {
+        if (sourceMarker === 'local_synced' || sourceMarker === 'sync_local_cache' || sourceMarker === 'local_cache_sync') {
             return 'synced_local';
         }
 
@@ -789,6 +895,40 @@ const ReportsPage = {
         const rid = String(reportId || '').trim();
         if (!rid) return;
         const resolvedSourceHint = sourceHint || this.violations.find((v) => String(v.report_id) === rid) || null;
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        const sourceScope = typeof API !== 'undefined' && typeof API.inferReportSourceScope === 'function'
+            ? API.inferReportSourceScope(resolvedSourceHint)
+            : this.inferSourceScope(resolvedSourceHint);
+
+        if (
+            offline
+            && sourceScope === 'synced_local'
+            && typeof API !== 'undefined'
+            && typeof API.getOfflineCachedReportUrl === 'function'
+        ) {
+            const cachedUrl = await API.getOfflineCachedReportUrl(rid, resolvedSourceHint);
+            if (cachedUrl) {
+                window.open(cachedUrl, '_blank');
+                this.notify(`Opening cached report ${rid}`, 'info');
+                return;
+            }
+        }
+
+        if (typeof API !== 'undefined' && API.isCloudReportUnavailableOffline(resolvedSourceHint)) {
+            const cachedUrl = typeof API.getOfflineCachedReportUrl === 'function'
+                ? await API.getOfflineCachedReportUrl(rid, resolvedSourceHint)
+                : null;
+            if (cachedUrl) {
+                window.open(cachedUrl, '_blank');
+                this.notify(`Opening cached report ${rid}`, 'info');
+                return;
+            }
+            this.notify('Cloud report details are unavailable while offline.', 'warning', {
+                dedupeKey: `cloud-report-offline-${rid}`,
+                dedupeTtlMs: 10000
+            });
+            return;
+        }
 
         try {
             await Promise.race([
@@ -1662,6 +1802,10 @@ const ReportsPage = {
         );
         const isReady = this.isReportReady(violation);
         const processAction = this.getProcessAction(violation);
+        const missingPpeLabels = (typeof API !== 'undefined' && typeof API.extractMissingPpeLabels === 'function')
+            ? API.extractMissingPpeLabels(violation)
+            : (Array.isArray(violation.missing_ppe) ? violation.missing_ppe : []);
+        const displayViolationCount = Number(violation.violation_count || missingPpeLabels.length || 0);
         const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
                              (violation.severity === 'MEDIUM' ? 'warning' : 'info');
         
@@ -1736,11 +1880,11 @@ const ReportsPage = {
 
                         <p style="margin: 0; color: var(--text-color); font-size: 0.9rem;">
                             <i class="fas fa-exclamation-triangle" style="color: var(--error-color);"></i>
-                            <strong>${violation.violation_count || 0} Violation${violation.violation_count !== 1 ? 's' : ''}</strong>
+                            <strong>${displayViolationCount} Violation${displayViolationCount !== 1 ? 's' : ''}</strong>
                         </p>
-                        ${violation.missing_ppe && violation.missing_ppe.length > 0 ? `
+                        ${missingPpeLabels.length > 0 ? `
                             <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                                ${violation.missing_ppe.map(ppe => `
+                                ${missingPpeLabels.map(ppe => `
                                     <span class="badge badge-danger" style="font-size: 0.75rem;">
                                         <i class="fas fa-times-circle"></i> No ${ppe}
                                     </span>

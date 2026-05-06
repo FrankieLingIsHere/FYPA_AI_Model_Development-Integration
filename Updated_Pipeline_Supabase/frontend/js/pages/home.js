@@ -437,7 +437,11 @@ const HomePage = {
 
         // /api/stats returns `completed` for finished reports — not totalReports/reportsTotal.
         // Secondary fallback: sum completed + pending so the number is never zero when data exists.
-        const totalReports = Number(stats.completed)
+        const totalReports = Number(stats.reportsGenerated)
+            || Number(stats.reports_generated)
+            || Number(stats.totalReports)
+            || Number(stats.reportsTotal)
+            || Number(stats.completed)
             || (Number(stats.completed || 0) + Number(stats.pending || 0))
             || (Array.isArray(pendingReports) ? pendingReports.length : 0)
             || 0;

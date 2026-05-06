@@ -167,19 +167,56 @@ const AnalyticsPage = {
         }
     },
 
+    normalizeStats(stats = {}, violations = []) {
+        const list = Array.isArray(violations) ? violations : [];
+        const severity = stats.severity && typeof stats.severity === 'object'
+            ? stats.severity
+            : {};
+        const completedFromList = list.filter((v) => {
+            const status = String((v && (v.status || (v.has_report ? 'completed' : ''))) || '').toLowerCase();
+            return status === 'completed' || status === 'ready';
+        }).length;
+        const pendingFromList = list.filter((v) => {
+            const status = String((v && (v.status || (v.has_report ? 'completed' : 'pending'))) || '').toLowerCase();
+            return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
+        }).length;
+
+        const reportsGenerated = Number(stats.reportsGenerated)
+            || Number(stats.reports_generated)
+            || Number(stats.totalReports)
+            || Number(stats.reportsTotal)
+            || Number(stats.completed)
+            || completedFromList
+            || 0;
+
+        return {
+            ...stats,
+            total: Number(stats.total) || list.length || 0,
+            pending: Number(stats.pending) || pendingFromList || 0,
+            completed: Number(stats.completed) || reportsGenerated || 0,
+            reportsGenerated,
+            severity: {
+                high: Number(severity.high) || 0,
+                medium: Number(severity.medium) || 0,
+                low: Number(severity.low) || 0
+            }
+        };
+    },
+
     async refreshData() {
         try {
             const [stats, violations] = await Promise.all([
                 API.getStats(),
                 API.getViolations()
             ]);
+            const normalizedStats = this.normalizeStats(stats, violations);
 
-            this.renderStats(stats);
-            this.renderInsights(stats, violations);
+            this.renderStats(normalizedStats);
+            this.renderInsights(normalizedStats, violations);
             this.renderTrendsChart(violations);
-            this.renderViolationTypes(stats);
+            this.renderViolationTypes(normalizedStats);
             this.renderTimeDistribution(violations);
-            this.calculateSafetyScore(stats);
+            this.calculateSafetyScore(normalizedStats);
         } catch (e) {
             console.error('Error loading analytics:', e);
             const statsEl = document.getElementById('analytics-stats');
@@ -196,6 +233,10 @@ const AnalyticsPage = {
             <div class="stat-card">
                 <h3>${stats.total}</h3>
                 <p>Total Violations</p>
+            </div>
+            <div class="stat-card success">
+                <h3>${stats.reportsGenerated}</h3>
+                <p>Reports Generated</p>
             </div>
             <div class="stat-card danger">
                 <h3>${stats.severity.high}</h3>

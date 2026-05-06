@@ -3826,6 +3826,7 @@ def _handle_local_cache_sync_job(
         'source_scope': source_scope_marker,
         'sync_source': sync_source_marker,
         'source': sync_source_marker,
+        'origin': 'local_synced',
         'device_id': queue_device_id,
     }
 
@@ -3920,6 +3921,26 @@ def _handle_local_cache_sync_job(
                 f"event_inserted={db_event_inserted}, violation_action={violation_action}, "
                 f"cloud_artifacts_complete={cloud_artifacts_complete}"
             )
+            try:
+                _push_realtime_report_event({
+                    'report_id': report_id,
+                    'status': 'completed',
+                    'timestamp': ts_value,
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                    'has_original': bool(storage_keys.get('original_image_key')) or original_path.exists(),
+                    'has_annotated': bool(storage_keys.get('annotated_image_key')) or annotated_path.exists(),
+                    'has_report': bool(storage_keys.get('report_html_key')) or local_report_path.exists(),
+                    'violation_count': max(len(violation_types_raw), int(queued_violation_count or 0), 1),
+                    'missing_ppe': violation_types_formatted,
+                    'ppe_tags': violation_types_raw,
+                    'violation_summary': violation_summary_text,
+                    'device_id': queue_device_id,
+                    'source_scope': 'synced_local',
+                    'source_label': 'Local Synced',
+                    'origin': 'local_synced',
+                }, event_type='local_cache_synced')
+            except Exception as realtime_err:
+                logger.debug(f"Could not push local-cache sync realtime row for {report_id}: {realtime_err}")
         except Exception as db_sync_err:
             _activate_local_offline_runtime('local_cache_sync_job.db', db_sync_err)
             logger.warning(f"Local-cache sync DB reconciliation warning for {report_id}: {db_sync_err}")
@@ -4981,11 +5002,13 @@ def api_violations():
                 or device_key_for_repair.startswith('offline_')
             )
             source_marker_for_repair = str(
-                detection_data.get('source')
+                detection_data.get('origin')
+                or detection_data.get('source')
                 or detection_data.get('sync_source')
                 or ''
             ).strip().lower()
             is_local_sync_marker_for_repair = source_marker_for_repair in {
+                'local_synced',
                 'sync_local_cache',
                 'local_cache_sync',
                 'offline_local_cache_sync',
@@ -5003,11 +5026,12 @@ def api_violations():
             return explicit_scope, 'detection_data.scope'
 
         source_marker = str(
-            detection_data.get('source')
+            detection_data.get('origin')
+            or detection_data.get('source')
             or detection_data.get('sync_source')
             or ''
         ).strip().lower()
-        if source_marker in ('sync_local_cache', 'local_cache', 'local_cache_sync'):
+        if source_marker in ('local_synced', 'sync_local_cache', 'local_cache', 'local_cache_sync'):
             return ('synced_local', source_marker) if has_cloud_artifacts else ('local', source_marker)
 
         device_key = str(device_id or '').strip().lower()
@@ -5064,6 +5088,29 @@ def api_violations():
                 has_report = (violation_dir / 'report.html').exists()
                 has_original = (violation_dir / 'original.jpg').exists()
                 has_annotated = (violation_dir / 'annotated.jpg').exists()
+                metadata_missing_ppe = [
+                    str(item).strip()
+                    for item in (metadata.get('missing_ppe') if isinstance(metadata.get('missing_ppe'), list) else [])
+                    if str(item).strip()
+                ]
+                metadata_ppe_tags = [
+                    str(item).strip()
+                    for item in (metadata.get('ppe_tags') if isinstance(metadata.get('ppe_tags'), list) else [])
+                    if str(item).strip()
+                ]
+                if not metadata_ppe_tags and isinstance(metadata.get('detections'), list):
+                    metadata_ppe_tags = _extract_violation_types_from_detections(metadata.get('detections') or [])
+                if not metadata_missing_ppe and metadata_ppe_tags:
+                    metadata_missing_ppe = [
+                        str(tag).replace('NO-', '').replace('NO ', '').replace('-', ' ').strip()
+                        for tag in metadata_ppe_tags
+                        if str(tag).strip()
+                    ]
+                metadata_violation_count = metadata.get('violation_count')
+                if not isinstance(metadata_violation_count, (int, float)):
+                    metadata_violation_count = metadata.get('detection_count')
+                if not isinstance(metadata_violation_count, (int, float)):
+                    metadata_violation_count = len(metadata_ppe_tags or metadata_missing_ppe)
 
                 if has_report:
                     status = 'completed'
@@ -5082,6 +5129,14 @@ def api_violations():
                     'has_report': has_report,
                     'status': status,
                     'severity': metadata.get('severity', 'HIGH'),
+                    'person_count': int(metadata.get('person_count') or 0) if isinstance(metadata.get('person_count'), (int, float)) else 0,
+                    'violation_count': int(metadata_violation_count or 0),
+                    'missing_ppe': metadata_missing_ppe,
+                    'ppe_tags': metadata_ppe_tags,
+                    'violation_summary': metadata.get('violation_summary') or (
+                        f"PPE Violation Detected: {', '.join(metadata_ppe_tags or metadata_missing_ppe)}"
+                        if (metadata_ppe_tags or metadata_missing_ppe) else 'PPE Violation Detected'
+                    ),
                     'violation_type': metadata.get('violation_type', 'PPE Violation'),
                     'location': metadata.get('location', 'Unknown'),
                     **_build_source_payload('local', source_reason)
@@ -5240,6 +5295,11 @@ def api_violations():
                 'has_original': bool(v.get('original_image_key')) or local_has_original,
                 'has_annotated': bool(v.get('annotated_image_key')) or local_has_annotated,
                 'has_report': bool(v.get('report_html_key')) or local_has_report,
+                'has_local_report': local_has_report,
+                'has_local_artifacts': has_local_artifacts,
+                'has_cloud_artifacts': has_cloud_artifacts,
+                'origin': detection_data_parsed.get('origin'),
+                'sync_source': detection_data_parsed.get('sync_source') or detection_data_parsed.get('source'),
                 'detection_data': {
                     'caption_validation': caption_validation
                 } if caption_validation else None,
@@ -5264,6 +5324,10 @@ def api_violations():
                 existing['has_original'] = bool(existing.get('has_original')) or bool(local_row.get('has_original'))
                 existing['has_annotated'] = bool(existing.get('has_annotated')) or bool(local_row.get('has_annotated'))
                 existing['has_report'] = bool(existing.get('has_report')) or bool(local_row.get('has_report'))
+                existing['has_local_report'] = bool(existing.get('has_local_report')) or bool(local_row.get('has_report'))
+                existing['has_local_artifacts'] = bool(existing.get('has_local_artifacts')) or bool(
+                    local_row.get('has_original') or local_row.get('has_annotated') or local_row.get('has_report')
+                )
 
                 existing_status = str(existing.get('status') or '').strip().lower()
                 if local_status in ('completed', 'failed', 'skipped'):
@@ -5287,10 +5351,13 @@ def api_violations():
                 if existing_scope == 'cloud':
                     if existing_local_device:
                         existing.update(_build_source_payload('synced_local', 'cloud_record_local_device'))
+                        existing['origin'] = 'local_synced'
+                        existing['sync_source'] = existing.get('sync_source') or 'sync_local_cache'
                     else:
                         existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
                     existing.update(_build_source_payload('local', 'local_cache_row'))
+                    existing['origin'] = existing.get('origin') or 'local'
                 continue
 
             formatted_violations.append({
@@ -5319,6 +5386,13 @@ def api_violations():
                 'has_original': bool(local_row.get('has_original')),
                 'has_annotated': bool(local_row.get('has_annotated')),
                 'has_report': bool(local_row.get('has_report')),
+                'has_local_report': bool(local_row.get('has_report')),
+                'has_local_artifacts': bool(
+                    local_row.get('has_original') or local_row.get('has_annotated') or local_row.get('has_report')
+                ),
+                'has_cloud_artifacts': False,
+                'origin': 'local',
+                'sync_source': None,
                 'detection_data': None,
                 **_build_source_payload('local', 'local_cache_row')
             })
@@ -5499,6 +5573,10 @@ def api_stats():
             'sourceCounts': source_counts,
             'source_counts': source_counts,
             'syncedLocal': source_counts.get('synced_local', 0),
+            'reportsGenerated': completed_count,
+            'reports_generated': completed_count,
+            'totalReports': completed_count,
+            'reportsTotal': completed_count,
         }
 
     try:
@@ -6104,6 +6182,8 @@ def _push_realtime_report_event(report_row: Dict[str, Any], event_type: str = 'v
         'device_id': report_row.get('device_id'),
         'source_scope': report_row.get('source_scope'),
         'source_label': report_row.get('source_label'),
+        'origin': report_row.get('origin'),
+        'sync_source': report_row.get('sync_source'),
         'event_type': event_type,
     }
 
@@ -6240,6 +6320,14 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
                     if isinstance(_meta.get('ppe_tags'), list):
                         metadata_ppe_tags = [
                             str(x).strip() for x in _meta.get('ppe_tags') if str(x).strip()
+                        ]
+                    if not metadata_ppe_tags and isinstance(_meta.get('detections'), list):
+                        metadata_ppe_tags = _extract_violation_types_from_detections(_meta.get('detections') or [])
+                    if not metadata_missing_ppe and metadata_ppe_tags:
+                        metadata_missing_ppe = [
+                            str(tag).replace('NO-', '').replace('NO ', '').replace('-', ' ').strip()
+                            for tag in metadata_ppe_tags
+                            if str(tag).strip()
                         ]
                     if isinstance(_meta.get('violation_summary'), str):
                         metadata_violation_summary = _meta.get('violation_summary')
@@ -9877,7 +9965,8 @@ def _sync_local_cache_candidates(
     max_items: int = 120,
     dry_run: bool = False,
     reconcile_reason: str = 'manual_api',
-    require_worker: bool = True
+    require_worker: bool = True,
+    origin: str = 'local_synced'
 ) -> Dict[str, Any]:
     """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
     global db_manager, storage_manager
@@ -9888,6 +9977,9 @@ def _sync_local_cache_candidates(
         max_items = 120
 
     reason = str(reconcile_reason or 'manual_api').strip() or 'manual_api'
+    sync_origin = str(origin or 'local_synced').strip().lower() or 'local_synced'
+    if sync_origin not in {'local_synced', 'sync_local_cache', 'browser_local_draft_handoff'}:
+        sync_origin = 'local_synced'
     is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
 
     # In cloud routing profile we still want the sweep to run so reports
@@ -9930,6 +10022,7 @@ def _sync_local_cache_candidates(
         return {
             'success': True,
             'reconcile_reason': reason,
+            'origin': sync_origin,
             'dry_run': True,
             'scanned': scanned,
             'candidates': candidates,
@@ -9973,6 +10066,7 @@ def _sync_local_cache_candidates(
             return {
                 'success': True,
                 'reconcile_reason': reason,
+                'origin': sync_origin,
                 'dry_run': False,
                 'scanned': 0,
                 'candidates': 0,
@@ -9999,6 +10093,8 @@ def _sync_local_cache_candidates(
     skipped = 0
     candidates = 0
     partial_handoffs = 0
+    queued_report_ids: List[str] = []
+    partial_handoff_report_ids: List[str] = []
     errors = []
     enqueue_cap_reached = False
 
@@ -10135,57 +10231,11 @@ def _sync_local_cache_candidates(
             continue
 
         if not local_has_report:
-            local_metadata = _read_local_violation_metadata(violation_dir)
-            local_detections = []
-            detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
-            if isinstance(detection_data, str):
-                try:
-                    detection_data = json.loads(detection_data)
-                except Exception:
-                    detection_data = {}
-            if isinstance(detection_data, dict) and isinstance(detection_data.get('detections'), list):
-                local_detections = [d for d in detection_data.get('detections') if isinstance(d, dict)]
-
-            if not local_detections and isinstance(local_metadata.get('detections'), list):
-                local_detections = [d for d in local_metadata.get('detections') if isinstance(d, dict)]
-
-            partial_count = (
-                event.get('violation_count') if isinstance(event, dict) else None
-            ) or local_metadata.get('violation_count') or local_metadata.get('detection_count') or 1
-            event_device_id = (
-                (event.get('device_id') if isinstance(event, dict) else None)
-                or local_metadata.get('device_id')
-                or 'local_cache_partial'
+            skipped += 1
+            logger.info(
+                f"Skipping local-cache sync for {report_id}: local report.html not ready; "
+                "local generation will finish first and sync on the next reconnect/reconcile pass"
             )
-            if event and event.get('timestamp'):
-                ts = event.get('timestamp')
-                ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
-            else:
-                ts_value = local_metadata.get('timestamp') or _parse_report_id_timestamp(report_id).isoformat()
-
-            handoff_summary = _handoff_partial_local_report_to_cloud(
-                report_id=report_id,
-                violation_dir=violation_dir,
-                timestamp=ts_value,
-                detections=local_detections,
-                queued_violation_count=partial_count,
-                original_path=original_path,
-                annotated_path=annotated_path,
-                device_id=str(event_device_id or 'local_cache_partial'),
-                source_scope='synced_local',
-                sync_source='sync_local_cache_partial',
-                reason=reason,
-                cloud_adopt_after_epoch=time.time() + float(LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS),
-            )
-            if handoff_summary.get('success'):
-                partial_handoffs += 1
-                logger.info(
-                    f"Partial local report handoff uploaded for {report_id}; "
-                    "cloud recovery may adopt if local generation does not finish"
-                )
-            else:
-                skipped += 1
-                errors.append(f"{report_id}: partial handoff failed ({handoff_summary.get('error')})")
             continue
 
         detections = []
@@ -10249,6 +10299,7 @@ def _sync_local_cache_candidates(
             'source_scope': source_scope_marker,
             'sync_source': sync_source_marker,
             'source': sync_source_marker,
+            'origin': sync_origin,
         }
         if original_sync_source:
             violation_data['origin_sync_source'] = original_sync_source
@@ -10305,6 +10356,7 @@ def _sync_local_cache_candidates(
                     logger.debug(f"Could not log local cache sync event for {report_id}: {log_err}")
 
             enqueued += 1
+            queued_report_ids.append(report_id)
         except Exception as enqueue_err:
             errors.append(f"{report_id}: enqueue failed ({enqueue_err})")
             skipped += 1
@@ -10312,11 +10364,14 @@ def _sync_local_cache_candidates(
     return {
         'success': True,
         'reconcile_reason': reason,
+        'origin': sync_origin,
         'dry_run': dry_run,
         'scanned': scanned,
         'candidates': candidates,
         'enqueued': enqueued,
+        'queued_report_ids': queued_report_ids,
         'partial_handoffs': partial_handoffs,
+        'partial_handoff_report_ids': partial_handoff_report_ids,
         'skipped': skipped,
         'errors': errors[:20],
         'worker_running': _is_queue_worker_alive() if not dry_run else bool(violation_queue is not None),
@@ -10337,12 +10392,14 @@ def api_sync_local_cache_to_supabase():
         max_items = 120
     dry_run = bool(payload.get('dry_run', False))
     sync_reason = str(payload.get('reason') or 'manual_api').strip() or 'manual_api'
+    sync_origin = str(payload.get('origin') or 'local_synced').strip().lower() or 'local_synced'
 
     result = _sync_local_cache_candidates(
         max_items=max_items,
         dry_run=dry_run,
         reconcile_reason=sync_reason,
-        require_worker=True
+        require_worker=True,
+        origin=sync_origin,
     )
 
     if result.get('success'):

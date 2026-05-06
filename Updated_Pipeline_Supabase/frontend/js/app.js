@@ -278,6 +278,45 @@ function notifyApp(message, type = 'info') {
     console.log(`[App:${type}] ${message}`);
 }
 
+async function clearOfflineTransitionState(reason = 'cloud-transition') {
+    const transientKeys = [
+        'ppe.runtime.isOffline',
+        'ppe.runtime.nlpFailed',
+        'ppe.nlpFailed',
+        'ppe.localMode.nlpFailed',
+        'ppe.offlineMode.active',
+        'ppe.provider.fallbackActive'
+    ];
+
+    transientKeys.forEach((key) => {
+        try { localStorage.removeItem(key); } catch (_) {}
+        try { sessionStorage.removeItem(key); } catch (_) {}
+    });
+
+    try {
+        API_CONFIG.BASE_URL = null;
+        lastResolvedBackendBaseUrl = null;
+        backendResolutionInFlight = null;
+    } catch (error) {
+        console.debug('Unable to reset runtime API base override:', error);
+    }
+
+    if (typeof API !== 'undefined' && typeof API.clearRuntimeTransitionCaches === 'function') {
+        try {
+            await API.clearRuntimeTransitionCaches(reason);
+        } catch (error) {
+            console.debug('Unable to clear runtime transition caches:', error);
+        }
+    }
+
+    window.dispatchEvent(new CustomEvent('ppe-runtime:cloud-transition-cleared', {
+        detail: {
+            reason,
+            measuredAt: Date.now()
+        }
+    }));
+}
+
 function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     const normalized = String(rawStatus || '').trim().toLowerCase();
     if (normalized === 'pending' || normalized === 'pending_approval') {
@@ -1146,6 +1185,13 @@ function initializeAdaptivePipelineModeManager() {
             return (Date.now() - this.lastDraftHandoffAt) >= this.minDraftHandoffIntervalMs;
         },
 
+        async clearCloudTransitionFlags(reason) {
+            this.offlineBootstrapAttempted = false;
+            this.localUnavailableNotified = false;
+            this.lastEvaluatedNetworkState = null;
+            await clearOfflineTransitionState(reason);
+        },
+
         async handoffBrowserLocalDrafts(reason, options = {}) {
             const force = !!options.force;
             if (navigator.onLine === false) {
@@ -1213,8 +1259,10 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 const enqueued = Number(syncRes.enqueued || 0);
-                if (notifyOnEnqueue && enqueued > 0) {
-                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info', {
+                const partialHandoffs = Number(syncRes.partial_handoffs || 0);
+                const affected = enqueued + partialHandoffs;
+                if (notifyOnEnqueue && affected > 0) {
+                    this.notify(`Reconnected: queued ${affected} local report(s) for Supabase sync (${reason}).`, 'info', {
                         dedupeKey: 'adaptive-reconnect-enqueued',
                         dedupeTtlMs: 20000
                     });
@@ -1274,8 +1322,10 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 const enqueued = Number(syncRes.enqueued || 0);
-                if (notifyOnEnqueue && enqueued > 0) {
-                    this.notify(`Reconnected: queued ${enqueued} local report(s) for Supabase sync (${reason}).`, 'info', {
+                const partialHandoffs = Number(syncRes.partial_handoffs || 0);
+                const affected = enqueued + partialHandoffs;
+                if (notifyOnEnqueue && affected > 0) {
+                    this.notify(`Reconnected: queued ${affected} local report(s) for Supabase sync (${reason}).`, 'info', {
                         dedupeKey: 'adaptive-reconnect-enqueued',
                         dedupeTtlMs: 20000
                     });
@@ -1465,6 +1515,12 @@ function initializeAdaptivePipelineModeManager() {
             });
 
             try {
+                await this.clearCloudTransitionFlags(`switch-to-cloud:${reason}`);
+                await resolveWorkingBackendBaseUrl({
+                    preferLocal: false,
+                    force: true
+                });
+
                 const switchRes = await API.switchPipelineMode('cloud');
                 if (switchRes && switchRes.success === false) {
                     throw new Error(switchRes.error || 'Failed to switch provider routing to cloud mode');
@@ -1506,6 +1562,24 @@ function initializeAdaptivePipelineModeManager() {
         }
     };
 
+    try {
+        window.AdaptivePipelineManager = manager;
+    } catch (error) {
+        // Ignore non-browser contexts.
+    }
+
+    if (navigator.serviceWorker && !manager.backgroundSyncMessageHandler) {
+        manager.backgroundSyncMessageHandler = (event) => {
+            const data = event && event.data ? event.data : {};
+            if (!data || data.type !== 'PPE_BACKGROUND_SYNC_LOCAL_REPORTS') return;
+            manager.directReconnectSync('service worker background sync', {
+                force: true,
+                notifyOnEnqueue: true
+            });
+        };
+        navigator.serviceWorker.addEventListener('message', manager.backgroundSyncMessageHandler);
+    }
+
     window.addEventListener('ppe-network:status', (event) => {
         const networkState = event && event.detail ? event.detail.state : 'network-good';
         manager.evaluate(networkState, { force: true });
@@ -1517,15 +1591,22 @@ function initializeAdaptivePipelineModeManager() {
         }
     });
 
-    window.addEventListener('online', () => {
+    window.addEventListener('online', async () => {
+        await manager.clearCloudTransitionFlags('online event');
+        if (typeof API !== 'undefined' && typeof API.registerLocalReportBackgroundSync === 'function') {
+            void API.registerLocalReportBackgroundSync('online event');
+        }
         manager.evaluate('network-good', { force: true });
         manager.directReconnectSync('online event', {
             force: true,
-            notifyOnEnqueue: false
+            notifyOnEnqueue: true
         });
     });
 
     window.addEventListener('offline', () => {
+        if (typeof API !== 'undefined' && typeof API.registerLocalReportBackgroundSync === 'function') {
+            void API.registerLocalReportBackgroundSync('offline event');
+        }
         manager.evaluate('network-offline', { force: true });
     });
 

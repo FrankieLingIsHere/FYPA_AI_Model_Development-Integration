@@ -19,7 +19,10 @@ import time
 import hashlib
 import shutil
 import subprocess
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # --- PROVIDER CONFIGURATION ---
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')
@@ -102,10 +105,12 @@ def _get_ollama_request_timeout():
 
 def _record_provider_failure(provider: str, reason: str):
     """Record provider-level failure reasons for user-facing diagnostics."""
+    clean_reason = str(reason or '').strip()
     _LAST_PROVIDER_FAILURES.append({
         'provider': provider,
-        'reason': str(reason or '').strip()
+        'reason': clean_reason
     })
+    logger.warning("[VLM:%s] provider failure: %s", provider, clean_reason)
 
 
 def _compute_cache_key(prompt: str, image_base64: str, temperature: float, max_tokens: int) -> str:
@@ -581,8 +586,17 @@ def attempt_ollama_auto_recover(reason: str = '', model_name: str = '', require_
 def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 250) -> str:
     """Call local Ollama vision model."""
     target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma3:4b'
+    logger.info(
+        "[VLM:ollama] preflight start model=%s api_url=%s timeout=%s prompt_chars=%s image_sha256=%s",
+        target_model,
+        OLLAMA_API_URL,
+        _get_ollama_request_timeout(),
+        len(prompt or ''),
+        hashlib.sha256((image_base64 or '').encode('utf-8')).hexdigest()[:12],
+    )
 
     if not check_ollama_running():
+        logger.warning("[VLM:ollama] service is not running before auto-recover")
         recovery = attempt_ollama_auto_recover(
             reason='Ollama service is not running',
             model_name=target_model,
@@ -593,6 +607,7 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
             return ''
 
     if not check_model_available(target_model):
+        logger.warning("[VLM:ollama] model '%s' is not available before auto-recover", target_model)
         recovery = attempt_ollama_auto_recover(
             reason=f"Model '{target_model}' is not available",
             model_name=target_model,
@@ -614,9 +629,12 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
     }
 
     try:
+        started = time.perf_counter()
+        logger.info("[VLM:ollama] request start model=%s", target_model)
         response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
 
         if not response.ok and response.status_code in OLLAMA_AUTO_RECOVER_RETRY_HTTP_STATUSES:
+            logger.warning("[VLM:ollama] HTTP %s; attempting auto-recover before retry", response.status_code)
             recovery = attempt_ollama_auto_recover(
                 reason=f"HTTP {response.status_code}",
                 model_name=target_model,
@@ -632,6 +650,14 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
         text = response.json().get('response', '').strip()
         if not text:
             _record_provider_failure('ollama', 'Empty response text')
+        else:
+            logger.info(
+                "[VLM:ollama] request complete model=%s duration_ms=%.1f output_chars=%s preview=%r",
+                target_model,
+                (time.perf_counter() - started) * 1000,
+                len(text),
+                text[:160],
+            )
         return text
     except requests.exceptions.Timeout as e:
         _record_provider_failure('ollama', f"Ollama vision request timed out: {e}")
@@ -644,10 +670,19 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
         )
         if recovery.get('ready'):
             try:
+                retry_started = time.perf_counter()
+                logger.info("[VLM:ollama] retry request start model=%s", target_model)
                 retry_response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
                 if retry_response.ok:
                     text = retry_response.json().get('response', '').strip()
                     if text:
+                        logger.info(
+                            "[VLM:ollama] retry request complete model=%s duration_ms=%.1f output_chars=%s preview=%r",
+                            target_model,
+                            (time.perf_counter() - retry_started) * 1000,
+                            len(text),
+                            text[:160],
+                        )
                         return text
                     _record_provider_failure('ollama', 'Empty response text')
                     return ''
@@ -666,14 +701,30 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
     global _LAST_PROVIDER_USED
     _LAST_PROVIDER_FAILURES.clear()
     _LAST_PROVIDER_USED = None
+    logger.info(
+        "[VLM] generation route start routing_profile=%s providers=%s cache_enabled=%s prompt_chars=%s max_tokens=%s",
+        os.getenv('CASM_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE),
+        list(VISION_PROVIDER_ORDER),
+        VISION_CACHE_ENABLED,
+        len(prompt or ''),
+        max_tokens,
+    )
 
     cache_key = _compute_cache_key(prompt, image_base64, temperature, max_tokens)
     cached = _get_cached_response(cache_key)
     if cached:
         print("Using vision response from cache")
+        _LAST_PROVIDER_USED = 'cache'
+        logger.info(
+            "[VLM] cache hit; no provider executed cache_key=%s output_chars=%s preview=%r",
+            cache_key[:12],
+            len(cached),
+            cached[:160],
+        )
         return cached
 
     for provider in VISION_PROVIDER_ORDER:
+        logger.info("[VLM] trying provider=%s", provider)
         if provider == 'model_api':
             output = _call_model_api_vision(prompt, image_base64, max_tokens=max_tokens)
         elif provider == 'gemini':
@@ -687,8 +738,10 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
             print(f"Using vision provider: {provider}")
             _LAST_PROVIDER_USED = provider
             _set_cached_response(cache_key, output)
+            logger.info("[VLM] provider=%s succeeded output_chars=%s", provider, len(output))
             return output
 
+    logger.warning("[VLM] all configured providers failed; returning user-facing provider failure message")
     return _build_user_facing_failure_message()
 
 

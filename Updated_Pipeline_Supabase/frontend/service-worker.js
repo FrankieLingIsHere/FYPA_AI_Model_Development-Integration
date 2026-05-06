@@ -1,9 +1,13 @@
 // PPE Safety Monitor - Service Worker
 // Offline support for app shell, read-only API payloads, and violation images.
 
-const STATIC_CACHE = 'ppe-monitor-static-v94';
-const API_CACHE = 'ppe-monitor-api-v69';
-const IMAGE_CACHE = 'ppe-monitor-images-v69';
+const STATIC_CACHE = 'ppe-monitor-static-v95';
+const API_CACHE = 'ppe-monitor-api-v70';
+const IMAGE_CACHE = 'ppe-monitor-images-v70';
+const REPORT_CACHE = 'ppe-monitor-reports-v10';
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const OFFLINE_CLOUD_REPORT_MESSAGE = 'Cloud report details are unavailable while offline.';
+const LOCAL_REPORT_SYNC_TAG = 'casm-local-report-sync';
 
 const STATIC_ASSETS = [
   '/',
@@ -67,7 +71,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    const keep = new Set([STATIC_CACHE, API_CACHE, IMAGE_CACHE]);
+    const keep = new Set([STATIC_CACHE, API_CACHE, IMAGE_CACHE, REPORT_CACHE]);
     const names = await caches.keys();
 
     await Promise.all(
@@ -79,6 +83,50 @@ self.addEventListener('activate', (event) => {
     await self.clients.claim();
   })());
 });
+
+self.addEventListener('message', (event) => {
+  const data = event && event.data ? event.data : {};
+  if (data.type !== 'PPE_CLEAR_RUNTIME_API_CACHE') {
+    return;
+  }
+
+  event.waitUntil((async () => {
+    await caches.delete(API_CACHE);
+    if (event.source && typeof event.source.postMessage === 'function') {
+      event.source.postMessage({
+        type: 'PPE_RUNTIME_API_CACHE_CLEARED',
+        cacheName: API_CACHE,
+        measuredAt: Date.now()
+      });
+    }
+  })());
+});
+
+async function notifyWindowClients(message) {
+  const clients = await self.clients.matchAll({
+    type: 'window',
+    includeUncontrolled: true
+  });
+  clients.forEach((client) => {
+    try {
+      client.postMessage(message);
+    } catch (error) {
+      // Ignore closed or unavailable clients.
+    }
+  });
+}
+
+if ('sync' in self.registration) {
+  self.addEventListener('sync', (event) => {
+    if (event.tag !== LOCAL_REPORT_SYNC_TAG) return;
+    event.waitUntil(notifyWindowClients({
+      type: 'PPE_BACKGROUND_SYNC_LOCAL_REPORTS',
+      tag: LOCAL_REPORT_SYNC_TAG,
+      reason: 'background-sync',
+      measuredAt: Date.now()
+    }));
+  });
+}
 
 function isApiGetRequest(request, url) {
   return request.method === 'GET' && url.pathname.startsWith('/api/');
@@ -103,6 +151,39 @@ function isNoStoreStatusApi(url) {
 
 function isViolationImageRequest(url) {
   return /\/image\/.+\/(annotated|original)\.jpg$/i.test(url.pathname);
+}
+
+function isReportDocumentRequest(url) {
+  return /^\/report\/[^/]+\/?$/i.test(url.pathname);
+}
+
+function isReportDetailsApiRequest(url) {
+  return /^\/api\/report\/[^/]+\/status\/?$/i.test(url.pathname)
+    || /^\/api\/violation\/[^/]+\/?$/i.test(url.pathname);
+}
+
+function offlineCloudReportJson() {
+  return new Response(
+    JSON.stringify({
+      success: false,
+      unavailable_offline: true,
+      error: OFFLINE_CLOUD_REPORT_MESSAGE
+    }),
+    {
+      status: 503,
+      headers: JSON_HEADERS
+    }
+  );
+}
+
+function offlineCloudReportHtml() {
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><title>Report unavailable offline</title></head><body><main style="font-family: system-ui, sans-serif; max-width: 640px; margin: 12vh auto; padding: 24px;"><h1>Report unavailable offline</h1><p>${OFFLINE_CLOUD_REPORT_MESSAGE}</p></main></body></html>`,
+    {
+      status: 503,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    }
+  );
 }
 
 async function networkFirstWithCache(request, cacheName, offlineFallback = null) {
@@ -137,7 +218,7 @@ async function staleWhileRevalidate(request, cacheName) {
       }
       return response;
     })
-    .catch(() => cached);
+    .catch(() => cached || new Response('', { status: 503 }));
 
   return cached || fetchPromise;
 }
@@ -150,7 +231,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (isReportDocumentRequest(url)) {
+    event.respondWith(
+      networkFirstWithCache(request, REPORT_CACHE, offlineCloudReportHtml())
+    );
+    return;
+  }
+
   if (isApiGetRequest(request, url)) {
+    if (isReportDetailsApiRequest(url)) {
+      event.respondWith(
+        fetch(request, { cache: 'no-store' }).catch(() => offlineCloudReportJson())
+      );
+      return;
+    }
+
     if (isNoStoreStatusApi(url)) {
       event.respondWith(
         fetch(request, { cache: 'no-store' }).catch(() => {
@@ -158,7 +253,7 @@ self.addEventListener('fetch', (event) => {
             JSON.stringify({ error: 'Status endpoint unavailable while offline.' }),
             {
               status: 503,
-              headers: { 'Content-Type': 'application/json' }
+              headers: JSON_HEADERS
             }
           );
         })
@@ -173,7 +268,7 @@ self.addEventListener('fetch', (event) => {
             JSON.stringify({ error: 'Live endpoint unavailable while offline.' }),
             {
               status: 503,
-              headers: { 'Content-Type': 'application/json' }
+              headers: JSON_HEADERS
             }
           );
         })
@@ -187,7 +282,7 @@ self.addEventListener('fetch', (event) => {
         API_CACHE,
         new Response(JSON.stringify({ error: 'Offline and no cached API response available.' }), {
           status: 503,
-          headers: { 'Content-Type': 'application/json' }
+          headers: JSON_HEADERS
         })
       )
     );

@@ -5101,6 +5101,18 @@ def api_violations():
                     for item in (metadata.get('ppe_tags') if isinstance(metadata.get('ppe_tags'), list) else [])
                     if str(item).strip()
                 ]
+                if not metadata_ppe_tags and isinstance(metadata.get('violation_types'), list):
+                    metadata_ppe_tags = [
+                        str(item).strip()
+                        for item in metadata.get('violation_types')
+                        if str(item).strip()
+                    ]
+                if not metadata_ppe_tags and isinstance(metadata.get('violations'), list):
+                    metadata_ppe_tags = [
+                        str(item).strip()
+                        for item in metadata.get('violations')
+                        if str(item).strip()
+                    ]
                 if not metadata_ppe_tags and isinstance(metadata.get('detections'), list):
                     metadata_ppe_tags = _extract_violation_types_from_detections(metadata.get('detections') or [])
                 if not metadata_missing_ppe and metadata_ppe_tags:
@@ -5219,9 +5231,44 @@ def api_violations():
                 if detected_people:
                     resolved_person_count = len(detected_people)
 
+                raw_detection_tags = (
+                    detection_data_parsed.get('ppe_tags')
+                    or detection_data_parsed.get('violation_types')
+                    or detection_data_parsed.get('violations')
+                    or []
+                )
+                if isinstance(raw_detection_tags, str):
+                    raw_detection_tags = [raw_detection_tags]
+                if not isinstance(raw_detection_tags, list):
+                    raw_detection_tags = []
+                for raw_tag in raw_detection_tags:
+                    if not str(raw_tag or '').strip():
+                        continue
+                    tag_text = str(raw_tag).strip()
+                    ppe_tags.append(tag_text)
+                    clean_item = re.sub(r'^(NO[-\s]+|Missing\s+)', '', tag_text, flags=re.IGNORECASE)
+                    clean_item = clean_item.replace('-', ' ').strip()
+                    if clean_item:
+                        missing_ppe.append(clean_item)
+
+                raw_missing_items = detection_data_parsed.get('missing_ppe') or []
+                if isinstance(raw_missing_items, str):
+                    raw_missing_items = [raw_missing_items]
+                if not isinstance(raw_missing_items, list):
+                    raw_missing_items = []
+                for raw_missing in raw_missing_items:
+                    if not str(raw_missing or '').strip():
+                        continue
+                    clean_item = str(raw_missing).strip()
+                    missing_ppe.append(re.sub(r'^(NO[-\s]+|Missing\s+)', '', clean_item, flags=re.IGNORECASE).replace('-', ' ').strip())
+                    ppe_tags.append(clean_item if _is_violation_label(clean_item) else f"NO-{clean_item}")
+
                 # Extract from violation_summary field in detection data
-                if 'violation_summary' in detection_data_parsed:
-                    for item in detection_data_parsed['violation_summary']:
+                if not missing_ppe and 'violation_summary' in detection_data_parsed:
+                    summary_items = detection_data_parsed['violation_summary']
+                    if isinstance(summary_items, str):
+                        summary_items = _extract_violation_types_from_summary(summary_items)
+                    for item in summary_items if isinstance(summary_items, list) else []:
                         if 'Missing' in item:
                             ppe_item = item.replace('Missing ', '').strip()
                             missing_ppe.append(ppe_item)
@@ -6323,6 +6370,14 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
                     if isinstance(_meta.get('ppe_tags'), list):
                         metadata_ppe_tags = [
                             str(x).strip() for x in _meta.get('ppe_tags') if str(x).strip()
+                        ]
+                    if not metadata_ppe_tags and isinstance(_meta.get('violation_types'), list):
+                        metadata_ppe_tags = [
+                            str(x).strip() for x in _meta.get('violation_types') if str(x).strip()
+                        ]
+                    if not metadata_ppe_tags and isinstance(_meta.get('violations'), list):
+                        metadata_ppe_tags = [
+                            str(x).strip() for x in _meta.get('violations') if str(x).strip()
                         ]
                     if not metadata_ppe_tags and isinstance(_meta.get('detections'), list):
                         metadata_ppe_tags = _extract_violation_types_from_detections(_meta.get('detections') or [])
@@ -9971,7 +10026,7 @@ def _sync_local_cache_candidates(
     require_worker: bool = True,
     origin: str = 'local_synced'
 ) -> Dict[str, Any]:
-    """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
+    """Scan local violation folders and enqueue unsynced local-origin items for Supabase reconciliation."""
     global db_manager, storage_manager
 
     try:
@@ -9989,12 +10044,119 @@ def _sync_local_cache_candidates(
     # created during a previous local-mode session can be reconciled to
     # Supabase (and tagged "Local Synced"). However we MUST NOT mistag
     # in-flight cloud-mode reports, which briefly have a local report.html
-    # before their cloud artifact upload completes. So in cloud mode we
-    # restrict the candidate filter to "true orphans": reports that have
-    # no detection_event row at all. Anything with an event was created by
-    # the live cloud worker and will finish on its own.
+    # before their cloud artifact upload completes.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     cloud_mode_orphans_only = (active_profile != 'local')
+
+    def _load_local_metadata(violation_dir: Path) -> Dict[str, Any]:
+        metadata_path = violation_dir / 'metadata.json'
+        if not metadata_path.exists():
+            return {}
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as meta_file:
+                parsed = json.load(meta_file) or {}
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    def _parse_detection_payload(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _has_local_report_id_prefix(report_id: str) -> bool:
+        return bool(re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', str(report_id or '').strip().lower()))
+
+    def _is_strict_local_origin_record(record: Dict[str, Any]) -> bool:
+        if not isinstance(record, dict):
+            return False
+        if _has_local_report_id_prefix(str(record.get('report_id') or '')):
+            return True
+
+        nested = _parse_detection_payload(record.get('detection_data'))
+        if nested:
+            nested.setdefault('report_id', record.get('report_id'))
+            nested.setdefault('device_id', record.get('device_id'))
+            if _is_strict_local_origin_record(nested):
+                return True
+
+        scope = str(record.get('source_scope') or record.get('report_scope') or record.get('scope') or '').strip().lower()
+        if scope == 'local':
+            return True
+
+        source_marker = str(
+            record.get('origin')
+            or record.get('sync_source')
+            or record.get('source')
+            or record.get('source_reason')
+            or ''
+        ).strip().lower()
+        local_markers = {
+            'local',
+            'local_pipeline',
+            'local_pending_recovery',
+            'offline_local',
+            'offline_local_cache',
+            'browser_local_draft',
+            'browser_local_draft_handoff',
+            'sync_local_cache',
+            'sync_local_cache_partial',
+            'local_cache',
+            'local_cache_sync',
+            'local_synced',
+        }
+        if (
+            source_marker in local_markers
+            or source_marker.startswith('local_')
+            or source_marker.startswith('offline_')
+            or source_marker.startswith('browser_local')
+        ):
+            return True
+
+        device_id = str(record.get('device_id') or '').strip().lower()
+        if (
+            device_id in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'browser_local_draft'}
+            or device_id.startswith('local_')
+            or device_id.startswith('offline_')
+            or device_id.startswith('browser_local')
+        ):
+            return True
+
+        return str(record.get('source_label') or '').strip().lower() == 'local'
+
+    def _is_strict_local_sync_candidate(
+        *,
+        report_id: str,
+        event: Optional[Dict[str, Any]],
+        violation: Optional[Dict[str, Any]],
+        metadata: Dict[str, Any],
+    ) -> bool:
+        records: List[Dict[str, Any]] = []
+        base = {'report_id': report_id}
+        if isinstance(metadata, dict) and metadata:
+            records.append({**base, **metadata})
+        if isinstance(event, dict) and event:
+            records.append({
+                **base,
+                **event,
+                'detection_data': event.get('detection_data'),
+                'device_id': event.get('device_id'),
+            })
+        if isinstance(violation, dict) and violation:
+            records.append({
+                **base,
+                **violation,
+                'detection_data': violation.get('detection_data'),
+                'device_id': violation.get('device_id'),
+            })
+        records.append(base)
+        return any(_is_strict_local_origin_record(record) for record in records)
 
     if (db_manager is None or storage_manager is None) and not dry_run:
         if _is_supabase_offline_backoff_active():
@@ -10016,7 +10178,16 @@ def _sync_local_cache_candidates(
                 if not violation_dir.is_dir():
                     continue
                 scanned += 1
-                if (violation_dir / 'original.jpg').exists():
+                metadata = _load_local_metadata(violation_dir)
+                if (
+                    (violation_dir / 'original.jpg').exists()
+                    and _is_strict_local_sync_candidate(
+                        report_id=violation_dir.name,
+                        event=None,
+                        violation=None,
+                        metadata=metadata,
+                    )
+                ):
                     candidates += 1
                 if scanned >= max_items:
                     break
@@ -10129,6 +10300,7 @@ def _sync_local_cache_candidates(
         annotated_path = violation_dir / 'annotated.jpg'
         report_html_path = violation_dir / 'report.html'
         local_has_report = report_html_path.exists()
+        metadata = _load_local_metadata(violation_dir)
 
         if not original_path.exists():
             skipped += 1
@@ -10140,6 +10312,20 @@ def _sync_local_cache_candidates(
         except Exception as lookup_err:
             errors.append(f"{report_id}: lookup failed ({lookup_err})")
             skipped += 1
+            continue
+
+        if not _is_strict_local_sync_candidate(
+            report_id=report_id,
+            event=event,
+            violation=violation,
+            metadata=metadata,
+        ):
+            skipped += 1
+            logger.debug(
+                "Skipping local-cache sync for %s: no strict local-origin marker "
+                "(cloud-origin artifacts are preserved)",
+                report_id,
+            )
             continue
 
         event_status = str((event or {}).get('status') or '').strip().lower()
@@ -10187,17 +10373,7 @@ def _sync_local_cache_candidates(
             # We must NOT sync events whose source_scope is 'cloud': those were
             # created by the live cloud worker and any missing key is a
             # mid-flight upload that will finish on its own.
-            event_detection_data = {}
-            if event:
-                raw_dd = event.get('detection_data')
-                if isinstance(raw_dd, dict):
-                    event_detection_data = raw_dd
-                elif isinstance(raw_dd, str):
-                    try:
-                        import json as _json
-                        event_detection_data = _json.loads(raw_dd) or {}
-                    except Exception:
-                        event_detection_data = {}
+            event_detection_data = _parse_detection_payload((event or {}).get('detection_data')) if event else {}
             event_source_scope = str(event_detection_data.get('source_scope') or '').strip().lower()
             event_sync_source = str(event_detection_data.get('sync_source') or '').strip().lower()
             is_local_origin = (

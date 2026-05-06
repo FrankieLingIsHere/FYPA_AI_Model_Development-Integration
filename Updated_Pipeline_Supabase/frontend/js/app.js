@@ -1249,6 +1249,16 @@ function initializeAdaptivePipelineModeManager() {
             this.lastDirectReconnectSyncAt = Date.now();
 
             try {
+                if (typeof API.getLocalSyncCandidateSummary === 'function') {
+                    const candidates = await API.getLocalSyncCandidateSummary();
+                    if (!candidates.count) {
+                        return {
+                            success: true,
+                            skipped_no_local_candidates: true,
+                            reason
+                        };
+                    }
+                }
                 const syncRes = await API.syncLocalCacheToSupabase({
                     limit: 180,
                     reason: 'reconnect_auto'
@@ -1311,6 +1321,16 @@ function initializeAdaptivePipelineModeManager() {
             this.lastBacklogSyncAt = Date.now();
 
             try {
+                if (typeof API.getLocalSyncCandidateSummary === 'function') {
+                    const candidates = await API.getLocalSyncCandidateSummary();
+                    if (!candidates.count) {
+                        return {
+                            success: true,
+                            skipped_no_local_candidates: true,
+                            reason
+                        };
+                    }
+                }
                 const syncRes = await API.syncLocalCacheToSupabase({
                     limit: 180,
                     reason: 'reconnect_auto'

@@ -6,6 +6,8 @@ const AudioAlert = (function () {
     const STORAGE_KEY_PLAYED = 'casm_voice_alerts_played';
     const STORAGE_KEY_VOLUME = 'casm_voice_volume';
     const STORAGE_KEY_VOICE = 'casm_voice_choice';
+    const STORAGE_KEY_MUTED = 'casm_voice_muted';
+    const STORAGE_KEY_CHIME = 'casm_notification_chime';
 
     let enabled = false;
     let playedReports = new Set();
@@ -13,6 +15,8 @@ const AudioAlert = (function () {
     let originalNotifyFn = null;
     let volume = 1.0;
     let preferredVoice = '';
+    let muted = false;
+    let chimeEnabled = true;
 
     function _loadState() {
         try {
@@ -46,6 +50,14 @@ const AudioAlert = (function () {
         try {
             preferredVoice = String(localStorage.getItem(STORAGE_KEY_VOICE) || '').trim();
         } catch (e) { preferredVoice = ''; }
+
+        try {
+            muted = String(localStorage.getItem(STORAGE_KEY_MUTED) || 'false').toLowerCase() === 'true';
+        } catch (e) { muted = false; }
+
+        try {
+            chimeEnabled = String(localStorage.getItem(STORAGE_KEY_CHIME) || 'true').toLowerCase() !== 'false';
+        } catch (e) { chimeEnabled = true; }
     }
 
     function _saveState() {
@@ -97,6 +109,10 @@ const AudioAlert = (function () {
     async function speakViolation(violation) {
         if (!enabled) {
             console.log('[AudioAlert] speakViolation called but alerts disabled');
+            return;
+        }
+        if (muted) {
+            console.log('[AudioAlert] speakViolation skipped because alerts are muted');
             return;
         }
         if (typeof window.speechSynthesis === 'undefined') {
@@ -187,7 +203,6 @@ const AudioAlert = (function () {
             // and not an intentional mute, so promote to full volume.
             try {
                 let vol = Number.isFinite(Number(volume)) ? Number(volume) : 1.0;
-                if (vol <= 0) vol = 1.0;
                 utter.volume = vol;
                 console.log('[AudioAlert] utterance volume=', vol, 'voice=', preferredVoice || '(auto)');
             } catch (e) {}
@@ -221,6 +236,7 @@ const AudioAlert = (function () {
             // queue and re-enables the engine.
             try { window.speechSynthesis.resume(); } catch (e) {}
             window.speechSynthesis.cancel();
+            playChime();
             window.speechSynthesis.speak(utter);
 
             // Detect Chrome's silent-drop: if neither onstart nor onerror has
@@ -256,12 +272,47 @@ const AudioAlert = (function () {
         } catch (e) {}
     }
 
+    function setMuted(value) {
+        muted = !!value;
+        try { localStorage.setItem(STORAGE_KEY_MUTED, muted ? 'true' : 'false'); } catch (e) {}
+    }
+
+    function setChimeEnabled(value) {
+        chimeEnabled = !!value;
+        try { localStorage.setItem(STORAGE_KEY_CHIME, chimeEnabled ? 'true' : 'false'); } catch (e) {}
+    }
+
     function setPreferredVoice(name) {
         try {
             preferredVoice = String(name || '').trim();
             try { if (preferredVoice) localStorage.setItem(STORAGE_KEY_VOICE, preferredVoice); } catch (e) {}
         } catch (e) {}
     }
+
+    function playChime() {
+        if (!chimeEnabled || muted || volume <= 0) return;
+        try {
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor) return;
+            const ctx = new AudioContextCtor();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 880;
+            gain.gain.value = Math.max(0.02, Math.min(0.18, volume * 0.16));
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+            osc.stop(ctx.currentTime + 0.2);
+            setTimeout(() => {
+                try { ctx.close(); } catch (e) {}
+            }, 320);
+        } catch (e) {
+            console.debug('[AudioAlert] Chime skipped:', e);
+        }
+    }
+
 
     function patchViolationMonitor() {
         // Wait until ViolationMonitor is defined
@@ -327,17 +378,25 @@ const AudioAlert = (function () {
                         NotificationManager.error('SpeechSynthesis not supported in this browser');
                         return;
                     }
+                    if (muted) {
+                        NotificationManager.warning('Voice alerts are muted');
+                        return;
+                    }
 
                     // Play a short test phrase regardless of enabled flag
                     const utter = new SpeechSynthesisUtterance('Testing voice alert');
                     utter.rate = 1.0;
                     utter.pitch = 1.0;
+                    utter.volume = Number.isFinite(Number(volume)) ? Math.max(0, Math.min(1, volume)) : 1.0;
                     const voices = window.speechSynthesis.getVoices();
                     if (voices && voices.length) {
-                        const preferred = voices.find(v => /en|google/i.test(v.name) || /en-US|en_US/i.test(v.lang));
+                        const preferred = preferredVoice
+                            ? voices.find(v => v.name === preferredVoice || `${v.lang} ${v.name}` === preferredVoice || v.name === String(preferredVoice))
+                            : voices.find(v => /en|google/i.test(v.name) || /en-US|en_US/i.test(v.lang));
                         if (preferred) utter.voice = preferred;
                     }
                     window.speechSynthesis.cancel();
+                    playChime();
                     window.speechSynthesis.speak(utter);
                     NotificationManager.info('Playing test voice');
                 } catch (err) {
@@ -381,9 +440,15 @@ const AudioAlert = (function () {
         toggle,
         speakViolation,
         isEnabled() { return enabled; },
+        isMuted() { return muted; },
+        isChimeEnabled() { return chimeEnabled; },
+        getVolume() { return volume; },
         markPlayed(reportId) { playedReports.add(reportId); _saveState(); },
         setVolume,
-        setPreferredVoice
+        setMuted,
+        setChimeEnabled,
+        setPreferredVoice,
+        playChime
     };
 })();
 

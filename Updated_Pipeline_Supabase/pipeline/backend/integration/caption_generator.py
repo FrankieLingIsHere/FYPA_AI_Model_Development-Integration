@@ -13,6 +13,7 @@ Usage:
 import logging
 import numpy as np
 import cv2
+import os
 from typing import Union, Optional
 from pathlib import Path
 import sys
@@ -70,9 +71,18 @@ class CaptionGenerator:
         self.model_loaded = False
         self._gemini_client = None
         
-        # Determine backend
+        # Determine backend. Strict local profile must keep captions on the
+        # local Ollama/Gemma path even when a Gemini key exists.
         gemini_config = config.get('GEMINI_CONFIG', {})
-        use_gemini = gemini_config.get('enabled', True) and GEMINI_CAPTION_AVAILABLE
+        strict_local_profile = (
+            str(os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+            and str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower() == 'local'
+        )
+        use_gemini = (
+            gemini_config.get('enabled', True)
+            and GEMINI_CAPTION_AVAILABLE
+            and not strict_local_profile
+        )
         
         if use_gemini:
             try:
@@ -131,8 +141,13 @@ class CaptionGenerator:
         image_path = str(image_path)
         
         try:
-            # Try Gemini first
-            if self._gemini_client and self._gemini_client.is_available:
+            strict_local_profile = (
+                str(os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+                and str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower() == 'local'
+            )
+
+            # Try Gemini first only outside strict local profile.
+            if not strict_local_profile and self._gemini_client and self._gemini_client.is_available:
                 caption = self._gemini_client.caption_image(image_path, custom_prompt=prompt)
                 if caption and not caption.startswith("Error") and not caption.startswith("Failed"):
                     self.model_loaded = True
@@ -141,11 +156,11 @@ class CaptionGenerator:
                     logger.warning(f"Gemini captioning failed, trying legacy: {caption}")
             
             # Fallback to legacy (Qwen2.5-VL via llama.cpp)
-            if self.backend == 'legacy' and LEGACY_CAPTION_AVAILABLE:
+            if (self.backend == 'legacy' or strict_local_profile) and LEGACY_CAPTION_AVAILABLE:
                 logger.info("Using legacy caption backend (Qwen2.5-VL)...")
                 for attempt in range(max_retries):
                     try:
-                        caption = caption_image_llava(image_path)
+                        caption = caption_image_llava(image_path, prompt=prompt)
                         if caption and len(caption.strip()) > 0:
                             self.model_loaded = True
                             logger.info(f"✓ Legacy caption generated: {caption[:100]}...")

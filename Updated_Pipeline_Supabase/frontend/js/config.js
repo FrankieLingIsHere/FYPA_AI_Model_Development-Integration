@@ -12,6 +12,14 @@ const normalizeApiBaseUrl = (value) => {
 
 let runtimeApiBaseOverride = null;
 
+const isFrontendServedFromLocalHost = () => {
+    const host = String((window.location && window.location.hostname) || '').toLowerCase();
+    return host === 'localhost'
+        || host === '127.0.0.1'
+        || host === '0.0.0.0'
+        || host.endsWith('.local');
+};
+
 const API_CONFIG = {
     get BASE_URL() {
         // Offline check first — always takes priority over any cached override so
@@ -21,6 +29,9 @@ const API_CONFIG = {
         }
         if (runtimeApiBaseOverride !== null) {
             return runtimeApiBaseOverride;
+        }
+        if (!window.PPE_API_URL && isFrontendServedFromLocalHost()) {
+            return '';
         }
         return normalizeApiBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '');
     },

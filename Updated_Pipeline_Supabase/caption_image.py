@@ -818,7 +818,7 @@ def check_model_available(model_name):
         pass
     return False
 
-def caption_image_llava(image_path):
+def caption_image_llava(image_path, prompt=None):
     """
     Generate caption using Qwen2.5-VL via Ollama API.
     
@@ -836,7 +836,7 @@ def caption_image_llava(image_path):
     print(f"Image loaded: {Path(image_path).name}")
     
     # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
-    prompt = """You are a workplace visual analyst. Write a factual caption from this image only.
+    default_prompt = """You are a workplace visual analyst. Write a factual caption from this image only.
 
 Output requirements (single paragraph, 6-10 sentences):
 1) Start with total visible people count and scene type (residential, office, warehouse, roadside, construction, etc.).
@@ -859,6 +859,7 @@ Style:
 - Natural professional English, no bullet points, no markdown.
 - Avoid generic phrases like "In the image" or "The image shows".
 """
+    caption_prompt = str(prompt or '').strip() or default_prompt
     
     # Encode image to base64
     try:
@@ -871,7 +872,7 @@ Style:
     try:
         print("Generating caption...")
         caption = _generate_vision_response(
-            prompt=prompt,
+            prompt=caption_prompt,
             image_base64=image_base64,
             temperature=0.6,
             max_tokens=650

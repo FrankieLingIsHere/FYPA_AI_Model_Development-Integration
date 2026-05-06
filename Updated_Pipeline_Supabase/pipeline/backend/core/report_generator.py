@@ -2755,6 +2755,17 @@ RESPONSE FORMAT (JSON):
             background-color: rgba(230, 126, 34, 0.1);
             border-bottom-style: solid;
         }}
+
+        .card-header .ppe-tooltip {{
+            color: #fff7ed;
+            border-bottom-color: rgba(255, 255, 255, 0.9);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+        }}
+
+        .card-header .ppe-tooltip:hover {{
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.18);
+        }}
         
         .ppe-tooltip::after {{
             content: '';

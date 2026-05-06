@@ -832,20 +832,40 @@ def _build_detection_caption_context(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> str:
-    """Build a short YOLO evidence addendum without replacing model prose."""
-    fallback_caption = _build_detection_grounded_caption(
-        detections,
-        violation_types=violation_types,
-    )
-    context = re.sub(
-        r'^(?:auto-generated|detection-only)\s+safety\s+summary:\s*',
-        '',
-        fallback_caption,
-        flags=re.IGNORECASE,
-    ).strip()
-    if not context:
+    """Build a concise YOLO evidence addendum without replacing model prose."""
+    detection_rows = detections if isinstance(detections, list) else []
+    person_count = 0
+    for det in detection_rows:
+        label = _normalize_label((det or {}).get('class_name') or (det or {}).get('class') or '')
+        if label in {'person', 'worker', 'man', 'woman'}:
+            person_count += 1
+
+    if person_count <= 0:
+        person_count = 1
+
+    raw_violation_types: List[str] = []
+    if isinstance(violation_types, list):
+        raw_violation_types.extend([str(v).strip() for v in violation_types if str(v or '').strip()])
+    if not raw_violation_types:
+        raw_violation_types.extend(_extract_violation_types_from_detections(detection_rows))
+
+    formatted_types: List[str] = []
+    seen: set = set()
+    for raw_type in raw_violation_types:
+        formatted = format_violation_type(str(raw_type))
+        key = formatted.lower()
+        if not formatted or key in seen:
+            continue
+        seen.add(key)
+        formatted_types.append(formatted)
+
+    if not formatted_types:
         return ''
-    return f"YOLO evidence: {context}"
+
+    return (
+        f"YOLO detection identified {person_count} person(s) in the frame with the following "
+        f"PPE deficiencies: {', '.join(formatted_types)}."
+    )
 
 
 def _enforce_caption_quality_floor(
@@ -857,7 +877,14 @@ def _enforce_caption_quality_floor(
     normalized = str(caption or '').strip()
     needs_fallback, reason = _caption_requires_quality_fallback(normalized)
     if not needs_fallback:
-        return normalized, False, ''
+        context_caption = _build_detection_caption_context(
+            detections,
+            violation_types=violation_types,
+        )
+        normalized_single = re.sub(r'\s+', ' ', normalized).strip()
+        if context_caption and context_caption.lower() not in normalized_single.lower():
+            return f"{normalized_single.rstrip(' .')}. {context_caption}", True, 'augmented_yolo_context'
+        return normalized_single, False, ''
 
     hard_failure = (
         reason == 'empty_caption'
@@ -5556,12 +5583,42 @@ def api_stats():
         if not isinstance(detection_payload, dict):
             detection_payload = {}
 
+        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        device_key = str(row.get('device_id') or '').strip().lower()
+        is_local_device = (
+            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
+            or device_key.startswith('local_')
+            or device_key.startswith('offline_')
+            or device_key.startswith('browser_local')
+        )
+
         explicit_scope = _normalize_source_scope(
             detection_payload.get('source_scope')
             or detection_payload.get('report_scope')
             or detection_payload.get('scope')
         )
         if explicit_scope:
+            source_marker_for_repair = str(
+                detection_payload.get('origin')
+                or detection_payload.get('source')
+                or detection_payload.get('sync_source')
+                or ''
+            ).strip().lower()
+            is_local_sync_marker = source_marker_for_repair in {
+                'local_synced',
+                'sync_local_cache',
+                'local_cache_sync',
+                'offline_local_cache_sync',
+                'sync_local_cache_partial',
+                'browser_local_draft_handoff',
+            }
+            if (
+                explicit_scope == 'synced_local'
+                and active_profile != 'local'
+                and not is_local_device
+                and not is_local_sync_marker
+            ):
+                return 'cloud'
             return explicit_scope
 
         source_marker = str(
@@ -5587,8 +5644,12 @@ def api_stats():
         if source_marker in local_markers:
             return 'synced_local' if has_cloud_artifacts else 'local'
 
+        if has_cloud_artifacts and is_local_device:
+            return 'synced_local'
         if has_cloud_artifacts:
-            return 'synced_local' if has_local_artifacts else 'cloud'
+            return 'cloud'
+        if active_profile == 'cloud' and has_local_artifacts and not is_local_device:
+            return 'cloud'
 
         return 'local' if has_local_artifacts else 'cloud'
 
@@ -8528,8 +8589,7 @@ def api_local_mode_provisioning_status():
     # 'rejected') the admin already controls.
     if not bool(cloud_state.get('checked')) and machine_id:
         try:
-            _public_devices = _load_pending_devices() or {}
-            _public_device = _public_devices.get(machine_id) if isinstance(_public_devices, dict) else None
+            _public_device = _load_pending_device(machine_id)
             if isinstance(_public_device, dict):
                 _public_status = str(_public_device.get('status') or '').strip().lower()
                 if _public_status in ('pending_approval', 'pending', 'approved', 'provisioned', 'active', 'rejected'):
@@ -13763,6 +13823,18 @@ PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS = _safe_int_env(
     0,
     24 * 3600,
 )
+PROVISIONING_STATE_QUERY_TIMEOUT_MS = _safe_int_env(
+    'PROVISIONING_STATE_QUERY_TIMEOUT_MS',
+    3000,
+    500,
+    15000,
+)
+PROVISIONING_STATE_ADMIN_MAX_ROWS = _safe_int_env(
+    'PROVISIONING_STATE_ADMIN_MAX_ROWS',
+    300,
+    20,
+    2000,
+)
 
 
 def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
@@ -13887,6 +13959,18 @@ def _get_provisioning_db_connection() -> Optional[Any]:
     except Exception as db_err:
         logger.debug(f"Provisioning DB backend unavailable; falling back to file storage: {db_err}")
         return None
+
+
+def _apply_provisioning_query_timeouts(cur: Any) -> None:
+    """Keep provisioning UI/status checks from hanging on slow shared-state queries."""
+    timeout_ms = max(500, int(PROVISIONING_STATE_QUERY_TIMEOUT_MS or 3000))
+    try:
+        cur.execute("SET LOCAL statement_timeout = %s", (timeout_ms,))
+        cur.execute("SET LOCAL lock_timeout = %s", (min(timeout_ms, 2000),))
+    except Exception:
+        # Older drivers or transaction states may reject SET LOCAL; the main
+        # query still runs with the connection-level defaults.
+        pass
 
 
 def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
@@ -14123,6 +14207,7 @@ def _load_pending_devices_from_db(
 
     try:
         with conn.cursor() as cur:
+            _apply_provisioning_query_timeouts(cur)
             cur.execute(
                 """
                 SELECT machine_id, status, requested_at, token, provision_secret_hash, approved_at, provisioned_at
@@ -14161,6 +14246,120 @@ def _load_pending_devices_from_db(
             'provisioned_at': _maybe_iso_datetime(row.get('provisioned_at')),
         })
 
+    return records
+
+
+def _row_to_pending_device_record(row: Any) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    return _normalize_pending_device_record({
+        'status': str(row.get('status') or 'pending').strip().lower(),
+        'requested_at': _maybe_iso_datetime(row.get('requested_at')),
+        'token': str(row.get('token') or '').strip(),
+        'provision_secret_hash': str(row.get('provision_secret_hash') or '').strip(),
+        'approved_at': _maybe_iso_datetime(row.get('approved_at')),
+        'provisioned_at': _maybe_iso_datetime(row.get('provisioned_at')),
+    })
+
+
+def _load_pending_device_from_db(
+    machine_id: str,
+    _retry_on_missing_relation: bool = True,
+) -> Optional[Dict[str, Any]]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    normalized_machine_id = str(machine_id or '').strip()
+    if not normalized_machine_id:
+        return {}
+
+    try:
+        with conn.cursor() as cur:
+            _apply_provisioning_query_timeouts(cur)
+            cur.execute(
+                """
+                SELECT machine_id, status, requested_at, token, provision_secret_hash, approved_at, provisioned_at
+                FROM public.provisioning_devices
+                WHERE machine_id = %s
+                LIMIT 1
+                """,
+                (normalized_machine_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _load_pending_device_from_db(normalized_machine_id, _retry_on_missing_relation=False)
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to load pending device from Supabase; using file fallback: {e}")
+        return None
+
+    if not row:
+        return {}
+    return _row_to_pending_device_record(row)
+
+
+def _load_pending_devices_for_admin_from_db(
+    limit: int = PROVISIONING_STATE_ADMIN_MAX_ROWS,
+    _retry_on_missing_relation: bool = True,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    conn = _get_provisioning_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            _apply_provisioning_query_timeouts(cur)
+            cur.execute(
+                """
+                SELECT machine_id, status, requested_at, token, provision_secret_hash, approved_at, provisioned_at
+                FROM public.provisioning_devices
+                ORDER BY
+                    CASE status
+                        WHEN 'pending' THEN 0
+                        WHEN 'approved' THEN 1
+                        WHEN 'provisioned' THEN 2
+                        ELSE 3
+                    END,
+                    requested_at DESC NULLS LAST,
+                    machine_id ASC
+                LIMIT %s
+                """,
+                (max(20, min(int(limit or PROVISIONING_STATE_ADMIN_MAX_ROWS), 2000)),),
+            )
+            rows = cur.fetchall() or []
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        if _is_missing_relation_error(e):
+            if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                return _load_pending_devices_for_admin_from_db(
+                    limit=limit,
+                    _retry_on_missing_relation=False,
+                )
+            logger.info('Supabase provisioning_devices table not found; using local file storage')
+        else:
+            logger.warning(f"Failed to load admin pending-device list from Supabase; using file fallback: {e}")
+        return None
+
+    records: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_machine_id = str(row.get('machine_id') or '').strip()
+        if not row_machine_id:
+            continue
+        records[row_machine_id] = _row_to_pending_device_record(row)
     return records
 
 
@@ -14541,6 +14740,56 @@ def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
             return {}
 
         return _load_pending_devices_from_file()
+
+
+def _load_pending_device(machine_id: str) -> Optional[Dict[str, Any]]:
+    normalized_machine_id = str(machine_id or '').strip()
+    if not normalized_machine_id:
+        return None
+
+    with PENDING_DEVICES_LOCK:
+        db_record = _load_pending_device_from_db(normalized_machine_id)
+        if db_record is not None:
+            return db_record or None
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared provisioning state backend unavailable; refusing local pending-device fallback in hosted runtime'
+            )
+            return None
+
+        return (_load_pending_devices_from_file() or {}).get(normalized_machine_id)
+
+
+def _load_pending_devices_for_admin() -> Dict[str, Dict[str, Any]]:
+    with PENDING_DEVICES_LOCK:
+        db_records = _load_pending_devices_for_admin_from_db(PROVISIONING_STATE_ADMIN_MAX_ROWS)
+        if db_records is not None:
+            if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                return db_records
+
+            if db_records:
+                return db_records
+
+        if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            logger.error(
+                'Shared provisioning state backend unavailable; refusing local admin device fallback in hosted runtime'
+            )
+            return {}
+
+        file_records = _load_pending_devices_from_file()
+        ordered_items = sorted(
+            file_records.items(),
+            key=lambda item: (
+                {'pending': 0, 'pending_approval': 0, 'approved': 1, 'provisioned': 2}.get(
+                    str((item[1] or {}).get('status') or '').strip().lower(),
+                    3,
+                ),
+                str((item[1] or {}).get('requested_at') or ''),
+                str(item[0]),
+            ),
+        )
+        return dict(ordered_items[:PROVISIONING_STATE_ADMIN_MAX_ROWS])
 
 
 def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> bool:
@@ -15854,7 +16103,7 @@ def admin_devices():
             {'WWW-Authenticate': 'Basic realm="Login Required"'}
         )
 
-    devices = _load_pending_devices()
+    devices = _load_pending_devices() if request.method == 'POST' else _load_pending_devices_for_admin()
 
     if request.method == 'POST':
         action = request.form.get('action')

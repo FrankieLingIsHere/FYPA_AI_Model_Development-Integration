@@ -1461,11 +1461,152 @@ RESPONSE FORMAT (JSON):
             or ('requires' in text and 'memory' in text)
         )
 
+    def _build_ollama_compact_report_prompt(
+        self,
+        report_data: Optional[Dict[str, Any]],
+        original_prompt: str,
+    ) -> str:
+        """Build a smaller schema-first prompt for local Gemma JSON generation."""
+        if not isinstance(report_data, dict):
+            return original_prompt
+
+        caption = str(report_data.get('caption') or '').strip()
+        violation_summary = str(report_data.get('violation_summary') or '').strip()
+        severity = str(report_data.get('severity') or 'HIGH').strip() or 'HIGH'
+        try:
+            person_count = max(1, int(report_data.get('person_count') or 1))
+        except (TypeError, ValueError):
+            person_count = 1
+
+        detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
+        missing_labels: List[str] = []
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip()
+            if not label.upper().startswith('NO-'):
+                continue
+            pretty = label[3:].replace('_', ' ').replace('-', ' ').strip().title()
+            if pretty and pretty not in missing_labels:
+                missing_labels.append(pretty)
+
+        if not missing_labels and violation_summary:
+            for raw_item in re.split(r'[,;/]+', violation_summary):
+                item = re.sub(r'\(x\d+\)', '', raw_item, flags=re.IGNORECASE).strip()
+                if item and item not in missing_labels:
+                    missing_labels.append(item)
+
+        if not missing_labels:
+            missing_labels = ['Required PPE']
+
+        detected_environment = self._extract_environment_from_caption(caption) or 'General Workspace'
+        missing_phrase = self._format_missing_ppe_phrase(missing_labels)
+        ppe_defaults = {
+            'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',
+            'safety_vest': 'Missing' if any('vest' in item.lower() for item in missing_labels) else 'Not Mentioned',
+            'mask': 'Missing' if any('mask' in item.lower() or 'respirator' in item.lower() for item in missing_labels) else 'Not Mentioned',
+            'gloves': 'Missing' if any('glove' in item.lower() for item in missing_labels) else 'Not Mentioned',
+            'footwear': 'Missing' if any('boot' in item.lower() or 'shoe' in item.lower() or 'foot' in item.lower() for item in missing_labels) else 'Not Mentioned',
+            'goggles': 'Missing' if any('goggle' in item.lower() or 'eye' in item.lower() for item in missing_labels) else 'Not Mentioned',
+        }
+        person_entries: List[str] = []
+        for idx in range(1, min(person_count, 6) + 1):
+            person_entries.append(f"""    {{
+      "id": "Person {idx}",
+      "description": "Grounded description of observed worker {idx} and any missing PPE supported by YOLO.",
+      "ppe": {{
+        "hardhat": "{ppe_defaults['hardhat']}",
+        "safety_vest": "{ppe_defaults['safety_vest']}",
+        "mask": "{ppe_defaults['mask']}",
+        "gloves": "{ppe_defaults['gloves']}",
+        "footwear": "{ppe_defaults['footwear']}",
+        "goggles": "{ppe_defaults['goggles']}"
+      }},
+      "hazards_faced": [
+        {{
+          "type": "Hazard caused by missing {missing_phrase}",
+          "source": "YOLO detected PPE non-compliance",
+          "severity": "{severity}"
+        }}
+      ],
+      "risks": [
+        {{
+          "risk": "Two concise sentences explaining what could happen to Person {idx} and why the missing {missing_phrase} makes it likely.",
+          "likelihood": "{severity}",
+          "regulation_citation": "OSHA 1994 Section 15 and BOWEC 1986 general PPE duty",
+          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
+          "mitigation_steps": [
+            "Stop work in the affected zone until the required PPE is issued and verified.",
+            "Brief the worker on the observed hazard before work restarts.",
+            "Record photographic proof of corrected PPE compliance."
+          ]
+        }}
+      ],
+      "corrective_actions": [
+        "Stop work and remove Person {idx} from the affected zone until {missing_phrase} is worn correctly.",
+        "Supervisor must inspect PPE fit and record sign-off before work restarts.",
+        "Run a toolbox talk and follow-up audit within 48 hours."
+      ]
+    }}""")
+        if person_count > len(person_entries):
+            person_entries.append("""    {
+      "id": "Additional Persons",
+      "description": "Summarize the remaining observed workers only when evidence supports additional distinct observations.",
+      "ppe": {
+        "hardhat": "Not Mentioned",
+        "safety_vest": "Not Mentioned",
+        "mask": "Not Mentioned",
+        "gloves": "Not Mentioned",
+        "footwear": "Not Mentioned",
+        "goggles": "Not Mentioned"
+      },
+      "hazards_faced": [],
+      "risks": [],
+      "corrective_actions": []
+    }""")
+        person_entries_json = ',\n'.join(person_entries)
+
+        return f"""You are a Malaysian JKR/DOSH safety report JSON generator.
+Return exactly one valid JSON object. Do not return markdown. Do not return an empty object.
+
+Evidence:
+- Caption: {caption or 'No visual caption available'}
+- YOLO person count: {person_count}
+- YOLO missing PPE: {', '.join(missing_labels)}
+- Violation summary: {violation_summary or ', '.join(missing_labels)}
+- Severity: {severity}
+
+Rules:
+- Use YOLO as authoritative for PPE status.
+- Use environment_type "{detected_environment}" unless the evidence clearly proves a more specific category.
+- Analyse exactly {person_count} person(s).
+- Keep text concise, factual, and grounded in the evidence above.
+- Include every required top-level key.
+
+Required JSON object:
+{{
+  "environment_type": "{detected_environment}",
+  "visual_evidence": "The scene depicts a {detected_environment} setting. Describe the caption and YOLO PPE gaps in two concise factual sentences.",
+  "persons": [
+{person_entries_json}
+  ],
+  "summary": "Concise professional summary naming the incident class, core PPE breach, immediate risk, and critical action.",
+  "dosh_regulations_cited": [
+    {{
+      "regulation": "OSHA 1994 Section 15",
+      "requirement": "Employer must provide and maintain safe plant, systems of work, and protective equipment for the observed task.",
+      "explanation": "This applies because YOLO detected missing {missing_phrase} for a worker in the observed scene.",
+      "penalty": "DOSH may issue enforcement action, including a stop-work order or prosecution for continued non-compliance."
+    }}
+  ]
+}}"""
+
     def _call_ollama_api(
         self,
         prompt: str,
         allow_local_fallback: bool = True,
         fast_mode: bool = False,
+        report_data: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Call Ollama API or use local Llama to get NLP analysis (fallback).
@@ -1551,9 +1692,10 @@ RESPONSE FORMAT (JSON):
             time.sleep(min(5.0, backoff_seconds * max(1, attempt_no)))
 
         def _request_ollama_json(request_prompt: str, model_name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+            prompt_for_request = self._build_ollama_compact_report_prompt(report_data, request_prompt)
             payload = {
                 'model': model_name,
-                'prompt': request_prompt,
+                'prompt': prompt_for_request,
                 'context': [],
                 'stream': False,
                 'format': 'json',
@@ -1625,6 +1767,12 @@ RESPONSE FORMAT (JSON):
                     nlp_response = json.loads(raw_json)
                     if not isinstance(nlp_response, dict):
                         last_error = 'Ollama response JSON root must be an object'
+                        if attempt_no < max_attempts:
+                            _sleep_before_retry(attempt_no)
+                            continue
+                        return None, last_error
+                    if not nlp_response:
+                        last_error = 'Ollama response JSON was an empty object'
                         if attempt_no < max_attempts:
                             _sleep_before_retry(attempt_no)
                             continue
@@ -2005,6 +2153,7 @@ RESPONSE FORMAT (JSON):
                     prompt,
                     allow_local_fallback=False,
                     fast_mode=force_local_nlp,
+                    report_data=report_data,
                 )
                 self.last_nlp_model = self.last_ollama_model_used or self.model
                 if not nlp_analysis:
@@ -2015,6 +2164,7 @@ RESPONSE FORMAT (JSON):
                     prompt,
                     allow_local_fallback=True,
                     fast_mode=force_local_nlp,
+                    report_data=report_data,
                 )
                 self.last_nlp_model = self.last_ollama_model_used if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
@@ -3886,31 +4036,36 @@ RESPONSE FORMAT (JSON):
                 break
         return out
 
+    def _clean_plain_text_for_report(self, value: Any) -> str:
+        """Normalize report text without expanding every character."""
+        text = str(value or '').strip()
+        if not text:
+            return ''
+
+        # Best-effort mojibake repair for common UTF-8-as-Latin-1 artifacts.
+        if any(marker in text for marker in ('\u00c3', '\u00c2', '\u00e2')):
+            try:
+                decoded = text.encode('latin1').decode('utf-8')
+            except Exception:
+                decoded = ''
+            if decoded and decoded != text:
+                text = decoded
+
+        text = text.replace('\ufeff', '')
+        text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', text)
+        text = re.sub(r'\s*[\u2022\u2023\u2043\u2219\u25e6]+\s*', ', ', text)
+        text = re.sub(r'\s*(?:\u2192|\u21d2|\u27f6|\u279c|->)\s*', ' to ', text)
+        text = re.sub(r'^\s*[-\u2013\u2014]\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'\s{2,}', ' ', text)
+        return text.strip()
+
     def _sanitize_nlp_analysis(self, nlp_analysis: Any) -> Dict[str, Any]:
         """Normalize model output into a stable schema for robust rendering."""
         if not isinstance(nlp_analysis, dict):
             nlp_analysis = {}
 
         def _professionalize_text(value: Any) -> str:
-            text = str(value or '').strip()
-            if not text:
-                return ''
-            for _ in range(2):
-                if not any(marker in text for marker in ('', '', '')):
-                    break
-                try:
-                    decoded = text.encode('latin1').decode('utf-8')
-                except Exception:
-                    break
-                if decoded and decoded != text:
-                    text = decoded
-                else:
-                    break
-            text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', text)
-            text = text.replace('', ', ').replace('', ' to ')
-            text = re.sub(r'^\s*[-\u2013\u2014]\s+', '', text, flags=re.MULTILINE)
-            text = re.sub(r'\s{2,}', ' ', text)
-            return text.strip()
+            return self._clean_plain_text_for_report(value)
 
         def _as_clean_str(value: Any) -> str:
             return _professionalize_text(value)
@@ -4036,15 +4191,6 @@ RESPONSE FORMAT (JSON):
 
         normalized['persons'] = persons_out
         return normalized
-
-    def _to_safe_html_text(self, text: Any) -> str:
-        """Convert text to safe HTML, handling None/types."""
-        if text is None: return ""
-        safe_text = str(text)
-        safe_text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', safe_text)
-        safe_text = safe_text.replace('', ', ').replace('', ' to ')
-        safe_text = re.sub(r'^\s*[-\u2013\u2014]\s+', '', safe_text, flags=re.MULTILINE)
-        return html.escape(safe_text)
 
     def _content_tokens(self, text: str) -> List[str]:
         """Extract lightweight content tokens for lexical grounding checks."""
@@ -4298,7 +4444,8 @@ RESPONSE FORMAT (JSON):
         """Escape user/model text for safe HTML rendering and preserve line breaks."""
         if value is None:
             return ""
-        return html.escape(str(value), quote=True).replace('\n', '<br>')
+        safe_text = self._clean_plain_text_for_report(value)
+        return html.escape(safe_text, quote=True).replace('\n', '<br>')
 
     def _generate_caption_history_section(self, report_data: Dict[str, Any]) -> str:
         """Generate caption history section if available."""

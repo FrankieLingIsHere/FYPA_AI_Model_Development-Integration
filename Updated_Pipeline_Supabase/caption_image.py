@@ -17,6 +17,7 @@ import requests
 import json
 import time
 import hashlib
+import re
 import shutil
 import subprocess
 import logging
@@ -75,7 +76,10 @@ GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL',
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
-OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)
+OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 360)
+OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
+OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
+OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
 OLLAMA_AUTO_RECOVER_ENABLED = os.getenv('OLLAMA_AUTO_RECOVER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
 OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS = max(5, _safe_int_env('OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS', 45))
 OLLAMA_AUTO_RECOVER_WAIT_SECONDS = max(1, _safe_int_env('OLLAMA_AUTO_RECOVER_WAIT_SECONDS', 8))
@@ -622,11 +626,16 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
         'prompt': prompt,
         'images': [image_base64],
         'stream': False,
+        'keep_alive': os.getenv('OLLAMA_VISION_KEEP_ALIVE', '0'),
         'options': {
             'temperature': temperature,
-            'num_predict': max_tokens
+            'num_predict': max_tokens,
+            'num_ctx': OLLAMA_VISION_NUM_CTX,
+            'num_gpu': OLLAMA_VISION_NUM_GPU,
         }
     }
+    if OLLAMA_VISION_NUM_THREAD > 0:
+        payload['options']['num_thread'] = OLLAMA_VISION_NUM_THREAD
 
     try:
         started = time.perf_counter()
@@ -644,7 +653,12 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
                 response = requests.post(OLLAMA_API_URL, json=payload, timeout=_get_ollama_request_timeout())
 
         if not response.ok:
-            _record_provider_failure('ollama', f"HTTP {response.status_code}")
+            try:
+                error_detail = response.json().get('error', '')
+            except Exception:
+                error_detail = response.text[:160] if response.text else ''
+            error_suffix = f": {error_detail}" if error_detail else ''
+            _record_provider_failure('ollama', f"HTTP {response.status_code}{error_suffix}")
             return ''
 
         text = response.json().get('response', '').strip()
@@ -686,7 +700,12 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
                         return text
                     _record_provider_failure('ollama', 'Empty response text')
                     return ''
-                _record_provider_failure('ollama', f"HTTP {retry_response.status_code}")
+                try:
+                    retry_error_detail = retry_response.json().get('error', '')
+                except Exception:
+                    retry_error_detail = retry_response.text[:160] if retry_response.text else ''
+                retry_error_suffix = f": {retry_error_detail}" if retry_error_detail else ''
+                _record_provider_failure('ollama', f"HTTP {retry_response.status_code}{retry_error_suffix}")
                 return ''
             except Exception as retry_error:
                 _record_provider_failure('ollama', str(retry_error))
@@ -769,6 +788,12 @@ def _normalize_caption_text(caption: str) -> str:
 
     text = ' '.join(filtered).strip()
     text = text.replace('  ', ' ')
+    text = re.sub(
+        r"(?is)^here[’']s\s+(?:a\s+)?(?:brief|descriptive|factual)?\s*paragraph\s+"
+        r"(?:based\s+(?:solely\s+)?on|from|describing)[^:]{0,120}:\s*",
+        "",
+        text,
+    ).strip()
     return text
 
 
@@ -781,12 +806,15 @@ def _caption_needs_expansion(caption: str) -> bool:
         return True
     generic_markers = (
         'person is visible',
-        'indoor setting',
         'outdoor setting',
         'a person is visible',
         'people are visible',
     )
-    return any(marker in lowered for marker in generic_markers)
+    if any(marker in lowered for marker in generic_markers):
+        return True
+    if 'indoor setting' in lowered and len(caption) < 180:
+        return True
+    return False
 
 def check_ollama_running():
     """Check if Ollama is running."""
@@ -836,28 +864,19 @@ def caption_image_llava(image_path, prompt=None):
     print(f"Image loaded: {Path(image_path).name}")
 
     # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
-    default_prompt = """You are a workplace visual analyst. Write a factual caption from this image only.
+    default_prompt = """You are a workplace visual analyst. Write one factual caption from this image only.
 
-Output requirements (single paragraph, 6-10 sentences):
-1) Start with total visible people count and scene type (residential, office, warehouse, roadside, construction, etc.).
-2) For each visible person, describe:
-    - what the person is doing (action/posture/interaction)
-    - which body region is visible (full body / upper body / head only)
-    - the person's situation/context (near vehicle, near machinery, indoors at home, standing idle, using phone, etc.)
-3) Describe specific nearby objects/conditions that affect safety context (machines, traffic lane, material stacks, wet floor, barricades, tools).
-4) Mention PPE only when clearly visible and certain.
-5) If PPE region is not visible, explicitly say it is not visible instead of guessing.
-6) End with concise safety context based on visible facts only.
+Output requirements:
+- Single paragraph, 3-5 concise sentences.
+- Start with the total visible people count and the actual scene type (for example indoor office, residential room, warehouse, roadside, construction site) based only on visible evidence.
+- Describe visible body region, posture, clothing, eyewear, and nearby room or site features.
+- Mention PPE only when clearly visible; if none is visible, say no PPE is visible.
 
 Strict grounding rules:
-- Do NOT invent tools, hazards, or PPE that are not clearly visible.
-- Do NOT assume construction/worksite unless visual evidence supports it.
-- Hardhat must be a rigid safety helmet; hair/cap/hood is not a hardhat.
-- Safety vest must be fluorescent and reflective to be considered a safety vest.
-
-Style:
-- Natural professional English, no bullet points, no markdown.
-- Avoid generic phrases like "In the image" or "The image shows".
+- Do not invent objects, actions, hazards, phones, tablets, vehicles, roads, machinery, tools, or construction activity.
+- Do not infer a worksite or traffic context unless those objects are clearly visible.
+- If visibility is unclear, say it is unclear instead of guessing.
+- Natural professional English, no bullet points, no markdown, no preamble.
 """
     caption_prompt = str(prompt or '').strip() or default_prompt
 

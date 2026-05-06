@@ -29,6 +29,8 @@ os.environ.setdefault("SUPABASE_URL", "https://projtest123.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "service-role-test-key")
 
 from casm_app import _enforce_caption_quality_floor
+from caption_image import _caption_needs_expansion, _normalize_caption_text
+from pipeline.backend.integration.caption_generator import CaptionGenerator
 from pipeline.backend.core.report_generator import ReportGenerator
 
 
@@ -56,8 +58,32 @@ def test_casm_caption_quality_augments_short_real_caption():
     _assert(applied is True, "Expected short caption to be augmented with YOLO context")
     _assert(reason == "augmented_too_short", f"Unexpected reason: {reason}")
     _assert(caption.startswith(raw_caption), "Expected original model caption to remain first")
-    _assert("YOLO evidence:" in caption, "Expected YOLO addendum")
+    _assert("YOLO detection identified 1 person(s)" in caption, "Expected YOLO addendum")
     _assert("Auto-generated safety summary" not in caption, "Legacy fallback template leaked")
+
+
+def test_casm_caption_quality_adds_yolo_context_to_rich_caption():
+    raw_caption = (
+        "One individual is visible from the chest up in an indoor office setting. "
+        "The person is wearing glasses and a dark jacket while facing the camera. "
+        "No compliant construction PPE is clearly visible in the frame."
+    )
+
+    caption, applied, reason = _enforce_caption_quality_floor(
+        raw_caption,
+        DETECTIONS,
+        violation_types=["NO-Hardhat", "NO-Safety Vest"],
+    )
+
+    _assert(applied is True, "Expected rich VLM caption to receive YOLO addendum")
+    _assert(reason == "augmented_yolo_context", f"Unexpected reason: {reason}")
+    _assert(caption.startswith(raw_caption), "Expected original rich model caption to remain first")
+    _assert(
+        "YOLO detection identified 1 person(s) in the frame with the following PPE deficiencies: "
+        "Missing Hard Hat, Missing Safety Vest." in caption,
+        "Expected exact YOLO deficiencies addendum",
+    )
+    _assert(not caption.startswith("Detection-only safety summary:"), "Real caption was replaced by fallback")
 
 
 def test_casm_caption_quality_replaces_provider_failure_only():
@@ -86,11 +112,41 @@ def test_report_generator_keeps_non_placeholder_caption():
     _assert(caption == report_data["caption"], "ReportGenerator should not overwrite real VLM captions")
 
 
+def test_caption_generator_image_path_does_not_shadow_os_module():
+    subject = CaptionGenerator.__new__(CaptionGenerator)
+    subject.config = {"GEMINI_CONFIG": {"enabled": False}}
+    subject.backend = "none"
+    subject.model_loaded = False
+    subject._gemini_client = None
+
+    caption = subject.generate_caption("nonexistent-test-image.jpg")
+
+    _assert("Image captioning not available" in caption, "Expected graceful caption backend unavailable response")
+
+
+def test_caption_cleanup_removes_model_preamble_without_forcing_expansion():
+    raw = (
+        "Here's a descriptive paragraph based on the image, adhering to your requirements: "
+        "There is one person visible in this indoor setting. The individual is wearing glasses "
+        "and a gray jacket in a room with white walls and green ceiling panels. No personal "
+        "protective equipment is visible."
+    )
+
+    cleaned = _normalize_caption_text(raw)
+
+    _assert(cleaned.startswith("There is one person visible"), "Expected model preamble to be removed")
+    _assert("Here's" not in cleaned, "Caption cleanup left model preamble")
+    _assert(_caption_needs_expansion(cleaned) is False, "Detailed indoor caption should not be expanded again")
+
+
 def main():
     tests = [
         test_casm_caption_quality_augments_short_real_caption,
+        test_casm_caption_quality_adds_yolo_context_to_rich_caption,
         test_casm_caption_quality_replaces_provider_failure_only,
         test_report_generator_keeps_non_placeholder_caption,
+        test_caption_generator_image_path_does_not_shadow_os_module,
+        test_caption_cleanup_removes_model_preamble_without_forcing_expansion,
     ]
     failures = []
     for test_fn in tests:

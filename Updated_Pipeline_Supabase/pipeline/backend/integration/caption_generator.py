@@ -191,6 +191,9 @@ class CaptionGenerator:
                     try:
                         caption = caption_image_llava(image_path, prompt=prompt)
                         if caption and len(caption.strip()) > 0:
+                            if str(caption).strip().startswith('ALERT_'):
+                                logger.warning(f"Legacy caption backend unavailable: {caption[:140]}...")
+                                return caption.strip()
                             self.model_loaded = True
                             logger.info(f"Legacy caption generated: {caption[:100]}...")
                             return caption.strip()
@@ -214,7 +217,6 @@ class CaptionGenerator:
             # Clean up temp file
             if temp_file:
                 try:
-                    import os
                     os.unlink(temp_file.name)
                 except:
                     pass
@@ -248,7 +250,7 @@ class CaptionGenerator:
         if self.backend == 'gemini':
             status['model'] = 'Gemini 2.0 Flash (Google AI)'
         elif self.backend == 'legacy':
-            status['model'] = 'Qwen2.5-VL-3B-Instruct (Q4_K_M GGUF)'
+            status['model'] = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', 'gemma3:4b'))
         else:
             status['model'] = 'None'
 

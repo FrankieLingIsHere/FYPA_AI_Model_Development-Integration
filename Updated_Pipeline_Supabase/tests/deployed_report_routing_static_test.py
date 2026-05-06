@@ -22,6 +22,18 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('Promise.allSettled', api_js)
         self.assertIn('calculateStatsFromViolations(merged)', api_js)
         self.assertIn('this.mergeLocalReportDrafts(merged, safeLimit)', api_js)
+        self.assertIn('cached_rows: this.stripLocalDraftRuntimeFields(merged)', api_js)
+        self.assertNotIn('return readyCount || list.length', api_js)
+        self.assertIn("status === 'completed'", api_js)
+        self.assertIn("!!item.local_report_url", api_js)
+
+    def test_backend_stats_scope_matches_cloud_staging_semantics(self):
+        casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+
+        self.assertIn("active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))", casm_app)
+        self.assertIn("explicit_scope == 'synced_local'", casm_app)
+        self.assertIn("active_profile == 'cloud' and has_local_artifacts and not is_local_device", casm_app)
+        self.assertIn('return \'cloud\'', casm_app)
 
     def test_local_realtime_uses_sse_and_backend_push_rows(self):
         realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')

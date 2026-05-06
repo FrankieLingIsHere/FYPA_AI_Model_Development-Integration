@@ -615,7 +615,7 @@ const API = {
 
     countGeneratedReportsFromViolations(violations = []) {
         const list = Array.isArray(violations) ? violations : [];
-        const readyCount = list.filter((item) => {
+        return list.filter((item) => {
             if (!item || typeof item !== 'object') return false;
             const status = String(item.status || '').trim().toLowerCase();
             return (
@@ -627,7 +627,6 @@ const API = {
                 || !!item.local_report_url
             );
         }).length;
-        return readyCount || list.length;
     },
 
     enrichStatsWithViolations(baseStats, violations) {
@@ -1558,7 +1557,8 @@ const API = {
                             headers: { 'Content-Type': 'application/json' },
                             cache: 'no-store',
                             body: JSON.stringify({
-                                cached_cloud_rows: cachedCloudRows,
+                                cached_rows: this.stripLocalDraftRuntimeFields(merged),
+                                cached_cloud_rows_count: cachedCloudRows.length,
                                 client_merged_count: merged.length
                             })
                         }, 9000);

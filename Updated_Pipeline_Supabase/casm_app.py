@@ -1953,13 +1953,16 @@ def initialize_pipeline_components():
             if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
                 _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
                 logger.info("Checking for stuck reports...")
-                fixed = _run_with_timeout(
-                    db_manager.fix_stuck_reports,
-                    int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
-                    'fix_stuck_reports'
-                )
-                if fixed > 0:
-                    logger.info(f"âœ“ Fixed {fixed} stuck reports")
+                try:
+                    fixed = _run_with_timeout(
+                        db_manager.fix_stuck_reports,
+                        int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
+                        'fix_stuck_reports'
+                    )
+                    if fixed > 0:
+                        logger.info(f"âœ“ Fixed {fixed} stuck reports")
+                except Exception as sweep_error:
+                    logger.warning(f"Stuck report recovery skipped during startup: {sweep_error}")
         
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')

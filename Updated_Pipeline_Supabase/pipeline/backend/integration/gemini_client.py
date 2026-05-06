@@ -1,10 +1,10 @@
 """
-Gemini Client — Unified AI provider for captioning and report generation
+Gemini Client  Unified AI provider for captioning and report generation
 =========================================================================
 
 Replaces Ollama (LLaVA + Llama3 + nomic-embed-text) with Google Gemini API.
 Provides:
-  1. Image captioning (multimodal — Gemini sees images directly)
+  1. Image captioning (multimodal  Gemini sees images directly)
   2. NLP report generation (structured JSON output)
 
 No GPU, no Ollama, no local model files needed.
@@ -34,7 +34,7 @@ try:
     from google import genai
     from google.genai import types
     GEMINI_AVAILABLE = True
-    logger.info("✓ Google GenAI SDK loaded successfully")
+    logger.info(" Google GenAI SDK loaded successfully")
 except ImportError as e:
     GEMINI_ERROR = f"google-genai not installed: {e}"
     _import_log = logger.error if GEMINI_REQUIRED_BY_DEFAULT else logger.warning
@@ -45,17 +45,17 @@ except ImportError as e:
 class GeminiClient:
     """
     Unified Gemini API client for image captioning and NLP report generation.
-    
+
     Replaces:
       - caption_image_llava() (LLaVA/Qwen2.5-VL via Ollama)
       - _call_ollama_api() (Llama3 via Ollama)
       - _get_ollama_embeddings() (nomic-embed-text via Ollama)
     """
-    
+
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize Gemini client.
-        
+
         Args:
             config: Configuration dictionary. Expected keys:
                 - GEMINI_CONFIG: {api_key, model, temperature, max_tokens, ...}
@@ -137,22 +137,22 @@ class GeminiClient:
             self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2
         except ValueError:
             self.report_temperature_cap = 0.2
-        
+
         # Rate limiter state
         self._last_call_time = 0
         self._min_interval = gemini_config.get('min_interval', 0.35 if self.paid_plan else 4.0)
-        
+
         # Initialize the client
         self.client = None
         self._initialized = False
 
         unavailable_log = logger.error if self.required else logger.warning
-        
+
         if not GEMINI_AVAILABLE:
             unavailable_log(f"Gemini SDK not available: {GEMINI_ERROR}")
             self.last_error = GEMINI_ERROR
             return
-            
+
         if not self.api_key:
             if self.required:
                 logger.error("GEMINI_API_KEY not set. Add it to .env file.")
@@ -160,15 +160,15 @@ class GeminiClient:
                 logger.info("GEMINI_API_KEY not set; Gemini disabled and fallback providers will be used")
             self.last_error = "GEMINI_API_KEY not set"
             return
-        
+
         try:
             self.client = genai.Client(api_key=self.api_key)
             self._initialized = True
             logger.info(
-                f"✓ Gemini client initialized (report_model: {self.model_name}, vision_model: {self.vision_model_name}, keys: {len(self.api_keys)})"
+                f" Gemini client initialized (report_model: {self.model_name}, vision_model: {self.vision_model_name}, keys: {len(self.api_keys)})"
             )
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Gemini client: {e}")
+            logger.error(f"Failed to initialize Gemini client: {e}")
             self.last_error = str(e)
 
     def _switch_to_next_api_key(self, reason: str) -> bool:
@@ -193,12 +193,12 @@ class GeminiClient:
                 logger.warning(f"Failed to activate Gemini API key at slot {next_index + 1}: {e}")
 
         return False
-    
+
     @property
     def is_available(self) -> bool:
         """Check if Gemini client is ready."""
         return self._initialized and self.client is not None
-    
+
     def _rate_limit(self):
         """Simple rate limiter; interval is configurable and can be lower for paid plans."""
         now = time.time()
@@ -228,14 +228,14 @@ class GeminiClient:
         self.last_model_switch_reason = reason
         logger.warning(f"Switching Gemini model from {previous} to {self.model_name} due to: {reason}")
         return True
-    
+
     def _load_image_as_part(self, image_path: str) -> Optional[Any]:
         """
         Load an image file and return it as a Gemini-compatible part.
-        
+
         Args:
             image_path: Path to the image file
-            
+
         Returns:
             Image part for Gemini API, or None if failed
         """
@@ -244,7 +244,7 @@ class GeminiClient:
             if not path.exists():
                 logger.error(f"Image not found: {image_path}")
                 return None
-            
+
             # Determine MIME type
             suffix = path.suffix.lower()
             mime_map = {
@@ -255,15 +255,15 @@ class GeminiClient:
                 '.gif': 'image/gif',
             }
             mime_type = mime_map.get(suffix, 'image/jpeg')
-            
+
             # Read image data
             image_data = path.read_bytes()
-            
+
             return types.Part.from_bytes(
                 data=image_data,
                 mime_type=mime_type
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to load image {image_path}: {e}")
             return None
@@ -472,11 +472,11 @@ class GeminiClient:
         except Exception as e:
             logger.warning(f"Gemini JSON repair attempt failed: {e}")
             return None
-    
+
     # =========================================================================
     # IMAGE CAPTIONING
     # =========================================================================
-    
+
     def caption_image(
         self,
         image_path: str,
@@ -484,19 +484,19 @@ class GeminiClient:
     ) -> str:
         """
         Generate a safety-focused caption for an image using Gemini Vision.
-        
+
         Replaces: caption_image_llava() from caption_image.py
-        
+
         Args:
             image_path: Path to the image file
             custom_prompt: Optional custom prompt override
-            
+
         Returns:
             Generated caption string
         """
         if not self.is_available:
-            return "Image captioning not available — Gemini API not configured"
-        
+            return "Image captioning not available. Gemini API is not configured"
+
         # Default safety-focused prompt with stronger people/action/situation structure.
         # Aligned with Local Mode successful pattern for maximum descriptive quality.
         prompt = custom_prompt or (
@@ -510,19 +510,19 @@ class GeminiClient:
             "- Be specific and factual. Do not invent details.\n"
             "- Professional natural English, no markdown, avoid 'In the image'."
         )
-        
+
         # Load image
         image_part = self._load_image_as_part(image_path)
         if not image_part:
             return f"Error: Could not load image from {image_path}"
-        
+
         # Call Gemini with retry
         for attempt in range(self.max_retries):
             try:
                 self._rate_limit()
-                
+
                 logger.info(f"Generating caption (attempt {attempt + 1}/{self.max_retries})...")
-                
+
                 response = self.client.models.generate_content(
                     model=self.vision_model_name,
                     contents=[prompt, image_part],
@@ -531,14 +531,14 @@ class GeminiClient:
                         max_output_tokens=700,
                     )
                 )
-                
+
                 if response and response.text:
                     caption = response.text.strip()
-                    logger.info(f"✓ Caption generated ({len(caption)} chars): {caption[:100]}...")
+                    logger.info(f" Caption generated ({len(caption)} chars): {caption[:100]}...")
                     return caption
                 else:
                     logger.warning(f"Empty response from Gemini (attempt {attempt + 1})")
-                    
+
             except Exception as e:
                 err_text = str(e)
                 logger.error(f"Gemini captioning error (attempt {attempt + 1}): {err_text}")
@@ -559,13 +559,13 @@ class GeminiClient:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)
-        
+
         return "Failed to generate caption after multiple attempts"
-    
+
     # =========================================================================
     # NLP REPORT GENERATION
     # =========================================================================
-    
+
     def generate_report_json(
         self,
         prompt: str,
@@ -574,13 +574,13 @@ class GeminiClient:
     ) -> Optional[Dict[str, Any]]:
         """
         Generate structured NLP report analysis as JSON.
-        
+
         Replaces: _call_ollama_api() in report_generator.py
-        
+
         Args:
             prompt: The full NLP prompt with context and instructions
             image_path: Optional image to include for multimodal analysis
-            
+
         Returns:
             Parsed JSON dict, or None if failed
         """
@@ -598,25 +598,25 @@ class GeminiClient:
             return None
 
         self.last_model_switch_reason = None
-        
+
         tight_prompt = self._tighten_prompt_for_json(prompt)
 
         # Build content parts
         contents = [tight_prompt]
-        
+
         # Optionally include the image for multimodal analysis
         if image_path:
             image_part = self._load_image_as_part(image_path)
             if image_part:
                 contents.insert(0, image_part)  # Image first, then prompt
-        
+
         # Call Gemini with retry
         for attempt in range(self.max_retries):
             try:
                 self._rate_limit()
-                
+
                 logger.info(f"Generating NLP report JSON (attempt {attempt + 1}/{self.max_retries})...")
-                
+
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=contents,
@@ -626,12 +626,12 @@ class GeminiClient:
                         response_mime_type="application/json",
                     )
                 )
-                
+
                 if response and response.text:
                     raw_text = response.text.strip()
                     result = self._parse_json_from_response_text(raw_text)
                     if result is not None:
-                        logger.info("✓ NLP report JSON generated successfully")
+                        logger.info(" NLP report JSON generated successfully")
                         self.last_error = None
                         self._capture_nlp_debug(
                             report_id=report_id,
@@ -646,7 +646,7 @@ class GeminiClient:
 
                     repaired = self._repair_json_with_gemini(raw_text)
                     if repaired is not None:
-                        logger.info("✓ NLP report JSON repaired successfully")
+                        logger.info(" NLP report JSON repaired successfully")
                         self.last_error = None
                         self._capture_nlp_debug(
                             report_id=report_id,
@@ -683,7 +683,7 @@ class GeminiClient:
                         success=False,
                         error=self.last_error,
                     )
-                    
+
             except json.JSONDecodeError as e:
                 self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
                 logger.error(self.last_error)
@@ -732,12 +732,12 @@ class GeminiClient:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)
-        
+
         logger.error("Failed to generate NLP report after all retries")
         if not self.last_error:
             self.last_error = "Failed to generate NLP report after all retries"
         return None
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get Gemini client status."""
         return {
@@ -765,11 +765,11 @@ class GeminiClient:
 def load_regulations(regulations_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Load Malaysian safety regulations from JSON file.
-    
+
     Args:
         regulations_path: Path to the regulations JSON file.
                          Defaults to pipeline/backend/data/malaysian_regulations.json
-    
+
     Returns:
         Regulations dictionary
     """
@@ -777,11 +777,11 @@ def load_regulations(regulations_path: Optional[str] = None) -> Dict[str, Any]:
         regulations_path = Path(__file__).parent.parent / 'data' / 'malaysian_regulations.json'
     else:
         regulations_path = Path(regulations_path)
-    
+
     try:
         with open(regulations_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        logger.info(f"✓ Loaded {len(data.get('regulations', {}))} regulation entries from {regulations_path.name}")
+        logger.info(f" Loaded {len(data.get('regulations', {}))} regulation entries from {regulations_path.name}")
         return data
     except FileNotFoundError:
         logger.error(f"Regulations file not found: {regulations_path}")
@@ -794,24 +794,24 @@ def load_regulations(regulations_path: Optional[str] = None) -> Dict[str, Any]:
 def build_regulation_context(regulations_data: Dict[str, Any], detected_violations: list = None, environment_type: str = None) -> str:
     """
     Build regulation context text for injection into the NLP prompt.
-    
+
     Instead of RAG/ChromaDB vector search, this feeds the actual regulation text
     directly into the prompt (leveraging Gemini's large context window).
-    
+
     Args:
         regulations_data: Full regulations dict from load_regulations()
         detected_violations: List of violation class names (e.g., ['NO-Hardhat', 'NO-Safety Vest'])
         environment_type: Detected environment type (e.g., 'Construction Site')
-    
+
     Returns:
         Formatted regulation context string for prompt injection
     """
     if not regulations_data:
         return ""
-    
+
     sections = []
     sections.append("=== MALAYSIAN PPE SAFETY REGULATIONS (Authoritative Legal Source) ===\n")
-    
+
     # Add acronym definitions
     acronyms = regulations_data.get('acronyms', {})
     if acronyms:
@@ -819,10 +819,10 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
         for abbrev, full_name in acronyms.items():
             sections.append(f"  {abbrev} = {full_name}")
         sections.append("")
-    
+
     # Add relevant PPE regulations
     regs = regulations_data.get('regulations', {})
-    
+
     # If we know the violations, only include relevant regulations
     relevant_keys = set()
     if detected_violations:
@@ -843,7 +843,7 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
     else:
         # Include all if we don't know the violations
         relevant_keys = set(regs.keys())
-    
+
     if relevant_keys:
         sections.append("APPLICABLE PPE REGULATIONS:")
         for key in relevant_keys:
@@ -858,7 +858,7 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
                 sections.append(f"  Risk: {reg.get('risk', 'N/A')}")
                 sections.append(f"  Corrective Action: {reg.get('corrective_action', 'N/A')}")
                 sections.append(f"  Penalty: {reg.get('penalty', 'N/A')}")
-    
+
     # Add environment-specific rules
     env_rules = regulations_data.get('environment_rules', {})
     if environment_type and environment_type in env_rules:
@@ -866,13 +866,13 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
         sections.append(f"\nENVIRONMENT-SPECIFIC RULES ({environment_type}):")
         sections.append(f"  Primary Regulation: {rule.get('primary_regulation', 'N/A')}")
         for req in rule.get('requirements', []):
-            sections.append(f"  • {req}")
+            sections.append(f"   {req}")
         sections.append(f"  Penalty: {rule.get('penalty', 'N/A')}")
-    
+
     sections.append("\n=== END REGULATIONS ===\n")
     sections.append("IMPORTANT: You MUST cite the specific regulation references above in your report. "
                     "Do NOT make up regulation numbers. Use only the citations provided.\n")
-    
+
     return "\n".join(sections)
 
 
@@ -883,18 +883,18 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
 if __name__ == '__main__':
     import os
     from dotenv import load_dotenv
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     load_dotenv()
-    
+
     print("=" * 70)
     print("GEMINI CLIENT TEST")
     print("=" * 70)
-    
+
     config = {
         'GEMINI_CONFIG': {
             'api_key': os.getenv('GEMINI_API_KEY', ''),
@@ -902,14 +902,14 @@ if __name__ == '__main__':
             'temperature': 0.4,
         }
     }
-    
+
     client = GeminiClient(config)
     status = client.get_status()
-    
+
     print(f"\nStatus:")
     for key, value in status.items():
         print(f"  {key}: {value}")
-    
+
     # Test regulation loading
     print("\n--- Testing Regulation Loader ---")
     regs = load_regulations()
@@ -922,5 +922,5 @@ if __name__ == '__main__':
         )
         print(f"Regulation context ({len(context)} chars):")
         print(context[:500])
-    
+
     print("\n" + "=" * 70)

@@ -685,7 +685,7 @@ function initializeProvisioningStatusTracker() {
 
 // Main Application Entry Point
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 PPE Safety Monitor - Initializing...');
+    console.log('PPE Safety Monitor initializing...');
     ensurePwaDocumentMarkers();
     initializeNetworkIndicator();
     registerPwaSupport();
@@ -775,7 +775,7 @@ async function initializeWithStartupGate() {
 
     appBootstrapped = true;
     body.classList.remove('startup-loading');
-    console.log('✅ Application ready!');
+    console.log('Application ready.');
 }
 
 async function waitForStartupReady() {
@@ -1021,9 +1021,9 @@ function registerPwaSupport() {
     window.addEventListener('load', async () => {
         try {
             const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-            console.log('✅ Service worker registered:', registration.scope);
+            console.log('Service worker registered:', registration.scope);
         } catch (error) {
-            console.warn('⚠️ Service worker registration failed:', error);
+            console.warn('Service worker registration failed:', error);
         }
     }, { once: true });
 }

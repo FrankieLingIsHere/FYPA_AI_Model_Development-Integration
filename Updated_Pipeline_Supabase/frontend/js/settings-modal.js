@@ -225,30 +225,10 @@ const GlobalSettingsModal = {
 
                 <div class="global-settings-content">
                     <div class="global-settings-tabs">
-                        <button type="button" class="global-settings-tab active" data-global-settings-tab="Dsettings">Detection Settings</button>
-                        <button type="button" class="global-settings-tab" data-global-settings-tab="Psettings">Processing Settings</button>
-                        <button type="button" class="global-settings-tab" data-global-settings-tab="Asettings">Audio Settings</button>
+                        <button type="button" class="global-settings-tab active" data-global-settings-tab="Psettings">Processing Settings</button>
                     </div>
 
-                    <section id="global-settings-tab-Dsettings" class="global-settings-section active">
-                        <h3 style="margin-top: 0;">Detection Settings</h3>
-                        <div class="global-settings-grid">
-                            <div class="global-settings-card">
-                                <h4>Active PPE Classes</h4>
-                                <p style="margin: 0; color: var(--text-secondary);">Hardhat, Safety Vest, Mask, Gloves, Safety Shoes, Goggles, and NO-* violation classes.</p>
-                            </div>
-                            <div class="global-settings-card">
-                                <h4>Violation Rules</h4>
-                                <ul style="margin: 0 0 0 1.1rem; color: var(--text-secondary); line-height: 1.7;">
-                                    <li>NO-Hardhat triggers immediate violation report flow.</li>
-                                    <li>Detection confidence threshold remains optimized for safety recall.</li>
-                                    <li>Frames are processed with live pipeline quality controls.</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </section>
-
-                    <section id="global-settings-tab-Psettings" class="global-settings-section">
+                    <section id="global-settings-tab-Psettings" class="global-settings-section active">
                         <h3 style="margin-top: 0;">Processing Settings</h3>
 
                         <div class="global-settings-grid">
@@ -367,41 +347,6 @@ const GlobalSettingsModal = {
                                 </button>
                             </div>
                             <div id="globalTestModeStatus" class="global-settings-status" style="margin-top: 0.65rem; white-space: pre-wrap;"></div>
-                        </div>
-                    </section>
-
-                    <section id="global-settings-tab-Asettings" class="global-settings-section">
-                        <h3 style="margin-top: 0;">Audio Settings</h3>
-                        <div class="global-settings-grid">
-                            <div class="global-settings-card">
-                                <h4><i class="fas fa-volume-up" style="color: var(--primary-color);"></i> Voice Alert Volume</h4>
-                                <div style="display:flex;align-items:center;gap:0.7rem;margin-top:0.4rem;">
-                                    <input type="range" id="globalVolumeSlider" min="0" max="100" value="100" aria-label="Voice alert volume" style="flex:1;">
-                                    <span id="globalVolumeValue" style="font-weight:700;min-width:54px;text-align:center;">100%</span>
-                                </div>
-                                <label style="display:flex;align-items:center;gap:0.55rem;margin-top:0.85rem;font-weight:600;">
-                                    <input type="checkbox" id="globalMuteAllToggle">
-                                    <span>Mute All Voice Alerts</span>
-                                </label>
-                                <label style="display:flex;align-items:center;gap:0.55rem;margin-top:0.55rem;font-weight:600;">
-                                    <input type="checkbox" id="globalChimeToggle">
-                                    <span>Notification Chime</span>
-                                </label>
-                                <button id="globalApplyAudioBtn" class="btn btn-primary" type="button" style="margin-top:0.75rem;width:100%;">
-                                    <i class="fas fa-save"></i> Apply Audio Settings
-                                </button>
-                            </div>
-
-                            <div class="global-settings-card">
-                                <h4><i class="fas fa-user-voice" style="color: var(--warning-color);"></i> Voice Output</h4>
-                                <label style="font-weight:600;display:block;margin-top:0.35rem;">Preferred Voice</label>
-                                <select id="globalVoiceSelect" class="global-provider-input" style="margin-top:0.35rem;"></select>
-                                <label style="font-weight:600;display:block;margin-top:0.5rem;">Or custom voice name</label>
-                                <input id="globalVoiceCustom" class="global-provider-input" placeholder="Custom voice name" style="margin-top:0.35rem;">
-                                <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-top:0.75rem;">
-                                    <button id="globalTestVoiceBtn" class="btn btn-secondary" type="button"><i class="fas fa-play"></i> Test Voice</button>
-                                </div>
-                            </div>
                         </div>
                     </section>
                 </div>
@@ -2100,7 +2045,7 @@ const GlobalSettingsModal = {
     },
 
     activateTab(tabKey) {
-        const normalized = String(tabKey || 'Dsettings').trim() || 'Dsettings';
+        const normalized = String(tabKey || 'Psettings').trim() || 'Psettings';
         document.querySelectorAll('.global-settings-tab').forEach((tab) => {
             tab.classList.toggle('active', tab.dataset.globalSettingsTab === normalized);
         });
@@ -2158,14 +2103,13 @@ const GlobalSettingsModal = {
         if (options && options.focusLocalCheckup) {
             this.activateTab('Psettings');
         } else {
-            this.activateTab('Dsettings');
+            this.activateTab('Psettings');
         }
 
         await Promise.all([
             this.loadCurrentSettings(),
             this.loadProviderRoutingSettings(),
-            this.refreshProvisioningState(),
-            this.loadAudioSettings()
+            this.refreshProvisioningState()
         ]);
         this.updateHeartbeatBadge();
 
@@ -2363,7 +2307,7 @@ const GlobalSettingsModal = {
 
         document.querySelectorAll('.global-settings-tab').forEach((tab) => {
             tab.addEventListener('click', () => {
-                this.activateTab(tab.dataset.globalSettingsTab || 'Dsettings');
+                this.activateTab(tab.dataset.globalSettingsTab || 'Psettings');
             });
         });
 

@@ -31,12 +31,12 @@ gemini_client_instance = None
 try:
     from pipeline.backend.integration.gemini_client import GeminiClient
     GEMINI_CAPTION_AVAILABLE = True
-    logger.info("✓ Gemini caption backend available")
+    logger.info("Gemini caption backend available")
 except ImportError as e:
     logger.info(f"Gemini backend not available: {e}")
 
 # =========================================================================
-# LEGACY BACKEND (Fallback — Qwen2.5-VL via llama.cpp)
+# LEGACY BACKEND (Fallback  Qwen2.5-VL via llama.cpp)
 # =========================================================================
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
@@ -46,7 +46,7 @@ LEGACY_CAPTION_AVAILABLE = False
 try:
     from caption_image import caption_image_llava
     LEGACY_CAPTION_AVAILABLE = True
-    logging.info("✓ Legacy caption_image module loaded (Qwen2.5-VL-3B)")
+    logging.info("Legacy caption_image module loaded (Qwen2.5-VL-3B)")
 except ImportError as e:
     CAPTION_ERROR = f"Import error: {str(e)}"
     logging.debug(f"Legacy caption_image not available: {e}")
@@ -59,18 +59,18 @@ class CaptionGenerator:
     """
     Generates image captions using Gemini API (primary) or Qwen2.5-VL (fallback).
     """
-    
+
     def __init__(self, config: dict):
         """
         Initialize caption generator.
-        
+
         Args:
             config: Configuration dictionary from config.py
         """
         self.config = config
         self.model_loaded = False
         self._gemini_client = None
-        
+
         # Determine backend. Strict local profile must keep captions on the
         # local Ollama/Gemma path even when a Gemini key exists.
         gemini_config = config.get('GEMINI_CONFIG', {})
@@ -83,14 +83,14 @@ class CaptionGenerator:
             and GEMINI_CAPTION_AVAILABLE
             and not strict_local_profile
         )
-        
+
         if use_gemini:
             try:
                 self._gemini_client = GeminiClient(config)
                 if self._gemini_client.is_available:
                     self.backend = 'gemini'
                     self.model_loaded = True
-                    logger.info("✓ Caption Generator initialized (Gemini API backend)")
+                    logger.info("Caption Generator initialized (Gemini API backend)")
                 else:
                     logger.warning("Gemini client not available, trying legacy backend")
                     self._gemini_client = None
@@ -101,12 +101,40 @@ class CaptionGenerator:
                 self.backend = 'legacy' if LEGACY_CAPTION_AVAILABLE else 'none'
         else:
             self.backend = 'legacy' if LEGACY_CAPTION_AVAILABLE else 'none'
-        
+
         if self.backend == 'legacy':
             logger.info("Caption Generator initialized (Legacy Qwen2.5-VL backend)")
         elif self.backend == 'none':
-            logger.warning("⚠️ No caption backend available (Gemini API key not set + legacy model not found)")
-    
+            logger.warning("No caption backend available. Gemini API key is not set and the legacy model was not found")
+
+    def _ensure_gemini_client(self) -> bool:
+        """Lazily restore Gemini after runtime switches from Local Mode to Cloud Mode."""
+        if self._gemini_client is not None and getattr(self._gemini_client, 'is_available', False):
+            return True
+        if not GEMINI_CAPTION_AVAILABLE:
+            return False
+
+        gemini_config = self.config.get('GEMINI_CONFIG', {}) if isinstance(self.config, dict) else {}
+        env_gemini_enabled = str(os.getenv('GEMINI_ENABLED', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+        if not gemini_config.get('enabled', True) and not env_gemini_enabled:
+            return False
+        if isinstance(self.config, dict):
+            self.config.setdefault('GEMINI_CONFIG', {})
+            self.config['GEMINI_CONFIG']['enabled'] = True
+
+        try:
+            self._gemini_client = GeminiClient(self.config)
+            if getattr(self._gemini_client, 'is_available', False):
+                self.backend = 'gemini'
+                self.model_loaded = True
+                logger.info("Gemini caption client restored for Cloud Mode")
+                return True
+        except Exception as e:
+            logger.warning(f"Gemini caption client restore failed: {e}")
+
+        self._gemini_client = None
+        return False
+
     def generate_caption(
         self,
         image: Union[str, np.ndarray, Path],
@@ -115,19 +143,19 @@ class CaptionGenerator:
     ) -> str:
         """
         Generate a caption for an image.
-        
+
         Args:
             image: Image path, numpy array, or Path object
             prompt: Optional custom prompt override
             max_retries: Number of retry attempts
-        
+
         Returns:
             Generated caption string
         """
         # Convert numpy array to temporary file if needed
         temp_file = None
         image_path = image
-        
+
         if isinstance(image, np.ndarray):
             try:
                 temp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
@@ -137,9 +165,9 @@ class CaptionGenerator:
             except Exception as e:
                 logger.error(f"Error saving image to temp file: {e}")
                 return "Error: Could not process image for captioning"
-        
+
         image_path = str(image_path)
-        
+
         try:
             strict_local_profile = (
                 str(os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -147,14 +175,15 @@ class CaptionGenerator:
             )
 
             # Try Gemini first only outside strict local profile.
-            if not strict_local_profile and self._gemini_client and self._gemini_client.is_available:
+            if not strict_local_profile and self._ensure_gemini_client():
                 caption = self._gemini_client.caption_image(image_path, custom_prompt=prompt)
                 if caption and not caption.startswith("Error") and not caption.startswith("Failed"):
                     self.model_loaded = True
+                    self.backend = 'gemini'
                     return caption
                 else:
                     logger.warning(f"Gemini captioning failed, trying legacy: {caption}")
-            
+
             # Fallback to legacy (Qwen2.5-VL via llama.cpp)
             if (self.backend == 'legacy' or strict_local_profile) and LEGACY_CAPTION_AVAILABLE:
                 logger.info("Using legacy caption backend (Qwen2.5-VL)...")
@@ -163,24 +192,24 @@ class CaptionGenerator:
                         caption = caption_image_llava(image_path, prompt=prompt)
                         if caption and len(caption.strip()) > 0:
                             self.model_loaded = True
-                            logger.info(f"✓ Legacy caption generated: {caption[:100]}...")
+                            logger.info(f"Legacy caption generated: {caption[:100]}...")
                             return caption.strip()
                     except Exception as e:
                         logger.error(f"Legacy captioning error (attempt {attempt + 1}): {e}")
                         if attempt < max_retries - 1:
                             import time
                             time.sleep(2)
-            
+
             # All backends failed
             error_msg = "Image captioning not available"
             if not self._gemini_client or not self._gemini_client.is_available:
-                error_msg += " — Gemini API key not configured"
+                error_msg += ". Gemini API key not configured"
             if not LEGACY_CAPTION_AVAILABLE:
-                error_msg += " — Legacy model not found"
+                error_msg += ". Legacy model not found"
             if CAPTION_ERROR:
                 error_msg += f": {CAPTION_ERROR}"
             return error_msg
-            
+
         finally:
             # Clean up temp file
             if temp_file:
@@ -189,7 +218,7 @@ class CaptionGenerator:
                     os.unlink(temp_file.name)
                 except:
                     pass
-    
+
     def generate_safety_focused_caption(
         self,
         image: Union[str, np.ndarray, Path]
@@ -205,9 +234,9 @@ class CaptionGenerator:
             "4) Any visible hazards in the work environment\n"
             "Be specific and factual. Output a single paragraph, 3-5 sentences."
         )
-        
+
         return self.generate_caption(image, prompt=safety_prompt)
-    
+
     def get_status(self) -> dict:
         """Get caption generator status."""
         status = {
@@ -215,20 +244,20 @@ class CaptionGenerator:
             'model_loaded': self.model_loaded,
             'backend': self.backend,
         }
-        
+
         if self.backend == 'gemini':
             status['model'] = 'Gemini 2.0 Flash (Google AI)'
         elif self.backend == 'legacy':
             status['model'] = 'Qwen2.5-VL-3B-Instruct (Q4_K_M GGUF)'
         else:
             status['model'] = 'None'
-            
+
         if CAPTION_ERROR:
             status['legacy_error'] = CAPTION_ERROR
-            
+
         if self._gemini_client:
             status['gemini_status'] = self._gemini_client.get_status()
-            
+
         return status
 
 
@@ -239,32 +268,32 @@ class CaptionGenerator:
 if __name__ == '__main__':
     import os
     from dotenv import load_dotenv
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     load_dotenv()
-    
+
     print("=" * 70)
     print("CAPTION GENERATOR TEST")
     print("=" * 70)
-    
+
     # Import config
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
     from config import LLAVA_CONFIG, GEMINI_CONFIG
-    
+
     config = {
         'LLAVA_CONFIG': LLAVA_CONFIG,
         'GEMINI_CONFIG': GEMINI_CONFIG,
     }
-    
+
     generator = CaptionGenerator(config)
-    
+
     print(f"\nBackend: {generator.backend}")
     status = generator.get_status()
     for key, value in status.items():
         print(f"  {key}: {value}")
-    
+
     print("\n" + "=" * 70)

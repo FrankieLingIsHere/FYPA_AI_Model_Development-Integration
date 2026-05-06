@@ -14,7 +14,7 @@ This is the SINGLE entry point for the entire system.
 
 Usage:
     python casm_app.py
-    
+
     Then open browser to: http://localhost:5000
 """
 
@@ -277,7 +277,7 @@ logger = logging.getLogger(__name__)
 # APPLICATION SETUP
 # =========================================================================
 
-app = Flask(__name__, 
+app = Flask(__name__,
             template_folder='frontend',
             static_folder='frontend',
             static_url_path='/static')
@@ -1160,7 +1160,7 @@ supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
 supabase_offline_backoff_error = ''
-# H3 â€” tracks consecutive Supabase connectivity failures.
+# H3  tracks consecutive Supabase connectivity failures.
 # db_manager / storage_manager are only wiped once this reaches >= 2 consecutive failures,
 # preventing a single transient error from knocking the whole pipeline offline.
 supabase_offline_failure_count = 0
@@ -1256,7 +1256,7 @@ def _clear_supabase_offline_backoff(reason: str = '') -> None:
         supabase_offline_backoff_until_epoch = 0.0
         supabase_offline_backoff_context = ''
         supabase_offline_backoff_error = ''
-    # H3 â€” Reset failure counter on a confirmed successful Supabase connection.
+    # H3  Reset failure counter on a confirmed successful Supabase connection.
     supabase_offline_failure_count = 0
     if reason:
         logger.info(f"Supabase offline backoff cleared ({reason})")
@@ -1289,7 +1289,7 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
         supabase_offline_backoff_error = error_text[:300]
 
-    # H3 â€” Only wipe managers after at least 2 consecutive failures so a single
+    # H3  Only wipe managers after at least 2 consecutive failures so a single
     # transient Supabase blip does not bring the whole pipeline offline.
     if supabase_offline_failure_count >= 2:
         demoted_parts = []
@@ -1304,7 +1304,7 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         demoted_parts = []
         logger.warning(
             f"Supabase connectivity failure #{supabase_offline_failure_count} "
-            f"(context={context!r}): managers preserved â€” need >= 2 consecutive failures to trigger offline demotion."
+            f"(context={context!r}): managers preserved  need >= 2 consecutive failures to trigger offline demotion."
         )
 
     if report_generator is not None and _is_supabase_report_generator_active():
@@ -1405,10 +1405,10 @@ ENVIRONMENT_VALIDATION_ENABLED = False  # <-- SET TO False TO DISABLE SKIPPING
 
 # How environment classification works:
 # 1. LLaVA model analyzes the image and classifies it as:
-#    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop â†’ VALID
-#    B) OFFICE/COMMERCIAL - office, retail, meeting room â†’ VALID (may need PPE)
-#    C) RESIDENTIAL/CASUAL - home, living room, park, beach â†’ INVALID (skipped)
-#    D) OTHER - unclear scenes â†’ VALID (benefit of doubt)
+#    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop  VALID
+#    B) OFFICE/COMMERCIAL - office, retail, meeting room  VALID (may need PPE)
+#    C) RESIDENTIAL/CASUAL - home, living room, park, beach  INVALID (skipped)
+#    D) OTHER - unclear scenes  VALID (benefit of doubt)
 #
 # 2. Only category C (residential/casual) causes skipping
 # 3. Categories A, B, D all proceed with report generation
@@ -1795,10 +1795,10 @@ def _run_startup_sequence():
         _ensure_startup_local_auto_provision_worker()
         _ensure_local_mode_cloud_heartbeat_worker()
         _set_startup_ready()
-        logger.info('âœ… Startup sequence completed. System is ready.')
+        logger.info(' Startup sequence completed. System is ready.')
 
     except Exception as e:
-        logger.error(f'âŒ Startup sequence failed: {e}', exc_info=True)
+        logger.error(f' Startup sequence failed: {e}', exc_info=True)
         _set_startup_error(str(e))
 
 
@@ -1837,7 +1837,7 @@ def _startup_gate_response():
 def format_violation_type(class_name: str) -> str:
     """
     Format violation class name for display.
-    
+
     Examples:
         'NO-Hardhat' -> 'Missing Hard Hat'
         'NO-Safety Vest' -> 'Missing Safety Vest'
@@ -1907,23 +1907,23 @@ def initialize_pipeline_components():
             return _local_mode_has_supabase_credentials()
         except Exception:
             return True
-    
+
     if not FULL_PIPELINE_AVAILABLE:
         logger.warning("Full pipeline not available - skipping component initialization")
         return False
-    
+
     try:
         if violation_detector is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing violation detector')
             logger.info("Initializing violation detector...")
             violation_detector = ViolationDetector(VIOLATION_RULES)
-            
+
         if caption_generator is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing caption generator')
             logger.info("Initializing caption generator...")
             caption_config = {'LLAVA_CONFIG': LLAVA_CONFIG, 'GEMINI_CONFIG': GEMINI_CONFIG}
             caption_generator = CaptionGenerator(caption_config)
-        
+
         if db_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
@@ -1948,7 +1948,7 @@ def initialize_pipeline_components():
                         db_manager = None
                     else:
                         raise
-            
+
             # Fix any stuck reports from previous sessions
             if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
                 _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
@@ -1960,10 +1960,10 @@ def initialize_pipeline_components():
                         'fix_stuck_reports'
                     )
                     if fixed > 0:
-                        logger.info(f"âœ“ Fixed {fixed} stuck reports")
+                        logger.info(f" Fixed {fixed} stuck reports")
                 except Exception as sweep_error:
                     logger.warning(f"Stuck report recovery skipped during startup: {sweep_error}")
-        
+
         if storage_manager is None:
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
@@ -1988,7 +1988,7 @@ def initialize_pipeline_components():
                         storage_manager = None
                     else:
                         raise
-            
+
         if report_generator is None:
             use_supabase_generator = db_manager is not None and storage_manager is not None
             if use_supabase_generator:
@@ -2014,13 +2014,13 @@ def initialize_pipeline_components():
                     STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
                     'report-generator-local-init'
                 )
-        
+
         # Initialize violation queue for handling multiple violations
-        # H4 â€” If violation_queue exists but its internal worker thread has died (e.g. after
+        # H4  If violation_queue exists but its internal worker thread has died (e.g. after
         # an unhandled exception inside the worker), reset it so the block below recreates it.
         if violation_queue is not None and not _is_queue_worker_alive():
             logger.warning(
-                "H4: violation_queue exists but worker thread is not alive â€” resetting queue to force re-creation."
+                "H4: violation_queue exists but worker thread is not alive  resetting queue to force re-creation."
             )
             violation_queue = None
 
@@ -2029,8 +2029,8 @@ def initialize_pipeline_components():
             logger.info("Initializing violation queue manager...")
             if not _ensure_violation_queue_runtime_ready(reason='startup_component_init'):
                 raise RuntimeError('Violation queue manager initialization failed')
-            logger.info(f"âœ“ Violation queue initialized (max_size=100)")
-        
+            logger.info(f" Violation queue initialized (max_size=100)")
+
         # Start queue worker thread if not running
         if not ensure_queue_worker_running():
             _set_startup_step('pipeline_components', 'pending', 'Starting queue worker thread')
@@ -2038,11 +2038,11 @@ def initialize_pipeline_components():
             if not start_queue_worker():
                 logger.error("Failed to start queue worker thread")
                 raise RuntimeError('Queue worker thread failed to start during component initialization')
-            
+
         _set_startup_step('pipeline_components', 'ok', 'All pipeline components initialized')
         logger.info("[OK] All pipeline components initialized")
         return True
-        
+
     except Exception as e:
         _set_startup_step('pipeline_components', 'error', f"Initialization failed: {e}")
         logger.error(f"Error initializing pipeline components: {e}")
@@ -2457,7 +2457,7 @@ def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
     Returns (is_valid, reason). Rejects when the file is missing, smaller
     than a JPEG can plausibly be, undecodable by OpenCV, or near-uniform
     black / extremely dark (mean pixel intensity below threshold AND very
-    low spatial variance — i.e. essentially a solid black frame).
+    low spatial variance  i.e. essentially a solid black frame).
 
     The thresholds are intentionally conservative so that legitimately dark
     scenes (night-time CCTV, low-light warehouse) are NOT rejected. Only
@@ -2798,7 +2798,7 @@ def start_queue_worker_watchdog() -> bool:
             return False
 
         logger.info(
-            f"âœ“ Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
+            f" Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
         )
         return True
 
@@ -2915,7 +2915,7 @@ def start_queue_worker(force_restart: bool = False) -> bool:
     if already_running:
         logger.info(f"Queue worker already running (Thread ID: {running_thread_id})")
     else:
-        logger.info(f"âœ“ Queue worker thread started (Thread ID: {running_thread_id})")
+        logger.info(f" Queue worker thread started (Thread ID: {running_thread_id})")
 
     if QUEUE_WORKER_WATCHDOG_ENABLED:
         start_queue_worker_watchdog()
@@ -2958,9 +2958,9 @@ def queue_worker_loop():
     last_supabase_auto_sync_epoch = time.time()
 
     _mark_queue_worker_heartbeat(last_supabase_auto_sync_epoch)
-    
+
     logger.info("Queue worker loop started - waiting for violations...")
-    
+
     while queue_worker_running:
         try:
             now_epoch = time.time()
@@ -3048,7 +3048,7 @@ def queue_worker_loop():
             if violation_queue is None:
                 time.sleep(1)
                 continue
-            
+
             # Update progress with queue size
             queue_size = violation_queue.get_queue_size() if violation_queue else 0
             if queue_size > 0:
@@ -3059,16 +3059,16 @@ def queue_worker_loop():
                 )
             else:
                 reset_report_progress()
-            
+
             # Try to get next violation from queue (with timeout)
             queued_violation = violation_queue.dequeue(timeout=2.0)
-            
+
             if queued_violation is None:
                 # No violation in queue, continue waiting
                 continue
-            
-            logger.info(f"ðŸ“¥ Dequeued violation {queued_violation.report_id} for processing")
-            
+
+            logger.info(f" Dequeued violation {queued_violation.report_id} for processing")
+
             try:
                 _mark_queue_worker_heartbeat()
 
@@ -3081,13 +3081,13 @@ def queue_worker_loop():
                     status='processing',
                     current_step='Starting report generation'
                 )
-                
+
                 # Process the violation
                 process_queued_violation(queued_violation)
                 violation_queue.mark_processed(queued_violation)
-                logger.info(f"âœ… Completed processing {queued_violation.report_id}")
+                logger.info(f" Completed processing {queued_violation.report_id}")
                 _mark_queue_worker_heartbeat()
-                
+
                 # Update progress: completed
                 update_report_progress(
                     completed=1,
@@ -3095,19 +3095,19 @@ def queue_worker_loop():
                     current_step='Report generated successfully'
                 )
                 time.sleep(0.5)  # Brief pause to show completed status
-                
+
             except Exception as e:
                 # Get full traceback for debugging
                 import traceback
                 error_details = traceback.format_exc()
-                logger.error(f"âŒ Error processing {queued_violation.report_id}: {e}")
+                logger.error(f" Error processing {queued_violation.report_id}: {e}")
                 logger.error(f"Full traceback:\n{error_details}")
-                
+
                 update_report_progress(
                     status='error',
                     error_message=str(e)
                 )
-                
+
                 # Requeue for retry
                 if not violation_queue.requeue(queued_violation):
                     logger.error(f"Max retries exceeded for {queued_violation.report_id}")
@@ -3115,19 +3115,19 @@ def queue_worker_loop():
                     if db_manager:
                         try:
                             db_manager.update_detection_status(
-                                queued_violation.report_id, 
-                                'failed', 
+                                queued_violation.report_id,
+                                'failed',
                                 f"Error: {str(e)}\n\nFull details:\n{error_details[:500]}"  # Limit to 500 chars
                             )
                         except Exception as e2:
                             logger.warning(f"Could not update status: {e2}")
                 _mark_queue_worker_heartbeat()
-                            
+
         except Exception as e:
             logger.error(f"Queue worker error: {e}")
             _mark_queue_worker_heartbeat()
             time.sleep(1)
-    
+
     with queue_worker_state_lock:
         queue_worker_running = False
     _mark_queue_worker_heartbeat()
@@ -3138,20 +3138,20 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
     """
     Capture a violation and add it to the processing queue.
     This is a FAST operation that saves images immediately and queues for report generation.
-    
+
     Args:
         frame: The video frame with the violation
         detections: List of YOLO detections
-    
+
     Returns:
         report_id if successfully queued, None otherwise
     """
     global last_violation_time
-    
+
     logger.info("=" * 80)
     logger.info("ENQUEUE_VIOLATION CALLED (Fast capture + queue)")
     logger.info("=" * 80)
-    
+
     try:
         trigger_source = (trigger_source or 'live').strip().lower()
         routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
@@ -3170,10 +3170,10 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
             logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
             return None
-        
+
         # Check for violations using unified matcher (same logic as upload/live paths)
         violation_detections = _extract_violation_detections(detections)
-        
+
         if not violation_detections:
             logger.warning("No violations found in detections")
             return None
@@ -3186,25 +3186,25 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             return None
 
         last_violation_time = current_time
-        
+
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
-        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_types}")
+        logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         runtime_device_id = 'local_cache' if force_local_scope else 'webcam_0'
-        
+
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"ðŸ“  Created violation directory: {violation_dir}")
-        
+        logger.info(f"  Created violation directory: {violation_dir}")
+
         # === IMMEDIATE: Save images (fast operation) ===
         # Save original frame
         original_path = violation_dir / 'original.jpg'
         cv2.imwrite(str(original_path), frame)
-        logger.info(f"âœ“ Saved original image: {original_path}")
-        
+        logger.info(f" Saved original image: {original_path}")
+
         annotated_path = violation_dir / 'annotated.jpg'
 
         missing_ppe_metadata: List[str] = []
@@ -3289,7 +3289,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     json.dump(metadata_update, f, indent=2)
             except Exception as metadata_update_err:
                 logger.debug(f"Could not update local enqueue failure metadata: {metadata_update_err}")
-        
+
         # === IMMEDIATE: Insert pending detection event ===
         # Local-first profile must not depend on cloud DB availability during capture.
         if db_manager and not force_local_scope:
@@ -3303,7 +3303,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"âœ“ Inserted PENDING detection event: {report_id}")
+                logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
                 logger.warning(
@@ -3314,7 +3314,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             logger.info(
                 f"Local scope active for {report_id}; deferring Supabase detection insert until sync"
             )
-        
+
         # === QUEUE: Add to queue for async processing ===
         if not ensure_queue_worker_running():
             logger.error(
@@ -3381,7 +3381,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                     )
 
         if success:
-            logger.info(f"âœ“ Violation {report_id} added to processing queue")
+            logger.info(f" Violation {report_id} added to processing queue")
             queue_stats = violation_queue.get_stats()
             logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
             return report_id
@@ -3404,9 +3404,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'Could not enqueue violation (queue full or device rate-limited). Use Reprocess Now to retry.'
         )
         return None
-        
+
         return None
-        
+
     except Exception as e:
         logger.error(f"Error enqueuing violation: {e}", exc_info=True)
         return None
@@ -3457,11 +3457,11 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
     if not violation_dir.exists() or not violation_dir.is_dir():
         return {'cleaned': False, 'reason': 'directory_missing'}
 
-    # Write a marker so recovery sweeps know this was intentionally synced and 
+    # Write a marker so recovery sweeps know this was intentionally synced and
     # artifacts were cleaned up, avoiding redundant re-generation.
     try:
         (violation_dir / 'SYNCED.txt').write_text(
-            f"Synced at {datetime.now().isoformat()}\n", 
+            f"Synced at {datetime.now().isoformat()}\n",
             encoding='utf-8'
         )
     except Exception as marker_err:
@@ -3983,7 +3983,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     """
     Process a violation from the queue.
     Validates environment first, then generates caption and report.
-    
+
     Args:
         queued_violation: The queued violation object with data
     """
@@ -4023,8 +4023,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         # Local-first runs should still produce a report artifact so reconnect sync can
         # flush to cloud even when local NLP generation fails.
         allow_placeholder_report = True
-    
-    logger.info(f"ðŸ“„ Processing queued violation: {report_id}")
+
+    logger.info(f" Processing queued violation: {report_id}")
 
     if is_local_cache_sync_job:
         handled_sync_job = _handle_local_cache_sync_job(
@@ -4040,9 +4040,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             queued_sync_source=queued_sync_source,
         )
         if handled_sync_job:
-            logger.info(f"âœ… Local-cache sync job completed without regeneration: {report_id}")
+            logger.info(f" Local-cache sync job completed without regeneration: {report_id}")
             return
-    
+
     if not annotated_path.exists() and original_path.exists():
         try:
             update_report_progress(
@@ -4064,41 +4064,41 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         current=report_id,
         current_step='Validating work environment'
     )
-    
+
     # === ENVIRONMENT VALIDATION (before heavy processing) ===
     # Uses semaphore to prevent concurrent Ollama calls (VRAM exhaustion)
     if ENVIRONMENT_VALIDATION_ENABLED and not skip_environment_validation:
         try:
             from caption_image import validate_work_environment
-            
-            logger.info("ðŸ” Validating work environment (acquiring Ollama lock)...")
+
+            logger.info(" Validating work environment (acquiring Ollama lock)...")
             with ollama_semaphore:  # Only one Ollama call at a time
                 env_result = validate_work_environment(str(original_path))
-            
+
             logger.info(f"   Environment: {env_result['environment_type']} (confidence: {env_result['confidence']})")
             logger.info(f"   Is valid work environment: {env_result['is_valid']}")
-            
+
             # Save environment validation result
             env_validation_path = violation_dir / 'environment_validation.json'
             with open(env_validation_path, 'w') as f:
                 json.dump(env_result, f, indent=2)
-            
+
             if not env_result['is_valid']:
-                logger.warning(f"âš ï¸ SKIPPING violation {report_id} - not a valid work environment")
+                logger.warning(f" SKIPPING violation {report_id} - not a valid work environment")
                 logger.warning(f"   Reason: {env_result['reason']}")
-                
+
                 # Update status to 'skipped' and clean up
                 if db_manager:
                     try:
                         db_manager.update_detection_status(
-                            report_id, 
-                            'skipped', 
+                            report_id,
+                            'skipped',
                             f"Not a work environment: {env_result['environment_type']}"
                         )
                     except Exception as e:
                         _activate_local_offline_runtime('process_queued_violation.status_skipped', e)
                         logger.warning(f"Could not update status: {e}")
-                
+
                 # Create a "skipped" marker file instead of full report
                 skip_report_path = violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt'
                 with open(skip_report_path, 'w') as f:
@@ -4106,29 +4106,29 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     f.write(f"Reason: Scene detected as '{env_result['environment_type']}'\n")
                     f.write(f"This does not appear to be a construction/industrial environment.\n")
                     f.write(f"Raw result: {env_result['reason']}\n")
-                
+
                 return  # Skip processing this violation
-                
+
         except ImportError:
             logger.warning("validate_work_environment not available - skipping environment check")
         except Exception as e:
             logger.warning(f"Environment validation failed: {e} - proceeding with processing")
-    
+
     # Update status to generating
     if db_manager:
         try:
             db_manager.update_detection_status(report_id, 'generating')
-            logger.info(f"âœ“ Status updated to GENERATING: {report_id}")
+            logger.info(f" Status updated to GENERATING: {report_id}")
         except Exception as e:
             _activate_local_offline_runtime('process_queued_violation.status_generating', e)
             logger.warning(f"Could not update status: {e}")
-    
+
     # Update progress
     update_report_progress(
         current=report_id,
         current_step='Generating image caption'
     )
-    
+
     # Generate caption (with semaphore to prevent concurrent Ollama calls)
     caption = ""
     env_context = ""
@@ -4137,8 +4137,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_quality_reason = ''
     if caption_generator:
         try:
-            logger.info("ðŸŽ¨ Generating image caption with LLaVA (acquiring Ollama lock)...")
-            
+            logger.info(" Generating image caption with LLaVA (acquiring Ollama lock)...")
+
             # Free up GPU memory before heavy captioning operation
             try:
                 import torch
@@ -4147,27 +4147,27 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     logger.info("   Cleared CUDA cache before caption generation")
             except Exception as gpu_e:
                 logger.debug(f"   Could not clear CUDA cache: {gpu_e}")
-            
+
             with ollama_semaphore:  # Only one Ollama call at a time
                 caption = caption_generator.generate_caption(str(original_path))
             if caption:
                 with open(caption_path, 'w', encoding='utf-8') as f:
                     f.write(caption)
-                logger.info(f"âœ“ Caption saved: {caption_path}")
-                
+                logger.info(f" Caption saved: {caption_path}")
+
                 # Secondary validation: check caption content for work environment indicators
                 caption_lower = caption.lower()
                 has_work_indicators = any(kw in caption_lower for kw in VALID_ENVIRONMENT_KEYWORDS)
                 has_invalid_indicators = any(kw in caption_lower for kw in INVALID_ENVIRONMENT_KEYWORDS)
-                
+
                 if has_invalid_indicators and not has_work_indicators:
-                    logger.warning(f"âš ï¸ Caption suggests non-work environment: {caption[:100]}...")
+                    logger.warning(f" Caption suggests non-work environment: {caption[:100]}...")
                     env_context = " [Warning: Scene may not be a typical work environment]"
 
                 if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                     failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                     logger.warning(
-                        f"âš ï¸ Local mode unavailable for {report_id}: {failure_reason}. "
+                        f" Local mode unavailable for {report_id}: {failure_reason}. "
                         "Continuing with detection-only fallback report generation."
                     )
                     caption = (
@@ -4177,11 +4177,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     )
                     with open(caption_path, 'w', encoding='utf-8') as f:
                         f.write(caption)
-                    
+
             else:
                 caption = "Caption generation returned empty"
         except Exception as e:
-            logger.error(f"âŒ Caption generation failed: {e}")
+            logger.error(f" Caption generation failed: {e}")
             caption = "Caption generation failed"
     else:
         caption = "Image captioning not available"
@@ -4202,7 +4202,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             )
     except Exception as caption_write_error:
         logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
-    
+
     # Generate report
     report_created = False
     failure_reason = None
@@ -4231,9 +4231,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 current=report_id,
                 current_step='Generating analysis report'
             )
-            
-            logger.info(f"ðŸ“„ Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
-            
+
+            logger.info(f" Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
+
             violation_types_raw = violation_types if isinstance(violation_types, list) else []
             if not violation_types_raw:
                 violation_types_raw = _extract_violation_types_from_detections(detections)
@@ -4254,7 +4254,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 in {'person', 'worker', 'man', 'woman', 'people'}
             )
             effective_annotated_path = annotated_path if annotated_path.exists() else original_path
-            
+
             report_data = {
                 'report_id': report_id,
                 'timestamp': timestamp,
@@ -4292,7 +4292,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 logger.info(
                     f"Local-first artifact pipeline active for {report_id}; deferring cloud upload until sync"
                 )
-            
+
             # Wrap report generation in a wall-clock watchdog so a hung downstream
             # provider call (e.g. an unreachable Ollama / NLP backend) cannot freeze
             # the queue worker indefinitely. The leaked executor thread is acceptable
@@ -4309,7 +4309,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     result = _gen_future.result(timeout=_report_gen_timeout_seconds)
                 except _cf.TimeoutError:
                     logger.error(
-                        f"â±ï¸ Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
+                        f" Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
                         "abandoning the call and proceeding to fallback to keep the queue moving"
                     )
                     failure_reason = (
@@ -4324,18 +4324,18 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
                 if isinstance(result.get('storage_keys'), dict):
                     result_storage_keys = result.get('storage_keys') or {}
-            
+
             if result and result.get('html'):
                 target_html = violation_dir / 'report.html'
                 if target_html.exists():
-                    logger.info(f"âœ“ Report generated: {target_html}")
+                    logger.info(f" Report generated: {target_html}")
                     report_created = True
-                    
+
                     # Update status to completed
                     if db_manager:
                         try:
                             db_manager.update_detection_status(report_id, 'completed')
-                            logger.info(f"âœ“ Status updated to COMPLETED: {report_id}")
+                            logger.info(f" Status updated to COMPLETED: {report_id}")
                         except Exception as e:
                             _activate_local_offline_runtime('process_queued_violation.status_completed', e)
                             logger.warning(f"Could not update status: {e}")
@@ -4343,11 +4343,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     failure_reason = "report.html was not found in violation directory after generation"
             else:
                 failure_reason = "Report generator returned empty or missing HTML output"
-                            
+
         except Exception as e:
-            logger.error(f"âŒ Report generation failed: {e}")
+            logger.error(f" Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
-    
+
     if not report_created and allow_placeholder_report and (
         force_reprocess_requested or force_local_artifact_pipeline
     ):
@@ -4410,7 +4410,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             except Exception as e:
                 _activate_local_offline_runtime('process_queued_violation.status_failed', e)
                 logger.warning(f"Could not update failed status for report: {e}")
-    
+
     # Save metadata
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
     # Compute violation/person counts and missing-PPE labels so the reports
@@ -4462,7 +4462,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'has_report': report_created,
         'failure_reason': failure_reason
     }
-    
+
     metadata_path = violation_dir / 'metadata.json'
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
@@ -4491,14 +4491,19 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 f"Skipped local cleanup for {report_id}: cloud artifact keys incomplete "
                 f"(keys={sorted(result_storage_keys.keys()) if isinstance(result_storage_keys, dict) else []})"
             )
-    
-    logger.info(f"âœ… Queued violation processing complete: {report_id}")
+
+    logger.info(f" Queued violation processing complete: {report_id}")
 
 
 def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, detections: List, caption: str):
     """Create a placeholder HTML report when generation fails."""
     report_html_path = violation_dir / 'report.html'
     placeholder_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    local_diag = {}
+    try:
+        local_diag = _get_local_mode_diagnostics()
+    except Exception:
+        local_diag = {}
     if placeholder_routing_profile == 'local':
         placeholder_warning_message = (
             f"The local NLP report generator ({LOCAL_OLLAMA_UNIFIED_MODEL}) is not configured or not running."
@@ -4509,10 +4514,22 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
             "This placeholder was produced so the violation is still recorded; the report will be "
             "regenerated automatically once the cloud provider is reachable again."
         )
+    diagnostics_html = ""
+    if placeholder_routing_profile == 'local':
+        diagnostics_html = f"""
+        <div class="info">
+            <h3>Local Model Diagnostics</h3>
+            <p><strong>Ollama running:</strong> {'yes' if local_diag.get('ollama_running') else 'no'}</p>
+            <p><strong>Required model:</strong> {html.escape(str(local_diag.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL))}</p>
+            <p><strong>Model available:</strong> {'yes' if local_diag.get('model_available') else 'no'}</p>
+            <p><strong>Ollama endpoint:</strong> {html.escape(str(local_diag.get('ollama_base_url') or 'http://localhost:11434'))}</p>
+            <p><strong>Next action:</strong> Start Ollama and run <code>{html.escape(str(local_diag.get('pull_command') or ('ollama pull ' + LOCAL_OLLAMA_UNIFIED_MODEL)))}</code>.</p>
+        </div>
+        """
     placeholder_html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>Violation Report - {report_id}</title>
+    <title>Violation Report {report_id}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
         .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
@@ -4523,33 +4540,34 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
 </head>
 <body>
     <div class="container">
-        <h1>ðŸš¨ PPE Violation Report</h1>
+        <h1>PPE Violation Report</h1>
         <p><strong>Report ID:</strong> {report_id}</p>
         <p><strong>Timestamp:</strong> {timestamp}</p>
         <p><strong>Severity:</strong> HIGH</p>
-        
+
         <div class="warning">
-            <h3>âš ï¸ Report Generator Not Available</h3>
+            <h3>Report Generator Not Available</h3>
             <p>{placeholder_warning_message}</p>
         </div>
-        
+        {diagnostics_html}
+
         <div class="info">
-            <h3>ðŸ“‹ Detection Summary</h3>
+            <h3>Detection Summary</h3>
             <p><strong>Detections:</strong> {len(detections)}</p>
         </div>
-        
-        <h3>ðŸ“¸ Images</h3>
+
+        <h3>Images</h3>
         <p>Original: <a href="original.jpg">original.jpg</a></p>
         <p>Annotated: <a href="annotated.jpg">annotated.jpg</a></p>
-        
-        <h3>ðŸ“ Caption</h3>
+
+        <h3>Caption</h3>
         <p>{caption if caption else 'No caption available'}</p>
     </div>
 </body>
 </html>"""
     with open(report_html_path, 'w', encoding='utf-8') as f:
         f.write(placeholder_html)
-    logger.info(f"âœ“ Placeholder report saved: {report_html_path}")
+    logger.info(f"Placeholder report saved: {report_html_path}")
 
 
 def process_violation(frame: np.ndarray, detections: List[Dict]):
@@ -4558,46 +4576,46 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
     Runs in background thread to not block streaming.
     """
     global last_violation_time
-    
+
     logger.info("=" * 80)
     logger.info("PROCESS_VIOLATION CALLED")
     logger.info("=" * 80)
-    
+
     try:
         # Check cooldown
         current_time = time.time()
         if current_time - last_violation_time < VIOLATION_COOLDOWN:
             logger.info(f"Violation cooldown active ({int(VIOLATION_COOLDOWN - (current_time - last_violation_time))}s remaining)")
             return
-        
+
         last_violation_time = current_time
-        
+
         # Check for violations using unified matcher (same logic as upload/live paths)
         violation_detections = _extract_violation_detections(detections)
-        
+
         if not violation_detections:
             logger.warning("No violations found in detections")
             return
-        
+
         violation_types = [d['class_name'] for d in violation_detections]
-        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_types}")
+        logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         logger.info("   Starting full processing...")
         logger.info(f"   Pipeline available: {FULL_PIPELINE_AVAILABLE}")
-        logger.info(f"   Caption generator: {'âœ“ Available' if caption_generator else 'âœ— Not initialized'}")
-        logger.info(f"   Report generator: {'âœ“ Available' if report_generator else 'âœ— Not initialized'}")
+        logger.info(f"   Caption generator: {' Available' if caption_generator else ' Not initialized'}")
+        logger.info(f"   Report generator: {' Available' if report_generator else ' Not initialized'}")
         runtime_device_id = 'webcam_0'
-        
+
         # Create violation directory with absolute path
         timestamp = datetime.now()
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"ðŸ“  Created violation directory: {violation_dir}")
-        
+        logger.info(f"  Created violation directory: {violation_dir}")
+
         # Save original frame immediately
         original_path = violation_dir / 'original.jpg'
         cv2.imwrite(str(original_path), frame)
-        logger.info(f"âœ“ Saved original image: {original_path}")
+        logger.info(f" Saved original image: {original_path}")
 
         # Save preliminary metadata immediately to trigger real-time notification
         metadata = {
@@ -4615,8 +4633,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         metadata_path = violation_dir / 'metadata.json'
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
-        logger.info(f"âœ“ Preliminary metadata saved: {metadata_path}")
-        
+        logger.info(f" Preliminary metadata saved: {metadata_path}")
+
         # === Insert "pending" detection event ===
         if db_manager:
             try:
@@ -4629,41 +4647,41 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     device_id=runtime_device_id,
                     status='pending'
                 )
-                logger.info(f"✓ Inserted PENDING detection event: {report_id}")
+                logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('process_violation.insert_pending_event', e)
                 logger.warning(
                     "Could not insert pending event into Supabase; "
                     f"continuing local report flow ({e})"
                 )
-        
+
         # Save annotated frame
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
-        logger.info(f"âœ“ Saved annotated image: {annotated_path}")
-        
+        logger.info(f" Saved annotated image: {annotated_path}")
+
         # Generate caption if available
         caption = ""
         caption_path = violation_dir / 'caption.txt'
         caption_quality_fallback_applied = False
         caption_quality_reason = ''
         logger.info(f"Caption generator status: {caption_generator is not None}")
-        
+
         if caption_generator:
             try:
-                logger.info("ðŸŽ¨ Generating image caption with LLaVA...")
+                logger.info(" Generating image caption with LLaVA...")
                 caption = caption_generator.generate_caption(str(original_path))
                 if caption:
                     with open(caption_path, 'w', encoding='utf-8') as f:
                         f.write(caption)
-                    logger.info(f"âœ“ Caption saved: {caption_path}")
+                    logger.info(f" Caption saved: {caption_path}")
                     logger.info(f"  Caption preview: {caption[:100]}...")
 
                     if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
                         failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                         logger.warning(
-                            f"âš ï¸ Local mode unavailable for {report_id}: {failure_reason}. "
+                            f" Local mode unavailable for {report_id}: {failure_reason}. "
                             "Continuing with detection-only fallback report generation."
                         )
                         caption = (
@@ -4677,7 +4695,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     logger.error("Caption generation returned None or empty string")
                     caption = "Caption generation returned empty"
             except Exception as e:
-                logger.error(f"âŒ Caption generation failed: {e}", exc_info=True)
+                logger.error(f" Caption generation failed: {e}", exc_info=True)
                 caption = "Caption generation failed"
         else:
             # Save placeholder caption even if generator not available
@@ -4685,7 +4703,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             caption = "Image captioning not available - LLaVA model not loaded. Install dependencies: pip install transformers accelerate bitsandbytes"
             with open(caption_path, 'w', encoding='utf-8') as f:
                 f.write(caption)
-            logger.info(f"âœ“ Placeholder caption saved: {caption_path}")
+            logger.info(f" Placeholder caption saved: {caption_path}")
 
         caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
             caption,
@@ -4701,7 +4719,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 )
         except Exception as caption_write_error:
             logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
-        
+
         # Generate report if available
         report_created = False
         logger.info(f"Report generator status: {report_generator is not None}")
@@ -4720,18 +4738,18 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             caption_model = provider_to_model.get(provider_key) or vision_diag.get('vision_api_model')
         except Exception:
             pass
-        
+
         if report_generator:
             try:
                 # Update status to "generating"
                 if db_manager:
                     try:
                         db_manager.update_detection_status(report_id, 'generating')
-                        logger.info(f"âœ“ Status updated to GENERATING: {report_id}")
+                        logger.info(f" Status updated to GENERATING: {report_id}")
                     except Exception as e:
                         logger.warning(f"Could not update status: {e}")
-                
-                logger.info(f"ðŸ“„ Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
+
+                logger.info(f" Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
 
                 detections_list = detections if isinstance(detections, list) else []
                 detected_person_count = sum(
@@ -4740,7 +4758,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     and str(d.get('class_name') or d.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
                     in {'person', 'worker', 'man', 'woman', 'people'}
                 )
-                
+
                 report_data = {
                     'report_id': report_id,
                     'timestamp': timestamp,
@@ -4760,50 +4778,50 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'severity': 'HIGH',
                     'person_count': detected_person_count
                 }
-                
+
                 # generate_report returns dict with 'html' and 'pdf' keys
                 # Note: ReportGenerator already copies the report to violations folder
                 logger.info("Calling report_generator.generate_report()...")
                 result = report_generator.generate_report(report_data)
                 logger.info(f"Report generation result: {result}")
-                
+
                 if result and result.get('html'):
                     # Check if report was created in violations directory
                     target_html = violation_dir / 'report.html'
                     if target_html.exists():
-                        logger.info(f"âœ“ Report generated: {target_html}")
+                        logger.info(f" Report generated: {target_html}")
                         report_created = True
                         # Update status to "completed"
                         if db_manager:
                             try:
                                 db_manager.update_detection_status(report_id, 'completed')
-                                logger.info(f"âœ“ Status updated to COMPLETED: {report_id}")
+                                logger.info(f" Status updated to COMPLETED: {report_id}")
                             except Exception as e:
                                 logger.warning(f"Could not update status: {e}")
                     else:
-                        logger.warning(f"âŒ Report not found in violations directory: {target_html}")
+                        logger.warning(f" Report not found in violations directory: {target_html}")
                 else:
-                    logger.warning(f"âŒ Report generation returned None or no HTML path. Result: {result}")
-                    
+                    logger.warning(f" Report generation returned None or no HTML path. Result: {result}")
+
             except Exception as e:
-                logger.error(f"âŒ Report generation failed: {e}", exc_info=True)
+                logger.error(f" Report generation failed: {e}", exc_info=True)
                 # Update status to "failed"
                 if db_manager:
                     try:
                         db_manager.update_detection_status(report_id, 'failed', str(e))
-                        logger.info(f"âœ“ Status updated to FAILED: {report_id}")
+                        logger.info(f" Status updated to FAILED: {report_id}")
                     except Exception as e2:
                         logger.warning(f"Could not update status: {e2}")
-        
+
         # Do not auto-create fallback report templates. Keep explicit failed status.
         if not report_created and db_manager:
             failure_reason = "Report generation did not produce model-generated HTML output"
             try:
                 db_manager.update_detection_status(report_id, 'failed', failure_reason)
-                logger.info(f"âœ“ Status updated to FAILED: {report_id}")
+                logger.info(f" Status updated to FAILED: {report_id}")
             except Exception as e:
                 logger.warning(f"Could not update failed status: {e}")
-        
+
         # Save metadata
         metadata = {
             'report_id': report_id,
@@ -4816,16 +4834,16 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'has_caption': bool(caption),
             'has_report': report_created
         }
-        
+
         metadata_path = violation_dir / 'metadata.json'
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
-        logger.info(f"âœ“ Metadata saved: {metadata_path}")
-        
-        logger.info(f"âœ… VIOLATION PROCESSING COMPLETE: {report_id}")
+        logger.info(f" Metadata saved: {metadata_path}")
+
+        logger.info(f" VIOLATION PROCESSING COMPLETE: {report_id}")
         logger.info(f"   - Location: {violation_dir}")
         logger.info(f"   - Files: original.jpg, annotated.jpg, caption.txt, report.html, metadata.json")
-        
+
     except Exception as e:
         logger.error(f"Error processing violation: {e}", exc_info=True)
 
@@ -5170,7 +5188,7 @@ def api_violations():
         return jsonify(_collect_local_violation_rows('filesystem_fallback'))
     if _is_supabase_offline_backoff_active():
         return jsonify(_collect_local_violation_rows('filesystem_fallback_offline_backoff'))
-    
+
     # Use Supabase - get ALL violations including pending
     try:
         # Use the new method that includes pending detection events
@@ -5178,7 +5196,7 @@ def api_violations():
             violations = db_manager.get_all_violations_with_status(limit=limit)
         else:
             violations = db_manager.get_recent_violations(limit=limit)
-        
+
         # Format violations for API response
         formatted_violations = []
         for v in violations:
@@ -5201,7 +5219,7 @@ def api_violations():
 
             # Extract caption validation data if available
             caption_validation = detection_data_parsed.get('caption_validation')
-            
+
             # Determine status - use actual status if available, otherwise infer from data
             status = v.get('status', 'unknown')
             if status == 'unknown':
@@ -5213,12 +5231,12 @@ def api_violations():
             # Keep list view aligned with status endpoint: local report artifact means ready.
             if status in ('pending', 'queued', 'generating', 'processing', 'unknown') and local_has_report:
                 status = 'completed'
-            
+
             # Extract missing PPE details from detection_data or violation_summary
             missing_ppe = []
             ppe_tags = []
             resolved_person_count = None
-            
+
             if detection_data_parsed:
                 detections = detection_data_parsed.get('detections', []) if isinstance(detection_data_parsed.get('detections', []), list) else []
                 detected_people = [
@@ -5273,11 +5291,11 @@ def api_violations():
                             ppe_item = item.replace('Missing ', '').strip()
                             missing_ppe.append(ppe_item)
                             ppe_tags.append(ppe_item.replace(' ', '-').upper())
-            
+
             # Fallback: parse from violation_summary string
             if not missing_ppe and v.get('violation_summary'):
                 summary = v.get('violation_summary', '')
-                
+
                 # Parse format: "PPE Violation Detected: NO-Hardhat, NO-Safety Vest"
                 if 'PPE Violation Detected:' in summary:
                     # Extract everything after the colon
@@ -5294,7 +5312,7 @@ def api_violations():
                             ppe_item = item.replace('Missing ', '').strip()
                             missing_ppe.append(ppe_item)
                             ppe_tags.append(ppe_item.replace(' ', '-').upper())
-                
+
                 # Also try parsing "Missing Hardhat" format
                 elif 'Missing' in summary:
                     matches = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
@@ -5328,7 +5346,7 @@ def api_violations():
                 )
             except Exception:
                 pass
-            
+
             formatted_violations.append({
                 'report_id': report_id,
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
@@ -5452,9 +5470,9 @@ def api_violations():
             reverse=True
         )
         formatted_violations = formatted_violations[:max(1, int(limit or 1))]
-        
+
         return jsonify(formatted_violations)
-        
+
     except Exception as e:
         _activate_local_offline_runtime('api_violations.fetch', e)
         logger.error(f"Error fetching violations from Supabase: {e}")
@@ -5734,6 +5752,147 @@ def api_stats():
         return jsonify(_build_stats_payload(fallback_rows))
 
 
+@app.route('/api/stats/merge-cache', methods=['POST'])
+def api_stats_merge_cache():
+    """Merge client cached cloud rows with local backend rows for Local Mode dashboards."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        cached_rows = payload.get('cached_cloud_rows') or payload.get('cached_rows') or []
+        if not isinstance(cached_rows, list):
+            cached_rows = []
+
+        local_rows = _collect_local_report_state_rows(limit=2000)
+        now = get_local_time()
+        tz_info = now.tzinfo or get_timezone_info()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=now.weekday())
+
+        def _parse_dt(value: Any, report_id: str = '') -> Optional[datetime]:
+            dt_value = None
+            if isinstance(value, datetime):
+                dt_value = value
+            elif value is not None:
+                text = str(value).strip()
+                if text:
+                    try:
+                        dt_value = datetime.fromisoformat(text.replace('Z', '+00:00') if text.endswith('Z') else text)
+                    except Exception:
+                        dt_value = None
+            if dt_value is None and report_id:
+                try:
+                    dt_value = _parse_report_id_timestamp(report_id)
+                except Exception:
+                    dt_value = None
+            if dt_value is None:
+                return None
+            if dt_value.tzinfo is None:
+                dt_value = dt_value.replace(tzinfo=tz_info)
+            else:
+                try:
+                    dt_value = dt_value.astimezone(tz_info)
+                except Exception:
+                    pass
+            return dt_value
+
+        def _scope(row: Dict[str, Any], fallback: str) -> str:
+            raw = str(row.get('source_scope') or row.get('report_scope') or row.get('scope') or '').strip().lower()
+            if raw in ('local', 'cloud', 'shared', 'synced_local'):
+                return raw
+            label = str(row.get('source_label') or '').strip().lower()
+            if 'local synced' in label:
+                return 'synced_local'
+            if 'local' in label:
+                return 'local'
+            if 'cloud' in label:
+                return 'cloud'
+            return fallback
+
+        by_report: Dict[str, Dict[str, Any]] = {}
+        for row in cached_rows:
+            if not isinstance(row, dict):
+                continue
+            report_id = str(row.get('report_id') or row.get('id') or '').strip()
+            if not report_id:
+                continue
+            by_report[report_id] = {
+                'report_id': report_id,
+                'timestamp': _parse_dt(row.get('timestamp') or row.get('created_at'), report_id),
+                'severity': str(row.get('severity') or 'MEDIUM').strip().upper(),
+                'status': str(row.get('status') or ('completed' if row.get('has_report') else 'pending')).strip().lower(),
+                'source_scope': _scope(row, 'cloud'),
+            }
+
+        for row in local_rows:
+            if not isinstance(row, dict):
+                continue
+            report_id = str(row.get('report_id') or row.get('id') or '').strip()
+            if not report_id:
+                continue
+            current = by_report.get(report_id, {})
+            local_status = str(row.get('status') or 'pending').strip().lower()
+            by_report[report_id] = {
+                'report_id': report_id,
+                'timestamp': current.get('timestamp') or _parse_dt(row.get('timestamp') or row.get('created_at'), report_id),
+                'severity': str(current.get('severity') or row.get('severity') or 'MEDIUM').strip().upper(),
+                'status': 'completed' if local_status == 'completed' else str(current.get('status') or local_status or 'pending'),
+                'source_scope': 'synced_local' if current.get('source_scope') == 'cloud' else _scope(row, current.get('source_scope') or 'local'),
+            }
+
+        rows = list(by_report.values())
+        severity = {'high': 0, 'medium': 0, 'low': 0}
+        source_counts = {'local': 0, 'cloud': 0, 'shared': 0, 'synced_local': 0}
+        pending_statuses = {'pending', 'generating', 'queued', 'processing'}
+        completed_statuses = {'completed', 'ready'}
+        failed_statuses = {'failed', 'error', 'skipped'}
+        today_count = week_count = pending_count = completed_count = failed_count = 0
+
+        for row in rows:
+            dt_value = row.get('timestamp')
+            if isinstance(dt_value, datetime):
+                if dt_value >= today_start:
+                    today_count += 1
+                if dt_value >= week_start:
+                    week_count += 1
+            sev = str(row.get('severity') or '').lower()
+            if sev in severity:
+                severity[sev] += 1
+            else:
+                severity['medium'] += 1
+            scope = str(row.get('source_scope') or 'cloud').lower()
+            source_counts[scope] = source_counts.get(scope, 0) + 1
+            status = str(row.get('status') or '').lower()
+            if status in completed_statuses:
+                completed_count += 1
+            elif status in failed_statuses:
+                failed_count += 1
+            elif status in pending_statuses:
+                pending_count += 1
+
+        stats = {
+            'total': len(rows),
+            'today': today_count,
+            'thisWeek': week_count,
+            'severity': severity,
+            'pending': pending_count,
+            'completed': completed_count,
+            'failed': failed_count,
+            'sourceCounts': source_counts,
+            'source_counts': source_counts,
+            'syncedLocal': source_counts.get('synced_local', 0),
+            'reportsGenerated': completed_count,
+            'reports_generated': completed_count,
+            'totalReports': completed_count,
+            'reportsTotal': completed_count,
+            'merge_source': 'local_backend_with_client_cache',
+            'cachedCloudRows': len(cached_rows),
+            'localRows': len(local_rows),
+        }
+        return jsonify(stats)
+    except Exception as e:
+        logger.warning(f"Cached stats merge failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/system/timezone', methods=['GET'])
 def api_system_timezone():
     """Expose backend timezone context for frontend timestamp normalization."""
@@ -5768,7 +5927,7 @@ def api_get_violation(report_id):
         violation_dir = VIOLATIONS_DIR / report_id
         if not violation_dir.exists():
             return jsonify({'error': 'Violation not found'}), 404
-        
+
         metadata_file = violation_dir / 'metadata.json'
         metadata = {}
         if metadata_file.exists():
@@ -5776,7 +5935,7 @@ def api_get_violation(report_id):
                 metadata = json.load(f)
 
         timestamp = _parse_report_id_timestamp(report_id)
-        
+
         return jsonify({
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
@@ -5786,13 +5945,13 @@ def api_get_violation(report_id):
             'status': 'completed' if (violation_dir / 'report.html').exists() else 'pending',
             **metadata
         })
-    
+
     # Use Supabase
     try:
         violation = db_manager.get_violation(report_id)
         if not violation:
             return jsonify({'error': 'Violation not found'}), 404
-        
+
         return jsonify({
             'report_id': violation['report_id'],
             'timestamp': violation['timestamp'].isoformat() if violation.get('timestamp') else None,
@@ -5808,7 +5967,7 @@ def api_get_violation(report_id):
             'has_annotated': bool(violation.get('annotated_image_key')),
             'has_report': bool(violation.get('report_html_key'))
         })
-        
+
     except Exception as e:
         logger.error(f"Error fetching violation: {e}")
         return jsonify({'error': 'Failed to fetch violation'}), 500
@@ -5880,7 +6039,7 @@ def api_report_status(report_id):
             'error_message': error_message,
             'message': message_map.get(status, 'Status unknown')
         })
-    
+
     # Use Supabase
     try:
         if hasattr(db_manager, 'get_status'):
@@ -5992,7 +6151,7 @@ def api_report_status(report_id):
                 'status': 'not_found',
                 'message': 'Report not found'
             })
-        
+
         status = status_info.get('status', 'unknown')
         generating_message = (
             status_info.get('alert_message')
@@ -6007,7 +6166,7 @@ def api_report_status(report_id):
             'partial': 'Report was partially generated',
             'skipped': f"Skipped - not a work environment: {status_info.get('error_message', 'Invalid scene')}"
         }
-        
+
         return jsonify({
             'status': status,
             'has_report': status_info.get('has_report', False),
@@ -6018,7 +6177,7 @@ def api_report_status(report_id):
             'alert_message': status_info.get('alert_message'),
             'message': messages.get(status, 'Status unknown')
         })
-        
+
     except Exception as e:
         logger.error(f"Error fetching report status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch status'}), 500
@@ -6140,7 +6299,7 @@ def api_queue_status():
             'available': False,
             'message': 'Violation queue not initialized'
         })
-    
+
     try:
         stats = violation_queue.get_stats()
         queue_preview = []
@@ -6654,14 +6813,14 @@ def api_realtime_snapshot():
 def api_environment_validation():
     """Get or set environment validation setting."""
     global ENVIRONMENT_VALIDATION_ENABLED
-    
+
     if request.method == 'GET':
         return jsonify({
             'enabled': ENVIRONMENT_VALIDATION_ENABLED,
             'valid_keywords': VALID_ENVIRONMENT_KEYWORDS[:10],  # First 10 for display
             'invalid_keywords': INVALID_ENVIRONMENT_KEYWORDS[:10]
         })
-    
+
     # POST - update setting
     try:
         data = request.get_json()
@@ -6684,13 +6843,13 @@ def api_environment_validation():
 def api_cooldown_setting():
     """Get or set the violation capture cooldown."""
     global VIOLATION_COOLDOWN
-    
+
     if request.method == 'GET':
         return jsonify({
             'cooldown_seconds': VIOLATION_COOLDOWN,
             'description': 'Minimum seconds between capturing violations'
         })
-    
+
     # POST - update cooldown
     try:
         data = request.get_json()
@@ -7283,7 +7442,7 @@ def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
     """One-shot migration: if a fresh CASM install lands on a machine that was
     previously provisioned under the old LUNA branding, copy the legacy state
     files (provision secret, machine_id) so the operator does not have to
-    request approval again. Safe to call repeatedly â€” only copies files that
+    request approval again. Safe to call repeatedly  only copies files that
     do not already exist in the new location.
     """
     try:
@@ -8363,7 +8522,7 @@ def api_local_mode_provisioning_status():
     # `status='idle'` (NOT empty), with `checked=False`. Without a
     # secret-protected lookup we can still resolve the device's true
     # status by querying the public device-provisioning DB directly by
-    # machine_id â€” that's the same lookup `/api/provision/status` does
+    # machine_id  that's the same lookup `/api/provision/status` does
     # after auth. No secrets are exposed; we only read the public
     # status field ('provisioned', 'approved', 'pending_approval',
     # 'rejected') the admin already controls.
@@ -8488,7 +8647,7 @@ def api_local_mode_installer_redirect():
     # PC's stored provision_secret embedded. Without this loopback gate, any
     # device on the LAN (e.g. a phone on the same Wi-Fi) could fetch the
     # installer for the host PC by hitting http://<PC-IP>:5000/api/local-mode/
-    # installer/redirect. Restrict to loopback only â€” this endpoint is
+    # installer/redirect. Restrict to loopback only  this endpoint is
     # intended exclusively for the host PC's own browser.
     _client_ip_raw = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or (request.remote_addr or '')
     _client_ip = _client_ip_raw.lower()
@@ -8528,7 +8687,7 @@ def api_local_mode_installer_redirect():
     if status not in ('approved', 'provisioned', 'active'):
         # Disk state may be stale (e.g. written as 'rejected' by an old bug or by
         # a previous failed auto-provision cycle).  Do a live cloud check before
-        # blocking — if the cloud confirms 'approved' we can proceed and heal the
+        # blocking  if the cloud confirms 'approved' we can proceed and heal the
         # disk state at the same time.
         if provision_secret and cloud_url:
             live_check = _local_mode_fetch_authoritative_status(
@@ -8710,7 +8869,7 @@ def _api_local_mode_auto_provisioning_impl():
             # admin involvement. For brand-new installs with no stored
             # secret, the operator must approve via /admin/devices.
             # When skip_existing_secret=True the caller knows the local secret
-            # is stale — omit it to avoid PRV5 on the cloud side.
+            # is stale  omit it to avoid PRV5 on the cloud side.
             request_body = {'machine_id': machine_id}
             if not skip_existing_secret:
                 existing_local_secret = str(state.get('provision_secret') or '').strip()
@@ -8832,13 +8991,13 @@ def _api_local_mode_auto_provisioning_impl():
         }), 502
 
     if status_response.status_code in (401, 404):
-        # PRV3 (relaxed) â€” A 401/404 from /api/provision/status can mean either:
+        # PRV3 (relaxed)  A 401/404 from /api/provision/status can mean either:
         #   (a) the admin deleted the device record (genuine revocation), OR
         #   (b) the cloud secret was rotated by a *different* caller (e.g. the
         #       Vercel browser session also requested provisioning while we held
         #       an older secret). The cloud's /api/provision/request endpoint
         #       only honours unauthenticated re-requests for devices whose
-        #       status is already 'approved'/'provisioned' â€” so attempting a
+        #       status is already 'approved'/'provisioned'  so attempting a
         #       re-request is safe: it will succeed only if the device is still
         #       legitimately approved on the cloud, otherwise it will fail and
         #       we then fall back to the genuine-rejection branch below.
@@ -9670,7 +9829,7 @@ def api_provider_routing_settings():
             })
         except Exception as caption_err:
             logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
-            # M2 â€” surface the warning to the caller so the UI can show it
+            # M2  surface the warning to the caller so the UI can show it
             caption_settings_warning = f"Caption provider settings could not be applied: {caption_err}"
 
         # Apply to active report generator immediately and invalidate in-flight
@@ -10361,10 +10520,10 @@ def _sync_local_cache_candidates(
         if cloud_mode_orphans_only:
             # Cloud routing profile: reconcile two kinds of unsynced reports:
             #
-            # (A) True orphans — no detection_event at all. These were created
+            # (A) True orphans  no detection_event at all. These were created
             #     by the local pipeline before any Supabase connection existed.
             #
-            # (B) Local-pipeline events — the local backend created a
+            # (B) Local-pipeline events  the local backend created a
             #     detection_event (source_scope='local') but never uploaded the
             #     artifacts to cloud storage (original_image_key is empty).
             #     When the user switches to cloud mode these reports disappear
@@ -10769,7 +10928,7 @@ def api_fix_stuck_reports():
     """Manually trigger fixing of stuck reports."""
     if db_manager is None:
         return jsonify({'error': 'Database not available'}), 503
-    
+
     try:
         if hasattr(db_manager, 'fix_stuck_reports'):
             fixed_count = db_manager.fix_stuck_reports()
@@ -11275,10 +11434,10 @@ def api_logs():
     """Get recent system event logs."""
     limit = request.args.get('limit', 50, type=int)
     event_type = request.args.get('event_type', None)
-    
+
     if db_manager is None:
         return jsonify([])  # No logs without Supabase
-    
+
     try:
         logs = db_manager.get_recent_logs(limit=limit, event_type=event_type)
         formatted = [{
@@ -11291,7 +11450,7 @@ def api_logs():
             'created_at': log['created_at'].isoformat() if log.get('created_at') else None
         } for log in logs]
         return jsonify(formatted)
-        
+
     except Exception as e:
         logger.error(f"Error fetching logs: {e}")
         return jsonify({'error': 'Failed to fetch logs'}), 500
@@ -11302,11 +11461,11 @@ def api_device_stats(device_id):
     """Get statistics for a specific device."""
     if db_manager is None:
         return jsonify({'error': 'Supabase not configured'}), 503
-    
+
     try:
         stats = db_manager.get_device_stats(device_id)
         return jsonify(stats)
-        
+
     except Exception as e:
         logger.error(f"Error fetching device stats: {e}")
         return jsonify({'error': 'Failed to fetch device stats'}), 500
@@ -11320,10 +11479,10 @@ def view_report(report_id):
     if storage_manager is None or db_manager is None:
         # Fallback to local filesystem
         violation_dir = VIOLATIONS_DIR / report_id
-        
+
         if not violation_dir.exists():
             abort(404, description="Report not found")
-        
+
         report_html = violation_dir / 'report.html'
         if report_html.exists():
             trace_payload = _build_traceability_payload(
@@ -11336,7 +11495,7 @@ def view_report(report_id):
             return _read_local_report_with_trace(report_html, trace_payload)
         else:
             abort(404, description="Report HTML not found")
-    
+
     local_violation_dir = VIOLATIONS_DIR / report_id
     local_report_html = local_violation_dir / 'report.html'
 
@@ -11355,7 +11514,7 @@ def view_report(report_id):
             source='supabase_storage',
             failed_view_requested=failed_view,
         )
-        
+
         if not violation:
             if failed_view and event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
@@ -11396,7 +11555,7 @@ def view_report(report_id):
                     return _read_local_report_with_trace(local_report_html, trace_payload)
             except Exception:
                 pass
-        
+
         # Get signed URL for report HTML
         report_html_key = violation.get('report_html_key')
         if not report_html_key:
@@ -11434,7 +11593,7 @@ def view_report(report_id):
                     'Pragma': 'no-cache',
                     'Expires': '0'
                 }
-        
+
         # Download the HTML content and render it
         try:
             html_content = _get_cached_report_html_content(report_id, report_html_key)
@@ -11477,7 +11636,7 @@ def view_report(report_id):
 
             _set_cached_report_html_content(report_id, report_html_key, html_content)
             _persist_local_report_html_cache(report_id, html_content)
-            
+
             # Return the HTML content directly so browser renders it
             trace_payload = _build_traceability_payload(
                 report_id=report_id,
@@ -11518,7 +11677,7 @@ def view_report(report_id):
                     status_code=409
                 )
             abort(500, description=f"Error loading report: {str(e)}")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -12285,15 +12444,15 @@ def _normalize_report_footer_branding(html_content: str) -> str:
         replacements = (
             (
                 'PPE Safety Monitor - AI-Powered Workplace Safety System',
-                'CASM PPE Safety Monitor - FYPA AI Model Development & Integration',
+                'CASM PPE Safety Monitor FYPA AI Model Development and Integration',
             ),
             (
-                'Powered by YOLOv8 â€¢ LLaVA â€¢ Llama3 â€¢ Computer Vision',
-                'Powered by YOLO PPE Detection â€¢ Local + Cloud AI Routing â€¢ Supabase-backed Report Pipeline',
+                'Powered by YOLOv8  LLaVA  Llama3  Computer Vision',
+                'Powered by YOLO PPE Detection, Local and Cloud AI Routing, Supabase backed Report Pipeline',
             ),
             (
                 'This NCR was auto-generated by CASM PPE Safety Monitor System',
-                'This NCR was auto-generated by CASM PPE Safety Monitor - FYPA AI Model Development & Integration',
+                'This NCR was auto-generated by CASM PPE Safety Monitor FYPA AI Model Development and Integration',
             ),
         )
 
@@ -12460,16 +12619,16 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
             # Do NOT auto-start the camera here. The camera must be explicitly started
             # via POST /api/live/start (i.e., the user must click Start). This prevents
             # the camera from opening on page load or any accidental stream URL access.
-            logger.info("Stream requested but no live source is active â€” ignoring (use /api/live/start)")
+            logger.info("Stream requested but no live source is active  ignoring (use /api/live/start)")
             return
         source_name = live_source_adapter.current_source
-    
+
     logger.info(f"Starting live frame generation from source: {source_name}")
     logger.info("=" * 80)
     logger.info("INITIALIZING PIPELINE COMPONENTS")
     logger.info(f"FULL_PIPELINE_AVAILABLE: {FULL_PIPELINE_AVAILABLE}")
     logger.info("=" * 80)
-    
+
     # Initialize pipeline components if available
     if FULL_PIPELINE_AVAILABLE:
         init_success = initialize_pipeline_components()
@@ -12478,9 +12637,9 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
         logger.info(f"Report generator: {report_generator}")
     else:
         logger.error("FULL_PIPELINE_AVAILABLE is False - components will not initialize")
-    
+
     logger.info("=" * 80)
-    
+
     frame_interval = 1.0 / max(1, int(target_fps))
     last_yield_ts = 0.0
 
@@ -12493,7 +12652,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                 if not ret:
                     logger.warning(error_message or 'Failed to read frame from active source')
                     break
-            
+
             # Run YOLO detection
             try:
                 detections, annotated = predict_image(frame, conf=conf)
@@ -12522,41 +12681,41 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                     2,
                     cv2.LINE_AA,
                 )
-                
+
                 # Log all detections for debugging
                 if detections:
                     detected_classes = [d['class_name'] for d in detections]
                     logger.debug(f"Detected: {detected_classes}")
-                
+
                 # Check for violations in background thread (non-blocking)
                 if detections and FULL_PIPELINE_AVAILABLE:
                     if violation_detections:
                         # Log detected violations
                         violation_classes = [d.get('class_name') for d in violation_detections]
                         logger.info("=" * 80)
-                        logger.info(f"ðŸš¨ PPE VIOLATION DETECTED: {violation_classes}")
+                        logger.info(f" PPE VIOLATION DETECTED: {violation_classes}")
                         logger.info(f"Caption generator available: {caption_generator is not None}")
                         logger.info(f"Report generator available: {report_generator is not None}")
                         logger.info(f"Violation queue available: {violation_queue is not None}")
                         logger.info("=" * 80)
-                        
+
                         # Use queue-based approach to prevent missing violations
                         # enqueue_violation is fast (saves images, adds to queue)
                         # Queue worker processes reports in background
                         frame_copy = frame.copy()
                         detections_copy = detections.copy()
-                        
+
                         report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
                         if report_id:
-                            logger.info(f"âœ“ Violation {report_id} queued for processing")
+                            logger.info(f" Violation {report_id} queued for processing")
                         else:
                             logger.debug("Violation not queued (cooldown or already processing)")
-                
+
                 # Encode frame as JPEG
                 ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
                 if not ret:
                     continue
-                
+
                 # Pace stream frames to keep latency predictable on slower machines/networks.
                 now = time.monotonic()
                 wait_s = frame_interval - (now - last_yield_ts)
@@ -12564,22 +12723,22 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                     time.sleep(wait_s)
 
                 frame_bytes = buffer.tobytes()
-                
+
                 # Yield frame in multipart format
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
                 last_yield_ts = time.monotonic()
-                
+
             except Exception as e:
                 logger.error(f"Error processing frame: {e}")
                 continue
-                
+
     except GeneratorExit:
         logger.info("Client disconnected from stream")
     except Exception as e:
         logger.error(f"Stream error: {e}")
     finally:
-        logger.info("Frame generation stopped â€” releasing camera")
+        logger.info("Frame generation stopped  releasing camera")
         with camera_lock:
             _stop_live_source_locked()
 
@@ -12657,7 +12816,7 @@ def stop_live():
     """Stop live monitoring."""
     with camera_lock:
         _stop_live_source_locked()
-    
+
     return jsonify({'success': True, 'message': 'Live monitoring stopped'})
 
 
@@ -12792,54 +12951,54 @@ def upload_inference():
 
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
-    
+
     file = request.files['image']
     if file.filename == '':
         return jsonify({'error': 'No image selected'}), 400
-    
+
     try:
         # Read image
         img_bytes = file.read()
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
+
         if frame is None:
             return jsonify({'error': 'Invalid image format'}), 400
-        
+
         # Get confidence threshold
         conf = float(request.form.get('conf', 0.10))
-        
+
         # Run inference
         detections, annotated = predict_image(frame, conf=conf)
-        
+
         # Check for violations
         violation_detections = _extract_violation_detections(detections)
         report_queued = False
         report_queue_reason = None
         queued_report_id = None
-        
+
         # If violations detected, use queue system (consistent with live camera)
         if violation_detections and FULL_PIPELINE_AVAILABLE:
             violation_types = [d['class_name'] for d in violation_detections]
-            logger.info(f"ðŸš¨ Uploaded image violation detected: {violation_types}")
-            
+            logger.info(f" Uploaded image violation detected: {violation_types}")
+
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
             queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='upload')
             report_queued = queued_report_id is not None
             if report_queued:
-                logger.info(f"ðŸ“¥ Violation queued for processing: {queued_report_id}")
+                logger.info(f" Violation queued for processing: {queued_report_id}")
             else:
                 report_queue_reason = 'cooldown_or_already_processing'
-                logger.info("ðŸ“­ Violation not queued (cooldown or already processing)")
+                logger.info(" Violation not queued (cooldown or already processing)")
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
             report_queue_reason = 'pipeline_components_unavailable'
-        
+
         # Encode annotated image to base64
         _, buffer = cv2.imencode('.jpg', annotated)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
-        
+
         return jsonify({
             'success': True,
             'detections': detections,
@@ -12851,7 +13010,7 @@ def upload_inference():
             'report_queue_reason': report_queue_reason,
             'report_id': queued_report_id
         })
-        
+
     except Exception as e:
         logger.error(f"Inference error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -13008,15 +13167,15 @@ def api_report_progress():
     """Get current report generation progress."""
     try:
         progress = get_report_progress()
-        
+
         # Add queue size if available
         if violation_queue:
             progress['queue_size'] = violation_queue.get_queue_size()
         else:
             progress['queue_size'] = 0
-        
+
         return jsonify(progress)
-        
+
     except Exception as e:
         logger.error(f"Error getting progress: {e}")
         return jsonify({'error': str(e)}), 500
@@ -13028,11 +13187,11 @@ def api_failed_reports():
     try:
         if not db_manager:
             return jsonify({'error': 'Database not available'}), 503
-        
+
         # Get all failed reports with error messages
         with db_manager.conn.cursor() as cur:
             cur.execute("""
-                SELECT 
+                SELECT
                     report_id,
                     timestamp,
                     status,
@@ -13047,12 +13206,12 @@ def api_failed_reports():
                 LIMIT 50
             """)
             failed_reports = cur.fetchall()
-        
+
         return jsonify({
             'count': len(failed_reports),
             'reports': failed_reports
         })
-        
+
     except Exception as e:
         logger.error(f"Error fetching failed reports: {e}")
         return jsonify({'error': str(e)}), 500
@@ -13236,7 +13395,7 @@ def system_info():
     except Exception:
         resolved_model_path = None
         model_exists = False
-    
+
     info = {
         'python_version': sys.version,
         'cuda_available': torch.cuda.is_available(),
@@ -13246,7 +13405,7 @@ def system_info():
         'resolved_model_path': resolved_model_path,
         'model_exists': model_exists
     }
-    
+
     return jsonify(info)
 
 
@@ -13504,7 +13663,7 @@ def cleanup():
     """Cleanup resources on shutdown."""
     with camera_lock:
         _stop_live_source_locked()
-    
+
     cv2.destroyAllWindows()
 
 
@@ -13557,7 +13716,7 @@ PROVISIONING_STATE_SCHEMA_LOCK = Lock()
 PROVISIONING_STATE_SCHEMA_READY = False
 
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
-# ADMIN_USERNAME â€” when non-empty, Basic-Auth username is also validated on all admin endpoints.
+# ADMIN_USERNAME  when non-empty, Basic-Auth username is also validated on all admin endpoints.
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '')
 # When False (default), /api/provision/request requires an X-Admin-Token header matching ADMIN_PASSWORD.
 # Set to '1'/'true'/'yes' only in isolated trusted networks where unauthenticated self-registration is acceptable.
@@ -15245,7 +15404,7 @@ def provision_request():
             # before the idempotency fix, or a different browser profile). The
             # only escape was admin-side revoke + re-approve.
             #
-            # PRV5 (self-healing recovery) — instead of a hard 401, treat this
+            # PRV5 (self-healing recovery)  instead of a hard 401, treat this
             # as a credential-desync recovery request: demote the device back to
             # `pending`, issue a fresh provision_secret, and notify the admin so
             # they can re-approve. The legitimate device's already-installed
@@ -15267,7 +15426,7 @@ def provision_request():
             is_rerequest_for_known_device = False
             _existing_status_for_auth = 'pending'
 
-    # PRV1 (hardened) â€” Require admin authorisation unless either:
+    # PRV1 (hardened)  Require admin authorisation unless either:
     #   (a) PROVISION_ALLOW_SELF_REGISTER=true (operator opt-in); or
     #   (b) this is a re-request for an approved/provisioned device AND the
     #       caller proved prior trust by presenting the current
@@ -15305,7 +15464,7 @@ def provision_request():
     repeated_pending_request = existing_status in ('pending', 'pending_approval')
     effective_status = existing_status if preserve_status else 'pending'
 
-    # PRV5 — credential-desync recovery overrides preservation. When a device
+    # PRV5  credential-desync recovery overrides preservation. When a device
     # presents a wrong current_provision_secret, we MUST demote it back to
     # `pending` so admin re-approval is required before the new secret is
     # usable. Without this, an attacker who guesses machine_id could obtain
@@ -15609,7 +15768,7 @@ def request_bootstrap_installer():
         if current_status not in ('approved', 'provisioned'):
             return _json_error('Device is not approved for installer access', 403)
 
-        # PRV4 â€” provision_secret is mandatory for device-initiated installer requests.
+        # PRV4  provision_secret is mandatory for device-initiated installer requests.
         # Removing the "recovery convenience path" prevents unauthenticated callers who
         # only know a machine_id from downloading the installer package.
         if not provision_secret:
@@ -16141,23 +16300,23 @@ def admin_devices_quick_approve():
 if __name__ == '__main__':
     import atexit
     atexit.register(cleanup)
-    
+
     logger.info("=" * 80)
     logger.info("CASM PPE SAFETY MONITOR - Unified Application Server")
     logger.info("=" * 80)
     logger.info("")
     port = int(os.getenv('PORT', '5000'))
-    logger.info(f"ðŸš€ Server starting at: http://localhost:{port}")
-    logger.info(f"ðŸ§­ Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
-    logger.info(f"ðŸŒ Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
+    logger.info(f" Server starting at: http://localhost:{port}")
+    logger.info(f" Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
+    logger.info(f" Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
     logger.info("")
-    logger.info("ðŸ“Š Features:")
+    logger.info(" Features:")
     logger.info("   - Modern web interface")
     logger.info("   - Live webcam monitoring with YOLO")
     logger.info("   - Image upload inference")
     logger.info("   - Violation reports and analytics")
     logger.info("")
-    logger.info("ðŸ”— Endpoints:")
+    logger.info(" Endpoints:")
     logger.info("   GET  /                          - Main frontend or API status")
     logger.info("   GET  /api/violations            - List violations")
     logger.info("   GET  /api/stats                 - Statistics")
@@ -16168,19 +16327,19 @@ if __name__ == '__main__':
     logger.info("")
     logger.info("Press Ctrl+C to stop")
     logger.info("=" * 80)
-    
+
     # Kick off startup checks asynchronously so frontend can display live progress.
-    logger.info("ðŸ”§ Starting startup sequence thread...")
+    logger.info(" Starting startup sequence thread...")
     ensure_startup_thread()
-    logger.info("â„¹ï¸  Visit /api/system/startup-status to track readiness progress")
+    logger.info("  Visit /api/system/startup-status to track readiness progress")
     logger.info("")
-    
+
     # Debug mode should ONLY be enabled for local development, NEVER in production
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     if debug_mode:
-        logger.warning("âš ï¸  Flask debug mode is ENABLED - This should ONLY be used for local development!")
-        logger.warning("âš ï¸  NEVER enable debug mode in production as it allows arbitrary code execution!")
-    
+        logger.warning("  Flask debug mode is ENABLED - This should ONLY be used for local development!")
+        logger.warning("  NEVER enable debug mode in production as it allows arbitrary code execution!")
+
     app.run(
         host='0.0.0.0',
         port=port,

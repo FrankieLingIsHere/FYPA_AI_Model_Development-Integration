@@ -72,13 +72,13 @@ const AudioAlert = (function () {
             button.classList.add('btn-success');
             button.style.background = '#27ae60';
             button.style.borderColor = '#1e8449';
-            button.innerHTML = '🔊 <span>Voice Alerts ON</span>';
+            button.innerHTML = '<span>Voice Alerts ON</span>';
         } else {
             button.classList.remove('btn-success');
             button.classList.add('btn-danger');
             button.style.background = '#e74c3c';
             button.style.borderColor = '#c0392b';
-            button.innerHTML = '🔊 <span>Voice Alerts OFF</span>';
+            button.innerHTML = '<span>Voice Alerts OFF</span>';
         }
     }
 
@@ -366,7 +366,7 @@ const AudioAlert = (function () {
                 testBtn = document.createElement('button');
                 testBtn.id = 'testVoice';
                 testBtn.className = 'btn btn-secondary sidebar-voice-btn';
-                testBtn.innerHTML = '🔈 <span>Test Voice</span>';
+                testBtn.innerHTML = '<span>Test Voice</span>';
                 if (sidebarBottom) sidebarBottom.appendChild(testBtn);
                 else document.body.appendChild(testBtn);
             }

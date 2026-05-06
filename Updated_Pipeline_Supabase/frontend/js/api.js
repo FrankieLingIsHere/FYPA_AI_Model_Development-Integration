@@ -32,6 +32,11 @@ const API = {
             e.name = 'InvalidContextError';
             throw e;
         }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            const e = new Error(`Offline: skipped network request to ${url}`);
+            e.name = 'OfflineSkippedError';
+            throw e;
+        }
 
         const controller = new AbortController();
         const externalSignal = init && init.signal;
@@ -125,6 +130,8 @@ const API = {
             || message.includes('load failed')
             || message.includes('request timed out')
             || message.includes('timeouterror')
+            || message.includes('offlineskippederror')
+            || message.includes('offline: skipped')
         );
     },
 
@@ -134,7 +141,7 @@ const API = {
             console.warn(`${context}:`, message);
             return;
         }
-        console.error(`${context}:`, error);
+        console.warn(`${context}:`, error);
     },
 
     inferReportSourceScope(sourceHint = null) {
@@ -712,7 +719,7 @@ const API = {
             data: payload
         };
         const key = this.getCacheStorageKey(scope);
-        
+
         // 1. Always try IndexedDB first (primary)
         if (typeof IndexedDBManager !== 'undefined') {
             const success = await IndexedDBManager.setItem(key, envelope);
@@ -742,12 +749,12 @@ const API = {
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return null;
-            
+
             // Migration: Move to IndexedDB for next time if possible
             if (typeof IndexedDBManager !== 'undefined') {
                 IndexedDBManager.setItem(key, parsed);
             }
-            
+
             return parsed;
         } catch (error) {
             return null;
@@ -769,6 +776,17 @@ const API = {
     async cacheReportHtml(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return false;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+
+        const sourceScope = this.inferReportSourceScope(sourceHint);
+        const cloudBase = this.getCloudBackendBaseUrl();
+        if (
+            (sourceScope === 'cloud' || sourceScope === 'synced_local' || sourceScope === 'shared')
+            && !this.canUseRemoteCloudBackendFromPage(cloudBase)
+            && !this.hasLocalReportArtifacts(sourceHint)
+        ) {
+            return false;
+        }
 
         const url = this.getReportUrl(rid, sourceHint);
         try {
@@ -1312,7 +1330,7 @@ const API = {
         if (!Array.isArray(listA)) listA = [];
         if (!Array.isArray(listB)) listB = [];
         const byId = new Map();
-        
+
         // listB overwrites listA
         listA.forEach(v => {
             if (v && v.report_id) byId.set(v.report_id, v);
@@ -1320,7 +1338,7 @@ const API = {
         listB.forEach(v => {
             if (v && v.report_id) byId.set(v.report_id, v);
         });
-        
+
         const merged = Array.from(byId.values());
         merged.sort((a, b) => {
             const aTime = new Date(a.timestamp || 0).getTime();
@@ -1408,7 +1426,7 @@ const API = {
                 cacheScope: `violation:${baseKey}:${reportId}`
             });
         } catch (error) {
-            console.error('Error fetching violation:', error);
+            this.logFetchFailure('Error fetching violation', error);
             return null;
         }
     },
@@ -1431,7 +1449,7 @@ const API = {
                 ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
                 : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
         } catch (error) {
-            console.error('Error fetching report status:', error);
+            this.logFetchFailure('Error fetching report status', error);
             if (noCache) {
                 const cached = await this.readJsonCache(cacheScope);
                 if (cached && cached.data && typeof cached.data === 'object') {
@@ -1514,6 +1532,7 @@ const API = {
                 );
 
                 let merged = [];
+                let cachedCloudRows = [];
                 results.forEach((result) => {
                     if (result.status === 'fulfilled' && Array.isArray(result.value)) {
                         merged = this._mergeOptimistically(merged, result.value, safeLimit);
@@ -1528,10 +1547,28 @@ const API = {
                     const cached = await this.readJsonCache(scope);
                     if (cached && Array.isArray(cached.data)) {
                         merged = this._mergeOptimistically(merged, cached.data, safeLimit);
+                        cachedCloudRows = this._mergeOptimistically(cachedCloudRows, cached.data, safeLimit);
                     }
                 }
                 merged = await this.mergeLocalReportDrafts(merged, safeLimit);
                 if (merged.length > 0) {
+                    try {
+                        const mergeResponse = await this._fetchWithTimeout(`${localBase}/api/stats/merge-cache`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            cache: 'no-store',
+                            body: JSON.stringify({
+                                cached_cloud_rows: cachedCloudRows,
+                                client_merged_count: merged.length
+                            })
+                        }, 9000);
+                        const mergedStats = await mergeResponse.json().catch(() => null);
+                        if (mergeResponse.ok && mergedStats && typeof mergedStats === 'object' && !mergedStats.error) {
+                            return this.enrichStatsWithViolations(mergedStats, merged);
+                        }
+                    } catch (backendMergeError) {
+                        console.warn('Local backend cached stats merge unavailable, using browser aggregate:', backendMergeError && backendMergeError.message ? backendMergeError.message : backendMergeError);
+                    }
                     return this.calculateStatsFromViolations(merged);
                 }
             } catch (unifiedError) {
@@ -1593,9 +1630,44 @@ const API = {
         return this.buildReportScopedUrl(API_CONFIG.ENDPOINTS.REPORT(reportId), sourceHint);
     },
 
+    getReportNavigationUrl(reportId, sourceHint = null) {
+        const path = API_CONFIG.ENDPOINTS.REPORT(reportId);
+        const scope = this.inferReportSourceScope(sourceHint);
+        const cloudBase = this.getCloudBackendBaseUrl();
+        const localBase = this.getLocalBackendBaseUrl();
+        const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+        if (scope === 'local') {
+            return `${localBase || currentBase || ''}${path}`;
+        }
+
+        if (scope === 'synced_local' && offline && this.hasLocalReportArtifacts(sourceHint)) {
+            return `${localBase || currentBase || ''}${path}`;
+        }
+
+        if ((scope === 'cloud' || scope === 'synced_local' || scope === 'shared') && cloudBase) {
+            return `${cloudBase}${path}`;
+        }
+
+        return this.getReportUrl(reportId, sourceHint);
+    },
+
     async prefetchReport(reportId, options = {}) {
         let htmlCached = false;
         const sourceHint = options.source || options.violation || options.sourceHint || options;
+        const sourceScope = this.inferReportSourceScope(sourceHint);
+        const cloudBase = this.getCloudBackendBaseUrl();
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return { success: false, skipped_offline: true, html_cached: false };
+        }
+        if (
+            (sourceScope === 'cloud' || sourceScope === 'synced_local' || sourceScope === 'shared')
+            && !this.canUseRemoteCloudBackendFromPage(cloudBase)
+            && !this.hasLocalReportArtifacts(sourceHint)
+        ) {
+            return { success: false, skipped_remote_prefetch: true, html_cached: false };
+        }
         try {
             const response = await fetch(this.buildReportScopedUrl(`/api/report/${reportId}/prefetch`, sourceHint), {
                 method: 'POST',
@@ -1631,7 +1703,7 @@ const API = {
             });
             return Array.isArray(data) ? data : [];
         } catch (error) {
-            console.error('Error fetching logs:', error);
+            this.logFetchFailure('Error fetching logs', error);
             return [];
         }
     },
@@ -1645,7 +1717,7 @@ const API = {
             });
             return data && typeof data === 'object' ? data : {};
         } catch (error) {
-            console.error('Error fetching device stats:', error);
+            this.logFetchFailure('Error fetching device stats', error);
             return {};
         }
     },
@@ -1660,7 +1732,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to trigger reprocess');
             return await response.json();
         } catch (error) {
-            console.error('Error reprocessing report:', error);
+            this.logFetchFailure('Error reprocessing report', error);
             return { success: false, error: error.message };
         }
     },
@@ -1688,7 +1760,7 @@ const API = {
             }
             return data;
         } catch (error) {
-            console.error('Error triggering priority generation:', error);
+            this.logFetchFailure('Error triggering priority generation', error);
             return { success: false, error: error.message };
         }
     },
@@ -1699,7 +1771,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to fetch provider routing settings');
             return await response.json();
         } catch (error) {
-            console.error('Error fetching provider routing settings:', error);
+            this.logFetchFailure('Error fetching provider routing settings', error);
             return null;
         }
     },
@@ -1714,7 +1786,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to update provider routing settings');
             return await response.json();
         } catch (error) {
-            console.error('Error updating provider routing settings:', error);
+            this.logFetchFailure('Error updating provider routing settings', error);
             return { success: false, error: error.message };
         }
     },
@@ -1725,7 +1797,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to fetch disk space status');
             return await response.json();
         } catch (error) {
-            console.error('Error fetching disk space status:', error);
+            this.logFetchFailure('Error fetching disk space status', error);
             return null;
         }
     },
@@ -1737,7 +1809,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to fetch reliability stats');
             return await response.json();
         } catch (error) {
-            console.error('Error fetching reliability stats:', error);
+            this.logFetchFailure('Error fetching reliability stats', error);
             return { success: false, error: error.message };
         }
     },
@@ -1750,7 +1822,7 @@ const API = {
             if (!response.ok) throw new Error('Failed to fetch provider runtime status');
             return await response.json();
         } catch (error) {
-            console.error('Error fetching provider runtime status:', error);
+            this.logFetchFailure('Error fetching provider runtime status', error);
             return { success: false, error: error.message };
         }
     },
@@ -1798,7 +1870,7 @@ const API = {
             }
             return data;
         } catch (error) {
-            console.error('Error executing report recovery:', error);
+            this.logFetchFailure('Error executing report recovery', error);
             return { success: false, error: error.message };
         }
     },
@@ -1828,7 +1900,7 @@ const API = {
             }
             return data;
         } catch (error) {
-            console.error('Error preparing local mode:', error);
+            this.logFetchFailure('Error preparing local mode', error);
             return { success: false, error: error.message };
         }
     },
@@ -1857,7 +1929,7 @@ const API = {
 
             return data;
         } catch (error) {
-            console.error('Error auto-provisioning local mode credentials:', error);
+            this.logFetchFailure('Error auto-provisioning local mode credentials', error);
             return { success: false, error: error.message };
         }
     },
@@ -1926,7 +1998,7 @@ const API = {
                 machine_id: String(data.machine_id || machineId).trim()
             };
         } catch (error) {
-            console.error('Error requesting cloud provisioning approval:', error);
+            this.logFetchFailure('Error requesting cloud provisioning approval', error);
             return { success: false, error: error.message };
         }
     },
@@ -2008,7 +2080,7 @@ const API = {
                 machine_id: String(data.machine_id || machineId).trim()
             };
         } catch (error) {
-            console.error('Error fetching cloud provisioning status:', error);
+            this.logFetchFailure('Error fetching cloud provisioning status', error);
             return { success: false, error: error.message };
         }
     },
@@ -2039,7 +2111,7 @@ const API = {
             }
             return data;
         } catch (error) {
-            console.error('Error fetching local provisioning status:', error);
+            this.logFetchFailure('Error fetching local provisioning status', error);
             return { success: false, error: error.message };
         }
     },
@@ -2061,6 +2133,20 @@ const API = {
             const dryRun = !!options.dryRun;
             const origin = String(options.origin || 'local_synced').trim() || 'local_synced';
             const syncBase = this._normalizeBaseUrl(options.baseUrl || options.syncBaseUrl || this.getLocalSyncBackendBaseUrl());
+            if (typeof navigator !== 'undefined' && navigator.onLine === false && !dryRun) {
+                return {
+                    success: true,
+                    skipped_offline: true,
+                    reconcile_reason: reason,
+                    origin,
+                    dry_run: false,
+                    scanned: 0,
+                    candidates: 0,
+                    enqueued: 0,
+                    skipped: 0,
+                    queued_report_ids: []
+                };
+            }
 
             if (!dryRun && options.skipCandidateCheck !== true) {
                 const candidates = await this.getLocalSyncCandidateSummary();
@@ -2125,7 +2211,7 @@ const API = {
             }
             return data;
         } catch (error) {
-            this.logFetchFailure('Error syncing local cache to Supabase', error);
+            console.warn('Local cache sync skipped or failed:', error && error.message ? error.message : error);
             void this.registerLocalReportBackgroundSync('sync local cache failed');
             return { success: false, error: error.message };
         }

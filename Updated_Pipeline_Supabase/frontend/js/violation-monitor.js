@@ -177,11 +177,11 @@ const ViolationMonitor = {
 
                     if (isNewDuringSession) {
                         console.log(`[ViolationMonitor] 🆕 NEW real-time violation detected via polling fallback: ${reportId}`);
-                        
-                        // We call the notification helpers. 
+
+                        // We call the notification helpers.
                         // These helpers already contain the de-duplication check:
                         // 'if (this.notifiedEvents.has(key)) return;'
-                        // So if live.js already fired the notification, these calls 
+                        // So if live.js already fired the notification, these calls
                         // will do absolutely nothing, preventing duplicates.
                         this._notifyViolationDetected(violation);
 
@@ -431,7 +431,7 @@ const ViolationMonitor = {
                 'info',
                 8000,
                 {
-                    title: '📋 Violation Summary',
+                    title: 'Violation Summary',
                     action: {
                         text: 'View Reports',
                         onClick: `Router.navigate('reports')`
@@ -463,7 +463,7 @@ const ViolationMonitor = {
                     'error',
                     6000,
                     {
-                        title: '❌ Failed Reports',
+                        title: 'Failed Reports',
                         action: {
                             text: 'View Details',
                             onClick: `Router.navigate('reports')`
@@ -517,7 +517,7 @@ const ViolationMonitor = {
             'violation',
             10000,  // Auto-dismiss after 10 seconds
             {
-                title: '🚨 PPE Violation Detected!',
+                title: 'PPE Violation Detected',
                 action: {
                     text: 'View Report',
                     onClickFn: () => this.navigateToReport(reportId)
@@ -527,7 +527,7 @@ const ViolationMonitor = {
             }
         );
 
-        console.log(`[ViolationMonitor] 🚨 VIOLATION: ${violation.report_id} (${derivedType})`);
+        console.log(`[ViolationMonitor] VIOLATION: ${violation.report_id} (${derivedType})`);
         // Trigger audio alert (if available) for immediate real-time detections
         try {
             if (window.AudioAlert && typeof window.AudioAlert.speakViolation === 'function') {
@@ -554,7 +554,7 @@ const ViolationMonitor = {
             'report',
             10000,
             {
-                title: '📝 Generating Report',
+                title: 'Generating Report',
                 action: {
                     text: 'View Progress',
                     onClickFn: () => this.navigateToReport(reportId)
@@ -562,7 +562,7 @@ const ViolationMonitor = {
             }
         );
 
-        console.log(`[ViolationMonitor] 📝 GENERATING: ${violation.report_id}`);
+        console.log(`[ViolationMonitor] GENERATING: ${violation.report_id}`);
     },
 
     // Real-time notification: Report ready
@@ -577,7 +577,7 @@ const ViolationMonitor = {
             'success',
             10000,
             {
-                title: '✅ Report Complete!',
+                title: 'Report Complete',
                 action: {
                     text: 'Open Report',
                     onClickFn: () => {
@@ -590,7 +590,7 @@ const ViolationMonitor = {
             }
         );
 
-        console.log(`[ViolationMonitor] ✅ READY: ${violation.report_id}`);
+        console.log(`[ViolationMonitor] READY: ${violation.report_id}`);
     },
 
     // Real-time notification: Report failed
@@ -607,7 +607,7 @@ const ViolationMonitor = {
             'error',
             10000,
             {
-                title: '❌ Report Failed',
+                title: 'Report Failed',
                 action: {
                     text: 'View Details',
                     onClickFn: () => this.navigateToReport(reportId)
@@ -615,7 +615,7 @@ const ViolationMonitor = {
             }
         );
 
-        console.log(`[ViolationMonitor] ❌ FAILED: ${violation.report_id}`);
+        console.log(`[ViolationMonitor] FAILED: ${violation.report_id}`);
     },
 
     // Check for caption validation warnings (real-time only)
@@ -634,7 +634,7 @@ const ViolationMonitor = {
         if (contradictions.length > 0) {
             // Clean up the message
             message = contradictions[0]
-                .replace('⚠️ PPE Mismatch: ', '')
+                .replace('PPE Mismatch: ', '')
                 .slice(0, 100);
         }
 
@@ -643,7 +643,7 @@ const ViolationMonitor = {
             'warning',
             8000,
             {
-                title: '⚠️ PPE Caption Mismatch',
+                title: 'PPE Caption Mismatch',
                 action: {
                     text: 'View Report',
                     onClickFn: () => this.navigateToReport(reportId)
@@ -651,7 +651,7 @@ const ViolationMonitor = {
             }
         );
 
-        console.warn(`[ViolationMonitor] ⚠️ VALIDATION: ${violation.report_id}`);
+        console.warn(`[ViolationMonitor] VALIDATION: ${violation.report_id}`);
     },
 
     // Navigate to reports page and scroll to specific report
@@ -686,7 +686,7 @@ const ViolationMonitor = {
         setTimeout(() => NotificationManager.error('Error notification test'), 3000);
         setTimeout(() => {
             NotificationManager.show('Test violation detected', 'violation', 0, {
-                title: '🚨 Test Violation'
+                title: 'Test Violation'
             });
         }, 4000);
     },

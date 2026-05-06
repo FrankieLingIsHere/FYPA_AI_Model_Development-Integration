@@ -4,7 +4,7 @@ Report Generator - NLP-powered report generation with RAG
 
 Generates comprehensive safety violation reports combining:
 1. YOLO detection data (hard metrics)
-2. Image caption from LLaVA  
+2. Image caption from LLaVA
 3. RAG retrieval from incident database (Trim1.csv)
 4. NLP analysis from Llama3 8b (soft reporting)
 5. HTML report generation
@@ -45,7 +45,7 @@ try:
 except ImportError:
     LOCAL_LLAMA_AVAILABLE = False
 
-# Try to import Chroma DB (legacy RAG â€” only used if Gemini disabled)
+# Try to import Chroma DB (legacy RAG  only used if Gemini disabled)
 try:
     import chromadb
     from chromadb.config import Settings
@@ -138,7 +138,7 @@ def infer_people_count_from_text(*texts: str) -> int:
     if candidates:
         return max(candidates)
 
-    # Ordinal fallback: "first person … second person" → 2
+    # Ordinal fallback: "first person  second person"  2
     ordinal_hits = re.findall(
         r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+"
         r"(?:\w+\s+){0,2}(?:person|worker|individual)\b",
@@ -153,15 +153,15 @@ def infer_people_count_from_text(*texts: str) -> int:
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
-    
+
     Uses RAG (Retrieval-Augmented Generation) with historical incident data
     and Llama3 via Ollama for intelligent report generation.
     """
-    
+
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize report generator.
-        
+
         Args:
             config: Configuration dictionary from config.py
         """
@@ -175,7 +175,7 @@ class ReportGenerator:
         self.provider_runtime_epoch = 0
         self.routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
-        # strict_local_profile is now a computed property â€” see below; do not set it here
+        # strict_local_profile is now a computed property  see below; do not set it here
         self.sticky_nlp_provider = None
         self.sticky_nlp_provider_until_epoch = 0.0
         self.last_gemini_budget_block_reason = None
@@ -220,7 +220,7 @@ class ReportGenerator:
         )
         self._gemini_budget_lock = threading.Lock()
         self._gemini_budget_state = self._load_gemini_budget_state()
-        
+
         # =====================================================================
         # GEMINI (Primary AI provider)
         # =====================================================================
@@ -230,7 +230,7 @@ class ReportGenerator:
             logger.info("Strict local provider profile active; skipping Gemini initialization")
         self.use_gemini = bool(gemini_requested and GEMINI_AVAILABLE and not self.strict_local_profile)
         self.gemini_client = None
-        
+
         if self.use_gemini:
             try:
                 self.gemini_client = GeminiClient(config)
@@ -240,7 +240,7 @@ class ReportGenerator:
                             self.gemini_client.max_tokens,
                             self.gemini_max_output_tokens_per_report
                         )
-                    logger.info("âœ“ Gemini client initialized for NLP report generation")
+                    logger.info("Gemini client initialized for NLP report generation")
                 else:
                     logger.warning("Gemini client not available, falling back to Ollama")
                     self.gemini_client = None
@@ -249,21 +249,21 @@ class ReportGenerator:
                 logger.error(f"Failed to initialize Gemini: {e}")
                 self.gemini_client = None
                 self.use_gemini = False
-        
+
         # =====================================================================
-        # REGULATION DATA (Direct injection â€” replaces ChromaDB RAG)
+        # REGULATION DATA (Direct injection  replaces ChromaDB RAG)
         # =====================================================================
         self.regulations_data = {}
         rag_config = config.get('RAG_CONFIG', {})
         regulations_file = rag_config.get('regulations_file', '')
-        
+
         if GEMINI_AVAILABLE:
             try:
                 self.regulations_data = load_regulations(str(regulations_file) if regulations_file else None)
-                logger.info(f"âœ“ Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
+                logger.info(f"Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
             except Exception as e:
                 logger.error(f"Failed to load regulations: {e}")
-        
+
         # =====================================================================
         # OLLAMA (Fallback AI provider)
         # =====================================================================
@@ -340,13 +340,13 @@ class ReportGenerator:
 
         self.ollama_low_memory_fallback_models = self._build_ollama_model_chain(self.model)
         self.last_ollama_model_used = self.model
-        
+
         # Local Llama settings (fallback if Ollama not available)
         self.use_local_llama = ollama_config.get('use_local_model', True)
-        self.local_model_path = ollama_config.get('local_model_path', 
+        self.local_model_path = ollama_config.get('local_model_path',
             r'C:\Users\maste\Downloads\FYP Combined\Meta-Llama-3-8B-Instruct')
         self.local_llama = None
-        
+
         if not self.use_gemini and self.use_local_llama and LOCAL_LLAMA_AVAILABLE:
             try:
                 logger.info("Initializing local Llama model...")
@@ -355,9 +355,9 @@ class ReportGenerator:
             except Exception as e:
                 logger.warning(f"Could not initialize local Llama: {e}")
                 self.local_llama = None
-        
+
         # =====================================================================
-        # RAG settings (legacy â€” used only when Gemini is disabled)
+        # RAG settings (legacy  used only when Gemini is disabled)
         # =====================================================================
         self.rag_enabled = rag_config.get('enabled', True)
         self.use_chroma = rag_config.get('use_chroma', False) and not self.use_gemini
@@ -367,20 +367,20 @@ class ReportGenerator:
         self.rag_data_path = rag_config.get('data_source', '')
         self.num_similar = rag_config.get('num_similar_incidents', 2)
         self.top_k = rag_config.get('top_k', 3)
-        
+
         # Chroma DB client (legacy)
         self.chroma_client = None
         self.chroma_collection = None
         if self.rag_enabled and self.use_chroma:
             self._initialize_chroma()
-        
+
         # Report settings
         report_config = config.get('REPORT_CONFIG', {})
         self.reports_dir = config.get('REPORTS_DIR', Path('reports'))
         self.violations_dir = config.get('VIOLATIONS_DIR', Path('violations'))
         self.format = report_config.get('format', 'both')
         self.enable_pdf = report_config.get('enable_pdf_generation', True)
-        
+
         # Brand colors
         self.colors = config.get('BRAND_COLORS', {
             'primary': '#E67E22',
@@ -389,12 +389,12 @@ class ReportGenerator:
             'warning': '#F39C12',
             'danger': '#E74C3C'
         })
-        
+
         # Load RAG incident database
         self.incident_data = []
         if self.rag_enabled:
             self._load_incident_database()
-        
+
         ai_provider = ' -> '.join(self.nlp_provider_order)
         logger.info(f"Report Generator initialized (NLP provider order: {ai_provider})")
 
@@ -405,7 +405,7 @@ class ReportGenerator:
 
     @strict_local_profile.setter
     def strict_local_profile(self, value):
-        # Ignored â€” value is always computed from routing_profile.
+        # Ignored  value is always computed from routing_profile.
         # Setter exists for backward compatibility with code that assigns to this attribute.
         pass
 
@@ -687,11 +687,11 @@ class ReportGenerator:
         except Exception as e:
             logger.warning(f"Model API embeddings error: {e}")
             return None
-    
+
     # =========================================================================
     # RAG - INCIDENT DATABASE
     # =========================================================================
-    
+
     def _load_incident_database(self):
         """Load incident database from CSV for RAG."""
         try:
@@ -699,27 +699,27 @@ class ReportGenerator:
             if not rag_path.exists():
                 logger.warning(f"RAG data file not found: {rag_path}")
                 return
-            
+
             with open(rag_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 self.incident_data = list(reader)
-            
+
             logger.info(f"[OK] Loaded {len(self.incident_data)} incident records for RAG")
-            
+
         except Exception as e:
             logger.error(f"Error loading incident database: {e}")
             self.incident_data = []
-    
+
     def _initialize_chroma(self):
         """Initialize Chroma DB client and collection."""
         if not CHROMA_AVAILABLE:
             logger.error("Chroma DB not available. Install with: pip install chromadb")
             self.use_chroma = False
             return
-        
+
         try:
             logger.info(f"Initializing Chroma DB from: {self.chroma_path}")
-            
+
             # Initialize client with persistent storage
             self.chroma_client = chromadb.PersistentClient(
                 path=str(self.chroma_path),
@@ -728,24 +728,24 @@ class ReportGenerator:
                     allow_reset=False
                 )
             )
-            
+
             # Get existing collection
             self.chroma_collection = self.chroma_client.get_collection(
                 name=self.collection_name
             )
-            
+
             # Get collection info
             count = self.chroma_collection.count()
             logger.info(f"[OK] Chroma DB connected: {count} documents in '{self.collection_name}' collection")
             logger.info(f"Using embedding model: {self.embedding_model}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize Chroma DB: {e}")
             logger.warning("Falling back to CSV-based RAG")
             self.use_chroma = False
             self.chroma_client = None
             self.chroma_collection = None
-    
+
     def _get_ollama_embeddings(self, text: str) -> Optional[List[float]]:
         """Get embeddings from Ollama using nomic-embed-text."""
         if os.getenv('DISABLE_OLLAMA_EMBEDDINGS', 'false').lower() == 'true':
@@ -768,18 +768,18 @@ class ReportGenerator:
                 },
                 timeout=30
             )
-            
+
             if response.ok:
                 data = response.json()
                 return data.get('embedding')
             else:
                 logger.error(f"Ollama embeddings error: {response.status_code}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error getting Ollama embeddings: {e}")
             return None
-    
+
     def _query_chroma_db(
         self,
         query_text: str,
@@ -788,43 +788,43 @@ class ReportGenerator:
         """Query Chroma DB for relevant DOSH documentation."""
         if not self.chroma_collection:
             return []
-        
+
         try:
             # Get embeddings for query
             query_embedding = self._get_ollama_embeddings(query_text)
-            
+
             if not query_embedding:
                 logger.warning("Could not generate query embeddings, skipping Chroma search")
                 return []
-            
+
             # Query collection
             results = self.chroma_collection.query(
                 query_embeddings=[query_embedding],
                 n_results=n_results,
                 include=['documents', 'metadatas', 'distances']
             )
-            
+
             # Format results
             formatted_results = []
             if results['documents'] and len(results['documents']) > 0:
                 for i, doc in enumerate(results['documents'][0]):
                     metadata = results['metadatas'][0][i] if results['metadatas'] else {}
                     distance = results['distances'][0][i] if results['distances'] else 0.0
-                    
+
                     formatted_results.append({
                         'content': doc,
                         'metadata': metadata,
                         'relevance_score': 1.0 - distance,  # Convert distance to similarity
                         'source': 'DOSH Documentation'
                     })
-            
+
             logger.info(f"Found {len(formatted_results)} relevant DOSH chunks")
             return formatted_results
-            
+
         except Exception as e:
             logger.error(f"Error querying Chroma DB: {e}")
             return []
-    
+
     def _find_similar_incidents(
         self,
         description: str,
@@ -832,57 +832,57 @@ class ReportGenerator:
     ) -> List[Dict[str, str]]:
         """
         Find similar incidents using keyword matching (basic RAG).
-        
+
         Args:
             description: Description to match against
             count: Number of similar incidents to return
-        
+
         Returns:
             List of similar incident dictionaries
         """
         if not self.incident_data:
             return []
-        
+
         # Extract keywords from description
         description_words = set(description.lower().split())
-        
+
         # Score incidents by keyword overlap
         scored = []
         for incident in self.incident_data:
             abstract = incident.get('Abstract', '')
             abstract_words = set(abstract.lower().split())
-            
+
             # Calculate overlap score
             overlap = len(description_words & abstract_words)
             scored.append((overlap, incident))
-        
+
         # Sort by score and return top N
         scored.sort(reverse=True, key=lambda x: x[0])
         return [incident for score, incident in scored[:count] if score > 0]
     # =========================================================================
     # ENVIRONMENT DETECTION FROM CAPTION (Root cause fix for "Unknown" issue)
     # =========================================================================
-    
+
     def _extract_environment_from_caption(self, caption: str) -> str:
         """
         Extract environment type from VLM caption using keyword matching.
         This is more reliable than depending on NLP to extract it.
-        
+
         Args:
             caption: VLM-generated image caption
-            
+
         Returns:
             One of the standard environment types
         """
         caption_lower = caption.lower()
-        
+
         # =====================================================================
         # Industry-standard environment categories aligned with:
         #   - DOSH Malaysia (Dept. of Occupational Safety & Health)
         #   - JKR (Jabatan Kerja Raya) classifications
         #   - OSHA 29 CFR 1926 (construction) / 1910 (general industry)
         #   - ISO 45001 hazard identification categories
-        # Order: most specific â†’ least specific (first match wins)
+        # Order: most specific  least specific (first match wins)
         # =====================================================================
         ENVIRONMENT_KEYWORDS = {
             # --- High-specificity outdoor work zones ---
@@ -943,18 +943,18 @@ class ReportGenerator:
                 'storage yard', 'staging area'
             ]
         }
-        
-        # Check for environment keywords (first match wins â€” order above matters)
+
+        # Check for environment keywords (first match wins  order above matters)
         for env_type, keywords in ENVIRONMENT_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in caption_lower:
                     logger.info(f"Environment detected from caption: '{env_type}' (matched keyword: '{keyword}')")
                     return env_type
-        
+
         # Default fallback
-        logger.info("No specific environment detected from caption â€” defaulting to 'General Workspace'")
+        logger.info("No specific environment detected from caption  defaulting to 'General Workspace'")
         return 'General Workspace'
-    
+
     def _build_scene_description(
         self,
         caption: str,
@@ -964,21 +964,21 @@ class ReportGenerator:
         """
         Build a professional, industry-standard AI scene description from the
         VLM caption, detected environment, and YOLO detections.
-        
+
         This replaces the NLP's hallucinated visual_evidence when the environment
         override is triggered, producing an objective, factual description.
-        
+
         Args:
             caption: VLM-generated image caption
             environment_type: Detected environment type from keyword matching
             detections: YOLO detection results
-            
+
         Returns:
             Professional scene description string
         """
         # 1. Opening statement with environment classification
         description = f"The scene depicts a {environment_type.lower()} setting. "
-        
+
         # 2. Append the VLM caption content (cleaned up)
         # Remove redundant "The image shows" prefix if present to avoid repetition
         caption_clean = caption.strip()
@@ -988,20 +988,20 @@ class ReportGenerator:
                 # Capitalize the remaining text
                 caption_clean = caption_clean[0].upper() + caption_clean[1:] if caption_clean else caption_clean
                 break
-        
+
         description += caption_clean
-        
+
         # Ensure it ends with a period
         if description and not description.endswith('.'):
             description += '.'
-        
+
         # 3. Append PPE violation summary
         violation_types = [
             d.get('class_name', '').replace('NO-', '')
             for d in detections
             if d.get('class_name', '').startswith('NO-')
         ]
-        
+
         if violation_types:
             unique_violations = list(dict.fromkeys(violation_types))  # preserve order, remove dupes
             violation_text = ', '.join(unique_violations)
@@ -1009,19 +1009,19 @@ class ReportGenerator:
             explicit_persons = sum(1 for d in detections if d.get('class_name', '') == 'Person')
             # Each group of violations may imply a person even if not explicitly detected
             person_count = max(explicit_persons, 1)  # At least 1 person if violations exist
-            
+
             description += (
                 f" YOLO detection identified {person_count} person(s) in the frame "
                 f"with the following PPE deficiencies: {violation_text}."
             )
-        
+
         logger.info(f"Built scene description ({len(description)} chars) for environment '{environment_type}'")
         return description
-    
+
     # =========================================================================
     # NLP - OLLAMA INTEGRATION
     # =========================================================================
-    
+
     def _build_nlp_prompt(
         self,
         report_data: Dict[str, Any],
@@ -1032,12 +1032,12 @@ class ReportGenerator:
         Build enhanced prompt for Llama based on NLP_CASM template.
         Includes environment-aware analysis and objective/subjective metrics.
         Now includes DOSH documentation context from Chroma DB.
-        
+
         Args:
             report_data: Report data including caption, detections, etc.
             similar_incidents: Similar incidents from CSV RAG
             dosh_context: Relevant DOSH documentation chunks from Chroma DB
-        
+
         Returns:
             Formatted prompt string
         """
@@ -1050,12 +1050,12 @@ class ReportGenerator:
         # Reconcile person count with the caption text. Vision-language
         # captions ("three workers on the scaffold") often see people that
         # YOLO miscounts because of pose / occlusion / partial bodies. We
-        # take MAX(yolo, caption) so the prompt â€” and therefore the
-        # per-person card grid generated downstream â€” line up with what
+        # take MAX(yolo, caption) so the prompt  and therefore the
+        # per-person card grid generated downstream  line up with what
         # the user can read in the scene description.
         video_caption_lower = caption.lower()
         caption_inferred_people = infer_people_count_from_text(caption, violation_summary)
-        # Caption is authoritative — YOLO over-counts shadows/reflections/partial bodies.
+        # Caption is authoritative  YOLO over-counts shadows/reflections/partial bodies.
         # If the caption says '1 worker' we tell the LLM '1', not YOLO's higher count.
         if caption_inferred_people > 0:
             if caption_inferred_people != person_count:
@@ -1081,7 +1081,7 @@ class ReportGenerator:
             )
         except Exception:
             pass
-        
+
         # Build detection description and identify missing PPE.
         # This block is injected into the NLP prompt so Gemini/Ollama never
         # depend on caption text alone for YOLO-grounded PPE facts.
@@ -1108,12 +1108,12 @@ class ReportGenerator:
                 except (TypeError, ValueError):
                     bbox_text = ''
             detection_desc.append(f"- {class_name} (confidence: {conf_float:.2f}{bbox_text})")
-            
+
             # Identify missing PPE from NO-X detections
             if class_name.startswith('NO-'):
                 ppe_item = class_name.replace('NO-', '').replace('Hardhat', 'Safety Helmet').replace('Safety Vest', 'High-Visibility Vest')
                 missing_ppe.append(ppe_item)
-        
+
         # Also parse caption for missing PPE keywords
         caption_lower = caption.lower()
         ppe_keywords = {
@@ -1124,7 +1124,7 @@ class ReportGenerator:
             'footwear': ['boots', 'safety boots', 'footwear', 'safety shoes'],
             'mask': ['mask', 'respirator', 'face mask']
         }
-        
+
         caption_missing = []
         for ppe_type, keywords in ppe_keywords.items():
             for keyword in keywords:
@@ -1139,7 +1139,7 @@ class ReportGenerator:
                 ]):
                     caption_missing.append(ppe_type.replace('_', ' ').title())
                     break
-        
+
         # Combine detected and caption-identified missing PPE
         all_missing = list(set(missing_ppe + caption_missing))
         missing_ppe_text = f"**CONFIRMED MISSING PPE**: {', '.join(all_missing)} (Mark these as 'Missing' in PPE status)" if all_missing else "All required PPE present"
@@ -1151,7 +1151,7 @@ class ReportGenerator:
             and str((det or {}).get('class_name') or (det or {}).get('class') or '').strip().startswith('NO-')
         ]
         yolo_violation_text = ', '.join(yolo_violation_classes) if yolo_violation_classes else 'None'
-        
+
         # Build context from DOSH documentation (primary source)
         dosh_text = ""
         if dosh_context and len(dosh_context) > 0:
@@ -1161,7 +1161,7 @@ class ReportGenerator:
                 source = chunk.get('metadata', {}).get('source', 'DOSH Documentation')
                 dosh_text += f"[Regulation {i}]\n{content}\n\n"
             dosh_text += "=== END DOSH REGULATIONS ===\n\n"
-        
+
         # Build context from similar incidents (secondary source)
         context_text = ""
         if similar_incidents:
@@ -1169,13 +1169,13 @@ class ReportGenerator:
             for i, inc in enumerate(similar_incidents, 1):
                 context_text += f"Incident {i}:\n{inc.get('Abstract', 'N/A')}\n\n"
             context_text += "=== END HISTORICAL INCIDENTS ===\n\n"
-        
+
         # Build enhanced prompt with Context-Aware Logic (Architecture 2.0)
         # Inject VLM caption into prompt so Llama 3 has visual context
         vlm_caption = report_data.get('caption', 'No visual caption available')
-        
-        prompt = f"""You are a JKR-certified AI Safety Officer. 
-        
+
+        prompt = f"""You are a JKR-certified AI Safety Officer.
+
 CONTEXT: Strict adherence to Malaysian Safety Standards (JKR/DOSH/CIDB).
 
 *** VLM VISUAL CAPTION (Primary Visual Evidence) ***
@@ -1202,7 +1202,7 @@ Analyze the VLM visual caption and YOLO detection payload above. Based ONLY on t
 8. "Public Area": Sidewalk, parking lot, open yard, material staging area.
 9. "General Workspace": Catch-all for ground-level work that doesn't fit above.
 
-IMPORTANT: Your classification MUST be consistent with the VLM caption. 
+IMPORTANT: Your classification MUST be consistent with the VLM caption.
 If the caption describes a couch, living room, bedroom, or indoor setting, the scene is NOT Construction/Roadside.
 
 *** INSTRUCTION 2: DYNAMIC RULESET SELECTION ***
@@ -1219,7 +1219,7 @@ Based on classification, APPLY these specific standards:
 *** INSTRUCTION 4: REPORT GENERATION ***
 Generate a JSON report following this logic:
 
-1. **SCENE DESCRIPTION (visual_evidence field)**: Start with "The scene depicts a [environment type] setting." 
+1. **SCENE DESCRIPTION (visual_evidence field)**: Start with "The scene depicts a [environment type] setting."
    Then describe what the VLM caption shows. Be objective and factual. DO NOT REPEAT THE LIST OF CATEGORIES.
 2. **INDIVIDUAL ANALYSIS**:
    - "Person N (Action) + No PPE + [Scene Hazard] = Specific Risk"
@@ -1228,7 +1228,7 @@ Generate a JSON report following this logic:
 3. **WEIGHTED SEVERITY**:
    - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
 4. **WRITE-UP DEPTH (MANDATORY)**:
-   Reports are read by safety officers preparing legal paperwork â€” short
+   Reports are read by safety officers preparing legal paperwork. Short
    one-line answers are unacceptable. For every regulation, risk and
    corrective action you MUST produce a *paragraph-style* explanation
    that ties back to THIS specific scene (people, PPE, environment
@@ -1238,14 +1238,14 @@ Generate a JSON report following this logic:
        name the specific PPE or hazard observed in this frame.
      - `persons[].risks[].risk` MUST be at least 2 sentences explaining
        *what could happen, to whom, and why this scene makes it likely*.
-     - `persons[].risks[].mitigation_steps` MUST be 2â€“4 concrete site
+     - `persons[].risks[].mitigation_steps` MUST be 2 to 4 concrete site
        actions (engineering / admin / PPE controls), each phrased as a
        full sentence the safety officer can hand to a foreman.
      - `persons[].corrective_actions` MUST be at least 3 entries; each
        entry is a full instruction sentence (e.g. "Halt work in the
        affected zone until every operative on the scaffold platform is
        wearing a DOSH-approved Class E hardhat and a fall-arrest
-       harness anchored to the guard rail.") â€” never a 1-2 word chip.
+       harness anchored to the guard rail.") Never return a one or two word chip.
 5. **NEGATIVE CONSTRAINTS**:
    - NO vague terms ("scattered", "some").
    - NO "Chemical masks" unless chemicals visible.
@@ -1295,7 +1295,7 @@ RESPONSE FORMAT (JSON):
             ]
         }}
     ],
-    "summary": "• **SCENE CLASS**: [Environment Type]...\\n• **CRITICAL RISK**: ...\\n• **LEGAL ORDER**: ...",
+    "summary": " **SCENE CLASS**: [Environment Type]...\\n **CRITICAL RISK**: ...\\n **LEGAL ORDER**: ...",
     "dosh_regulations_cited": [
         {{
             "regulation": "Official JKR/DOSH regulation name",
@@ -1306,27 +1306,27 @@ RESPONSE FORMAT (JSON):
     ]
 }}
 """
-        
+
         return prompt
-    
+
     def _call_gemini_api(self, prompt: str, image_path: str = None, report_id: str = None) -> Optional[Dict[str, Any]]:
         """
         Call Gemini API for NLP analysis (primary provider).
-        
+
         Args:
             prompt: Prompt to send to Gemini
             image_path: Optional image for multimodal analysis
-        
+
         Returns:
             Parsed JSON response or None if failed
         """
         if not self.gemini_client or not self.gemini_client.is_available:
             return None
-        
+
         try:
             logger.info("\U0001f680 Using Gemini API for NLP analysis...")
             result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
-            
+
             if result:
                 missing_fields = self._missing_required_nlp_fields(result)
                 if missing_fields:
@@ -1386,7 +1386,7 @@ RESPONSE FORMAT (JSON):
                         logger.warning(detail)
                         return None
 
-                logger.info("âœ“ Gemini NLP analysis completed")
+                logger.info("Gemini NLP analysis completed")
                 self.last_nlp_error = None
                 return result
             else:
@@ -1394,7 +1394,7 @@ RESPONSE FORMAT (JSON):
                 self.last_nlp_error = detail
                 logger.warning(f"Gemini NLP failed: {detail}")
                 return None
-                
+
         except Exception as e:
             self.last_nlp_error = f"Gemini API error: {e}"
             logger.error(f"Gemini API error: {e}")
@@ -1460,7 +1460,7 @@ RESPONSE FORMAT (JSON):
             or 'out of memory' in text
             or ('requires' in text and 'memory' in text)
         )
-    
+
     def _call_ollama_api(
         self,
         prompt: str,
@@ -1469,10 +1469,10 @@ RESPONSE FORMAT (JSON):
     ) -> Optional[Dict[str, Any]]:
         """
         Call Ollama API or use local Llama to get NLP analysis (fallback).
-        
+
         Args:
             prompt: Prompt to send to Ollama/Llama
-        
+
         Returns:
             Parsed JSON response or None if failed
         """
@@ -1487,17 +1487,17 @@ RESPONSE FORMAT (JSON):
                     max_new_tokens=512,
                     temperature=self.temperature
                 )
-                
+
                 if response:
                     logger.info("[OK] Local Llama NLP analysis completed")
                     return response
                 else:
                     logger.warning("Local Llama returned no valid JSON, trying Ollama...")
-                    
+
             except Exception as e:
                 logger.error(f"Local Llama generation failed: {e}")
                 logger.info("Falling back to Ollama API...")
-        
+
         # Fall back to Ollama API
         recovery_helper = None
         check_running = None
@@ -1563,9 +1563,9 @@ RESPONSE FORMAT (JSON):
                     # while Gemini is capped at 0.2. Use the same low temperature here
                     # so local-mode reports look like cloud-mode reports.
                     'temperature': self.temperature,
-                    'num_predict': 2048,         # was 1500 — avoid mid-JSON truncation on multi-person scenes
-                    'top_k': 20,                 # was 40 — tighter token selection
-                    'top_p': 0.7,                # was 0.9 — less wandering
+                    'num_predict': 2048,         # was 1500  avoid mid-JSON truncation on multi-person scenes
+                    'top_k': 20,                 # was 40  tighter token selection
+                    'top_p': 0.7,                # was 0.9  less wandering
                     'repeat_penalty': 1.15,      # discourage repetitive phrasing
                     'seed': 42,                  # deterministic output for the same prompt
                 }
@@ -1749,10 +1749,10 @@ RESPONSE FORMAT (JSON):
             "Language: UK English (Malaysia standard).\n"
             "Format: 3-4 professional bullet points.\n\n"
             "Required sections:\n"
-            "• Incident Classification (High/Medium/Low based on VISUAL evidence)\n"
-            "• Core Violation (Primary regulation breached, e.g., OSHA 1994 Section 15)\n"
-            "• Immediate Risk (Life-threatening vs standard risk)\n"
-            "• Critical Action (Stop work, issue PPE, or toolbox talk)\n\n"
+            " Incident Classification (High/Medium/Low based on VISUAL evidence)\n"
+            " Core Violation (Primary regulation breached, e.g., OSHA 1994 Section 15)\n"
+            " Immediate Risk (Life-threatening vs standard risk)\n"
+            " Critical Action (Stop work, issue PPE, or toolbox talk)\n\n"
             "Rules:\n"
             "- Do not use emojis.\n"
             "- Do not be generic (e.g., don't say 'worker is not wearing PPE').\n"
@@ -1763,7 +1763,7 @@ RESPONSE FORMAT (JSON):
     def generate_report(self, report_data: Dict[str, Any]) -> Dict[str, Optional[Path]]:
         """
         Generate complete violation report.
-        
+
         Args:
             report_data: Dictionary containing:
                 - report_id: Unique identifier
@@ -1776,7 +1776,7 @@ RESPONSE FORMAT (JSON):
                 - severity: Violation severity
                 - original_image_path: Path to original image
                 - annotated_image_path: Path to annotated image
-        
+
         Returns:
             Dictionary with paths:
                 - html: Path to HTML report
@@ -1799,19 +1799,19 @@ RESPONSE FORMAT (JSON):
             report_data['caption'] = caption_floor
             if not str(report_data.get('vlm_caption') or '').strip():
                 report_data['vlm_caption'] = caption_floor
-        
+
         # Step 1: RAG - Retrieve relevant context
         # Check for Malaysian regulations context injection
         regulation_context = ""
         detections = report_data.get('detections', [])
         violation_classes = [d.get('class_name') for d in detections if d.get('class_name', '').startswith('NO-')]
-        
+
         caption = report_data.get('caption', '')
         env_type = self._extract_environment_from_caption(caption)
-        
+
         if self.regulations_data:
             regulation_context = build_regulation_context(
-                self.regulations_data, 
+                self.regulations_data,
                 detected_violations=violation_classes,
                 environment_type=env_type
             )
@@ -1819,10 +1819,10 @@ RESPONSE FORMAT (JSON):
 
         similar_incidents = []
         dosh_context = []
-        
+
         if self.rag_enabled:
             query_text = f"{report_data.get('caption', '')} {report_data.get('violation_summary', '')}"
-            
+
             # PRIMARY: Direct regulation injection (Gemini mode)
             if self.use_gemini and self.regulations_data:
                 detected_violations = [d.get('class_name', '') for d in report_data.get('detections', []) if d.get('class_name', '').startswith('NO-')]
@@ -1834,29 +1834,29 @@ RESPONSE FORMAT (JSON):
                     environment_type=env_type
                 )
                 logger.info(f"Injected {len(regulation_context)} chars of regulation context")
-            
+
             # LEGACY: Use Chroma DB for DOSH documentation (only if Gemini disabled)
             elif self.use_chroma and self.chroma_collection:
                 logger.info("Retrieving relevant DOSH documentation from Chroma DB...")
                 dosh_context = self._query_chroma_db(query_text, n_results=self.top_k)
                 logger.info(f"Retrieved {len(dosh_context)} DOSH documentation chunks")
-            
+
             # Also get similar incidents from CSV (optional)
             similar_incidents = self._find_similar_incidents(query_text, self.num_similar)
             logger.info(f"Found {len(similar_incidents)} similar incidents")
-        
+
         # Step 2: NLP - Generate analysis
         nlp_analysis = None
         prompt = self._build_nlp_prompt(report_data, similar_incidents, dosh_context)
-        
+
         # Add safety summary prompt to the instruction set
         prompt += "\n\n=== SPECIAL INSTRUCTION FOR SUMMARY FIELD ===\n"
         prompt += self.get_safety_summary_prompt(report_data)
-        
+
         # Inject regulation context into prompt if using Gemini
         if regulation_context:
             prompt = regulation_context + "\n" + prompt
-        
+
         # Try NLP providers in configured order.
         image_path = report_data.get('original_image_path')
         image_path_str = str(image_path) if image_path else None
@@ -2035,7 +2035,7 @@ RESPONSE FORMAT (JSON):
                     self.sticky_nlp_provider_until_epoch = time.time() + max(30, self.sticky_nlp_provider_ttl_seconds)
                 logger.info(f"NLP analysis succeeded with provider: {provider_name}")
                 break
-        
+
         if not nlp_analysis:
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
             allow_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
@@ -2192,7 +2192,7 @@ RESPONSE FORMAT (JSON):
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
 
-        
+
         # Step 3: Generate HTML report
         self._assert_generation_epoch_current(generation_epoch, report_id, 'before html render')
         html_path = self._generate_html_report(report_data, nlp_analysis)
@@ -2213,14 +2213,14 @@ RESPONSE FORMAT (JSON):
                 "Failed to write traceability sidecar for %s: %s",
                 report_data.get('report_id'), sidecar_err,
             )
-        
+
         # Step 4: Generate PDF (if enabled)
         pdf_path = None
         if self.enable_pdf and self.format in ['pdf', 'both']:
             pdf_path = self._generate_pdf_report(html_path, report_data.get('report_id'))
-        
+
         logger.info(f"[OK] Report generated: {report_data.get('report_id')}")
-        
+
         return {
             'html': html_path,
             'pdf': pdf_path,
@@ -2228,7 +2228,7 @@ RESPONSE FORMAT (JSON):
             'nlp_analysis_raw': raw_nlp_analysis,
             'nlp_integrity': nlp_integrity,
         }
-    
+
     def _generate_fallback_analysis(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate comprehensive fallback analysis from YOLO detections when NLP fails.
@@ -2236,7 +2236,7 @@ RESPONSE FORMAT (JSON):
         Note: Without VLM/NLP, we cannot determine actual environment type.
         """
         detections = report_data.get('detections', [])
-        
+
         # Hazards and recommendations by violation type (aligned with JKR/OSHA standards)
         # v7 Enhancement: Dual citations (Law + Technical Standard) and Action Verb directives
         # v7.1: Added official regulation URLs for verification
@@ -2342,11 +2342,11 @@ RESPONSE FORMAT (JSON):
                 'risk_tier': 'HIGH'  # Tier 1: Instant Push
             },
         }
-        
+
         # Extract violations from detections
         violations = [d.get('class_name', '') for d in detections if d.get('class_name', '').startswith('NO-')]
         person_count = max(1, sum(1 for d in detections if 'person' in d.get('class_name', '').lower()))
-        
+
         # Build PPE status and collect data
         ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
         hazards, risks, actions, regulations = [], [], [], []
@@ -2367,7 +2367,7 @@ RESPONSE FORMAT (JSON):
                 'legal_url': data.get('legal_url', ''),
                 'standard_url': data.get('standard_url', '')
             })
-        
+
         for v in violations:
             v_lower = v.lower().replace('no-', '')
             for key in VIOLATION_DATA:
@@ -2375,7 +2375,7 @@ RESPONSE FORMAT (JSON):
                     ppe_field = key.replace(' ', '_')
                     _add_violation_signal(key, ppe_field=ppe_field)
                     break
-        
+
         # Detect environment from caption keywords AND YOLO detections
         caption = report_data.get('vlm_caption', '') or report_data.get('caption', '') or ''
         caption_lower = caption.lower()
@@ -2385,7 +2385,7 @@ RESPONSE FORMAT (JSON):
         yolo_cones = 'cone' in detections_str
         yolo_vehicle = 'vehicle' in detections_str or 'truck' in detections_str or 'lorry' in detections_str
         yolo_machinery = 'machinery' in detections_str or 'excavator' in detections_str
-        
+
         # Environment detection with specificity
         # Check for specific Malaysian context hazards from caption + YOLO
         has_piles = any(kw in caption_lower for kw in ['pile', 'timber', 'log', 'bakau', 'wood'])
@@ -2402,7 +2402,7 @@ RESPONSE FORMAT (JSON):
             _add_violation_signal('unsecured_piles')
         if has_work_height and 'NO-Harness' in violations:
             _add_violation_signal('harness', ppe_field='harness')
-        
+
         if has_roadside and has_piles:
             env_type = 'Roadside Bakau Piling Zone'
             env_detail = 'High-risk roadside timber piling zone with struck-by-vehicle and crush hazards.'
@@ -2421,15 +2421,15 @@ RESPONSE FORMAT (JSON):
         else:
             env_type = 'General Workspace'
             env_detail = 'Work environment identified from visual analysis.'
-        
+
         # Generate behavior-based person descriptions (not generic "Individual detected")
         violation_types = [v.replace('NO-', '') for v in violations]
-        
+
         # Create specific person descriptions based on context
         person_descriptions = []
         for i in range(person_count):
             person_id = f"Person {i + 1}"
-            
+
             # Build behavior-based description
             if 'Safety Vest' in violation_types and 'Hardhat' in violation_types:
                 desc = f"Worker operating in {env_type} without MS 1731 high-visibility vest or MS 183 helmet."
@@ -2460,7 +2460,7 @@ RESPONSE FORMAT (JSON):
                      desc += " Worker is DISTRACTED by mobile phone/device."
                      risks.append("Distracted Behavior: Reduced situational awareness while operating in high-risk zone.")
 
-            
+
             person_descriptions.append({
                 'id': i + 1,
                 'description': desc,
@@ -2470,13 +2470,13 @@ RESPONSE FORMAT (JSON):
                 'risks': risks or ['Risk level depends on environment and activities performed'],
                 'compliance_status': 'Non-Compliant' if violations else 'Unknown'
             })
-        
+
         # Situation-Hazard-Standard summary model
         if violation_types:
             ppe_list = ' or '.join([f"MS {std}" for std in ['1731 high-visibility vest' if 'Safety Vest' in violation_types else '', '183 helmet' if 'Hardhat' in violation_types else ''] if std])
             if not ppe_list:
                 ppe_list = ' and '.join(violation_types)
-            
+
             # Build Situation-Hazard-Standard summary
             situation = f"High-severity violation at {env_type.lower()}."
             hazard = f"{person_count} personnel operating"
@@ -2486,18 +2486,18 @@ RESPONSE FORMAT (JSON):
                 hazard += " near a flatbed lorry"
             hazard += f" without {ppe_list}."
             standard = "Stop Work order recommended per BOWEC 1986."
-            
+
             if 'Safety Vest' in violation_types and has_roadside:
                 risk_desc = "This creates an immediate risk of being struck by the lorry or passing traffic."
             elif 'Hardhat' in violation_types and has_piles:
                 risk_desc = "This creates an immediate risk of head injury from falling timber/debris."
             else:
                 risk_desc = "This creates an immediate risk of injury."
-            
+
             summary = f"{situation} {hazard} {risk_desc} {standard}"
         else:
             summary = f"Safety observation recorded at {env_type}."
-        
+
         return {
             'summary': summary,
             'environment_type': env_type,
@@ -2508,7 +2508,7 @@ RESPONSE FORMAT (JSON):
             'suggested_actions': actions or ['Assess environment to determine PPE requirements'],
             'severity_level': 'HIGH' if violations else 'MEDIUM'
         }
-    
+
     # Old summary method removed
 
 
@@ -2517,7 +2517,7 @@ RESPONSE FORMAT (JSON):
         """Wraps standard names in interactive tooltip spans."""
         if not text:
             return text
-            
+
         import re
         replacements = [
             (r'(MS\s?1731|High-Visibility|High-Vis|Vest|Reflective Strips?|Neon)', 'ms1731_vest.jpg'),
@@ -2526,10 +2526,10 @@ RESPONSE FORMAT (JSON):
             (r'(BOWEC(\s?1986)?|Body Harness|Safety Harness|Fall Protection|Lanyard|Double Lanyard)', 'bowec_harness.jpg'),
             (r'(MS\s?2323(:2010)?|Respirator|Mask|N95|Face Mask)', 'ms2323_mask.png')
         ]
-        
+
         for pattern, img_file in replacements:
             text = re.sub(pattern, f'<span class="ppe-tooltip" data-image="{img_file}">\\g<0></span>', text, flags=re.IGNORECASE)
-            
+
         return text
 
     def _generate_html_report(
@@ -2539,7 +2539,7 @@ RESPONSE FORMAT (JSON):
     ) -> Path:
         """
         Generate HTML report with full styling.
-        
+
         Returns:
             Path to HTML report
         """
@@ -2569,11 +2569,11 @@ RESPONSE FORMAT (JSON):
                 else:
                     summary_parts.append(vio)
             report_data['violation_summary'] = ", ".join(summary_parts)
-        
+
         # Get image paths (relative to violations dir for web viewing)
         original_img = f"/image/{report_id}/original.jpg"
         annotated_img = f"/image/{report_id}/annotated.jpg"
-        
+
         # Build HTML content
         safe_report_id_js = json.dumps(str(report_id))
         safe_timestamp_js = json.dumps(str(report_data.get('timestamp', 'N/A')))
@@ -2592,7 +2592,7 @@ RESPONSE FORMAT (JSON):
           crossorigin="anonymous" referrerpolicy="no-referrer">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        
+
         :root {{
             --primary-color: #2c3e50;
             --secondary-color: #3498db;
@@ -2603,13 +2603,13 @@ RESPONSE FORMAT (JSON):
             --border-color: #dfe6e9;
             --background: #ecf0f1;
         }}
-        
+
         * {{
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }}
-        
+
         body {{
             font-family: 'Inter', sans-serif;
             background: var(--background);
@@ -2617,7 +2617,7 @@ RESPONSE FORMAT (JSON):
             line-height: 1.6;
             padding: 2rem;
         }}
-        
+
         .container {{
             max-width: 1200px;
             margin: 0 auto;
@@ -2626,32 +2626,32 @@ RESPONSE FORMAT (JSON):
             box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             overflow: hidden;
         }}
-        
+
         .header {{
             background: linear-gradient(135deg, var(--danger-color), #c0392b);
             color: white;
             padding: 2rem;
             text-align: center;
         }}
-        
+
         .header h1 {{
             font-size: 2rem;
             margin-bottom: 0.5rem;
         }}
-        
+
         .header .report-id {{
             font-size: 1.1rem;
             opacity: 0.9;
         }}
-        
+
         .content {{
             padding: 2rem;
         }}
-        
+
         .section {{
             margin-bottom: 2rem;
         }}
-        
+
         .section-title {{
             font-size: 1.5rem;
             color: var(--primary-color);
@@ -2659,65 +2659,65 @@ RESPONSE FORMAT (JSON):
             padding-bottom: 0.5rem;
             border-bottom: 2px solid var(--border-color);
         }}
-        
+
         .grid {{
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 1.5rem;
             margin-bottom: 1.5rem;
         }}
-        
+
         .card {{
             border: 1px solid var(--border-color);
             border-radius: 8px;
         }}
-        
+
         .card-header {{
             background: var(--primary-color);
             color: white;
             padding: 1rem;
             font-weight: 600;
         }}
-        
+
         .card-content {{
             padding: 1rem;
         }}
-        
+
         .image-container {{
             width: 100%;
             max-height: 400px;
             overflow: hidden;
             background: #000;
         }}
-        
+
         .image-container img {{
             width: 100%;
             height: auto;
             display: block;
         }}
-        
+
         .info-grid {{
             display: grid;
             gap: 0.75rem;
         }}
-        
+
         .info-item {{
             display: flex;
             padding: 0.75rem;
             background: var(--background);
             border-radius: 6px;
         }}
-        
+
         .info-label {{
             font-weight: 600;
             color: var(--primary-color);
             min-width: 150px;
         }}
-        
+
         .info-value {{
             flex: 1;
         }}
-        
+
         .badge {{
             display: inline-block;
             padding: 0.25rem 0.75rem;
@@ -2725,17 +2725,17 @@ RESPONSE FORMAT (JSON):
             font-size: 0.85rem;
             font-weight: 500;
         }}
-        
+
         .badge-danger {{
             background: rgba(231,76,60,0.1);
             color: var(--danger-color);
         }}
-        
+
         .badge-warning {{
             background: rgba(243,156,18,0.1);
             color: var(--warning-color);
         }}
-        
+
         .badge-success {{
             background: rgba(46,204,113,0.1);
             color: var(--success-color);
@@ -2750,7 +2750,7 @@ RESPONSE FORMAT (JSON):
             font-weight: 600;
             transition: all 0.2s ease;
         }}
-        
+
         .ppe-tooltip:hover {{
             background-color: rgba(230, 126, 34, 0.1);
             border-bottom-style: solid;
@@ -2766,7 +2766,7 @@ RESPONSE FORMAT (JSON):
             color: #ffffff;
             background-color: rgba(255, 255, 255, 0.18);
         }}
-        
+
         .ppe-tooltip::after {{
             content: '';
             position: absolute;
@@ -2788,13 +2788,13 @@ RESPONSE FORMAT (JSON):
             z-index: 1000;
             pointer-events: none;
         }}
-        
+
         .ppe-tooltip[data-image="ms1731_vest.jpg"]::after {{ background-image: url('/static/images/standards/ms1731_vest.jpg'); }}
         .ppe-tooltip[data-image="ms183_helmet.jpg"]::after {{ background-image: url('/static/images/standards/ms183_helmet.jpg'); }}
         .ppe-tooltip[data-image="iso20345_boots.jpg"]::after {{ background-image: url('/static/images/standards/iso20345_boots.jpg'); }}
         .ppe-tooltip[data-image="bowec_harness.jpg"]::after {{ background-image: url('/static/images/standards/bowec_harness.jpg'); }}
         .ppe-tooltip[data-image="ms2323_mask.png"]::after {{ background-image: url('/static/images/standards/ms2323_mask.png'); }}
-        
+
         .ppe-tooltip:hover::after {{
             opacity: 1;
             visibility: visible;
@@ -2806,7 +2806,7 @@ RESPONSE FORMAT (JSON):
             display: grid;
             gap: 1.5rem;
         }}
-        
+
         .person-card {{
             border: 2px solid var(--border-color);
             border-radius: 12px;
@@ -2814,12 +2814,12 @@ RESPONSE FORMAT (JSON):
             background: white;
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }}
-        
+
         .person-card:hover {{
             transform: translateY(-4px);
             box-shadow: 0 8px 24px rgba(0,0,0,0.15);
         }}
-        
+
         .person-header {{
             background: linear-gradient(135deg, var(--primary-color), #34495e);
             color: white;
@@ -2828,12 +2828,12 @@ RESPONSE FORMAT (JSON):
             justify-content: space-between;
             align-items: center;
         }}
-        
+
         .person-header h3 {{
             font-size: 1.25rem;
             margin-bottom: 0.25rem;
         }}
-        
+
         .person-header p {{
             font-size: 0.9rem;
             opacity: 0.9;
@@ -2842,13 +2842,13 @@ RESPONSE FORMAT (JSON):
             text-overflow: unset;
             word-wrap: break-word;
         }}
-        
+
         .person-content {{
             padding: 1.5rem;
             display: grid;
             gap: 1.25rem;
         }}
-        
+
         .person-section h4 {{
             color: var(--primary-color);
             font-size: 1rem;
@@ -2856,13 +2856,13 @@ RESPONSE FORMAT (JSON):
             padding-bottom: 0.5rem;
             border-bottom: 1px solid var(--border-color);
         }}
-        
+
         .ppe-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 0.75rem;
         }}
-        
+
         .ppe-item {{
             display: flex;
             justify-content: space-between;
@@ -2871,13 +2871,13 @@ RESPONSE FORMAT (JSON):
             background: var(--background);
             border-radius: 6px;
         }}
-        
+
         .ppe-label {{
             font-weight: 600;
             color: var(--text-color);
             font-size: 0.9rem;
         }}
-        
+
         .ppe-status {{
             display: inline-block;
             padding: 0.25rem 0.75rem;
@@ -2885,34 +2885,34 @@ RESPONSE FORMAT (JSON):
             font-size: 0.85rem;
             font-weight: 500;
         }}
-        
+
         .ppe-status-mentioned {{
             background: rgba(46,204,113,0.1);
             color: var(--success-color);
         }}
-        
+
         .ppe-status-missing {{
             background: rgba(231,76,60,0.1);
             color: var(--danger-color);
         }}
-        
+
         .ppe-status-not-mentioned {{
             background: rgba(149,165,166,0.1);
             color: #7f8c8d;
         }}
-        
+
         .ppe-status-not-required {{
             background: rgba(52,152,219,0.1);
             color: var(--secondary-color);
         }}
-        
+
         .list-compact {{
             list-style: none;
             padding: 0;
         }}
-        
 
-        
+
+
         /* Environment Badge */
         .environment-badge {{
             display: inline-flex;
@@ -2925,7 +2925,7 @@ RESPONSE FORMAT (JSON):
             font-weight: 600;
             margin-bottom: 1rem;
         }}
-        
+
         .confidence-indicator {{
             display: flex;
             align-items: center;
@@ -2935,7 +2935,7 @@ RESPONSE FORMAT (JSON):
             border-radius: 8px;
             margin-top: 1rem;
         }}
-        
+
         .confidence-bar {{
             flex: 1;
             height: 12px;
@@ -2943,18 +2943,18 @@ RESPONSE FORMAT (JSON):
             border-radius: 6px;
             overflow: hidden;
         }}
-        
+
         .confidence-fill {{
             height: 100%;
             background: linear-gradient(90deg, var(--success-color), var(--warning-color), var(--danger-color));
             transition: width 0.3s ease;
         }}
-        
+
         .list {{
             list-style: none;
             padding: 0;
         }}
-        
+
         .list li {{
             padding: 0.75rem;
             margin-bottom: 0.5rem;
@@ -2962,14 +2962,14 @@ RESPONSE FORMAT (JSON):
             border-left: 3px solid var(--secondary-color);
             border-radius: 4px;
         }}
-        
+
         .footer {{
             background: var(--primary-color);
             color: white;
             padding: 1.5rem;
             text-align: center;
         }}
-        
+
         /* Chips and Badges */
         .hazard-chip, .action-chip {{
             display: inline-block;
@@ -2991,7 +2991,7 @@ RESPONSE FORMAT (JSON):
             color: #155724;
             border: 1px solid #c3e6cb;
         }}
-        
+
         /* Likelihood Badge */
         .likelihood-badge {{
             display: inline-flex;
@@ -3002,7 +3002,7 @@ RESPONSE FORMAT (JSON):
             min-width: 120px;
             border: 1px solid rgba(0,0,0,0.1);
         }}
-        
+
         .likelihood-label {{
             font-size: 0.75rem;
             text-transform: uppercase;
@@ -3010,13 +3010,13 @@ RESPONSE FORMAT (JSON):
             opacity: 0.8;
             margin-bottom: 0.25rem;
         }}
-        
+
         .likelihood-value {{
             font-weight: bold;
             font-size: 1.1rem;
             margin-bottom: 0.5rem;
         }}
-        
+
         .likelihood-bar {{
             width: 100%;
             height: 6px;
@@ -3024,18 +3024,18 @@ RESPONSE FORMAT (JSON):
             border-radius: 3px;
             overflow: hidden;
         }}
-        
+
         .bar-fill {{
             height: 100%;
             border-radius: 3px;
         }}
-        
+
         .likelihood-high {{
             background-color: #f8d7da;
             color: #721c24;
             border-color: #f5c6cb;
         }}
-        
+
         .likelihood-high .bar-fill {{
             background-color: #dc3545;
         }}
@@ -3057,7 +3057,7 @@ RESPONSE FORMAT (JSON):
         .likelihood-low .bar-fill {{
             background-color: #17a2b8;
         }}
-        
+
         .risk-grid, .action-grid {{
             display: flex;
             flex-wrap: wrap;
@@ -3211,7 +3211,7 @@ RESPONSE FORMAT (JSON):
             <p class="report-id">Report ID: {report_id}</p>
             <p>Generated: {timestamp_display}</p>
         </div>
-        
+
         <div class="content">
             <div id="reportSplitCard" class="report-split-card">
                 <div class="report-split-top">
@@ -3307,7 +3307,7 @@ RESPONSE FORMAT (JSON):
                 </div>
             </div>
         </div>
-        
+
         <script>
         (function initReportExpandToggle() {{
             const splitCard = document.getElementById('reportSplitCard');
@@ -3327,34 +3327,34 @@ RESPONSE FORMAT (JSON):
             toggle.addEventListener('click', () => setExpanded(!splitCard.classList.contains('expanded')));
         }})();
         </script>
-        
+
         <div class="footer">
             <p>CASM PPE Safety Monitor - FYPA AI Model Development & Integration</p>
             <p style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">
-                Powered by YOLO PPE Detection • Local + Cloud AI Routing • Supabase-backed Report Pipeline
+                Powered by YOLO PPE Detection  Local + Cloud AI Routing  Supabase-backed Report Pipeline
             </p>
         </div>
     </div>
 </body>
 </html>"""
-        
+
         # Save to both reports directory and violations directory
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         html_path = self.reports_dir / f'violation_{report_id}.html'
-        
+
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
-        
+
         # Also save to violations directory for web UI
         violations_report_path = self.violations_dir / report_id / 'report.html'
         violations_report_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(violations_report_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
-        
+
         logger.info(f"HTML report saved to: {html_path}")
         logger.info(f"HTML report copied to: {violations_report_path}")
-        
+
         return html_path
 
     def _write_traceability_sidecar(
@@ -3412,7 +3412,7 @@ RESPONSE FORMAT (JSON):
             logger.info(f"Traceability sidecar written: {sidecar_path}")
         except Exception as e:
             logger.warning(f"Could not write traceability sidecar to {sidecar_path}: {e}")
-    
+
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
         import re
@@ -3492,7 +3492,7 @@ RESPONSE FORMAT (JSON):
             else:
                 detail = 'PPE/risk observation recorded by model'
 
-            model_person_rows.append(f"• {person_id}: {detail}")
+            model_person_rows.append(f" {person_id}: {detail}")
 
         model_person_count = len(model_person_rows)
 
@@ -3529,7 +3529,7 @@ RESPONSE FORMAT (JSON):
         if model_person_count > 0:
             preview_rows = model_person_rows[:4]
             if model_person_count > 4:
-                preview_rows.append(f"• +{model_person_count - 4} more model-identified person entries")
+                preview_rows.append(f" +{model_person_count - 4} more model-identified person entries")
 
             who_header = (
                 f"Model identified {model_person_count} person(s), "
@@ -3591,8 +3591,8 @@ RESPONSE FORMAT (JSON):
             # Handle Malaysian Executive Summary format (bullet points with emojis)
             # If the model provides a bulleted list, we wrap it in a clean HTML list
             # but keep it inside the 'WHAT' table cell.
-            if '•' in summary_text or '*' in summary_text:
-                lines = [line.strip(' *•') for line in summary_text.split('\n') if line.strip()]
+            if '' in summary_text or '*' in summary_text:
+                lines = [line.strip(' *') for line in summary_text.split('\n') if line.strip()]
                 list_items = "".join([f"<li style='margin-bottom: 0.4rem;'>{self._to_safe_html_text(line)}</li>" for line in lines])
                 what_text = f"<ul style='list-style-type: none; padding-left: 0; margin: 0;'>{list_items}</ul>"
             else:
@@ -3617,11 +3617,11 @@ RESPONSE FORMAT (JSON):
             context_sentence = _clean_sentence(visual_evidence_text or caption_text)
             if context_sentence:
                 what_text += f" Scene context: {context_sentence}"
-        
+
         # Extract environment/risk keywords
         env_type = nlp_analysis.get('environment_type', 'Unknown')
         hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
-        
+
         # Get regulations
         regs = nlp_analysis.get('dosh_regulations_cited', [])
         reg_names = []
@@ -3667,7 +3667,7 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
-            hazard_text = '<br>'.join(f"• {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+            hazard_text = '<br>'.join(f" {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
 
         if not reg_names:
             inferred_regs: List[str] = []
@@ -3690,12 +3690,12 @@ RESPONSE FORMAT (JSON):
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
-            reg_text = '<br>'.join(f"• {self._inject_interactive_tooltips(name)}" for name in reg_names)
+            reg_text = '<br>'.join(f" {self._inject_interactive_tooltips(name)}" for name in reg_names)
 
         # Parse Markdown for Summary (Bold and Lists)
         # 1. Bold: **text** -> <strong>text</strong>
         parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', what_text)
-        # 2. Lists/Newlines: • or - -> <br>•
+        # 2. Lists/Newlines:  or - -> <br>
         parsed_summary = parsed_summary.replace('\n', '<br>')
 
 
@@ -3745,10 +3745,10 @@ RESPONSE FORMAT (JSON):
         """Helper to ensure data is a list of strings, handling parsing of limiters."""
         if not data:
             return []
-        
+
         if isinstance(data, list):
             return data
-            
+
         if isinstance(data, str):
             # Try splitting by common delimiters
             if ';' in data:
@@ -3756,7 +3756,7 @@ RESPONSE FORMAT (JSON):
             if '\n' in data:
                 return [item.strip() for item in data.split('\n') if item.strip()]
             return [data]
-            
+
         return [str(data)]
 
     # =========================================================================
@@ -3891,8 +3891,29 @@ RESPONSE FORMAT (JSON):
         if not isinstance(nlp_analysis, dict):
             nlp_analysis = {}
 
+        def _professionalize_text(value: Any) -> str:
+            text = str(value or '').strip()
+            if not text:
+                return ''
+            for _ in range(2):
+                if not any(marker in text for marker in ('', '', '')):
+                    break
+                try:
+                    decoded = text.encode('latin1').decode('utf-8')
+                except Exception:
+                    break
+                if decoded and decoded != text:
+                    text = decoded
+                else:
+                    break
+            text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', text)
+            text = text.replace('', ', ').replace('', ' to ')
+            text = re.sub(r'^\s*[-\u2013\u2014]\s+', '', text, flags=re.MULTILINE)
+            text = re.sub(r'\s{2,}', ' ', text)
+            return text.strip()
+
         def _as_clean_str(value: Any) -> str:
-            return str(value or '').strip()
+            return _professionalize_text(value)
 
         def _as_list(value: Any) -> List[Any]:
             if value is None:
@@ -4019,7 +4040,11 @@ RESPONSE FORMAT (JSON):
     def _to_safe_html_text(self, text: Any) -> str:
         """Convert text to safe HTML, handling None/types."""
         if text is None: return ""
-        return html.escape(str(text))
+        safe_text = str(text)
+        safe_text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', safe_text)
+        safe_text = safe_text.replace('', ', ').replace('', ' to ')
+        safe_text = re.sub(r'^\s*[-\u2013\u2014]\s+', '', safe_text, flags=re.MULTILINE)
+        return html.escape(safe_text)
 
     def _content_tokens(self, text: str) -> List[str]:
         """Extract lightweight content tokens for lexical grounding checks."""
@@ -4188,14 +4213,14 @@ RESPONSE FORMAT (JSON):
         """Helper to inject Malaysian regulatory terminology into scene description."""
         caption = report_data.get('caption', '')
         detections = report_data.get('detections', [])
-        
+
         desc = f"Visual assessment of {env_type.lower()} zone in Malaysia. "
         desc += caption if caption else "General work activity observed. "
-        
+
         violation_labels = [d.get('class_name', '').replace('NO-', '') for d in detections if d.get('class_name', '').startswith('NO-')]
         if violation_classes := list(dict.fromkeys(violation_labels)):
             desc += f" Non-compliance with DOSH guidelines detected for: {', '.join(violation_classes)}."
-            
+
         return desc
 
     def _build_grounded_summary_text(self, report_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> str:
@@ -4227,12 +4252,12 @@ RESPONSE FORMAT (JSON):
             issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
 
         summary_parts = [
-            f"• 🚨 **INCIDENT**: {env} Safety Violation",
-            f"• 🔍 **CRITICAL GAP**: Missing {', '.join(missing_items[:3]) if missing_items else 'PPE compliance'}",
+            f"Incident: {env} safety violation.",
+            f"Critical gap: Missing {', '.join(missing_items[:3]) if missing_items else 'PPE compliance'}.",
         ]
         if context_sentence:
-            summary_parts.append(f"• 👁️ **EVIDENCE**: {context_sentence}")
-        summary_parts.append("• 🛑 **DIRECTIVE**: Halt work and enforce PPE per OSHA 1994")
+            summary_parts.append(f"Evidence: {context_sentence}")
+        summary_parts.append("Directive: Halt work and enforce PPE per OSHA 1994.")
         return '\n'.join(summary_parts)
 
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
@@ -4278,22 +4303,22 @@ RESPONSE FORMAT (JSON):
     def _generate_caption_history_section(self, report_data: Dict[str, Any]) -> str:
         """Generate caption history section if available."""
         history = report_data.get('caption_history', [])
-        # Show history even if only 1 item if it's explicitly tracked, 
+        # Show history even if only 1 item if it's explicitly tracked,
         # but usually we want to see evolution, so maybe only if > 0.
         # User asked to "record development process", implies seeing the list.
         if not history:
             return ""
-            
+
         items = []
         # Sort by version
         sorted_history = sorted(history, key=lambda x: x.get('version', 0))
-        
+
         for entry in sorted_history:
             version = entry.get('version', '?')
             timestamp = entry.get('timestamp', '')
             caption = entry.get('caption', '')
             model = entry.get('model', 'Unknown')
-            
+
             # Format timestamp nicely
             ts_str = timestamp
             try:
@@ -4305,7 +4330,7 @@ RESPONSE FORMAT (JSON):
                      ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
             except:
                 pass
-                
+
             items.append(f"""
                 <div class="card" style="margin-bottom: 1rem; border-left: 4px solid var(--secondary-color);">
                     <div class="card-header" style="background: var(--background); color: var(--text-color); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
@@ -4320,7 +4345,7 @@ RESPONSE FORMAT (JSON):
                     </div>
                 </div>
             """)
-            
+
         return f"""
             <div class="section">
                 <h2 class="section-title"><i class="fas fa-history"></i> Caption Development History</h2>
@@ -4338,7 +4363,7 @@ RESPONSE FORMAT (JSON):
         hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
         if not hazards:
             return ""
-        
+
         items = "".join([f"<li style=\"white-space: normal; word-break: break-word;\">{self._to_safe_html_text(h)}</li>" for h in hazards if str(h).strip()])
         return f"""
             <div class="section">
@@ -4348,7 +4373,7 @@ RESPONSE FORMAT (JSON):
                 </ul>
             </div>
         """
-    
+
     def _generate_dosh_regulations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate DOSH regulations section with cited regulations (Text Only - No External Links)."""
         regulations_raw = nlp_analysis.get('dosh_regulations_cited', [])
@@ -4427,7 +4452,7 @@ RESPONSE FORMAT (JSON):
                 </div>
             """)
 
-        
+
         return f"""
             <div class="section">
                 <h2 class="section-title"><i class="fas fa-book-open"></i> Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
@@ -4439,7 +4464,7 @@ RESPONSE FORMAT (JSON):
                 {''.join(reg_items)}
             </div>
         """
-    
+
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
         """Generate per-person analysis cards (inspired by NLP_CASM)."""
         persons = nlp_analysis.get('persons', [])
@@ -4476,7 +4501,7 @@ RESPONSE FORMAT (JSON):
             if label in {'person', 'worker', 'man', 'woman', 'people'}:
                 yolo_person_count += 1
 
-        # Caption/YOLO inference is the authoritative count — Gemini's
+        # Caption/YOLO inference is the authoritative count  Gemini's
         # person_count field is unreliable and must not override it.
         if inferred_from_caption > 0:
             target_count = inferred_from_caption
@@ -4576,7 +4601,7 @@ RESPONSE FORMAT (JSON):
                     status_class = 'ppe-status-mentioned'
                 else:
                     status_class = 'ppe-status-not-mentioned'
-                    
+
                 ppe_label = ppe_type.replace('_', ' ').title()
                 ppe_items.append(f"""
                     <div class="ppe-item">
@@ -4598,7 +4623,7 @@ RESPONSE FORMAT (JSON):
                 compliance = 'NON-COMPLIANT (Breach of Regulation)'
             elif not compliance:
                 compliance = 'Status Not Verified'
-            
+
             # Build Hazards Faced HTML (hazard-chip style)
             hazards_faced = person.get('hazards_faced', [])
             if not isinstance(hazards_faced, list):
@@ -4617,7 +4642,7 @@ RESPONSE FORMAT (JSON):
                         hazards_html += f'<div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> {self._to_safe_html_text(hazard_text)}</div>'
             else:
                 hazards_html = '<div class="hazard-chip">No hazards provided by model</div>'
-            
+
             # Risks list - Use _format_risk_item style (likelihood badge)
             risks = person.get('risks', [])
             if not isinstance(risks, list):
@@ -4667,7 +4692,7 @@ RESPONSE FORMAT (JSON):
                         elif 'not specified' in lik_lower:
                             lik_class = 'likelihood-medium'
                             bar_width = '45%'
-                        
+
                         risks_html += f"""
             <div class="risk-item">
                 <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
@@ -4727,7 +4752,7 @@ RESPONSE FORMAT (JSON):
                 'background:#fff3cd; border-left:4px solid #f0ad4e; border-radius:4px; '
                 'font-size:0.85rem; color:#856404;">'
                 '<i class="fas fa-info-circle"></i>&nbsp;'
-                '<strong>Scene-level data shown.</strong> The model analysed this scene as a group — '
+                '<strong>Scene level data shown.</strong> The model analysed this scene as a group. '
                 'the PPE status, hazards and risks below are the same scene-wide findings '
                 'that apply to all personnel in the frame. '
                 'Regenerate the report for a full per-person breakdown.</div>'
@@ -4736,7 +4761,7 @@ RESPONSE FORMAT (JSON):
                 <div class="person-card">
                     <div class="person-header">
                         <div>
-                            <h3>&#x1F464; Person {person_id_display}</h3>
+                            <h3>Person {person_id_display}</h3>
                             <p style="white-space: normal; word-break: break-word;">{description or 'No description provided by model'}</p>
                         </div>
                         {comp_badge}
@@ -4744,7 +4769,7 @@ RESPONSE FORMAT (JSON):
                     <div class="person-content">
                         {placeholder_banner}
                         <div class="person-section">
-                            <h4>&#x1F9BA; PPE Status</h4>
+                            <h4>PPE Status</h4>
                             <div class="ppe-grid">
                                 {"".join(ppe_items)}
                             </div>
@@ -4765,7 +4790,7 @@ RESPONSE FORMAT (JSON):
                         </div>
 
                         <div class="person-section">
-                            <h4>&#x1F3C3; Recommended Actions</h4>
+                            <h4>Recommended Actions</h4>
                             <div class="action-grid">
                                 {actions_html}
                             </div>
@@ -4773,7 +4798,7 @@ RESPONSE FORMAT (JSON):
                     </div>
                 </div>
             """)
-        
+
         return f"""
             <div class="section">
                 <h2 class="section-title"><i class="fas fa-users"></i> Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
@@ -4782,13 +4807,13 @@ RESPONSE FORMAT (JSON):
                 </div>
             </div>
         """
-    
+
     def _generate_recommendations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate recommendations HTML section."""
         recommendations = self._ensure_list_of_strings(nlp_analysis.get('suggested_actions', []))
         if not recommendations:
             return ""
-        
+
         items = "".join([
             f"<li style=\"white-space: normal; word-break: break-word;\">{self._inject_interactive_tooltips(self._to_safe_html_text(r))}</li>"
             for r in recommendations if str(r).strip()
@@ -4801,7 +4826,7 @@ RESPONSE FORMAT (JSON):
                 </ul>
             </div>
         """
-    
+
     def _format_risk_item(self, risk_text: str) -> str:
         """
         Format a risk item with visual likelihood badge.
@@ -4809,7 +4834,7 @@ RESPONSE FORMAT (JSON):
         """
         likelihood = 'Medium (inferred)'
         risk_desc = risk_text
-        
+
         # Parse likelihood
         # Parse likelihood
         import re
@@ -4821,7 +4846,7 @@ RESPONSE FORMAT (JSON):
             risk_desc = re.sub(r'\(?Likelihood[:\s-]*\(?(High|Medium|Low|Very High)\)?\)?[\.]?', '', risk_text, flags=re.IGNORECASE).strip()
             # Clean up trailing punctuation
             if risk_desc.endswith(','): risk_desc = risk_desc[:-1]
-            
+
         # Determine badge class (case-insensitive)
         lik_lower = likelihood.lower()
         badge_class = 'likelihood-high'  # Default for safety risks
@@ -4831,7 +4856,7 @@ RESPONSE FORMAT (JSON):
             badge_class = 'likelihood-medium'
         elif 'low' in lik_lower:
             badge_class = 'likelihood-low'
-            
+
         return f"""
             <div class="risk-item">
                 <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
@@ -4848,7 +4873,7 @@ RESPONSE FORMAT (JSON):
     def _generate_pdf_report(self, html_path: Path, report_id: str) -> Optional[Path]:
         """
         Generate PDF from HTML report (to be implemented).
-        
+
         Returns:
             Path to PDF report or None if failed
         """
@@ -4867,16 +4892,16 @@ if __name__ == '__main__':
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
     from config import OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, REPORTS_DIR, VIOLATIONS_DIR
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     print("=" * 70)
     print("REPORT GENERATOR TEST")
     print("=" * 70)
-    
+
     # Create config
     config = {
         'OLLAMA_CONFIG': OLLAMA_CONFIG,
@@ -4886,17 +4911,17 @@ if __name__ == '__main__':
         'REPORTS_DIR': REPORTS_DIR,
         'VIOLATIONS_DIR': VIOLATIONS_DIR
     }
-    
+
     # Create generator
     generator = ReportGenerator(config)
-    
+
     print(f"\n[OK] Report Generator initialized")
     print(f"Ollama URL: {generator.api_url}")
     print(f"Model: {generator.model}")
     print(f"RAG enabled: {generator.rag_enabled}")
     print(f"RAG data loaded: {len(generator.incident_data)} incidents")
     print(f"Report format: {generator.format}")
-    
+
     # Test RAG
     print("\n--- Testing RAG ---")
     test_desc = "worker fell from ladder without safety harness"
@@ -4904,6 +4929,6 @@ if __name__ == '__main__':
     print(f"Similar incidents found: {len(similar)}")
     if similar:
         print(f"First incident keywords: {similar[0].get('Keywords', 'N/A')[:100]}...")
-    
+
     print("\n[OK] All tests completed!")
     print("=" * 70)

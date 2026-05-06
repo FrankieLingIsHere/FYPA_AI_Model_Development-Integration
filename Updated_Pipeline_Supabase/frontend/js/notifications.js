@@ -746,7 +746,7 @@ const NotificationManager = {
 
     violation(message, reportId, options = {}) {
         return this.show(message, 'violation', 8000, {
-            title: '🚨 Violation Detected',
+            title: 'Violation Detected',
             action: {
                 text: 'View Reports',
                 onClick: `Router.navigate('reports')`
@@ -778,7 +778,7 @@ const NotificationManager = {
             'report',
             8000,
             {
-                title: '📝 Processing',
+                title: 'Processing',
                 action: defaultAction,
                 dedupeKey: reportId ? `report-generating:${reportId}` : 'report-generating:unknown',
                 dedupeTtlMs: reportId ? 45000 : 8000,
@@ -793,7 +793,7 @@ const NotificationManager = {
             'success',
             6000,
             {
-                title: '✅ Complete',
+                title: 'Complete',
                 action: {
                     text: 'Open',
                     onClickFn: () => {
@@ -860,7 +860,7 @@ style.textContent = `
         transform: translateY(-2px);
         transition: all 0.2s ease;
     }
-    
+
     #notification-summary:hover {
         background: linear-gradient(135deg, #2980b9, #1a5276);
         transform: scale(1.02);
@@ -875,4 +875,3 @@ if (document.readyState === 'loading') {
 } else {
     NotificationManager.init();
 }
-

@@ -821,10 +821,10 @@ def check_model_available(model_name):
 def caption_image_llava(image_path, prompt=None):
     """
     Generate caption using Qwen2.5-VL via Ollama API.
-    
+
     Args:
         image_path: Path to image file
-    
+
     Returns:
         Caption string or None if failed
     """
@@ -832,9 +832,9 @@ def caption_image_llava(image_path, prompt=None):
     if not Path(image_path).exists():
         print(f"Error: Image file not found at {image_path}")
         return None
-    
+
     print(f"Image loaded: {Path(image_path).name}")
-    
+
     # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
     default_prompt = """You are a workplace visual analyst. Write a factual caption from this image only.
 
@@ -860,14 +860,14 @@ Style:
 - Avoid generic phrases like "In the image" or "The image shows".
 """
     caption_prompt = str(prompt or '').strip() or default_prompt
-    
+
     # Encode image to base64
     try:
         image_base64 = encode_image_to_base64(image_path)
     except Exception as e:
         print(f"Error encoding image: {e}")
         return None
-    
+
     # Generate caption using provider routing
     try:
         print("Generating caption...")
@@ -877,7 +877,7 @@ Style:
             temperature=0.6,
             max_tokens=650
         )
-        
+
         if caption:
             caption = _normalize_caption_text(caption)
 
@@ -913,7 +913,7 @@ Requirements:
                 "In this image, ",
                 "In this image "
             ]
-            
+
             for prefix in prefixes_to_remove:
                 if caption.startswith(prefix):
                     caption = caption[len(prefix):]
@@ -921,7 +921,7 @@ Requirements:
                     if caption:
                         caption = caption[0].upper() + caption[1:]
                     break
-            
+
             # Ensure complete sentence - truncate to last period if incomplete
             if caption and not caption.endswith(('.', '!', '?')):
                 # Find last complete sentence
@@ -931,13 +931,13 @@ Requirements:
                 else:
                     # If no period found, add one
                     caption = caption + '.'
-            
+
             print("Caption generation complete!")
             return caption
         else:
             print("Error: Empty response from model")
             return None
-            
+
     except Exception as e:
         print(f"Error during caption generation: {e}")
         return None
@@ -947,36 +947,36 @@ def validate_work_environment(image_path):
     """
     Quick check to determine if the image shows a valid work environment
     where PPE monitoring is appropriate (construction site, factory, warehouse, etc.).
-    
+
     CLASSIFICATION LOGIC:
     =====================
     The LLaVA model classifies the scene into 4 categories:
-    
-    A) CONSTRUCTION/INDUSTRIAL → is_valid=TRUE, confidence=HIGH
+
+    A) CONSTRUCTION/INDUSTRIAL  is_valid=TRUE, confidence=HIGH
        - Construction sites, factories, warehouses, workshops
        - Manufacturing plants, work zones, industrial areas
        - Any place where PPE is typically required
-    
-    B) OFFICE/COMMERCIAL → is_valid=TRUE, confidence=MEDIUM  
+
+    B) OFFICE/COMMERCIAL  is_valid=TRUE, confidence=MEDIUM
        - Office buildings, retail stores, meeting rooms
        - These environments MAY require PPE in certain areas
        - Still processed (not skipped)
-    
-    C) RESIDENTIAL/CASUAL → is_valid=FALSE, confidence=HIGH
+
+    C) RESIDENTIAL/CASUAL  is_valid=FALSE, confidence=HIGH
        - Homes, living rooms, bedrooms, kitchens
        - Parks, beaches, restaurants, casual settings
        - These are SKIPPED (no report generated)
-    
-    D) OTHER/UNCLEAR → is_valid=TRUE, confidence=LOW
+
+    D) OTHER/UNCLEAR  is_valid=TRUE, confidence=LOW
        - Outdoor roads, vehicle interiors, unclear scenes
        - Benefit of doubt - still processed
-    
+
     ONLY Category C causes violations to be SKIPPED.
     Categories A, B, D all proceed with normal processing.
-    
+
     Args:
         image_path: Path to image file
-    
+
     Returns:
         dict with:
             - is_valid: bool - True if this is a work environment (A, B, D) or False (C only)
@@ -985,39 +985,39 @@ def validate_work_environment(image_path):
             - reason: str - explanation
     """
     print(f"Validating work environment...")
-    
+
     # Verify image exists
     if not Path(image_path).exists():
         print(f"Error: Image not found at {image_path}")
         return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Image file not found'}
-    
+
     # Quick environment classification prompt - STRICT scene recognition
     prompt = """Look at this image carefully and classify the ACTUAL environment you see.
 
 CHECK FOR THESE INDICATORS:
 
 A) CONSTRUCTION/INDUSTRIAL:
-   ✓ Scaffolding, concrete, lumber, construction equipment
-   ✓ Factory machinery, assembly lines, warehouses with industrial shelving
-   ✓ Visible construction materials, work site barriers, heavy machinery
-   ✓ People wearing multiple PPE items in an active work zone
-   → Choose A ONLY if you see CLEAR industrial/construction indicators
+    Scaffolding, concrete, lumber, construction equipment
+    Factory machinery, assembly lines, warehouses with industrial shelving
+    Visible construction materials, work site barriers, heavy machinery
+    People wearing multiple PPE items in an active work zone
+    Choose A ONLY if you see CLEAR industrial/construction indicators
 
 B) OFFICE/COMMERCIAL:
-   ✓ Office desks, computers, cubicles, meeting rooms
-   ✓ Retail displays, store shelves, checkout counters
-   ✓ Professional indoor setting with business furniture
+    Office desks, computers, cubicles, meeting rooms
+    Retail displays, store shelves, checkout counters
+    Professional indoor setting with business furniture
 
 C) RESIDENTIAL/CASUAL:
-   ✓ Home furniture: sofas, TV stands, beds, dining tables, home decor
-   ✓ Residential kitchen, living room, bedroom, home interior
-   ✓ Parks, beaches, restaurants, cafes, casual outdoor settings
-   ✓ Person at home (even if wearing safety gear for testing purposes)
-   → Choose C if this looks like someone's HOME or casual setting
+    Home furniture: sofas, TV stands, beds, dining tables, home decor
+    Residential kitchen, living room, bedroom, home interior
+    Parks, beaches, restaurants, cafes, casual outdoor settings
+    Person at home (even if wearing safety gear for testing purposes)
+    Choose C if this looks like someone's HOME or casual setting
 
 D) OTHER:
-   ✓ Vehicle interior, outdoor road/street, unclear background
-   ✓ Cannot determine the setting
+    Vehicle interior, outdoor road/street, unclear background
+    Cannot determine the setting
 
 IMPORTANT: Do NOT classify a residential living room as construction site just because someone is wearing safety gear! The ENVIRONMENT determines the category, not the person's clothing.
 
@@ -1049,9 +1049,9 @@ Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
                 'environment_type': 'unknown',
                 'reason': 'No response from configured providers'
             }
-        
+
         print(f"Environment check result: {answer}")
-        
+
         # Parse the response - ONLY category C causes is_valid=False
         if answer.startswith('A'):
             return {
@@ -1090,7 +1090,7 @@ Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
                 'environment_type': 'unknown',
                 'reason': f'Unparseable response: {answer[:50]}'
             }
-            
+
     except Exception as e:
         print(f"Environment validation error: {e} - defaulting to valid")
         return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': str(e)}
@@ -1100,7 +1100,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python caption_image.py path/to/image.jpg")
         sys.exit(1)
-        
+
     image_path = sys.argv[1]
 
     try:
@@ -1111,15 +1111,15 @@ if __name__ == "__main__":
         print(f"  Confidence: {env_result['confidence']}")
         print(f"  Type: {env_result['environment_type']}")
         print(f"  Reason: {env_result['reason']}")
-        
+
         if env_result['is_valid']:
             print("\n--- Generating full caption ---")
             caption = caption_image_llava(image_path)
             if caption:
                 print("Caption:", caption)
         else:
-            print("\n⚠️ Skipping caption - not a valid work environment")
-            
+            print("\nSkipping caption. Not a valid work environment")
+
     except ImportError as e:
         print(f"\nImportError: {e}")
         print("Please ensure you have installed required packages:")

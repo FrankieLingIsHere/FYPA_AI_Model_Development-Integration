@@ -68,15 +68,15 @@ const ReportsPage = {
                     <div class="card-content">
                         <!-- Filters -->
                         <div class="grid grid-4 mb-3 report-filter-grid">
-                            <input 
-                                type="text" 
-                                id="search-reports" 
-                                placeholder="Search reports..." 
+                            <input
+                                type="text"
+                                id="search-reports"
+                                placeholder="Search reports..."
                                 style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md);"
                                 onkeyup="ReportsPage.handleSearch(event)"
                             >
-                            <select 
-                                id="filter-severity" 
+                            <select
+                                id="filter-severity"
                                 style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md);"
                                 onchange="ReportsPage.handleFilter()"
                             >
@@ -85,8 +85,8 @@ const ReportsPage = {
                                 <option value="medium">Medium Severity</option>
                                 <option value="low">Low Severity</option>
                             </select>
-                            <select 
-                                id="filter-date" 
+                            <select
+                                id="filter-date"
                                 style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md);"
                                 onchange="ReportsPage.handleFilter()"
                             >
@@ -95,8 +95,8 @@ const ReportsPage = {
                                 <option value="week">This Week</option>
                                 <option value="month">This Month</option>
                             </select>
-                            <select 
-                                id="filter-source" 
+                            <select
+                                id="filter-source"
                                 style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md);"
                                 onchange="ReportsPage.handleFilter()"
                             >
@@ -648,7 +648,7 @@ const ReportsPage = {
 
         // Search filter
         if (this.filters.search) {
-            filtered = filtered.filter(v => 
+            filtered = filtered.filter(v =>
                 String(v.report_id || '').toLowerCase().includes(this.filters.search) ||
                 String(v.timestamp || '').toLowerCase().includes(this.filters.search) ||
                 String(v.device_id || '').toLowerCase().includes(this.filters.search)
@@ -667,10 +667,10 @@ const ReportsPage = {
         if (this.filters.dateRange !== 'all') {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            
+
             filtered = filtered.filter(v => {
                 const vDate = new Date(v.timestamp);
-                
+
                 switch(this.filters.dateRange) {
                     case 'today':
                         return vDate >= today;
@@ -939,7 +939,9 @@ const ReportsPage = {
             // Fall through to open even if prefetch fails or times out.
         }
 
-        const url = API.getReportUrl(reportId, resolvedSourceHint);
+        const url = typeof API.getReportNavigationUrl === 'function'
+            ? API.getReportNavigationUrl(reportId, resolvedSourceHint)
+            : API.getReportUrl(reportId, resolvedSourceHint);
         window.open(url, '_blank');
         this.notify(`Opening report ${reportId}`, 'info');
     },
@@ -1033,7 +1035,7 @@ const ReportsPage = {
     // Check if report is ready to view
     isReportReady(violation) {
         const status = this.normalizeStatus(violation);
-        return violation.has_report && 
+        return violation.has_report &&
                (status === 'completed' || status === 'partial' || status === 'unknown');
     },
 
@@ -1041,7 +1043,7 @@ const ReportsPage = {
     getStatusInfo(violation) {
         const status = this.normalizeStatus(violation);
         const ready = this.isReportReady(violation);
-        
+
         switch(status) {
             case 'completed':
                 if (ready) {
@@ -1063,7 +1065,7 @@ const ReportsPage = {
             case 'partial':
                 return { icon: 'fa-exclamation-circle', color: 'warning', text: 'Partial' };
             default:
-                return violation.has_report 
+                return violation.has_report
                     ? { icon: 'fa-check-circle', color: 'success', text: 'Ready' }
                     : { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Processing' };
         }
@@ -1122,7 +1124,7 @@ const ReportsPage = {
         const statusInfo = this.getStatusInfo(violation);
         const ready = this.isReportReady(violation);
         const processAction = this.getProcessAction(violation);
-        
+
         // Fetch detailed status from API if failed
         let detailedError = violation.error_message;
         if (this.normalizeStatus(violation) === 'failed') {
@@ -1133,7 +1135,7 @@ const ReportsPage = {
                 console.error('Failed to fetch detailed error:', e);
             }
         }
-        
+
         // Create modal overlay
         const modal = document.createElement('div');
         modal.id = 'report-status-modal';
@@ -1143,14 +1145,14 @@ const ReportsPage = {
             justify-content: center; z-index: 1000; padding: 0.75rem;
             overflow-y: auto;
         `;
-        
+
         const errorDetails = this.normalizeStatus(violation) === 'failed' && detailedError ? `
             <div style="margin-top: 1rem; padding: 1rem; background: #fee; border-left: 3px solid #e74c3c; border-radius: 4px; text-align: left; max-height: 200px; overflow-y: auto;">
                 <strong style="color: #c0392b; display: block; margin-bottom: 0.5rem;">Error Details:</strong>
                 <pre style="margin: 0; font-size: 0.85rem; color: #7f8c8d; white-space: pre-wrap; word-wrap: break-word;">${detailedError}</pre>
             </div>
         ` : '';
-        
+
         modal.innerHTML = `
             <div style="background: white; padding: 1.15rem; border-radius: 12px; max-width: 600px; width: min(96vw, 600px); text-align: center; max-height: 88vh; overflow-y: auto;">
                 <style>
@@ -1211,11 +1213,11 @@ const ReportsPage = {
                 </div>
             </div>
         `;
-        
+
         modal.onclick = (e) => {
             if (e.target === modal) this.closeModal();
         };
-        
+
         document.body.appendChild(modal);
 
         this.ensureModalRuntime(violation.report_id);
@@ -1248,7 +1250,7 @@ const ReportsPage = {
         if (status === 'completed' && !violation.has_report) {
             return 'Status says completed, but report file is not ready yet. Click Process Now to force generation.';
         }
-        
+
         switch(status) {
             case 'generating':
                 return 'The AI is analyzing the violation and generating a detailed report. This usually takes 30-60 seconds.';
@@ -1546,7 +1548,7 @@ const ReportsPage = {
             } else if (status === 'generating' || status === 'processing') {
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                     NotificationManager.reportGenerating(reportId, {
-                        title: '📝 Generating Report',
+                        title: 'Generating Report',
                         action: {
                             text: 'View Progress',
                             onClickFn: () => this.focusReport(reportId, { openModal: true })
@@ -1642,7 +1644,7 @@ const ReportsPage = {
     async checkAndRefresh(reportId) {
         this.closeModal();
         await this.refreshReports();
-        
+
         // Find the updated violation
         const violation = this.violations.find(v => v.report_id === reportId);
         if (violation && this.isReportReady(violation)) {
@@ -1763,7 +1765,7 @@ const ReportsPage = {
             this.setModalStatusText('Regeneration queued. Monitoring progress...');
             if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                 NotificationManager.reportGenerating(reportId, {
-                    title: options.force ? '♻️ Reprocessing Started' : '📝 Generation Started',
+                    title: options.force ? 'Reprocessing Started' : 'Generation Started',
                     action: {
                         text: 'View Progress',
                         onClickFn: () => this.focusReport(reportId, { openModal: true })
@@ -1789,8 +1791,12 @@ const ReportsPage = {
                 ? TimezoneManager.formatDateTime(timestamp)
                 : new Date(timestamp).toLocaleString())
             : 'Unknown time';
-        const imageUrl = violation.local_image_url || API.getImageUrl(violation.report_id, 'annotated.jpg', violation);
-        const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated);
+        const imageUrl = violation.local_image_url || (
+            violation.has_annotated
+                ? API.getImageUrl(violation.report_id, 'annotated.jpg', violation)
+                : API.getImageUrl(violation.report_id, 'original.jpg', violation)
+        );
+        const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated || violation.has_original);
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
         const sourceScope = this.inferSourceScope(violation);
@@ -1806,12 +1812,12 @@ const ReportsPage = {
             ? API.extractMissingPpeLabels(violation)
             : (Array.isArray(violation.missing_ppe) ? violation.missing_ppe : []);
         const displayViolationCount = Number(violation.violation_count || missingPpeLabels.length || 0);
-        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' : 
+        const severityClass = (violation.severity === 'HIGH' || violation.severity === 'CRITICAL') ? 'danger' :
                              (violation.severity === 'MEDIUM' ? 'warning' : 'info');
-        
+
                 return `
-            <div class="report_card ${sourceScope === 'local' ? 'report-card-local' : ''}" id="report-${violation.report_id}" 
-                 style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}" 
+            <div class="report_card ${sourceScope === 'local' ? 'report-card-local' : ''}" id="report-${violation.report_id}"
+                 style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}"
                  onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${hasPreviewImage ?
@@ -1826,8 +1832,8 @@ const ReportsPage = {
                          </div>`
                     }
                     ${!isReady ? `
-                        <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; 
-                                    background: rgba(0,0,0,0.4); display: flex; align-items: center; 
+                        <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                                    background: rgba(0,0,0,0.4); display: flex; align-items: center;
                                     justify-content: center;">
                             <div style="color: white; text-align: center;">
                                 <i class="fas ${statusInfo.icon}" style="font-size: 2rem;"></i>
@@ -1855,7 +1861,7 @@ const ReportsPage = {
                             ${violation.severity || 'High'}
                         </span>
                     </div>
-                    
+
                     <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem;">
                         <span class="badge badge-${statusInfo.color}">
                             <i class="fas ${statusInfo.icon}"></i> ${statusInfo.text}
@@ -1863,7 +1869,7 @@ const ReportsPage = {
                         ${violation.has_original ? '<span class="badge badge-success"><i class="fas fa-image"></i> Original</span>' : ''}
                         ${violation.has_annotated ? '<span class="badge badge-success"><i class="fas fa-draw-polygon"></i> Annotated</span>' : ''}
                     </div>
-                    
+
                     <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">
                         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem;">
                             <button class="btn btn-primary" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;"

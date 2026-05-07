@@ -5035,8 +5035,8 @@ def service_worker():
 @app.route('/api/violations')
 def api_violations():
     """Get all violations with details from Supabase."""
-    requested_limit = request.args.get('limit', 1000, type=int)
-    limit = max(1, min(requested_limit or 1000, 5000))
+    requested_limit = request.args.get('limit', 200, type=int)
+    limit = max(1, min(requested_limit or 200, 5000))
 
     def _normalize_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()

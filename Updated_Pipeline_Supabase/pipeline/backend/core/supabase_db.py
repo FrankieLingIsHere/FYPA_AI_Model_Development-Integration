@@ -63,8 +63,21 @@ class SupabaseDatabaseManager:
                 connect_timeout=max(1, int(self.connect_timeout))
             )
             self.conn.autocommit = False
+            # Set connection-level statement and lock timeouts so every query on
+            # this connection is automatically bounded. Individual methods may
+            # override with SET LOCAL inside their own transaction if they need
+            # a different budget (e.g. fix_stuck_reports uses its own timeout).
+            _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
+            _lock_ms = max(500, int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '3000')))
+            try:
+                with self.conn.cursor() as _cur:
+                    _cur.execute("SET statement_timeout = %s", (_stmt_ms,))
+                    _cur.execute("SET lock_timeout = %s", (_lock_ms,))
+                self.conn.commit()
+            except Exception:
+                pass  # Non-fatal: some PG editions may reject SET before a tx
             self._reconnect_retry_after_epoch = 0.0
-            logger.info(f"Connected to Supabase Postgres (connect_timeout={self.connect_timeout}s)")
+            logger.info(f"Connected to Supabase Postgres (connect_timeout={self.connect_timeout}s, stmt_timeout={_stmt_ms}ms)")
         except Exception as e:
             self._reconnect_retry_after_epoch = time.time() + float(self.reconnect_backoff_seconds)
             logger.error(f"Failed to connect to database: {e}")
@@ -748,9 +761,10 @@ class SupabaseDatabaseManager:
             List of detection event dictionaries
         """
         self._ensure_connection()
-        
+        _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
         try:
             with self.conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                 cur.execute("""
                     SELECT * FROM public.detection_events
                     ORDER BY timestamp DESC
@@ -784,10 +798,12 @@ class SupabaseDatabaseManager:
             List of violation dictionaries with status
         """
         self._ensure_connection()
-        
+        _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
         try:
             try:
                 with self.conn.cursor() as cur:
+                    cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
+                    cur.execute("SET LOCAL lock_timeout = %s", (max(500, _stmt_ms // 2),))
                     cur.execute("""
                         SELECT 
                             de.report_id,
@@ -820,6 +836,7 @@ class SupabaseDatabaseManager:
                     'get_all_violations_with_status.primary_query'
                 )
                 with self.conn.cursor() as fallback_cur:
+                    fallback_cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                     fallback_cur.execute("""
                         SELECT 
                             de.report_id,

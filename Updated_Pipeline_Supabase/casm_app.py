@@ -2475,6 +2475,70 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         # cloud mode so downstream scope inference doesn't flip the report to
         # 'local' just because the recovery device id starts with 'local_'.
         if recovery_in_local_mode:
+            # Guard: when running in local mode, only recover reports that are
+            # genuinely local-origin. Cloud-mode reports sitting in the local
+            # violations dir (captured before a mode switch) must NOT be
+            # re-enqueued with source_scope='local' — that would corrupt their
+            # Supabase record and make them show as "Local"/"Local Synced" after
+            # the user switches back to cloud mode.
+            _metadata_path_for_guard = violation_dir / 'metadata.json'
+            _guard_metadata: Dict[str, Any] = {}
+            try:
+                if _metadata_path_for_guard.exists():
+                    with open(_metadata_path_for_guard, 'r', encoding='utf-8') as _gmf:
+                        _gm = json.load(_gmf) or {}
+                    if isinstance(_gm, dict):
+                        _guard_metadata = _gm
+            except Exception:
+                pass
+            _guard_record: Dict[str, Any] = {
+                'report_id': report_id,
+                **_guard_metadata,
+            }
+            if isinstance(event, dict):
+                _guard_record.setdefault('device_id', event.get('device_id'))
+            if isinstance(violation, dict):
+                _guard_record.setdefault('device_id', violation.get('device_id'))
+                _guard_dd = violation.get('detection_data') or {}
+                if isinstance(_guard_dd, str):
+                    try:
+                        _guard_dd = json.loads(_guard_dd)
+                    except Exception:
+                        _guard_dd = {}
+                if isinstance(_guard_dd, dict):
+                    _guard_record.setdefault('source_scope', _guard_dd.get('source_scope'))
+                    _guard_record.setdefault('origin', _guard_dd.get('origin'))
+                    _guard_record.setdefault('sync_source', _guard_dd.get('sync_source'))
+            _local_recovery_markers = {
+                'local', 'local_pipeline', 'local_pending_recovery',
+                'offline_local', 'offline_local_cache', 'browser_local_draft',
+                'browser_local_draft_handoff', 'sync_local_cache',
+                'sync_local_cache_partial', 'local_cache', 'local_cache_sync',
+                'local_synced',
+            }
+            _guard_scope = str(_guard_record.get('source_scope') or '').strip().lower()
+            _guard_device = str(_guard_record.get('device_id') or '').strip().lower()
+            _guard_origin = str(_guard_record.get('origin') or _guard_record.get('sync_source') or '').strip().lower()
+            _has_local_report_id_prefix_guard = bool(
+                re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', report_id.lower())
+            )
+            _is_local_origin_for_recovery = (
+                _has_local_report_id_prefix_guard
+                or _guard_scope == 'local'
+                or _guard_origin in _local_recovery_markers
+                or _guard_origin.startswith('local_')
+                or _guard_device in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'browser_local_draft'}
+                or _guard_device.startswith('local_')
+                or _guard_device.startswith('offline_')
+            )
+            if not _is_local_origin_for_recovery:
+                summary['eligible'] -= 1
+                logger.debug(
+                    f"Local pending recovery: skipping {report_id} — not a local-origin report "
+                    f"(scope={_guard_scope!r}, device={_guard_device!r}, origin={_guard_origin!r}). "
+                    "Cloud-mode reports in local violations dir are preserved."
+                )
+                continue
             recovery_device_id = f"local_recovery_{report_id}_{time.time_ns()}"
             recovery_source_scope = 'local'
             recovery_sync_source = 'local_pending_recovery'
@@ -3270,7 +3334,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
-        runtime_device_id = 'local_cache' if force_local_scope else 'webcam_0'
+        runtime_device_id = 'local_cache' if (force_local_scope or local_profile_active) else 'webcam_0'
 
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -3326,9 +3390,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'location': 'Live Stream Monitor',
             'detection_count': len(detections or []),
             'status': 'pending',
-            'source_scope': 'local' if force_local_scope else 'cloud',
-            'source_label': 'Local' if force_local_scope else 'Cloud',
-            'sync_source': 'local_pipeline' if force_local_scope else 'live_capture',
+            'source_scope': 'local' if (force_local_scope or local_profile_active) else 'cloud',
+            'source_label': 'Local' if (force_local_scope or local_profile_active) else 'Cloud',
+            'sync_source': 'local_pipeline' if (force_local_scope or local_profile_active) else 'live_capture',
             'has_original': True,
             'has_annotated': False,
             'has_caption': False,
@@ -3421,6 +3485,14 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         }
 
         if force_local_scope:
+            violation_data['source_scope'] = 'local'
+            violation_data['sync_source'] = 'local_pipeline'
+            violation_data['source'] = 'local_pipeline'
+        elif local_profile_active:
+            # Local routing profile is active but force-local-artifacts is off
+            # (e.g. Supabase IS reachable). Still stamp the scope so the report
+            # is correctly identified as 'local' origin rather than 'cloud' once
+            # the user switches back to cloud mode.
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'

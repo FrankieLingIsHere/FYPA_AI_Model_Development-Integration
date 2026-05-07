@@ -14,7 +14,7 @@ BASE_URL = os.environ.get(
 
 MAX_SCAN = max(10, int(os.environ.get("CASM_REPORT_LATENCY_MAX_SCAN", "80")))
 MAX_CANDIDATES = max(1, int(os.environ.get("CASM_REPORT_LATENCY_MAX_CANDIDATES", "6")))
-WARM_TARGET_SECONDS = float(os.environ.get("CASM_REPORT_OPEN_WARM_TARGET_SECONDS", "1.0"))
+WARM_TARGET_SECONDS = float(os.environ.get("CASM_REPORT_OPEN_WARM_TARGET_SECONDS", "2.0"))
 WARM_SAMPLE_COUNT = max(1, int(os.environ.get("CASM_REPORT_OPEN_WARM_SAMPLES", "3")))
 REQUEST_TIMEOUT = max(5, int(os.environ.get("CASM_REPORT_OPEN_TIMEOUT", "30")))
 MAX_ALLOWED_SAMPLE_SECONDS = float(

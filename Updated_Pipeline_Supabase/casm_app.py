@@ -2468,7 +2468,10 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             break
 
         recovery_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-        recovery_in_local_mode = recovery_routing_profile == 'local'
+        recovery_in_local_mode = (
+            recovery_routing_profile == 'local'
+            or not _is_hosted_runtime_environment()
+        )
         # Recovery sweep should preserve the runtime's active routing profile so
         # cloud-mode reports being recovered don't get tagged with the orange
         # 'Local' / 'Local Synced' chips. Use a neutral webcam_0 device id in
@@ -2530,6 +2533,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 or _guard_device in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'browser_local_draft'}
                 or _guard_device.startswith('local_')
                 or _guard_device.startswith('offline_')
+                # Reports not in Supabase at all were created on this machine only —
+                # safe to recover as local regardless of the metadata scope value.
+                or (event is None and violation is None and db_manager is not None)
             )
             if not _is_local_origin_for_recovery:
                 summary['eligible'] -= 1
@@ -3162,7 +3168,7 @@ def queue_worker_loop():
                 # from a previous local session where the camera wasn't ready)
                 # produces spurious black-picture reports that confuse the UI.
                 _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-                if _queue_worker_routing == 'local':
+                if _queue_worker_routing == 'local' or not _is_hosted_runtime_environment():
                     recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
                     enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
                     if enqueued_count > 0:
@@ -3390,9 +3396,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'location': 'Live Stream Monitor',
             'detection_count': len(detections or []),
             'status': 'pending',
-            'source_scope': 'local' if (force_local_scope or local_profile_active) else 'cloud',
-            'source_label': 'Local' if (force_local_scope or local_profile_active) else 'Cloud',
-            'sync_source': 'local_pipeline' if (force_local_scope or local_profile_active) else 'live_capture',
+            'source_scope': 'local' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'cloud',
+            'source_label': 'Local' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'Cloud',
+            'sync_source': 'local_pipeline' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'live_capture',
             'has_original': True,
             'has_annotated': False,
             'has_caption': False,
@@ -3488,11 +3494,11 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'
-        elif local_profile_active:
-            # Local routing profile is active but force-local-artifacts is off
-            # (e.g. Supabase IS reachable). Still stamp the scope so the report
-            # is correctly identified as 'local' origin rather than 'cloud' once
-            # the user switches back to cloud mode.
+        elif local_profile_active or not _is_hosted_runtime_environment():
+            # Local routing profile is active, OR this is a non-hosted (local-machine)
+            # runtime regardless of CASM_ROUTING_PROFILE. Stamp the local-origin marker
+            # so the report is correctly identified as 'local' (not 'cloud') when the
+            # user switches to cloud mode or views reports via the cloud frontend.
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'

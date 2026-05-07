@@ -13931,6 +13931,11 @@ def cleanup():
     cv2.destroyAllWindows()
 
 
+# Register cleanup for both direct (python casm_app.py) and gunicorn (worker exit) runs.
+import atexit as _atexit
+_atexit.register(cleanup)
+
+
 # =========================================================================
 # ZERO-TOUCH DEVICE PROVISIONING & NOTIFICATIONS
 # =========================================================================

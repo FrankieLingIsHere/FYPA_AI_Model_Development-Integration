@@ -24,5 +24,25 @@ if [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${RAILWAY_ENVIRONMENT:-}" ] || is_t
 fi
 
 echo "Starting CASM application on port ${PORT:-5000}..."
-# Use python directly
-exec python casm_app.py
+# Use gunicorn for production-grade request handling.
+# --workers 1: single process so background threads (startup, queue worker, heartbeat)
+#   are shared and not duplicated across processes.
+# --threads 16: allows 16 concurrent in-flight requests without blocking (replaces
+#   werkzeug's per-connection thread-per-request which accumulates unboundedly).
+# --timeout 180: covers the 120s YOLO warmup + pipeline init with margin so gunicorn
+#   does not kill a worker that is still in the middle of startup.
+# --worker-tmp-dir /dev/shm: use tmpfs for heartbeat file to avoid disk I/O stalls.
+# --worker-class gthread: thread-based worker matching the --threads setting.
+# --bind: respect Railway's dynamic PORT env var.
+exec gunicorn \
+    --workers 1 \
+    --worker-class gthread \
+    --threads 16 \
+    --timeout 180 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --worker-tmp-dir /dev/shm \
+    --bind "0.0.0.0:${PORT:-5000}" \
+    --access-logfile - \
+    --error-logfile - \
+    "casm_app:app"

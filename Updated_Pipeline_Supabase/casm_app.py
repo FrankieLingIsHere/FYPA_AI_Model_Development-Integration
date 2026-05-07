@@ -8931,13 +8931,24 @@ def _api_local_mode_auto_provisioning_impl():
         machine_id = _local_mode_get_or_create_machine_id()
 
     provision_secret = str(state.get('provision_secret') or '').strip()
+    _payload_secret_candidate = ''
     if not provision_secret:
         payload_secret = str(payload.get('provision_secret') or '').strip()
         _client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or (request.remote_addr or '')
+        # Accept browser-injected secret ONLY from loopback and ONLY as a
+        # candidate — do NOT persist yet.  It will be validated against the
+        # cloud below; only if the cloud confirms an approved/provisioned/
+        # active status do we commit it to disk (see below).
         if payload_secret and (_client_ip.startswith('127.') or _client_ip in {'::1', 'localhost'}):
-            provision_secret = payload_secret
-            state['provision_secret'] = provision_secret
-            _local_mode_save_provision_state(state)
+            # Basic format sanity: reject anything that doesn't look like a
+            # hex/base64 secret token (alphanumeric + dashes, 16-256 chars).
+            if re.fullmatch(r'[A-Za-z0-9_\-]{16,256}', payload_secret):
+                _payload_secret_candidate = payload_secret
+                provision_secret = payload_secret
+            else:
+                logger.warning(
+                    "Rejected browser-injected provision_secret: failed format validation"
+                )
 
     if provision_secret:
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
@@ -8963,6 +8974,26 @@ def _api_local_mode_auto_provisioning_impl():
             provision_secret=provision_secret,
             timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
         )
+
+    # --- Deferred commit of browser-injected secret ---
+    # Only persist the candidate secret if the cloud confirmed a valid status.
+    # This prevents an attacker on loopback from injecting an arbitrary string.
+    if _payload_secret_candidate:
+        _cloud_confirmed_status = str(cloud_state.get('status') or '').strip().lower()
+        if _cloud_confirmed_status in ('approved', 'provisioned', 'active', 'pending_approval'):
+            state['provision_secret'] = _payload_secret_candidate
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            _local_mode_save_provision_state(state)
+            logger.info(
+                f"Browser-injected provision_secret accepted and persisted "
+                f"(cloud confirmed status={_cloud_confirmed_status})"
+            )
+        else:
+            logger.warning(
+                f"Browser-injected provision_secret rejected: "
+                f"cloud returned status={_cloud_confirmed_status} "
+                f"(code={cloud_state.get('status_code')})"
+            )
 
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
     if authoritative_status in ('pending_approval', 'rejected'):

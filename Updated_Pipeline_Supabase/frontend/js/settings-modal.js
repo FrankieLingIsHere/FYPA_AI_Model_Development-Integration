@@ -1185,6 +1185,31 @@ const GlobalSettingsModal = {
         const btn = this.getEl('globalRequestProvisioningBtn');
         if (!btn || btn.disabled) return;
 
+        // --- Anti-flood: 60-second cooldown between requests ---
+        const PROVISION_REQUEST_COOLDOWN_MS = 60 * 1000;
+        const now = Date.now();
+        if (this._lastProvisionRequestAt && (now - this._lastProvisionRequestAt) < PROVISION_REQUEST_COOLDOWN_MS) {
+            const remainSec = Math.ceil((PROVISION_REQUEST_COOLDOWN_MS - (now - this._lastProvisionRequestAt)) / 1000);
+            this.showNotification(
+                `Please wait ${remainSec}s before sending another provisioning request.`,
+                'warning'
+            );
+            return;
+        }
+
+        // --- Confirmation for already-approved devices ---
+        const currentStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+        if (currentStatus === 'approved' || currentStatus === 'provisioned' || currentStatus === 'active') {
+            const confirmed = window.confirm(
+                'This device is already approved. Re-requesting will rotate your '
+                + 'provisioning credentials and send a new notification to the admin.\n\n'
+                + 'Only do this if your local installer is broken and you need fresh credentials.\n\n'
+                + 'Continue?'
+            );
+            if (!confirmed) return;
+        }
+
+        this._lastProvisionRequestAt = now;
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
 

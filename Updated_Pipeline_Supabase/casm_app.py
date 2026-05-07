@@ -14547,6 +14547,7 @@ def _save_pending_devices_to_db(
 
     try:
         with conn.cursor() as cur:
+            _apply_provisioning_query_timeouts(cur)
             for machine_id, record in data.items():
                 normalized_machine_id = str(machine_id or '').strip()
                 if not normalized_machine_id:
@@ -15902,7 +15903,9 @@ def provision_request():
 
     provision_secret = secrets.token_urlsafe(48)
 
-    devices = _load_pending_devices()
+    # Reuse the already-loaded pending-devices dict from the auth-check phase above
+    # to avoid a second synchronous Supabase DB round-trip on every provision request.
+    devices = _existing_devices_for_auth_check
     existing = devices.get(machine_id) if isinstance(devices.get(machine_id), dict) else {}
     existing_status = str((existing or {}).get('status') or 'pending').strip().lower()
     existing_requested_at = str((existing or {}).get('requested_at') or '').strip()

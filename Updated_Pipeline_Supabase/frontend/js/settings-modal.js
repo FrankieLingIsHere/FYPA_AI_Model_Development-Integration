@@ -423,6 +423,7 @@ const GlobalSettingsModal = {
         if (normalized === 'active') return 'active';
         if (normalized === 'approved') return 'approved';
         if (normalized === 'provisioned') return 'provisioned';
+        if (normalized === 'validation_required' || normalized === 'reauthorize_required') return 'validation_required';
         if (normalized === 'rejected') return 'rejected';
         if (normalized === 'error') return 'error';
         return normalized || 'idle';
@@ -759,15 +760,15 @@ const GlobalSettingsModal = {
                 this.saveRemoteProvisionState({
                     machineId,
                     provisionSecret: '',
-                    status: 'rejected',
+                    status: 'validation_required',
                     adminPortalUrl
                 });
                 return {
                     success: false,
-                    status: 'rejected',
+                    status: 'validation_required',
                     machine_id: machineId,
                     admin_portal_url: adminPortalUrl,
-                    error: String((statusResult && statusResult.error) || 'Cached provision_secret is no longer valid; re-request provisioning.')
+                    error: String((statusResult && statusResult.error) || 'Provisioning validation expired; re-request validation for this approved device.')
                 };
             }
 
@@ -1014,6 +1015,25 @@ const GlobalSettingsModal = {
             if ((normalizedStatus === 'idle' || normalizedStatus === 'credentials_present') && heartbeatProvisionStatus !== 'idle') {
                 normalizedStatus = heartbeatProvisionStatus;
             }
+
+            const heartbeatActive = !!(
+                normalizedHeartbeat.available
+                && normalizedHeartbeat.isRecent
+                && normalizedHeartbeat.localModePossible
+            );
+            const heartbeatIsApproved = (
+                heartbeatProvisionStatus === 'approved'
+                || heartbeatProvisionStatus === 'provisioned'
+                || heartbeatProvisionStatus === 'active'
+            );
+            const statusIsApproved = (
+                normalizedStatus === 'approved'
+                || normalizedStatus === 'provisioned'
+                || normalizedStatus === 'active'
+            );
+            if (heartbeatActive && (heartbeatIsApproved || statusIsApproved)) {
+                normalizedStatus = 'active';
+            }
         }
 
         this.localProvisionState = {
@@ -1155,6 +1175,11 @@ const GlobalSettingsModal = {
             return;
         }
 
+        if (status === 'validation_required') {
+            btn.title = 'Installer access needs a fresh validation request before re-download is available.';
+            return;
+        }
+
         btn.title = 'Installer re-issue is available after device approval.';
     },
 
@@ -1164,6 +1189,7 @@ const GlobalSettingsModal = {
         const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
         const isApproved = status === 'approved' || status === 'provisioned' || status === 'active';
         const isPending = status === 'pending_approval';
+        const needsValidation = status === 'validation_required';
 
         btn.disabled = isPending;
         btn.style.opacity = isPending ? '0.45' : '';
@@ -1175,6 +1201,9 @@ const GlobalSettingsModal = {
         } else if (isPending) {
             btn.title = 'Provisioning request already submitted. Waiting for admin approval.';
             btn.innerHTML = '<i class="fas fa-clock"></i> Pending Approval…';
+        } else if (needsValidation) {
+            btn.title = 'Send a fresh validation request for this previously approved device.';
+            btn.innerHTML = '<i class="fas fa-shield-alt"></i> Re-Validate Provisioning';
         } else {
             btn.title = 'Send a provisioning request to the administrator for approval.';
             btn.innerHTML = '<i class="fas fa-paper-plane"></i> Request Provisioning';
@@ -1317,6 +1346,12 @@ const GlobalSettingsModal = {
 
         if (status === 'credentials_present') {
             statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
+            statusEl.style.color = 'var(--warning-color)';
+            return;
+        }
+
+        if (status === 'validation_required') {
+            statusEl.textContent = 'This device appears known, but the stored validation token could not be confirmed. This is not an admin rejection; use Re-Validate Provisioning to refresh access.';
             statusEl.style.color = 'var(--warning-color)';
             return;
         }
@@ -1637,7 +1672,7 @@ const GlobalSettingsModal = {
                     allowRequest: false,
                     machineIdHint: this.localProvisionState.machineId
                 });
-                if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'rejected')) {
+                if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'validation_required' || remoteState.status === 'rejected')) {
                     this.syncLocalProvisionStateFromPayload(remoteState);
                 }
             }
@@ -1655,7 +1690,7 @@ const GlobalSettingsModal = {
                 allowRequest: false,
                 machineIdHint: this.localProvisionState.machineId
             });
-            if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'rejected')) {
+            if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'validation_required' || remoteState.status === 'rejected')) {
                 this.syncLocalProvisionStateFromPayload(remoteState);
             }
         }
@@ -1706,17 +1741,18 @@ const GlobalSettingsModal = {
                 machineId: (this.localProvisionState && this.localProvisionState.machineId) || ''
             });
             const local = (options && options.local) || {};
-            const cloudHeartbeat = (options && options.cloud_local_heartbeat) || {};
-            const heartbeatMachineId = String(cloudHeartbeat.machine_id || '').trim();
-            const heartbeatRecent = !!cloudHeartbeat.is_recent;
-            const heartbeatFreshWindow = Number(cloudHeartbeat.fresh_within_seconds || 0) || 0;
+            const rawCloudHeartbeat = (options && options.cloud_local_heartbeat) || {};
+            const cloudHeartbeat = this.normalizeCloudHeartbeatPayload(rawCloudHeartbeat);
+            const heartbeatMachineId = cloudHeartbeat.machineId;
+            const heartbeatRecent = !!cloudHeartbeat.isRecent;
+            const heartbeatFreshWindow = Number(cloudHeartbeat.freshWithinSeconds || 0) || 0;
             this.syncLocalProvisionStateFromPayload({
                 machine_id: heartbeatMachineId || this.localProvisionState.machineId,
-                cloud_local_heartbeat: cloudHeartbeat
+                cloud_local_heartbeat: rawCloudHeartbeat
             });
             const useHeartbeatDiagnostics = isLikelyRemoteBackend && heartbeatRecent;
             let ready = useHeartbeatDiagnostics
-                ? !!cloudHeartbeat.local_mode_possible
+                ? !!cloudHeartbeat.localModePossible
                 : !!local.local_mode_possible;
 
             if (!ready) {
@@ -1804,14 +1840,18 @@ const GlobalSettingsModal = {
                 ? await this.refreshRemoteProvisioningStatus({
                     allowRequest: false,   // checkup is health-check only — use the dedicated button to request provisioning
                     machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
-                    cloud_local_heartbeat: cloudHeartbeat
+                    cloud_local_heartbeat: rawCloudHeartbeat
                 })
                 : await API.autoProvisionLocalModeCredentials({
                     provision_secret: this.getStoredProvisionSecretForMachine(heartbeatMachineId || this.localProvisionState.machineId)
                 });
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
-            const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
+            const status = this.normalizeLocalProvisionStatus(
+                (this.localProvisionState && this.localProvisionState.status)
+                || (provisionResult && provisionResult.status)
+                || 'idle'
+            );
             if (status === 'active') {
                 this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
             } else if (status === 'provisioned') {
@@ -1823,6 +1863,8 @@ const GlobalSettingsModal = {
             } else if (status === 'pending_approval') {
                 this.setProviderStatus('Provisioning request is pending admin approval.', 'warning');
                 this.ensureLocalProvisionPolling();
+            } else if (status === 'validation_required') {
+                this.setProviderStatus('Device needs fresh provisioning validation. This is not an admin rejection; use "Re-Validate Provisioning" below.', 'warning');
             } else if (status === 'rejected' && isLikelyRemoteBackend) {
                 // Only show 'rejected' immediately when connected to the remote backend
                 // (where the response is authoritative). When connected to the local
@@ -1847,6 +1889,7 @@ const GlobalSettingsModal = {
                     || status === 'approved'
                     || status === 'provisioned'
                     || status === 'active'
+                    || status === 'validation_required'
                     || status === 'rejected'
                 );
             if (!shouldSkipRemoteRefresh) {
@@ -1894,6 +1937,8 @@ const GlobalSettingsModal = {
                 this.setProviderStatus('Provisioning completed. Cloud sync is now available.', 'success');
             } else if (finalStatus === 'approved') {
                 this.setProviderStatus('Device is approved. You can re-issue installer BAT from this panel.', 'success');
+            } else if (finalStatus === 'validation_required') {
+                this.setProviderStatus('Device needs fresh provisioning validation. Use "Re-Validate Provisioning" to refresh access.', 'warning');
             } else if (finalStatus === 'rejected') {
                 this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
             }
@@ -2051,7 +2096,7 @@ const GlobalSettingsModal = {
                     : await API.autoProvisionLocalModeCredentials();
                 this.syncLocalProvisionStateFromPayload(pollResult || {});
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
-                if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'active' || pollStatus === 'credentials_present' || pollStatus === 'rejected') {
+                if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'active' || pollStatus === 'credentials_present' || pollStatus === 'validation_required' || pollStatus === 'rejected') {
                     this.stopLocalProvisionPolling();
                     return;
                 }
@@ -2192,6 +2237,11 @@ const GlobalSettingsModal = {
 
             if (status === 'rejected') {
                 this.showNotification('Provision request was rejected. Contact admin and rerun Local Mode Checkup.', 'error');
+                return;
+            }
+
+            if (status === 'validation_required') {
+                this.showNotification('Provisioning validation needs refresh. Use Re-Validate Provisioning first.', 'warning');
                 return;
             }
 

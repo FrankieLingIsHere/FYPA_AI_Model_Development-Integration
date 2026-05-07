@@ -406,6 +406,7 @@
             <div class="handbook-body">
                 <div class="handbook-nav" role="tablist" aria-label="Handbook sections">
                     <button class="handbook-link active" data-page="intro" role="tab"><i class="fas fa-flag"></i><span>Introduction</span></button>
+                    <button class="handbook-link" data-page="workflow" role="tab"><i class="fas fa-route"></i><span>Usage Stages</span></button>
                     <button class="handbook-link" data-page="ppe" role="tab"><i class="fas fa-hard-hat"></i><span>PPE Guidelines</span></button>
                     <button class="handbook-link" data-page="live" role="tab"><i class="fas fa-video"></i><span>Live Monitoring</span></button>
                     <button class="handbook-link" data-page="alerts" role="tab"><i class="fas fa-volume-up"></i><span>Voice Alerts</span></button>
@@ -417,6 +418,71 @@
                     <div class="handbook-page active" id="handbook-intro">
                         <h3>Welcome</h3>
                         <p>Welcome to the CASM PPE Safety Monitor Manual Handbook. This handbook explains how to operate the safety monitoring system and answers common questions.</p>
+                    </div>
+                    <div class="handbook-page" id="handbook-workflow">
+                        <h3>Usage Stages</h3>
+                        <p>Move through the stages below when setting up a monitoring session, reviewing evidence, or preparing a PC for local mode.</p>
+
+                        <div class="usage-stage-shell">
+                            <div class="usage-stage-tabs" role="tablist" aria-label="Usage tutorial stages">
+                                <button class="usage-stage-tab active" type="button" data-stage="prep" role="tab" aria-selected="true">
+                                    <i class="fas fa-toolbox"></i>
+                                    <span>Prepare</span>
+                                </button>
+                                <button class="usage-stage-tab" type="button" data-stage="live" role="tab" aria-selected="false">
+                                    <i class="fas fa-video"></i>
+                                    <span>Monitor</span>
+                                </button>
+                                <button class="usage-stage-tab" type="button" data-stage="reports" role="tab" aria-selected="false">
+                                    <i class="fas fa-file-alt"></i>
+                                    <span>Reports</span>
+                                </button>
+                                <button class="usage-stage-tab" type="button" data-stage="local" role="tab" aria-selected="false">
+                                    <i class="fas fa-laptop-code"></i>
+                                    <span>Local Mode</span>
+                                </button>
+                            </div>
+
+                            <div class="usage-stage-panel active" data-stage-panel="prep" role="tabpanel">
+                                <h4>Preliminary Hardware</h4>
+                                <ul>
+                                    <li>Use a Windows PC with a webcam or RealSense camera connected before starting the local backend.</li>
+                                    <li>Keep stable Wi-Fi available for cloud sync, first-time provisioning, and report upload.</li>
+                                    <li>For local AI mode, install Ollama and keep the configured local model available before relying on offline generation.</li>
+                                    <li>Allow browser camera permission when using browser-camera monitoring.</li>
+                                </ul>
+                            </div>
+
+                            <div class="usage-stage-panel" data-stage-panel="live" role="tabpanel">
+                                <h4>Live Monitoring Flow</h4>
+                                <ol>
+                                    <li>Open <strong>Live</strong>, choose the camera source, then confirm the preview is visible.</li>
+                                    <li>Click <strong>Start</strong> and keep the worker area inside the camera frame.</li>
+                                    <li>Watch for bounding boxes, voice alerts, and violation notifications.</li>
+                                    <li>Click <strong>Stop</strong> before switching camera source or closing the session.</li>
+                                </ol>
+                            </div>
+
+                            <div class="usage-stage-panel" data-stage-panel="reports" role="tabpanel">
+                                <h4>Reading Reports</h4>
+                                <ul>
+                                    <li>Open <strong>Reports</strong> to compare status badges: Queued, Generating, Ready, Failed, or Local Synced.</li>
+                                    <li>Use <strong>Open Report</strong> for completed reports, or <strong>Process/Reprocess Now</strong> when a report needs recovery.</li>
+                                    <li>Check the source badge before opening: Cloud uses the cloud backend, Local uses local files, and Local Synced is a local-origin report uploaded to cloud storage.</li>
+                                    <li>Cached cloud reports can open from browser storage; newly cached reports include embedded evidence images for local viewing.</li>
+                                </ul>
+                            </div>
+
+                            <div class="usage-stage-panel" data-stage-panel="local" role="tabpanel">
+                                <h4>Local Mode Setup</h4>
+                                <ol>
+                                    <li>On the host PC, run Local Mode Checkup from Settings to detect machine ID, backend health, camera readiness, and model readiness.</li>
+                                    <li>If approval is needed, use <strong>Request Provisioning</strong> and wait for admin approval in the cloud device portal.</li>
+                                    <li>After approval, download or re-issue the installer BAT only from the approved machine.</li>
+                                    <li>When Wi-Fi drops, CASM can continue locally; when Wi-Fi returns, synced-local reports queue back to Supabase automatically.</li>
+                                </ol>
+                            </div>
+                        </div>
                     </div>
                     <div class="handbook-page" id="handbook-ppe">
                         <h3>PPE Guidelines</h3>

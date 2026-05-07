@@ -537,6 +537,9 @@ const HomePage = {
         } else if (status === 'pending_approval') {
             setBadge('badge badge-warning', 'Pending Approval');
             messageEl.textContent = 'Approval request is pending. This page updates automatically when admin approves.';
+        } else if (status === 'validation_required') {
+            setBadge('badge badge-warning', 'Validation Needed');
+            messageEl.textContent = 'This device needs fresh provisioning validation. It was not rejected; open Local Mode Checkup to re-validate access.';
         } else if (status === 'rejected') {
             setBadge('badge badge-danger', 'Rejected');
             messageEl.textContent = 'Approval request was rejected. Open Local Mode Checkup to submit a new request.';

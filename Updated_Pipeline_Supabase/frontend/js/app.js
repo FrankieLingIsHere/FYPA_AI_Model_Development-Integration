@@ -334,6 +334,9 @@ function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     if (normalized === 'provisioned') {
         return 'provisioned';
     }
+    if (normalized === 'validation_required' || normalized === 'reauthorize_required') {
+        return 'validation_required';
+    }
     if (normalized === 'rejected') {
         return 'rejected';
     }
@@ -461,6 +464,25 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             status = heartbeatProvisionStatus;
         }
 
+        const heartbeatActive = !!(
+            cloudHeartbeat.available
+            && cloudHeartbeat.isRecent
+            && cloudHeartbeat.localModePossible
+        );
+        const heartbeatIsApproved = (
+            heartbeatProvisionStatus === 'approved'
+            || heartbeatProvisionStatus === 'provisioned'
+            || heartbeatProvisionStatus === 'active'
+        );
+        const statusIsApproved = (
+            status === 'approved'
+            || status === 'provisioned'
+            || status === 'active'
+        );
+        if (heartbeatActive && (heartbeatIsApproved || statusIsApproved)) {
+            status = 'active';
+        }
+
         if (!machineId && cloudHeartbeat.machineId) {
             machineId = String(cloudHeartbeat.machineId || '').trim();
         }
@@ -542,6 +564,8 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
         notifyApp('Local mode approval completed. Cloud sync credentials are active.', 'success');
     } else if (nextState.status === 'approved') {
         notifyApp('Local mode request is approved. You can re-issue installer access for this machine.', 'success');
+    } else if (nextState.status === 'validation_required') {
+        notifyApp('Local mode validation needs refresh. Use Settings to re-validate provisioning.', 'warning');
     } else if (nextState.status === 'rejected') {
         notifyApp('Local mode approval request was rejected. Contact admin and rerun checkup.', 'error');
     } else if (nextState.status === 'pending_approval') {
@@ -1854,6 +1878,25 @@ document.addEventListener('DOMContentLoaded', () => {
         item.classList.toggle('active');
     });
 
+    const activateUsageStage = (stageKey) => {
+        if (!stageKey) return;
+        const stageTabs = Array.from(modal.querySelectorAll('.usage-stage-tab'));
+        const stagePanels = Array.from(modal.querySelectorAll('.usage-stage-panel'));
+        stageTabs.forEach((tab) => {
+            const isActive = tab.dataset.stage === stageKey;
+            tab.classList.toggle('active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+        stagePanels.forEach((panel) => {
+            panel.classList.toggle('active', panel.dataset.stagePanel === stageKey);
+        });
+    };
+
+    modal.addEventListener('click', (event) => {
+        const stageTab = event.target.closest('.usage-stage-tab');
+        if (!stageTab || !modal.contains(stageTab)) return;
+        activateUsageStage(stageTab.dataset.stage);
+    });
 
     const handbookLinks = Array.from(modal.querySelectorAll('.handbook-link'));
     const handbookPages = Array.from(modal.querySelectorAll('.handbook-page'));

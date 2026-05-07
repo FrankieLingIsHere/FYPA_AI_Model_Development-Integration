@@ -810,7 +810,8 @@ const API = {
             if (/Cloud report details are unavailable while offline/i.test(html)) {
                 return false;
             }
-            const cachedHtml = this.prepareCachedReportHtml(html, url);
+            const preparedHtml = this.prepareCachedReportHtml(html, url);
+            const cachedHtml = await this.inlineCachedReportImages(preparedHtml, rid, sourceHint, url);
 
             await this.writeJsonCache(this.reportHtmlCacheScope(rid, sourceHint), {
                 report_id: rid,
@@ -823,6 +824,96 @@ const API = {
         } catch (error) {
             return false;
         }
+    },
+
+    async inlineCachedReportImages(html, reportId, sourceHint = null, sourceUrl = '') {
+        const raw = String(html || '');
+        const rid = String(reportId || '').trim();
+        if (!raw || !rid || typeof DOMParser === 'undefined') return raw;
+
+        let documentRef = null;
+        try {
+            documentRef = new DOMParser().parseFromString(raw, 'text/html');
+        } catch (error) {
+            return raw;
+        }
+        if (!documentRef || !documentRef.documentElement) return raw;
+
+        const imageCache = new Map();
+        const resolveFilename = (src) => {
+            const rawSrc = String(src || '').trim();
+            if (!rawSrc || /^data:/i.test(rawSrc)) return '';
+
+            try {
+                const resolved = new URL(rawSrc, sourceUrl || window.location.origin);
+                const parts = String(resolved.pathname || '').split('/').filter(Boolean);
+                const filename = String(parts[parts.length - 1] || '').toLowerCase();
+                const idFromImageRoute = parts.length >= 3 && parts[0] === 'image'
+                    ? String(parts[1] || '')
+                    : '';
+                if (
+                    (filename === 'original.jpg' || filename === 'annotated.jpg')
+                    && (!idFromImageRoute || idFromImageRoute === rid)
+                ) {
+                    return filename;
+                }
+            } catch (error) {
+                const match = rawSrc.match(/(?:^|\/)(original|annotated)\.jpg(?:[?#].*)?$/i);
+                if (match && match[1]) return `${match[1].toLowerCase()}.jpg`;
+            }
+            return '';
+        };
+
+        const images = Array.from(documentRef.querySelectorAll('img[src]'));
+        await Promise.all(images.map(async (img) => {
+            const originalSrc = img.getAttribute('src') || '';
+            const filename = resolveFilename(originalSrc);
+            if (!filename) return;
+
+            if (!imageCache.has(filename)) {
+                imageCache.set(filename, await this.fetchReportImageDataUrl(rid, filename, sourceHint));
+            }
+            const dataUrl = imageCache.get(filename);
+            if (!dataUrl) return;
+
+            img.setAttribute('data-casm-cached-src', originalSrc);
+            img.setAttribute('src', dataUrl);
+        }));
+
+        return `<!DOCTYPE html>\n${documentRef.documentElement.outerHTML}`;
+    },
+
+    async fetchReportImageDataUrl(reportId, filename, sourceHint = null) {
+        const rid = String(reportId || '').trim();
+        const safeFilename = String(filename || '').trim().toLowerCase();
+        if (!rid || (safeFilename !== 'original.jpg' && safeFilename !== 'annotated.jpg')) return '';
+
+        try {
+            const response = await this._fetchWithTimeout(this.getImageUrl(rid, safeFilename, sourceHint), {
+                method: 'GET',
+                cache: 'no-store'
+            }, 8000);
+            if (!response || !response.ok) return '';
+
+            const blob = await response.blob();
+            if (!blob || !Number.isFinite(blob.size) || blob.size <= 0) return '';
+            return await this.blobToDataUrl(blob);
+        } catch (error) {
+            return '';
+        }
+    },
+
+    blobToDataUrl(blob) {
+        return new Promise((resolve) => {
+            try {
+                const reader = new FileReader();
+                reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+                reader.onerror = () => resolve('');
+                reader.readAsDataURL(blob);
+            } catch (error) {
+                resolve('');
+            }
+        });
     },
 
     prepareCachedReportHtml(html, sourceUrl) {

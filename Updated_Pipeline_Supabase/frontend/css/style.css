@@ -7070,6 +7070,63 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.usage-stage-shell {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.usage-stage-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.usage-stage-tab {
+    min-height: 58px;
+    border: 0;
+    border-right: 1px solid #e2e8f0;
+    background: transparent;
+    color: #475569;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    font-weight: 700;
+}
+
+.usage-stage-tab:last-child {
+    border-right: 0;
+}
+
+.usage-stage-tab:hover,
+.usage-stage-tab:focus-visible {
+    background: #eef2f7;
+    color: #0f172a;
+    outline: none;
+}
+
+.usage-stage-tab.active {
+    background: #0f766e;
+    color: #ffffff;
+}
+
+.usage-stage-panel {
+    display: none;
+    padding: 1.1rem 1.2rem 1.2rem;
+}
+
+.usage-stage-panel.active {
+    display: block;
+}
+
+.usage-stage-panel h4 {
+    margin-top: 0;
+}
 .handbook-content::-webkit-scrollbar { width: 8px; }
 .handbook-content::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
 .handbook-content::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
@@ -7161,6 +7218,19 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
         padding: 1.05rem 1rem calc(1.4rem + env(safe-area-inset-bottom, 0px)) !important;
     }
     .handbook-page h3 { font-size: 1.15rem; }
+    .usage-stage-tabs {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .usage-stage-tab {
+        min-height: 52px;
+        font-size: 0.86rem;
+    }
+    .usage-stage-tab:nth-child(2) {
+        border-right: 0;
+    }
+    .usage-stage-tab:nth-child(-n + 2) {
+        border-bottom: 1px solid #e2e8f0;
+    }
 }
 
 /* Make sure the legacy phone-device "page picker" select stays hidden — we use pills now. */

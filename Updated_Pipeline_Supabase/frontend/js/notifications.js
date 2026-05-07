@@ -29,13 +29,32 @@ const NotificationManager = {
         return (Date.now() - this._bootTs) < this.QUIET_STARTUP_MS;
     },
 
+    isLocalRuntimeContext() {
+        try {
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+            const base = (typeof API_CONFIG !== 'undefined' && API_CONFIG && API_CONFIG.BASE_URL)
+                ? String(API_CONFIG.BASE_URL || '')
+                : '';
+            const resolved = new URL(base || window.location.origin, window.location.origin);
+            const host = String(resolved.hostname || '').toLowerCase();
+            return host === 'localhost'
+                || host === '127.0.0.1'
+                || host === '0.0.0.0'
+                || host.endsWith('.local');
+        } catch (_) {
+            return false;
+        }
+    },
+
     // Decide whether a toast should pop on screen, or be silently logged
     // to the bell. Returns true = silent (history only).
     shouldRouteToHistoryOnly(type, options = {}) {
         if (options.forceToast === true) return false;
+        if (options.action) return false;
         const isMobile = this.isMobileViewport();
         const quiet = this.inStartupQuietWindow();
         const lowValue = (type === 'info' || type === 'success' || type === 'report');
+        if (lowValue && this.isLocalRuntimeContext()) return false;
         // Mobile + low-value -> always silent (bell only).
         if (isMobile && lowValue) return true;
         // Any platform + still inside startup quiet window + low-value -> silent.

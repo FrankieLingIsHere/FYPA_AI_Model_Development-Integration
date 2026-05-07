@@ -1242,6 +1242,9 @@ function initializeAdaptivePipelineModeManager() {
             if (navigator.onLine === false) {
                 return null;
             }
+            if (this.backlogSyncInFlight || this.switchInFlight) {
+                return null;
+            }
             if (!this.canAttemptDirectReconnectSync(force)) {
                 return null;
             }

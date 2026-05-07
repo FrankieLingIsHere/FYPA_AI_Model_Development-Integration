@@ -474,7 +474,9 @@ const ReportsPage = {
                 existing.has_report = !!existing.has_report || !!item.has_report;
 
                 let mergedScope = existingScope || pendingScope || 'cloud';
-                if (pendingScope === 'synced_local') {
+                if (existingScope === 'synced_local' && pendingScope === 'cloud') {
+                    mergedScope = 'synced_local';
+                } else if (pendingScope === 'synced_local') {
                     mergedScope = 'synced_local';
                 } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
                     mergedScope = 'shared';
@@ -485,7 +487,9 @@ const ReportsPage = {
                 }
 
                 existing.source_scope = mergedScope;
-                if (mergedScope === pendingScope && pendingLabel) {
+                if (mergedScope === 'synced_local') {
+                    existing.source_label = 'Local Synced';
+                } else if (mergedScope === pendingScope && pendingLabel) {
                     existing.source_label = pendingLabel;
                 } else {
                     existing.source_label = String(existing.source_label || '').trim() || this.sourceLabelForScope(mergedScope);
@@ -1704,7 +1708,8 @@ const ReportsPage = {
 
         try {
             const result = await API.generateReportNow(reportId, {
-                force: !!options.force
+                force: !!options.force,
+                source: options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null
             });
             if (!result || !result.success) {
                 runtime.retryCount += 1;

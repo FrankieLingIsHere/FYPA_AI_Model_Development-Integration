@@ -1331,17 +1331,59 @@ const API = {
         });
     },
 
+    mergeOptimisticReportRecord(existing = null, incoming = null) {
+        if (!existing || typeof existing !== 'object') return incoming;
+        if (!incoming || typeof incoming !== 'object') return existing;
+
+        const merged = {
+            ...existing,
+            ...incoming
+        };
+
+        ['has_original', 'has_annotated', 'has_report', 'has_local_artifacts', 'has_local_report'].forEach((key) => {
+            if (existing[key] === true || incoming[key] === true) {
+                merged[key] = true;
+            }
+        });
+
+        const existingScope = this.inferReportSourceScope(existing);
+        const incomingScope = this.inferReportSourceScope(incoming);
+        const existingLabel = String(existing.source_label || '').trim().toLowerCase();
+        const incomingLabel = String(incoming.source_label || '').trim().toLowerCase();
+        const syncedLocal = existingScope === 'synced_local'
+            || incomingScope === 'synced_local'
+            || existingLabel.includes('local synced')
+            || incomingLabel.includes('local synced');
+
+        if (syncedLocal) {
+            merged.source_scope = 'synced_local';
+            merged.source_label = 'Local Synced';
+            merged.origin = merged.origin || existing.origin || incoming.origin || 'local_synced';
+            merged.sync_source = merged.sync_source || existing.sync_source || incoming.sync_source || 'sync_local_cache';
+            return merged;
+        }
+
+        const strictLocal = this.isStrictLocalOriginReport(existing) || this.isStrictLocalOriginReport(incoming);
+        if (strictLocal && incomingScope !== 'cloud' && existingScope !== 'cloud') {
+            merged.source_scope = 'local';
+            merged.source_label = String(merged.source_label || '').trim() || 'Local';
+        }
+
+        return merged;
+    },
+
     _mergeOptimistically(listA, listB, maxLimit = 1000) {
         if (!Array.isArray(listA)) listA = [];
         if (!Array.isArray(listB)) listB = [];
         const byId = new Map();
 
-        // listB overwrites listA
         listA.forEach(v => {
             if (v && v.report_id) byId.set(v.report_id, v);
         });
         listB.forEach(v => {
-            if (v && v.report_id) byId.set(v.report_id, v);
+            if (!v || !v.report_id) return;
+            const existing = byId.get(v.report_id);
+            byId.set(v.report_id, existing ? this.mergeOptimisticReportRecord(existing, v) : v);
         });
 
         const merged = Array.from(byId.values());
@@ -1750,7 +1792,11 @@ const API = {
 
     async generateReportNow(reportId, options = {}) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}/api/report/${reportId}/generate-now`, {
+            const sourceHint = options.source || options.violation || options.sourceHint || null;
+            const url = sourceHint
+                ? this.buildReportScopedUrl(`/api/report/${reportId}/generate-now`, sourceHint)
+                : `${API_CONFIG.BASE_URL}/api/report/${reportId}/generate-now`;
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

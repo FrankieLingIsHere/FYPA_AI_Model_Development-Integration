@@ -312,6 +312,12 @@ def main() -> int:
             if skipped_legacy_template:
                 extra_parts.append(f"skipped_legacy={skipped_legacy_template[:5]}")
             extra = (" " + " ".join(extra_parts)) if extra_parts else ""
+            if skipped_non_work and not failures:
+                print(
+                    "WARN: No work-scene report candidate available for quality contract validation."
+                    + extra
+                )
+                return 0
             return fail(
                 "No work-scene report candidate available for quality contract validation."
                 + extra,

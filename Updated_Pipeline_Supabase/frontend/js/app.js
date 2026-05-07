@@ -1,7 +1,8 @@
 const STARTUP_STATUS_ENDPOINT = '/api/system/startup-status';
-const STARTUP_POLL_INTERVAL_MS = 1200;
+const STARTUP_POLL_INTERVAL_MS = 5000;
 const BACKEND_PROBE_TIMEOUT_MS = 2600;
 let appBootstrapped = false;
+let startupGateInFlight = false;
 let networkIndicatorBootstrapped = false;
 let pwaBootstrapped = false;
 let adaptivePipelineBootstrapped = false;
@@ -738,6 +739,11 @@ function ensurePwaDocumentMarkers() {
 }
 
 async function initializeWithStartupGate() {
+    if (startupGateInFlight) {
+        return;
+    }
+    startupGateInFlight = true;
+    try {
     const body = document.body;
     const retryButton = document.getElementById('startupRetryBtn');
 
@@ -800,6 +806,9 @@ async function initializeWithStartupGate() {
     appBootstrapped = true;
     body.classList.remove('startup-loading');
     console.log('Application ready.');
+    } finally {
+        startupGateInFlight = false;
+    }
 }
 
 async function waitForStartupReady() {
@@ -808,7 +817,17 @@ async function waitForStartupReady() {
 
     while (Date.now() < timeoutAt) {
         try {
-            const response = await fetch(`${API_CONFIG.BASE_URL}${STARTUP_STATUS_ENDPOINT}`, { cache: 'no-store' });
+            const startupController = new AbortController();
+            const startupTimeoutId = setTimeout(() => startupController.abort(), 12000);
+            let response;
+            try {
+                response = await fetch(`${API_CONFIG.BASE_URL}${STARTUP_STATUS_ENDPOINT}`, {
+                    cache: 'no-store',
+                    signal: startupController.signal
+                });
+            } finally {
+                clearTimeout(startupTimeoutId);
+            }
             const payload = await response.json();
             consecutiveFetchFailures = 0;
             updateStartupUi(payload || {});

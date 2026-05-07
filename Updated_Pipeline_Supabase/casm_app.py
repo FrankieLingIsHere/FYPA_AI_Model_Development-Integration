@@ -98,6 +98,12 @@ startup_state = {
         'queue_worker': {'label': 'Queue worker', 'status': 'pending', 'detail': None}
     }
 }
+# Short-lived cache for /api/system/startup-status responses.
+# When many tabs poll simultaneously (common during slow startup), this prevents
+# each request from re-computing the same snapshot and contending for locks.
+_startup_status_response_cache: Dict[str, Any] = {'ts': 0.0, 'data': None, 'code': 202}
+_startup_status_response_cache_lock = Lock()
+_STARTUP_STATUS_CACHE_TTL_SECONDS = 1.5  # serve cached snapshot for up to 1.5s
 startup_auto_provision_thread_lock = Lock()
 startup_auto_provision_thread = None
 local_mode_auto_provision_lock = Lock()
@@ -4979,6 +4985,18 @@ def index():
 def api_startup_status():
     """Expose startup progress so frontend can block UI until system is fully ready."""
     ensure_startup_thread()
+
+    now = time.time()
+    with _startup_status_response_cache_lock:
+        cached = _startup_status_response_cache
+        if cached['data'] is not None and (now - cached['ts']) < _STARTUP_STATUS_CACHE_TTL_SECONDS:
+            response = jsonify(cached['data'])
+            response.status_code = cached['code']
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
+
     snapshot = get_startup_state_snapshot()
     if isinstance(snapshot, dict):
         snapshot['runtime'] = {
@@ -4993,6 +5011,12 @@ def api_startup_status():
         status_code = 500
     elif not snapshot.get('ready'):
         status_code = 202
+
+    with _startup_status_response_cache_lock:
+        _startup_status_response_cache['ts'] = time.time()
+        _startup_status_response_cache['data'] = snapshot
+        _startup_status_response_cache['code'] = status_code
+
     response = jsonify(snapshot)
     response.status_code = status_code
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'

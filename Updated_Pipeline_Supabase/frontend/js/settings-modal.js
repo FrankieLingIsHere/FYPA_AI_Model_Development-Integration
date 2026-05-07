@@ -2076,11 +2076,14 @@ const GlobalSettingsModal = {
         if (this.localProvisionPollInterval) return;
 
         // Adaptive cadence: poll fast right after the request was submitted so
-        // the UI flips green within ~5s of admin approval, then back off to
+        // the UI flips green within ~30s of admin approval, then back off to
         // avoid hammering the cloud once it's been pending for a while.
-        const FAST_INTERVAL_MS = 5000;     // first ~2 minutes
-        const SLOW_INTERVAL_MS = 15000;    // after that
-        const FAST_WINDOW_MS = 2 * 60 * 1000;
+        // NOTE: intervals are intentionally generous — each poll call can take
+        // up to 12s (fetch timeout) so a 5s interval caused hundreds of
+        // overlapping/queued requests in the browser's network tab.
+        const FAST_INTERVAL_MS = 30000;    // first ~5 minutes
+        const SLOW_INTERVAL_MS = 60000;    // after that
+        const FAST_WINDOW_MS = 5 * 60 * 1000;
         const startedAt = Date.now();
         let currentIntervalMs = FAST_INTERVAL_MS;
 
@@ -2095,7 +2098,12 @@ const GlobalSettingsModal = {
         };
 
         const tick = async () => {
-            if (!this.isOpen) return;
+            // Stop polling entirely if the modal was closed — don't resume
+            // until ensureLocalProvisionPolling() is called again on next open.
+            if (!this.isOpen) {
+                this.stopLocalProvisionPolling();
+                return;
+            }
 
             const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
             if (status !== 'pending_approval') {

@@ -8268,7 +8268,7 @@ def _send_local_mode_cloud_heartbeat_once(
             cloud_url=cloud_url,
             machine_id=machine_id,
             provision_secret=provision_secret,
-            timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+            timeout_seconds=min(8, max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))),
         )
         authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
@@ -8698,11 +8698,17 @@ def api_local_mode_provisioning_status():
     if not machine_id and heartbeat_machine_id:
         machine_id = heartbeat_machine_id
 
+    # Cap the outbound status-poll timeout well below the frontend's
+    # 12 s _fetchWithTimeout so the endpoint always responds before the
+    # browser aborts the request and retries.  The old default (20 s) caused
+    # the browser to cancel the request at 12 s, accumulating thousands of
+    # pending/canceled requests in the network tab when the modal was open.
+    _status_poll_timeout = min(8, max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)))
     cloud_state = _local_mode_fetch_authoritative_status(
         cloud_url=cloud_url,
         machine_id=machine_id,
         provision_secret=provision_secret,
-        timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+        timeout_seconds=_status_poll_timeout,
     )
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
 
@@ -8884,7 +8890,7 @@ def api_local_mode_installer_redirect():
                 cloud_url=cloud_url,
                 machine_id=machine_id,
                 provision_secret=provision_secret,
-                timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+                timeout_seconds=min(8, max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))),
             )
             live_status = str(live_check.get('status') or '').strip().lower()
             if live_status in ('approved', 'provisioned', 'active'):
@@ -9010,7 +9016,7 @@ def _api_local_mode_auto_provisioning_impl():
             cloud_url=cloud_url,
             machine_id=machine_id,
             provision_secret=provision_secret,
-            timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
+            timeout_seconds=min(8, max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))),
         )
 
     # --- Deferred commit of browser-injected secret ---

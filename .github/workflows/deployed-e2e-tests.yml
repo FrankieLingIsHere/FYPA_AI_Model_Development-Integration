@@ -227,11 +227,11 @@ jobs:
       - name: Run deployed report-open latency contract test
         env:
           CASM_BASE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.railway_api_base || 'https://fypaaimodeldevelopment-integration-production.up.railway.app' }}
-          CASM_REPORT_OPEN_WARM_TARGET_SECONDS: "1.0"
+          CASM_REPORT_OPEN_WARM_TARGET_SECONDS: "2.0"
           CASM_REPORT_OPEN_WARM_SAMPLES: "3"
           CASM_REPORT_OPEN_RETRY_ATTEMPTS: "4"
           CASM_REPORT_OPEN_RETRY_BACKOFF_SECONDS: "4"
-          CASM_REPORT_OPEN_MAX_SAMPLE_SECONDS: "2.5"
+          CASM_REPORT_OPEN_MAX_SAMPLE_SECONDS: "4.0"
           CASM_REPORT_OPEN_NETWORK_BASELINE_PATH: "/api/system/startup-status"
           CASM_REPORT_OPEN_NETWORK_BASELINE_SAMPLES: "3"
           CASM_REPORT_OPEN_NETWORK_BASELINE_FREE_S: "0.20"

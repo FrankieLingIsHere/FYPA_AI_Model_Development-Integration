@@ -1926,6 +1926,9 @@ const API = {
             if (options.cloudUrl) {
                 payload.cloud_url = String(options.cloudUrl).trim();
             }
+            if (options.provision_secret) {
+                payload.provision_secret = String(options.provision_secret).trim();
+            }
 
             const response = await this._fetchWithTimeout(`${API_CONFIG.BASE_URL}/api/local-mode/provisioning/auto`, {
                 method: 'POST',

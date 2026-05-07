@@ -1165,13 +1165,13 @@ const GlobalSettingsModal = {
         const isApproved = status === 'approved' || status === 'provisioned' || status === 'active';
         const isPending = status === 'pending_approval';
 
-        btn.disabled = isApproved || isPending;
-        btn.style.opacity = (isApproved || isPending) ? '0.45' : '';
-        btn.style.cursor = (isApproved || isPending) ? 'not-allowed' : '';
+        btn.disabled = isPending;
+        btn.style.opacity = isPending ? '0.45' : '';
+        btn.style.cursor = isPending ? 'not-allowed' : '';
 
         if (isApproved) {
-            btn.title = 'Device is already approved — no provisioning request needed.';
-            btn.innerHTML = '<i class="fas fa-check-circle"></i> Already Approved';
+            btn.title = 'Device is already approved. Click to force a new request (rotates credentials).';
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Re-Request Provisioning';
         } else if (isPending) {
             btn.title = 'Provisioning request already submitted. Waiting for admin approval.';
             btn.innerHTML = '<i class="fas fa-clock"></i> Pending Approval…';
@@ -1781,7 +1781,9 @@ const GlobalSettingsModal = {
                     machineIdHint: heartbeatMachineId || this.localProvisionState.machineId,
                     cloud_local_heartbeat: cloudHeartbeat
                 })
-                : await API.autoProvisionLocalModeCredentials();
+                : await API.autoProvisionLocalModeCredentials({
+                    provision_secret: this.getStoredProvisionSecretForMachine(heartbeatMachineId || this.localProvisionState.machineId)
+                });
             this.syncLocalProvisionStateFromPayload(provisionResult || {});
 
             const status = this.normalizeLocalProvisionStatus((provisionResult && provisionResult.status) || 'idle');
@@ -2390,179 +2392,6 @@ const GlobalSettingsModal = {
         if (redownloadInstallerBtn) {
             redownloadInstallerBtn.addEventListener('click', async () => {
                 await this.redownloadInstaller();
-                return;
-
-                const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
-                const machineId = String(this.localProvisionState.machineId || '').trim();
-
-                if (!this.canIssueInstallerRedownload(status, machineId)) {
-                    if (!machineId) {
-                        this.showNotification('Run Local Mode Checkup first so this device can obtain machine ID.', 'warning');
-                        return;
-                    }
-
-                    if (status === 'pending_approval') {
-                        this.showNotification('Installer re-download is available after admin approval.', 'warning');
-                        return;
-                    }
-
-                    if (status === 'rejected') {
-                        this.showNotification('Provision request was rejected. Contact admin and rerun Local Mode Checkup.', 'error');
-                        return;
-                    }
-
-                    this.showNotification('Installer re-download is available after this device is approved.', 'warning');
-                    return;
-                }
-
-                // Refuse to navigate when the page itself is in a chrome-error
-                // or other invalid context. This prevents the user-facing
-                // "Unsafe attempt to load URL ... from frame with URL
-                // chrome-error://chromewebdata/" warning.
-                const currentProtocol = String(window.location.protocol || '').toLowerCase();
-                if (currentProtocol === 'chrome-error:' || currentProtocol === 'about:' || currentProtocol === 'data:') {
-                    this.showNotification(
-                        'This page is in an error state. Refresh the tab from the backend URL and try again.',
-                        'error'
-                    );
-                    return;
-                }
-
-                // Two scenarios:
-                //   (A) Page is hosted on the local backend (localhost). The local
-                //       backend has provision_secret on disk and can issue a
-                //       302 to cloud via /api/local-mode/installer/redirect.
-                //   (B) Page is hosted on the cloud frontend (Vercel) OR the
-                //       local backend is offline. We must call the cloud
-                //       installer endpoint directly using the machine_id +
-                //       provision_secret that the checkup persisted into
-                //       sessionStorage (see saveRemoteProvisionState).
-                const apiBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
-                const isRemoteBackend = this.isLikelyRemoteBackend();
-
-                // Helper: perform direct cloud installer download using stored
-                // provision_secret. Returns true on success (navigation issued),
-                // false if credentials are missing.
-                const tryDirectCloudDownload = () => {
-                    const stored = this.loadRemoteProvisionState() || {};
-                    const machineIdStored = String(stored.machineId || this.localProvisionState.machineId || '').trim();
-                    const provisionSecretStored = String(stored.provisionSecret || '').trim();
-
-                    if (!machineIdStored || !provisionSecretStored) {
-                        return false;
-                    }
-
-                    // Resolve cloud URL. When the page is already pointed at the
-                    // cloud, API_CONFIG.BASE_URL is the cloud. Otherwise fall
-                    // back to a stored cloud URL hint or window.location.origin.
-                    let cloudBase = '';
-                    if (isRemoteBackend) {
-                        cloudBase = apiBase;
-                    } else {
-                        cloudBase = String(stored.cloudUrl || window.CLOUD_URL || '').replace(/\/+$/, '');
-                    }
-
-                    if (!cloudBase) {
-                        return false;
-                    }
-
-                    const params = new URLSearchParams({
-                        machine_id: machineIdStored,
-                        provision_secret: provisionSecretStored,
-                        _ts: String(Date.now())
-                    });
-                    const cloudUrl = `${cloudBase}/api/bootstrap/installer/request?${params.toString()}`;
-                    window.location.assign(cloudUrl);
-                    return true;
-                };
-
-                // Path A — page is served by the local backend. Try the local
-                // proxy redirect first (no need to expose secret in URL bar).
-                if (!isRemoteBackend) {
-                    const proxyUrl = `${apiBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
-                    try {
-                        const probeController = new AbortController();
-                        const probeTimer = setTimeout(() => probeController.abort(), 4000);
-                        const probeResp = await fetch(`${apiBase}/api/system/startup-status`, {
-                            cache: 'no-store',
-                            signal: probeController.signal
-                        }).finally(() => clearTimeout(probeTimer));
-                        if (probeResp && (probeResp.status < 500 || probeResp.status === 503)) {
-                            window.location.assign(proxyUrl);
-                            return;
-                        }
-                    } catch (probeErr) {
-                        console.warn('GlobalSettingsModal: local backend probe failed; falling back to direct cloud download', probeErr);
-                    }
-                }
-
-                // Path B — direct cloud download with stored credentials.
-                if (tryDirectCloudDownload()) {
-                    return;
-                }
-
-                // Path C — page is on the cloud frontend (Vercel) but the browser's
-                // sessionStorage has no provision_secret (e.g. cleared by an earlier
-                // rejected flow, or a fresh browser session). If a local backend is
-                // running on localhost:5000 it has the provision_secret on disk and
-                // can 302 us to the cloud installer URL via its loopback-only
-                // installer/redirect endpoint. We must PROBE first — top-level
-                // navigation to a non-running localhost shows a confusing
-                // "site can't be reached" page, so only redirect if the probe
-                // confirms the local backend is up.
-                if (isRemoteBackend) {
-                    const localBase = String(
-                        (window.API_CONFIG && window.API_CONFIG.LOCAL_BACKEND_URL)
-                        || 'http://localhost:5000'
-                    ).replace(/\/+$/, '');
-                    let localBackendUp = false;
-                    try {
-                        const probeController = new AbortController();
-                        const probeTimer = setTimeout(() => probeController.abort(), 1500);
-                        // Use no-cors so a cross-origin HTTPS→HTTP-localhost probe
-                        // doesn't get rejected by CORS preflight. With no-cors,
-                        // a reachable server yields an opaque response (status 0)
-                        // and only true network errors / timeouts throw.
-                        const probeResp = await fetch(`${localBase}/api/system/startup-status`, {
-                            cache: 'no-store',
-                            signal: probeController.signal,
-                            mode: 'no-cors'
-                        }).finally(() => clearTimeout(probeTimer));
-                        if (probeResp) {
-                            localBackendUp = true;
-                        }
-                    } catch (probeErr) {
-                        localBackendUp = false;
-                    }
-
-                    if (localBackendUp) {
-                        const localProxyUrl = `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
-                        window.location.assign(localProxyUrl);
-                        return;
-                    }
-
-                    // No local backend reachable AND no browser secret → the user has
-                    // no credentials to authenticate the device-flow installer
-                    // download. Clear, actionable guidance is the only safe option:
-                    // they must either (a) start the local backend so the disk
-                    // secret can be used, or (b) re-run Local Mode Checkup which
-                    // will repopulate sessionStorage with the provision_secret.
-                    this.showNotification(
-                        'Cannot download installer: this browser has no stored provisioning '
-                        + 'credentials and the local backend on localhost:5000 is not running. '
-                        + 'Either start the local backend (run start.bat) and try again, or '
-                        + 'open this dashboard from the local backend URL to re-run Local Mode '
-                        + 'Checkup.',
-                        'error'
-                    );
-                    return;
-                }
-
-                this.showNotification(
-                    'Local backend is offline and stored cloud credentials are missing. '
-                    + 'Run Local Mode Checkup, then try again.',
-                    'error'
-                );
             });
         }
 

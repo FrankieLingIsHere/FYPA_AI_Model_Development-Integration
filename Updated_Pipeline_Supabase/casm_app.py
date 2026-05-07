@@ -8931,6 +8931,14 @@ def _api_local_mode_auto_provisioning_impl():
         machine_id = _local_mode_get_or_create_machine_id()
 
     provision_secret = str(state.get('provision_secret') or '').strip()
+    if not provision_secret:
+        payload_secret = str(payload.get('provision_secret') or '').strip()
+        _client_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or (request.remote_addr or '')
+        if payload_secret and (_client_ip.startswith('127.') or _client_ip in {'::1', 'localhost'}):
+            provision_secret = payload_secret
+            state['provision_secret'] = provision_secret
+            _local_mode_save_provision_state(state)
+
     if provision_secret:
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
         if resolved_machine_id and resolved_machine_id != machine_id:

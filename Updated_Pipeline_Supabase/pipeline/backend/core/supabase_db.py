@@ -11,10 +11,13 @@ import os
 import json
 import re
 import time
+from functools import wraps
+from threading import RLock
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 
 import psycopg2
+from psycopg2 import extensions
 from psycopg2.extras import RealDictCursor, Json
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,7 @@ class SupabaseDatabaseManager:
         self.db_url = db_url
         self.connect_timeout = int(connect_timeout if connect_timeout is not None else os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
         self.conn = None
+        self._operation_lock = RLock()
         self.reconnect_backoff_seconds = max(3, int(os.getenv('SUPABASE_DB_RECONNECT_BACKOFF_SECONDS', '12')))
         self._reconnect_retry_after_epoch = 0.0
         
@@ -78,8 +82,38 @@ class SupabaseDatabaseManager:
 
     def _safe_rollback(self) -> None:
         """Rollback current transaction if connection is still usable."""
+        lock = getattr(self, '_operation_lock', None)
+        if lock is not None:
+            with lock:
+                self._safe_rollback_unlocked()
+            return
+
+        self._safe_rollback_unlocked()
+
+    def _safe_rollback_unlocked(self) -> None:
+        """Rollback current transaction without acquiring the operation lock."""
         try:
             if self.conn is not None and not self.conn.closed:
+                self.conn.rollback()
+        except Exception:
+            pass
+
+    def _cleanup_transaction_state(self) -> None:
+        """Leave the shared psycopg2 connection out of any open/aborted transaction."""
+        lock = getattr(self, '_operation_lock', None)
+        if lock is not None:
+            with lock:
+                self._cleanup_transaction_state_unlocked()
+            return
+
+        self._cleanup_transaction_state_unlocked()
+
+    def _cleanup_transaction_state_unlocked(self) -> None:
+        """Leave the shared psycopg2 connection out of any open tx without locking."""
+        try:
+            if self.conn is None or self.conn.closed:
+                return
+            if self.conn.get_transaction_status() != extensions.TRANSACTION_STATUS_IDLE:
                 self.conn.rollback()
         except Exception:
             pass
@@ -475,13 +509,13 @@ class SupabaseDatabaseManager:
         Fix reports stuck in pending/generating status by checking actual data.
 
         Decision table (evaluated in order):
-        - Has report_html_key                           → completed
-        - Has original_image_key (recoverable in cloud) → leave as-is; cloud
+        - Has report_html_key                           -> completed
+        - Has original_image_key (recoverable in cloud) -> leave as-is; cloud
           recovery sweep will auto-enqueue (don't mark failed)
         - Has violation record, no recoverable image,
-          older than STUCK_REPORT_AGE_MINUTES           → failed
+          older than STUCK_REPORT_AGE_MINUTES           -> failed
         - No violation record at all,
-          older than STUCK_REPORT_AGE_MINUTES           → failed
+          older than STUCK_REPORT_AGE_MINUTES           -> failed
 
         Returns:
             Number of reports fixed
@@ -489,9 +523,10 @@ class SupabaseDatabaseManager:
         self._ensure_connection()
         fixed_count = 0
         statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
-        lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '5000'))
+        lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '2000'))
+        sweep_limit = max(1, min(1000, int(os.getenv('STUCK_REPORT_SWEEP_LIMIT', '200') or 200)))
         # How long a report must be stuck before we declare it failed.
-        # Default 20 min — long enough to survive Railway cold-start + worker
+        # Default 20 min -- long enough to survive Railway cold-start + worker
         # startup, which previously caused all in-flight reports to be swept to
         # 'failed' immediately after every deployment/restart.
         stuck_age_minutes = max(5, int(os.getenv('STUCK_REPORT_AGE_MINUTES', '20') or 20))
@@ -501,84 +536,91 @@ class SupabaseDatabaseManager:
                 # Avoid blocking startup indefinitely on locks/slow queries.
                 cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
                 cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
-                # Scan pending/generating/unknown AND failed — a report
-                # already marked 'failed' that actually has report_html_key
-                # (e.g. wrongly swept by a previous server restart) must be
-                # promoted back to 'completed'.
-                cur.execute("""
-                    SELECT 
-                        de.report_id,
-                        de.timestamp,
-                        de.status,
-                        v.id as violation_id,
-                        v.original_image_key,
-                        v.annotated_image_key,
-                        v.report_html_key
-                    FROM public.detection_events de
-                    LEFT JOIN public.violations v ON de.report_id = v.report_id
-                    WHERE de.status IS NULL 
-                       OR de.status = 'pending' 
-                       OR de.status = 'generating'
-                       OR de.status = 'unknown'
-                       OR de.status = 'failed'
-                       OR de.status = 'partial'
-                """)
 
-                stuck_reports = cur.fetchall()
+                # Only one backend process should run the status repair sweep at a time.
+                # The row locks below also skip reports currently being generated.
+                cur.execute(
+                    "SELECT pg_try_advisory_xact_lock(%s, %s) AS lock_acquired",
+                    (4240006, 260507),
+                )
+                lock_row = cur.fetchone() or {}
+                if not bool(lock_row.get('lock_acquired')):
+                    self.conn.rollback()
+                    logger.info("Skipped stuck report sweep because another backend holds the repair lock")
+                    return 0
 
-                for report in stuck_reports:
-                    report_id = report['report_id']
-                    has_violation = report['violation_id'] is not None
-                    has_original = report['original_image_key'] is not None
-                    has_annotated = report['annotated_image_key'] is not None
-                    has_report = report['report_html_key'] is not None
-                    report_time = report['timestamp']
-
-                    is_old = (
-                        report_time is not None
-                        and (datetime.now(timezone.utc) - report_time) > timedelta(minutes=stuck_age_minutes)
+                # Scan pending/generating/unknown AND failed. A report already
+                # marked failed that actually has report_html_key must be
+                # promoted back to completed. FOR UPDATE SKIP LOCKED prevents
+                # startup repair from fighting active report generation.
+                cur.execute(
+                    """
+                    WITH candidate_rows AS MATERIALIZED (
+                        SELECT
+                            de.report_id,
+                            de.status AS old_status,
+                            CASE
+                                WHEN v.report_html_key IS NOT NULL THEN 'completed'
+                                WHEN v.original_image_key IS NOT NULL THEN NULL
+                                WHEN v.id IS NOT NULL
+                                     AND v.annotated_image_key IS NOT NULL
+                                     AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                                    THEN 'partial'
+                                WHEN v.id IS NOT NULL
+                                     AND v.original_image_key IS NULL
+                                     AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                                    THEN 'failed'
+                                WHEN v.id IS NULL
+                                     AND de.timestamp < NOW() - (INTERVAL '1 minute' * %s)
+                                    THEN 'failed'
+                                ELSE NULL
+                            END AS new_status
+                        FROM public.detection_events de
+                        LEFT JOIN public.violations v ON de.report_id = v.report_id
+                        WHERE de.status IS NULL
+                           OR de.status IN ('pending', 'generating', 'unknown', 'failed', 'partial')
+                        ORDER BY de.timestamp ASC NULLS LAST
+                        LIMIT %s
+                        FOR UPDATE OF de SKIP LOCKED
+                    ),
+                    updated_rows AS (
+                        UPDATE public.detection_events AS de
+                        SET status = candidate_rows.new_status,
+                            updated_at = NOW()
+                        FROM candidate_rows
+                        WHERE de.report_id = candidate_rows.report_id
+                          AND candidate_rows.new_status IS NOT NULL
+                          AND de.status IS DISTINCT FROM candidate_rows.new_status
+                        RETURNING
+                            de.report_id,
+                            candidate_rows.old_status,
+                            de.status AS new_status
                     )
+                    SELECT report_id, old_status, new_status
+                    FROM updated_rows
+                    """,
+                    (stuck_age_minutes, stuck_age_minutes, stuck_age_minutes, sweep_limit),
+                )
 
-                    # Determine correct status
-                    new_status = None
-
-                    if has_report:
-                        # Full report uploaded — mark completed regardless of age.
-                        new_status = 'completed'
-                    elif has_original:
-                        # Original image exists in cloud storage → the report is
-                        # recoverable by the cloud-pending-recovery sweep.
-                        # Do NOT mark as failed; leave as pending so the sweep
-                        # can re-enqueue it automatically.
-                        pass
-                    elif has_violation and has_annotated and is_old:
-                        # Annotated image exists but no original/report and truly old.
-                        new_status = 'partial'
-                    elif has_violation and not has_original and is_old:
-                        # Violation row exists but no recoverable image and truly old.
-                        new_status = 'failed'
-                    elif not has_violation and is_old:
-                        # No violation record created at all and truly old.
-                        new_status = 'failed'
-
-                    if new_status:
-                        try:
-                            cur.execute("""
-                                UPDATE public.detection_events 
-                                SET status = %s, updated_at = NOW()
-                                WHERE report_id = %s
-                            """, (new_status, report_id))
-                            fixed_count += 1
-                            logger.info(f"Fixed stuck report {report_id}: {report['status']} -> {new_status}")
-                        except Exception as e:
-                            logger.warning(f"Could not fix report {report_id}: {e}")
+                updated_rows = cur.fetchall()
+                fixed_count = len(updated_rows)
+                for row in updated_rows[:20]:
+                    logger.info(
+                        f"Fixed stuck report {row['report_id']}: "
+                        f"{row['old_status']} -> {row['new_status']}"
+                    )
+                if fixed_count > 20:
+                    logger.info(f"Fixed {fixed_count - 20} additional stuck reports")
 
                 self.conn.commit()
                 logger.info(f"Fixed {fixed_count} stuck reports")
 
         except Exception as e:
-            self.conn.rollback()
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'fix_stuck_reports')
             logger.warning(f"Could not fix stuck reports: {e}")
+        finally:
+            self._cleanup_transaction_state()
 
         return fixed_count
 
@@ -1395,6 +1437,55 @@ class SupabaseDatabaseManager:
             self._raise_if_connection_failure(e, 'get_recent_logs')
             logger.error(f"Failed to get recent logs: {e}")
             return []
+
+
+def _serialize_db_operation(method):
+    """Serialize access to the shared psycopg2 connection and clean aborted tx state."""
+    @wraps(method)
+    def _wrapped(self, *args, **kwargs):
+        lock = getattr(self, '_operation_lock', None)
+        if lock is None:
+            return method(self, *args, **kwargs)
+
+        with lock:
+            try:
+                return method(self, *args, **kwargs)
+            except Exception:
+                self._safe_rollback()
+                raise
+            finally:
+                self._cleanup_transaction_state()
+
+    return _wrapped
+
+
+for _db_method_name in (
+    '_get_existing_detection_event_report_id',
+    '_get_existing_violation_id',
+    '_upsert_device_presence',
+    'insert_detection_event',
+    'update_detection_status',
+    'update_detection_event',
+    'fix_stuck_reports',
+    'get_cloud_pending_recovery_candidates',
+    'get_detection_event',
+    'get_recent_detection_events',
+    'get_all_violations_with_status',
+    'insert_violation',
+    'get_violation',
+    'get_recent_violations',
+    'update_violation_storage_keys',
+    'update_violation',
+    'delete_violation',
+    'log_event',
+    'get_device_stats',
+    'get_recent_logs',
+):
+    setattr(
+        SupabaseDatabaseManager,
+        _db_method_name,
+        _serialize_db_operation(getattr(SupabaseDatabaseManager, _db_method_name)),
+    )
 
 
 # =============================================================================

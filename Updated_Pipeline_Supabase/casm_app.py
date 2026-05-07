@@ -379,13 +379,33 @@ LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = max(
 )
 try:
     LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = int(
-        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS', '8')
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS', '20')
     )
 except (TypeError, ValueError):
-    LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = 8
+    LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = 20
 LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = max(
     3,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS, 30),
+)
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = int(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS', '2')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = 2
+LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = max(
+    1,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS, 3),
+)
+try:
+    LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = float(
+        os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS', '1.5')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = 1.5
+LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = max(
+    0.0,
+    min(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS, 5.0),
 )
 try:
     LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = int(
@@ -1784,11 +1804,18 @@ def _run_startup_sequence():
                     _ = cur.fetchone()
                 _set_startup_step('supabase_database', 'ok', 'Database query test passed')
             except Exception as db_exc:
+                safe_rollback = getattr(db_manager, '_safe_rollback', None)
+                if callable(safe_rollback):
+                    safe_rollback()
                 if ALLOW_OFFLINE_LOCAL_MODE:
                     _set_startup_step('supabase_database', 'ok', f'Supabase DB unreachable; local-only mode active ({db_exc})')
                 else:
                     _set_startup_step('supabase_database', 'error', str(db_exc))
                     raise RuntimeError(f'Supabase database check failed: {db_exc}')
+            finally:
+                cleanup_tx = getattr(db_manager, '_cleanup_transaction_state', None)
+                if callable(cleanup_tx):
+                    cleanup_tx()
 
         _set_startup_progress(82, 'Verifying Supabase storage connection')
         if storage_manager is None:
@@ -1981,11 +2008,7 @@ def initialize_pipeline_components():
                 _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
                 logger.info("Checking for stuck reports...")
                 try:
-                    fixed = _run_with_timeout(
-                        db_manager.fix_stuck_reports,
-                        int(os.getenv('STARTUP_FIX_STUCK_REPORTS_TIMEOUT_SECONDS', '20')),
-                        'fix_stuck_reports'
-                    )
+                    fixed = db_manager.fix_stuck_reports()
                     if fixed > 0:
                         logger.info(f" Fixed {fixed} stuck reports")
                 except Exception as sweep_error:
@@ -2237,11 +2260,7 @@ def _run_queue_stuck_report_sweep(reason: str = 'watchdog') -> int:
         return 0
 
     try:
-        fixed_count = _run_with_timeout(
-            db_manager.fix_stuck_reports,
-            QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS,
-            f'fix_stuck_reports_{reason}'
-        )
+        fixed_count = db_manager.fix_stuck_reports()
         normalized_count = max(0, int(fixed_count or 0))
         if normalized_count > 0:
             logger.info(
@@ -6704,8 +6723,15 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                         })
                     _set_realtime_supabase_cached_rows(report_rows)
                 except Exception as e:
+                    safe_rollback = getattr(db_manager, '_safe_rollback', None)
+                    if callable(safe_rollback):
+                        safe_rollback()
                     logger.debug(f"Realtime report snapshot query failed: {e}")
                     report_rows = list(report_rows) + list(cached_rows)
+                finally:
+                    cleanup_tx = getattr(db_manager, '_cleanup_transaction_state', None)
+                    if callable(cleanup_tx):
+                        cleanup_tx()
         else:
             report_rows = list(report_rows) + list(cached_rows)
 
@@ -7955,7 +7981,7 @@ def _local_mode_fetch_authoritative_status(
     cloud_url: str,
     machine_id: str,
     provision_secret: str,
-    timeout_seconds: int = 8,
+    timeout_seconds: int = 20,
 ) -> Dict[str, Any]:
     normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url)
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
@@ -8153,7 +8179,7 @@ def _send_local_mode_cloud_heartbeat_once(
             cloud_url=cloud_url,
             machine_id=machine_id,
             provision_secret=provision_secret,
-            timeout_seconds=max(3, min(int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS), 8)),
+            timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
         )
         authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
@@ -8178,15 +8204,30 @@ def _send_local_mode_cloud_heartbeat_once(
             'error': str(diagnostics.get('error') or '').strip(),
         }
 
-    try:
-        response = requests.post(
-            f"{cloud_url}/api/local-mode/heartbeat",
-            json=heartbeat_payload,
-            timeout=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
-        )
-        body = response.json() if response.content else {}
-    except Exception as heartbeat_err:
-        error_text = str(heartbeat_err)
+    response = None
+    body = {}
+    last_heartbeat_error = None
+    heartbeat_timeout = max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))
+    for attempt_index in range(int(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS)):
+        try:
+            response = requests.post(
+                f"{cloud_url}/api/local-mode/heartbeat",
+                json=heartbeat_payload,
+                timeout=heartbeat_timeout,
+            )
+            body = response.json() if response.content else {}
+            last_heartbeat_error = None
+            break
+        except requests.exceptions.RequestException as heartbeat_err:
+            last_heartbeat_error = heartbeat_err
+            if attempt_index + 1 < int(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS):
+                time.sleep(float(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS))
+        except Exception as heartbeat_err:
+            last_heartbeat_error = heartbeat_err
+            break
+
+    if last_heartbeat_error is not None or response is None:
+        error_text = str(last_heartbeat_error or 'heartbeat request failed')
         if _is_supabase_connectivity_failure(error_text):
             return {
                 'sent': False,
@@ -8572,7 +8613,7 @@ def api_local_mode_provisioning_status():
         cloud_url=cloud_url,
         machine_id=machine_id,
         provision_secret=provision_secret,
-        timeout_seconds=8,
+        timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
     )
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
 
@@ -8754,7 +8795,7 @@ def api_local_mode_installer_redirect():
                 cloud_url=cloud_url,
                 machine_id=machine_id,
                 provision_secret=provision_secret,
-                timeout_seconds=8,
+                timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
             )
             live_status = str(live_check.get('status') or '').strip().lower()
             if live_status in ('approved', 'provisioned', 'active'):
@@ -8861,7 +8902,7 @@ def _api_local_mode_auto_provisioning_impl():
             cloud_url=cloud_url,
             machine_id=machine_id,
             provision_secret=provision_secret,
-            timeout_seconds=8,
+            timeout_seconds=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
         )
 
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()

@@ -105,7 +105,10 @@ class SupabaseReportGenerator(ReportGenerator):
 
         # Clear any stale aborted transaction state before DB operations.
         try:
-            if getattr(self.db_manager, 'conn', None) is not None:
+            safe_rollback = getattr(self.db_manager, '_safe_rollback', None)
+            if callable(safe_rollback):
+                safe_rollback()
+            elif getattr(self.db_manager, 'conn', None) is not None:
                 self.db_manager.conn.rollback()
         except Exception:
             pass

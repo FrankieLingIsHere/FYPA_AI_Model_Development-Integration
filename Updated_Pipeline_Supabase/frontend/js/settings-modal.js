@@ -607,12 +607,14 @@ const GlobalSettingsModal = {
         const hasStoredProvisionSecret = !!provisionSecret;
 
         if (allowRequest && (!provisionSecret || options.forceRequest === true)) {
+            const forceExistingRefresh = options.forceRequest === true
+                && ['approved', 'provisioned', 'active', 'validation_required'].includes(storedStatus);
             const requestResult = await API.requestCloudProvisioningApproval({
                 machineId,
                 // Pass the stored secret (if any) so the backend can authenticate
                 // a rotation without an admin token. Brand-new devices have no
                 // stored secret and must be admin-approved out-of-band.
-                currentProvisionSecret: provisionSecret || ''
+                currentProvisionSecret: forceExistingRefresh ? '' : (provisionSecret || '')
             });
             if (!requestResult || requestResult.success === false) {
                 return {
@@ -1230,9 +1232,9 @@ const GlobalSettingsModal = {
         const currentStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
         if (currentStatus === 'approved' || currentStatus === 'provisioned' || currentStatus === 'active') {
             const confirmed = window.confirm(
-                'This device is already approved. Re-requesting will rotate your '
-                + 'provisioning credentials and send a new notification to the admin.\n\n'
-                + 'Only do this if your local installer is broken and you need fresh credentials.\n\n'
+                'This device is already approved. Re-requesting will refresh installer '
+                + 'validation and recover credentials if the cloud still sees this device as approved.\n\n'
+                + 'Use this when the local installer BAT is broken or credentials were cleared.\n\n'
                 + 'Continue?'
             );
             if (!confirmed) return;
@@ -1249,16 +1251,27 @@ const GlobalSettingsModal = {
             })();
             const machineIdHint = String(this.localProvisionState.machineId || stored.machineId || localStoredId || '').trim();
             const machineId = this.ensureRemoteProvisionMachineId(machineIdHint);
+            const refreshExistingApproval = currentStatus === 'approved'
+                || currentStatus === 'provisioned'
+                || currentStatus === 'active'
+                || currentStatus === 'validation_required';
+            const currentSecret = refreshExistingApproval
+                ? ''
+                : String(stored.provisionSecret || '').trim();
 
             const requestResult = await API.requestCloudProvisioningApproval({
                 machineId,
-                currentProvisionSecret: String(stored.provisionSecret || '').trim()
+                currentProvisionSecret: currentSecret
             });
 
             if (!requestResult || requestResult.success === false) {
-                const errMsg = String((requestResult && requestResult.error) || 'Failed to submit provisioning request.');
+                let errMsg = String((requestResult && requestResult.error) || 'Failed to submit provisioning request.');
+                if (/unauthorized|timeout|timed out|failed to fetch/i.test(errMsg) && refreshExistingApproval) {
+                    errMsg = 'Could not re-validate installer access yet. Start the local backend on this approved host, wait for heartbeat, then rerun Local Mode Checkup.';
+                }
                 this.setProviderStatus(errMsg, 'error');
                 this.showNotification(errMsg, 'error');
+                this._lastProvisionRequestAt = 0;
                 btn.disabled = false;
                 this.updateRequestProvisioningButton();
                 return;
@@ -1303,6 +1316,7 @@ const GlobalSettingsModal = {
             const errMsg = (error && error.message) || 'Failed to submit provisioning request.';
             this.setProviderStatus(errMsg, 'error');
             this.showNotification(errMsg, 'error');
+            this._lastProvisionRequestAt = 0;
             btn.disabled = false;
             this.updateRequestProvisioningButton();
         }
@@ -1738,7 +1752,8 @@ const GlobalSettingsModal = {
             const isLikelyRemoteBackend = this.isLikelyRemoteBackend();
 
             const options = await API.getReportRecoveryOptions({
-                machineId: (this.localProvisionState && this.localProvisionState.machineId) || ''
+                machineId: (this.localProvisionState && this.localProvisionState.machineId) || '',
+                checkupOnly: true
             });
             const local = (options && options.local) || {};
             const rawCloudHeartbeat = (options && options.cloud_local_heartbeat) || {};

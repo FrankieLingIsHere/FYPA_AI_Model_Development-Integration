@@ -251,6 +251,38 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
         self.assertTrue(rerequest_payload.get('active'))
 
+    def test_approved_heartbeat_can_reissue_missing_or_stale_browser_secret(self):
+        machine_id = 'TEST-EDGE-HEARTBEAT-REISSUE-001'
+        provision_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        })
+        self.assertEqual(heartbeat.status_code, 200)
+
+        with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            reissue = self.client.post('/api/provision/request', json={
+                'machine_id': machine_id,
+                'current_provision_secret': 'stale-browser-secret',
+            })
+
+        self.assertEqual(reissue.status_code, 200)
+        payload = reissue.json or {}
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('device_status'), 'active')
+        self.assertEqual(payload.get('provisioning_status'), 'approved')
+        self.assertTrue(str(payload.get('provision_secret') or '').strip())
+        self.assertEqual(payload.get('notification_reason'), 'status_preserved')
+
     def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
         machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
         provision_secret = self._request_device(machine_id)

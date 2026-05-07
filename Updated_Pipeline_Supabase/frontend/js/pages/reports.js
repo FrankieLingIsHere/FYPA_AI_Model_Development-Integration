@@ -415,6 +415,67 @@ const ReportsPage = {
         return normalized === 'pending' || normalized === 'generating';
     },
 
+    encodeInlineReportPayload(violation) {
+        return JSON.stringify(violation || {})
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '\\u003c')
+            .replace(/>/g, '\\u003e');
+    },
+
+    upsertReportRuntimeState(reportId, patch = {}, sourceHint = null) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return null;
+
+        const existingIndex = this.violations.findIndex((v) => String((v && v.report_id) || '').trim() === rid);
+        const existing = existingIndex >= 0 ? this.violations[existingIndex] : {};
+        const sourceRecord = sourceHint && typeof sourceHint === 'object' ? sourceHint : {};
+        const nowIso = new Date().toISOString();
+        const sourceScope = this.normalizeSourceScope(patch.source_scope)
+            || this.inferSourceScope(sourceRecord)
+            || this.inferSourceScope(existing)
+            || 'cloud';
+        const next = {
+            ...sourceRecord,
+            ...existing,
+            ...patch,
+            report_id: rid,
+            timestamp: patch.timestamp || existing.timestamp || sourceRecord.timestamp || nowIso,
+            status: this.normalizeStatusValue(
+                patch.status || existing.status || sourceRecord.status || 'pending',
+                !!(Object.prototype.hasOwnProperty.call(patch, 'has_report') ? patch.has_report : (existing.has_report || sourceRecord.has_report))
+            ),
+            has_report: Object.prototype.hasOwnProperty.call(patch, 'has_report')
+                ? !!patch.has_report
+                : !!(existing.has_report || sourceRecord.has_report),
+            source_scope: sourceScope,
+            source_label: String(patch.source_label || '').trim() || this.sourceLabelForScope(sourceScope),
+            updated_at: patch.updated_at || nowIso
+        };
+
+        if (sourceScope === 'cloud') {
+            const deviceKey = String(next.device_id || '').trim().toLowerCase();
+            if (deviceKey === 'local_cache' || deviceKey === 'offline_local_cache' || deviceKey.startsWith('local_') || deviceKey.startsWith('offline_')) {
+                next.device_id = null;
+            }
+            next.origin = '';
+            next.sync_source = '';
+            next.source = '';
+        }
+
+        if (existingIndex >= 0) {
+            this.violations.splice(existingIndex, 1, next);
+        } else {
+            this.violations.unshift(next);
+        }
+
+        const listEl = document.getElementById('reports-list');
+        if (listEl) {
+            this.renderReports();
+        }
+        return next;
+    },
+
     mergePendingReports(violations, pendingReports) {
         const base = Array.isArray(violations) ? violations : [];
         const pending = Array.isArray(pendingReports) ? pendingReports : [];
@@ -475,7 +536,9 @@ const ReportsPage = {
 
                 let mergedScope = existingScope || pendingScope || 'cloud';
                 if (existingScope === 'synced_local' && pendingScope === 'cloud') {
-                    mergedScope = 'synced_local';
+                    mergedScope = this.inferSourceScope(item) === 'cloud' && this.isPendingLikeStatus(pendingStatus)
+                        ? 'cloud'
+                        : 'synced_local';
                 } else if (pendingScope === 'synced_local') {
                     mergedScope = 'synced_local';
                 } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
@@ -1142,6 +1205,7 @@ const ReportsPage = {
         }
 
         // Create modal overlay
+        const inlineViolation = this.encodeInlineReportPayload(violation);
         const modal = document.createElement('div');
         modal.id = 'report-status-modal';
         modal.style.cssText = `
@@ -1198,7 +1262,7 @@ const ReportsPage = {
                     <button onclick="ReportsPage.closeModal()" class="btn" style="background: #95a5a6;">
                         <i class="fas fa-times"></i> Close
                     </button>
-                    <button id="report-modal-process-btn" onclick="ReportsPage.generateNow('${violation.report_id}', { force: ${processAction.force} })" class="btn btn-success">
+                    <button id="report-modal-process-btn" onclick="ReportsPage.generateNow('${violation.report_id}', { force: ${processAction.force}, source: ${inlineViolation} })" class="btn btn-success">
                         <i class="fas ${processAction.icon}"></i> ${processAction.label}
                     </button>
                     ${!ready ? `
@@ -1207,7 +1271,7 @@ const ReportsPage = {
                         </button>
                     ` : ''}
                     ${ready ? `
-                        <button onclick="ReportsPage.openReport('${violation.report_id}'); ReportsPage.closeModal();" class="btn btn-primary">
+                        <button onclick="ReportsPage.openReport('${violation.report_id}', ${inlineViolation}); ReportsPage.closeModal();" class="btn btn-primary">
                             <i class="fas fa-file-alt"></i> Open Report
                         </button>
                     ` : this.normalizeStatus(violation) === 'failed' ? `
@@ -1541,11 +1605,17 @@ const ReportsPage = {
 
     async pollReportProgress(reportId, { autoOpen = false } = {}) {
         const sourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
-        const data = await API.getReportStatus(reportId, { source: sourceHint });
+        const data = await API.getReportStatus(reportId, { source: sourceHint, noCache: true, timeoutMs: 6000 });
         const status = this.normalizeStatusValue(data && data.status, !!(data && data.has_report));
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
         const runtime = this.ensureModalRuntime(reportId);
+        const latestSourceHint = this.upsertReportRuntimeState(reportId, {
+            ...(data && typeof data === 'object' ? data : {}),
+            status,
+            has_report: !!(data && data.has_report),
+            source_scope: (data && data.source_scope) || (sourceHint && sourceHint.source_scope) || ''
+        }, sourceHint) || sourceHint;
 
         if (runtime.lastPollStatus !== status) {
             if (status === 'pending' || status === 'queued') {
@@ -1565,7 +1635,7 @@ const ReportsPage = {
                     NotificationManager.reportReady(reportId, {
                         action: {
                             text: 'Open Report',
-                            onClickFn: () => this.openReport(reportId, sourceHint)
+                            onClickFn: () => this.openReport(reportId, latestSourceHint)
                         }
                     });
                 }
@@ -1604,7 +1674,8 @@ const ReportsPage = {
             this.setModalStatusText('Report completed. Opening now...');
             await this.loadReports({ noCache: true, targetedReportId: reportId });
             if (autoOpen) {
-                this.openReport(reportId, sourceHint);
+                const refreshedSourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || latestSourceHint;
+                this.openReport(reportId, refreshedSourceHint);
                 this.closeModal();
             }
             return true;
@@ -1707,9 +1778,16 @@ const ReportsPage = {
         this.setModalStatusText('Submitting request to queue...');
 
         try {
+            const sourceHint = options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
+            const sourceScope = this.inferSourceScope(sourceHint);
+            this.upsertReportRuntimeState(reportId, {
+                status: 'pending',
+                has_report: false,
+                source_scope: sourceScope
+            }, sourceHint);
             const result = await API.generateReportNow(reportId, {
                 force: !!options.force,
-                source: options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null
+                source: sourceHint
             });
             if (!result || !result.success) {
                 runtime.retryCount += 1;
@@ -1745,6 +1823,12 @@ const ReportsPage = {
                 }
 
                 this.setModalStatusText(errorText);
+                this.upsertReportRuntimeState(reportId, {
+                    status: 'failed',
+                    has_report: false,
+                    error_message: errorText,
+                    source_scope: sourceScope
+                }, sourceHint);
                 this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
                 this.notify(errorText, 'error');
                 return;
@@ -1769,6 +1853,12 @@ const ReportsPage = {
             this.stopModalCooldown();
             this.setModalStage('queued');
             this.setModalStatusText('Regeneration queued. Monitoring progress...');
+            this.upsertReportRuntimeState(reportId, {
+                status: result.already_completed ? 'completed' : (result.status || 'pending'),
+                has_report: !!(result.already_completed || result.has_report),
+                source_scope: result.source_scope || sourceScope,
+                source_label: result.source_label || ''
+            }, sourceHint);
             if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                 NotificationManager.reportGenerating(reportId, {
                     title: options.force ? 'Reprocessing Started' : 'Generation Started',
@@ -1785,6 +1875,13 @@ const ReportsPage = {
             runtime.retryCount += 1;
             this.updateModalRetryText();
             this.setModalStatusText('Failed to prioritize report generation');
+            const sourceHint = options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
+            this.upsertReportRuntimeState(reportId, {
+                status: 'failed',
+                has_report: false,
+                error_message: 'Failed to prioritize report generation',
+                source_scope: this.inferSourceScope(sourceHint)
+            }, sourceHint);
             this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
             this.notify('Failed to prioritize report generation', 'error');
         }
@@ -1806,6 +1903,7 @@ const ReportsPage = {
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
         const sourceScope = this.inferSourceScope(violation);
+        const inlineViolation = this.encodeInlineReportPayload(violation);
         const deviceId = String((violation && violation.device_id) || '').trim();
         const deviceKey = deviceId.toLowerCase();
         const shouldShowDevice = Boolean(deviceId) && !(
@@ -1824,7 +1922,7 @@ const ReportsPage = {
                 return `
             <div class="report_card ${sourceScope === 'local' ? 'report-card-local' : ''}" id="report-${violation.report_id}"
                  style="cursor: pointer; ${!isReady ? 'opacity: 0.9;' : ''}"
-                 onclick="ReportsPage.handleReportClick(${JSON.stringify(violation).replace(/"/g, '&quot;')})">
+                 onclick="ReportsPage.handleReportClick(${inlineViolation})">
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${hasPreviewImage ?
                         `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async"
@@ -1879,12 +1977,12 @@ const ReportsPage = {
                     <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">
                         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem;">
                             <button class="btn btn-primary" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;"
-                                onclick="event.stopPropagation(); ReportsPage.generateNow('${violation.report_id}', { force: ${processAction.force} });">
+                                onclick="event.stopPropagation(); ReportsPage.generateNow('${violation.report_id}', { force: ${processAction.force}, source: ${inlineViolation} });">
                                 <i class="fas ${processAction.icon}"></i> ${processAction.label}
                             </button>
                             ${isReady ? `
                                 <button class="btn btn-secondary" style="padding: 0.45rem 0.75rem; font-size: 0.85rem;"
-                                    onclick="event.stopPropagation(); ReportsPage.openReport('${violation.report_id}');">
+                                    onclick="event.stopPropagation(); ReportsPage.openReport('${violation.report_id}', ${inlineViolation});">
                                     <i class="fas fa-file-alt"></i> Open Report
                                 </button>
                             ` : ''}

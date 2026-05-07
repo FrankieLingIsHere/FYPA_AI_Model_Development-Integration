@@ -7436,6 +7436,44 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     }
 
 
+def _get_hosted_local_mode_checkup_diagnostics() -> Dict[str, Any]:
+    """Fast cloud-side diagnostics for deployed UI checkups.
+
+    A deployed cloud backend cannot probe the user's localhost/Ollama process;
+    readiness comes from the edge heartbeat instead. Skipping the localhost
+    probe keeps Settings checkup responsive after deploy/reconnect.
+    """
+    ollama_base_url = str(
+        os.getenv('OLLAMA_BASE_URL')
+        or (OLLAMA_CONFIG or {}).get('base_url')
+        or 'http://localhost:11434'
+    ).rstrip('/')
+    ollama_model = str(
+        os.getenv('OLLAMA_MODEL')
+        or (OLLAMA_CONFIG or {}).get('model')
+        or os.getenv('OLLAMA_VISION_MODEL')
+        or LOCAL_OLLAMA_UNIFIED_MODEL
+    ).strip()
+    install_guidance = _get_ollama_install_guidance()
+
+    return {
+        'ollama_base_url': ollama_base_url,
+        'ollama_model': ollama_model,
+        'ollama_executable': None,
+        'ollama_installed': False,
+        'ollama_running': False,
+        'model_available': False,
+        'local_mode_possible': False,
+        'offline_fallback_available': False,
+        'pull_command': f"ollama pull {ollama_model}",
+        'start_command': 'ollama serve',
+        'install_url': install_guidance.get('install_url'),
+        'install_commands': install_guidance.get('install_commands', []),
+        'post_install_steps': install_guidance.get('post_install_steps', []),
+        'error': 'Cloud-hosted checkup skipped localhost probing; use edge heartbeat for local readiness.',
+    }
+
+
 def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
     """Best-effort start of Ollama service when not already running."""
     before = _get_local_mode_diagnostics()
@@ -10088,9 +10126,14 @@ def api_provider_runtime_status():
 def api_report_recovery_options():
     """Provide quota-recovery options before failover is executed."""
     requested_machine_id = _local_mode_normalize_machine_id(request.args.get('machine_id') or '')
-    diagnostics = _get_local_mode_diagnostics()
+    checkup_only = str(request.args.get('checkup_only') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    diagnostics = (
+        _get_hosted_local_mode_checkup_diagnostics()
+        if checkup_only and _is_hosted_runtime_environment()
+        else _get_local_mode_diagnostics()
+    )
     heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(requested_machine_id)
-    candidates = _collect_recovery_candidates(limit=300)
+    candidates = [] if checkup_only else _collect_recovery_candidates(limit=300)
     quota_failed = [c for c in candidates if c.get('status') == 'failed']
     pending_like = [c for c in candidates if c.get('status') in ('pending', 'queued', 'processing', 'generating')]
 
@@ -15764,6 +15807,22 @@ def provision_request():
     )
     _existing_status_for_auth = str((_existing_for_auth or {}).get('status') or '').strip().lower()
     is_rerequest_for_known_device = _existing_status_for_auth in ('approved', 'provisioned')
+    heartbeat_summary_for_auth = (
+        _get_cloud_local_mode_heartbeat_snapshot(machine_id)
+        if is_rerequest_for_known_device
+        else {}
+    )
+    heartbeat_provision_status_for_auth = _normalize_heartbeat_provision_status(
+        heartbeat_summary_for_auth.get('provision_status')
+    )
+    rerequest_authenticated_by_heartbeat = bool(
+        is_rerequest_for_known_device
+        and heartbeat_summary_for_auth.get('available')
+        and heartbeat_summary_for_auth.get('is_recent')
+        and heartbeat_provision_status_for_auth in (
+            'approved', 'provisioned', 'active', 'credentials_present'
+        )
+    )
     # A previously-rejected device may always re-apply without admin intervention;
     # the admin's secret was already rotated on revocation so the device can't
     # prove prior trust with its old secret. Allow the re-application so the
@@ -15777,6 +15836,12 @@ def provision_request():
     if is_rerequest_for_known_device and presented_existing_secret:
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
             rerequest_authenticated_by_secret = True
+        elif rerequest_authenticated_by_heartbeat:
+            # The browser may hold a stale provision_secret after reinstall or
+            # storage repair, while the approved local backend is still sending
+            # a fresh heartbeat. Treat the heartbeat as proof that this is the
+            # same approved host and reissue credentials without demoting it.
+            rerequest_authenticated_by_secret = False
         else:
             # Wrong secret on a known approved device. Historically this returned
             # a hard 401, which created a permanent deadlock when the browser's
@@ -15815,7 +15880,13 @@ def provision_request():
     #   (c) this is a re-application from a previously-rejected device
     #       (secret was rotated on revocation so proof of prior trust is
     #       impossible; admin will review and decide again).
-    if not PROVISION_ALLOW_SELF_REGISTER and not rerequest_authenticated_by_secret and not is_rejected_rerequest and not credential_desync_recovery:
+    if (
+        not PROVISION_ALLOW_SELF_REGISTER
+        and not rerequest_authenticated_by_secret
+        and not rerequest_authenticated_by_heartbeat
+        and not is_rejected_rerequest
+        and not credential_desync_recovery
+    ):
         token_header = request.headers.get('X-Admin-Token', '').strip()
         if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
             _append_device_audit_event(
@@ -15913,11 +15984,16 @@ def provision_request():
 
     # Capture request metadata for admin risk view + audit log
     request_meta = _capture_request_metadata()
-    audit_event = (
-        'request_secret_mismatch_recovered' if credential_desync_recovery
-        else ('request_existing' if preserve_status
-              else ('request_repeat_pending' if repeated_pending_request else 'request_new'))
-    )
+    if credential_desync_recovery:
+        audit_event = 'request_secret_mismatch_recovered'
+    elif preserve_status and rerequest_authenticated_by_heartbeat and not rerequest_authenticated_by_secret:
+        audit_event = 'request_existing_heartbeat'
+    elif preserve_status:
+        audit_event = 'request_existing'
+    elif repeated_pending_request:
+        audit_event = 'request_repeat_pending'
+    else:
+        audit_event = 'request_new'
     if credential_desync_recovery:
         notification_reason = 'credential_desync_recovery'
         notify_pending_request = True
@@ -15955,6 +16031,7 @@ def provision_request():
         'machine_id': machine_id,
         'provision_secret': provision_secret,
         'secret_rotated': secret_rotated,
+        'cloud_local_heartbeat': heartbeat_summary,
         'notification_dispatched': bool(notify_pending_request),
         'notification_reason': notification_reason,
     })

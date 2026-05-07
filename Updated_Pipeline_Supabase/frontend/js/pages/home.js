@@ -316,11 +316,18 @@ const HomePage = {
         }
 
         if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.refresh === 'function') {
-            window.PPEProvisioningStatus.refresh({
-                source: 'home-mount',
-                force: true,
-                notify: false
-            });
+            const currentProvisionState = typeof window.PPEProvisioningStatus.get === 'function'
+                ? window.PPEProvisioningStatus.get()
+                : {};
+            const measuredAt = Number((currentProvisionState && currentProvisionState.measuredAt) || 0);
+            const stale = !Number.isFinite(measuredAt) || measuredAt <= 0 || (Date.now() - measuredAt) > 90000;
+            if (stale) {
+                window.PPEProvisioningStatus.refresh({
+                    source: 'home-mount',
+                    force: false,
+                    notify: false
+                });
+            }
         }
 
         this.syncFallbackPolling();
@@ -386,18 +393,48 @@ const HomePage = {
         }
     },
 
+    renderHomeDataset(stats = {}, pendingReports = []) {
+        const safeStats = stats && typeof stats === 'object' ? stats : {};
+        const safePending = Array.isArray(pendingReports) ? pendingReports : [];
+        this.renderHomeSummary(safeStats);
+        this.renderViolationTypes(safeStats);
+        this.renderRecentViolations(safeStats.recentViolations || []);
+        this.calculateSafetyScore(safeStats);
+        this.renderReportsOverview(safeStats, safePending);
+        this.renderTrustStrip(safeStats, safePending);
+    },
+
+    async renderCachedDataIfAvailable() {
+        if (typeof API === 'undefined' || typeof API.readJsonCache !== 'function') return false;
+        try {
+            const [cachedStats, cachedPending] = await Promise.all([
+                API.readJsonCache('stats:summary'),
+                API.readJsonCache('reports:pending')
+            ]);
+            const stats = cachedStats && cachedStats.data && typeof cachedStats.data === 'object'
+                ? cachedStats.data
+                : null;
+            if (!stats) return false;
+            const pendingReports = cachedPending && Array.isArray(cachedPending.data)
+                ? cachedPending.data
+                : [];
+            this.renderHomeDataset(stats, pendingReports);
+            return true;
+        } catch (error) {
+            return false;
+        }
+    },
+
     async refreshData() {
+        const cachedRendered = await this.renderCachedDataIfAvailable();
         const [stats, pendingReports] = await Promise.all([
             API.getStats(),
             API.getPendingReports()
         ]);
 
-        this.renderHomeSummary(stats);
-        this.renderViolationTypes(stats);
-        this.renderRecentViolations(stats.recentViolations || []);
-        this.calculateSafetyScore(stats);
-        this.renderReportsOverview(stats, pendingReports || []);
-        this.renderTrustStrip(stats, pendingReports || []);
+        if (!cachedRendered || stats) {
+            this.renderHomeDataset(stats, pendingReports || []);
+        }
     },
 
     /* ================= COUNT-UP HELPER ================= */

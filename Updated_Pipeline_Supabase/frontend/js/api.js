@@ -1325,7 +1325,7 @@ const API = {
             });
             if (!response.ok) throw new Error(`Request failed: ${response.status}`);
             const data = await response.json();
-            if (data && !data.error && Array.isArray(data)) {
+            if (data && !data.error) {
                 this.writeJsonCache(scope, data);
                 return data;
             }
@@ -1447,6 +1447,25 @@ const API = {
             || incomingLabel.includes('local synced');
 
         if (syncedLocal) {
+            const existingStrictLocal = this.isStrictLocalOriginReport(existing);
+            const incomingStrictLocal = this.isStrictLocalOriginReport(incoming);
+            const existingCloudAuthoritative = existingScope === 'cloud' && !existingStrictLocal;
+            const incomingCloudAuthoritative = incomingScope === 'cloud' && !incomingStrictLocal;
+
+            if (incomingCloudAuthoritative || existingCloudAuthoritative) {
+                const cloudSource = incomingCloudAuthoritative ? incoming : existing;
+                const cloudStatus = String(cloudSource.status || '').trim().toLowerCase();
+                const cloudInFlight = ['pending', 'queued', 'processing', 'generating'].includes(cloudStatus);
+                if (cloudInFlight || !this.hasLocalReportArtifacts(cloudSource)) {
+                    merged.source_scope = 'cloud';
+                    merged.source_label = 'Cloud';
+                    merged.origin = '';
+                    merged.sync_source = '';
+                    merged.source = '';
+                    return merged;
+                }
+            }
+
             merged.source_scope = 'synced_local';
             merged.source_label = 'Local Synced';
             merged.origin = merged.origin || existing.origin || incoming.origin || 'local_synced';
@@ -1778,8 +1797,7 @@ const API = {
         const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
         if (scope === 'cloud' && this.isCloudReportUnavailableOffline(sourceHint)) {
-            const localBase = this.getLocalBackendBaseUrl() || this._normalizeBaseUrl(API_CONFIG.BASE_URL);
-            return `${localBase}${path}`;
+            return cloudBase ? `${cloudBase}${path}` : this.getReportUrl(reportId, sourceHint);
         }
 
         if (scope === 'local') {
@@ -1983,6 +2001,9 @@ const API = {
             const query = new URLSearchParams();
             if (machineId) {
                 query.set('machine_id', machineId);
+            }
+            if (options && (options.checkupOnly || options.checkup_only)) {
+                query.set('checkup_only', '1');
             }
 
             const querySuffix = query.toString();

@@ -402,14 +402,10 @@ const API = {
     },
 
     isCloudReportUnavailableOffline(sourceHint = null) {
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) return false;
         const scope = this.inferReportSourceScope(sourceHint);
         if (scope === 'synced_local' && this.hasLocalReportArtifacts(sourceHint)) return false;
-        if (scope === 'cloud' || scope === 'synced_local' || scope === 'shared') {
-            const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
-            const cloudBase = this.getCloudBackendBaseUrl();
-            if (offline || !cloudBase) return true;
-        }
-        return false;
+        return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
     },
 
     parseObjectMaybeJson(value) {

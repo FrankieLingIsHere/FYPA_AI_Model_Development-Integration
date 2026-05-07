@@ -33,9 +33,16 @@ const API = {
             throw e;
         }
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-            const e = new Error(`Offline: skipped network request to ${url}`);
-            e.name = 'OfflineSkippedError';
-            throw e;
+            let isLocalTarget = false;
+            try {
+                isLocalTarget = this.isLocalBackendBase ? this.isLocalBackendBase(url) : false;
+            } catch (err) { }
+            
+            if (!isLocalTarget) {
+                const e = new Error(`Offline: skipped network request to ${url}`);
+                e.name = 'OfflineSkippedError';
+                throw e;
+            }
         }
 
         const controller = new AbortController();

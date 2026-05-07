@@ -813,6 +813,7 @@ async function initializeWithStartupGate() {
 
 async function waitForStartupReady() {
     const timeoutAt = Date.now() + (10 * 60 * 1000);
+    let lastResolutionAtMs = 0;
     let consecutiveFetchFailures = 0;
 
     while (Date.now() < timeoutAt) {
@@ -859,10 +860,19 @@ async function waitForStartupReady() {
             consecutiveFetchFailures += 1;
 
             if (consecutiveFetchFailures >= 2) {
-                await resolveWorkingBackendBaseUrl({
-                    preferLocal: navigator.onLine === false,
-                    force: true
-                });
+                // Only re-probe backend candidates at most once per 60 seconds.
+                // Without this cooldown, every 2nd failed poll triggers a full
+                // resolution cycle that sends extra probeBackend requests to
+                // Railway (already under load) and localhost (ERR_CONNECTION_REFUSED),
+                // turning an overloaded backend into a request flood.
+                const nowMs = Date.now();
+                if (nowMs - lastResolutionAtMs >= 60000) {
+                    lastResolutionAtMs = nowMs;
+                    await resolveWorkingBackendBaseUrl({
+                        preferLocal: navigator.onLine === false,
+                        force: false
+                    });
+                }
             }
 
             updateStartupUi({
@@ -994,6 +1004,12 @@ async function probeBackend(baseUrl, endpoint = STARTUP_STATUS_ENDPOINT, timeout
             signal: controller.signal
         });
         if (response.status === 200 || response.status === 202 || response.status === 500 || response.status === 503) {
+            return true;
+        }
+        // 502/504 = Bad/Gateway Timeout → server exists but is temporarily overloaded.
+        // 429 = Too Many Requests → same server. Accept these so resolution keeps the
+        // current URL instead of falling through to localhost candidates.
+        if (response.status === 502 || response.status === 504 || response.status === 429) {
             return true;
         }
         return false;

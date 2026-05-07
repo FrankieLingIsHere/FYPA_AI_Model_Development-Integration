@@ -2136,7 +2136,7 @@ const API = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
-            }, 15000);
+            }, 25000);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {

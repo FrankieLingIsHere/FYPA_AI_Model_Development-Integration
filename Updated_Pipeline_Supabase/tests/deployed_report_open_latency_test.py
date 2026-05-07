@@ -28,11 +28,26 @@ NETWORK_BASELINE_PATH = os.environ.get("CASM_REPORT_OPEN_NETWORK_BASELINE_PATH",
 NETWORK_BASELINE_FREE_S = max(0.0, float(os.environ.get("CASM_REPORT_OPEN_NETWORK_BASELINE_FREE_S", "0.20")))
 NETWORK_ALLOWANCE_CAP_S = max(0.0, float(os.environ.get("CASM_REPORT_OPEN_NETWORK_ALLOWANCE_CAP_S", "0.60")))
 MAX_SPIKE_SAMPLES = max(0, int(os.environ.get("CASM_REPORT_OPEN_MAX_SPIKE_SAMPLES", "1")))
+INFRA_BLOCK_CODES = {402, 429, 503}
 
 
 def fail(msg: str, code: int = 2) -> int:
     print(f"FAIL: {msg}")
     return code
+
+
+def _extract_block_reason(status_code: int, payload, preview: str) -> Optional[str]:
+    if status_code not in INFRA_BLOCK_CODES:
+        return None
+    reason = None
+    if isinstance(payload, dict):
+        reason = payload.get("error") or payload.get("message")
+    if not reason:
+        reason = preview
+    reason = str(reason or "").strip()
+    if not reason:
+        reason = f"HTTP {status_code}"
+    return reason
 
 
 def request_json(method: str, path: str, *, timeout: int = REQUEST_TIMEOUT, **kwargs):
@@ -46,7 +61,8 @@ def request_json(method: str, path: str, *, timeout: int = REQUEST_TIMEOUT, **kw
     except Exception:
         payload = None
     preview = (response.text or "")[:500]
-    return response.status_code, payload, preview, elapsed
+    block_reason = _extract_block_reason(response.status_code, payload, preview)
+    return response.status_code, payload, preview, elapsed, block_reason
 
 
 def timed_get_text(path: str, *, timeout: int = REQUEST_TIMEOUT):
@@ -54,14 +70,21 @@ def timed_get_text(path: str, *, timeout: int = REQUEST_TIMEOUT):
     started = time.perf_counter()
     response = requests.get(url, timeout=timeout, headers={"Cache-Control": "no-cache"})
     elapsed = time.perf_counter() - started
-    return response, elapsed
+    preview = (response.text or "")[:500]
+    block_reason = _extract_block_reason(response.status_code, None, preview)
+    return response, elapsed, block_reason
 
 
 def measure_network_baseline_seconds() -> Optional[float]:
     samples: List[float] = []
     for _ in range(NETWORK_BASELINE_SAMPLES):
         try:
-            response, elapsed = timed_get_text(NETWORK_BASELINE_PATH, timeout=REQUEST_TIMEOUT)
+            response, elapsed, block_reason = timed_get_text(
+                NETWORK_BASELINE_PATH,
+                timeout=REQUEST_TIMEOUT,
+            )
+            if block_reason:
+                continue
             if response.status_code >= 400:
                 continue
             samples.append(elapsed)
@@ -92,11 +115,16 @@ def choose_candidates(rows: List[Dict]) -> List[str]:
 
 
 def warm_and_measure(report_id: str) -> Optional[Dict]:
-    prefetch_code, prefetch_payload, prefetch_preview, prefetch_elapsed = request_json(
+    prefetch_code, prefetch_payload, prefetch_preview, prefetch_elapsed, prefetch_block = request_json(
         "POST",
         f"/api/report/{report_id}/prefetch",
         timeout=REQUEST_TIMEOUT,
     )
+    if prefetch_block:
+        return {
+            "infra_blocked": True,
+            "reason": f"prefetch HTTP {prefetch_code}: {prefetch_block}",
+        }
 
     prefetch_layer = "unavailable"
     if prefetch_code == 404:
@@ -114,14 +142,30 @@ def warm_and_measure(report_id: str) -> Optional[Dict]:
         prefetch_layer = str(prefetch_payload.get("layer") or "prefetch")
 
     # Prime report path regardless of prefetch outcome so we measure warm-open latency.
-    warmup_response, warmup_elapsed = timed_get_text(f"/report/{report_id}", timeout=REQUEST_TIMEOUT)
+    warmup_response, warmup_elapsed, warmup_block = timed_get_text(
+        f"/report/{report_id}",
+        timeout=REQUEST_TIMEOUT,
+    )
+    if warmup_block:
+        return {
+            "infra_blocked": True,
+            "reason": f"/report/{report_id} HTTP {warmup_response.status_code}: {warmup_block}",
+        }
     if warmup_response.status_code >= 400:
         print(f"WARN: warmup /report/{report_id} returned {warmup_response.status_code}")
         return None
 
     sample_times: List[float] = []
     for _ in range(WARM_SAMPLE_COUNT):
-        response, elapsed = timed_get_text(f"/report/{report_id}", timeout=REQUEST_TIMEOUT)
+        response, elapsed, block_reason = timed_get_text(
+            f"/report/{report_id}",
+            timeout=REQUEST_TIMEOUT,
+        )
+        if block_reason:
+            return {
+                "infra_blocked": True,
+                "reason": f"/report/{report_id} HTTP {response.status_code}: {block_reason}",
+            }
         if response.status_code >= 400:
             print(f"WARN: /report/{report_id} returned {response.status_code}")
             return None
@@ -158,11 +202,13 @@ def run_once() -> int:
             extra_network_allowance_s = min(extra_network_allowance_s, NETWORK_ALLOWANCE_CAP_S)
         effective_warm_target_s = WARM_TARGET_SECONDS + extra_network_allowance_s
 
-        code, payload, preview, elapsed = request_json(
+        code, payload, preview, elapsed, block_reason = request_json(
             "GET",
             f"/api/violations?limit={MAX_SCAN}",
             timeout=REQUEST_TIMEOUT,
         )
+        if block_reason:
+            return fail(f"Infrastructure blocked ({code}): {block_reason}", 12)
         if code >= 400:
             return fail(f"/api/violations failed ({code}): {preview}", 3)
         if not isinstance(payload, list) or not payload:
@@ -190,6 +236,8 @@ def run_once() -> int:
         measured: List[Dict] = []
         for rid in candidates:
             result = warm_and_measure(rid)
+            if isinstance(result, dict) and result.get("infra_blocked"):
+                return fail(f"Environment block detected: {result.get('reason')}", 12)
             if result:
                 measured.append(result)
                 samples = ", ".join(f"{x:.3f}" for x in result["sample_times_s"])

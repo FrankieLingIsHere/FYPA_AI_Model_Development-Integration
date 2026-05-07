@@ -1266,12 +1266,30 @@ def _get_supabase_offline_backoff_snapshot() -> Dict[str, Any]:
         }
 
 
+def _is_supabase_restriction_failure(raw_error: Any) -> bool:
+    normalized = str(raw_error or '').strip().lower()
+    if not normalized:
+        return False
+
+    markers = (
+        'http 402',
+        '402',
+        'restricted',
+        'egress',
+        'exceed_egress_quota',
+    )
+    return any(marker in normalized for marker in markers)
+
+
 def _is_supabase_connectivity_failure(raw_error: Any) -> bool:
     normalized = str(raw_error or '').strip().lower()
     if not normalized:
         return False
 
     if '_local_mode_is_name_resolution_error' in globals() and _local_mode_is_name_resolution_error(normalized):
+        return True
+
+    if _is_supabase_restriction_failure(normalized):
         return True
 
     markers = (
@@ -1314,11 +1332,12 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
     global supabase_offline_failure_count
 
-    if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
-        return
+    allow_demotion = ALLOW_OFFLINE_LOCAL_MODE and not _is_hosted_runtime_environment()
 
     error_text = str(error or '').strip()
     if error_text and not _is_supabase_connectivity_failure(error_text):
+        return
+    if not allow_demotion and not _is_supabase_restriction_failure(error_text):
         return
 
     now_epoch = time.time()
@@ -1335,6 +1354,15 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         supabase_offline_backoff_until_epoch = new_until
         supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
         supabase_offline_backoff_error = error_text[:300]
+
+    if not allow_demotion:
+        logger.warning(
+            "Supabase restriction detected; backoff engaged in hosted runtime "
+            f"(context={supabase_offline_backoff_context}, "
+            f"backoff_seconds={int(max(0, supabase_offline_backoff_until_epoch - now_epoch))}, "
+            f"error={error_text or 'none'})"
+        )
+        return
 
     # H3  Only wipe managers after at least 2 consecutive failures so a single
     # transient Supabase blip does not bring the whole pipeline offline.
@@ -6270,6 +6298,29 @@ def api_report_prefetch(report_id):
 
     try:
         local_report_html = VIOLATIONS_DIR / report_id / 'report.html'
+
+        restriction_block = None
+        if storage_manager is not None:
+            blocked = _egress_budget_blocked_response()
+            if blocked:
+                restriction_block = blocked
+            elif storage_manager._restriction_active():
+                restriction_reason = (
+                    str(getattr(storage_manager, '_restriction_reason', '') or '').strip()
+                    or 'Supabase project restricted.'
+                )
+                _activate_local_offline_runtime(
+                    'api_report_prefetch.restricted',
+                    f"HTTP 402 restricted: {restriction_reason}",
+                )
+                restriction_block = (jsonify({
+                    'success': False,
+                    'error': 'Supabase project restricted',
+                    'detail': restriction_reason,
+                }), 402)
+
+        if restriction_block and not local_report_html.exists():
+            return restriction_block
 
         if storage_manager is None or db_manager is None:
             if local_report_html.exists():

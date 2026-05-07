@@ -18,6 +18,11 @@ from datetime import timedelta, datetime, timezone
 import requests
 from supabase import create_client, Client
 
+try:
+    from postgrest.exceptions import APIError as PostgrestAPIError
+except Exception:  # pragma: no cover - optional dependency shape
+    PostgrestAPIError = None
+
 logger = logging.getLogger(__name__)
 
 # When Supabase returns a project-level restriction (HTTP 402 "exceed_egress_quota",
@@ -232,7 +237,7 @@ class SupabaseStorageManager:
             reason, _RESTRICTION_BACKOFF_SECONDS,
         )
 
-    def _probe_restriction(self, bucket_name: str, storage_key: str) -> bool:
+    def _probe_restriction(self, bucket_name: str, storage_key: str, *, method: str = 'POST') -> bool:
         """After an opaque SDK error, do a direct REST probe to learn the real
         HTTP status. If Supabase responds with 402 / project restriction, trip
         the breaker and return True."""
@@ -240,15 +245,23 @@ class SupabaseStorageManager:
             return False
         try:
             url = f"{self.supabase_url}/storage/v1/object/{bucket_name}/{storage_key}"
-            resp = requests.post(
-                url,
-                headers={
-                    'Authorization': f'Bearer {self.supabase_key}',
-                    'apikey': self.supabase_key,
+            method_upper = (method or 'POST').upper()
+            headers = {
+                'Authorization': f'Bearer {self.supabase_key}',
+                'apikey': self.supabase_key,
+            }
+            data = None
+            if method_upper in ('POST', 'PUT', 'PATCH'):
+                headers.update({
                     'Content-Type': 'application/octet-stream',
                     'x-upsert': 'true',
-                },
-                data=b'',
+                })
+                data = b''
+            resp = requests.request(
+                method_upper,
+                url,
+                headers=headers,
+                data=data,
                 timeout=10,
             )
         except Exception as probe_err:
@@ -470,31 +483,53 @@ class SupabaseStorageManager:
                 self._egress_block_reason = usage.get('blocked_reason') or 'Monthly egress budget exceeded.'
                 logger.warning(self._egress_block_reason)
                 return None
+
+        if self._restriction_active():
+            logger.debug(f"Skip download (project restricted): {storage_key}")
+            return None
         
         try:
             # Download file content
             result = self.client.storage.from_(bucket_name).download(path)
-            
-            if result:
-                size_bytes = 0
-                if isinstance(result, (bytes, bytearray)):
-                    size_bytes = len(result)
-                elif isinstance(result, str):
-                    size_bytes = len(result.encode('utf-8'))
-                else:
-                    try:
-                        size_bytes = len(result)
-                    except Exception:
-                        size_bytes = 0
-                if size_bytes:
-                    self._record_egress_bytes(size_bytes)
-                logger.debug(f"Downloaded content from: {storage_key}")
-                return result
-            else:
+            if result is None:
                 logger.error(f"No content returned for: {storage_key}")
+                self._probe_restriction(bucket_name, path, method='GET')
                 return None
+
+            size_bytes = 0
+            if isinstance(result, (bytes, bytearray)):
+                size_bytes = len(result)
+            elif isinstance(result, str):
+                size_bytes = len(result.encode('utf-8'))
+            else:
+                try:
+                    size_bytes = len(result)
+                except Exception:
+                    size_bytes = 0
+            if size_bytes:
+                self._record_egress_bytes(size_bytes)
+            logger.debug(f"Downloaded content from: {storage_key}")
+            return result
                 
         except Exception as e:
+            err_text = str(e)
+            status_code = None
+            if PostgrestAPIError and isinstance(e, PostgrestAPIError):
+                status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                try:
+                    status_code = int(status_code)
+                except Exception:
+                    status_code = None
+            if (
+                status_code == 402
+                or '402' in err_text
+                or 'exceed_egress_quota' in err_text
+                or 'restricted' in err_text.lower()
+            ):
+                self._trip_restriction(f"HTTP {status_code or '402'}: {err_text[:240]}")
+                return None
+            if self._probe_restriction(bucket_name, path, method='GET'):
+                return None
             logger.error(f"Failed to download file from {storage_key}: {e}")
             return None
     

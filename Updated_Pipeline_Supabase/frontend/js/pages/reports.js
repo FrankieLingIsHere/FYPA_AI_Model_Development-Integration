@@ -900,9 +900,10 @@ const ReportsPage = {
             ? API.inferReportSourceScope(resolvedSourceHint)
             : this.inferSourceScope(resolvedSourceHint);
 
+        const requiresCloudBase = sourceScope === 'cloud' || sourceScope === 'shared' || sourceScope === 'synced_local';
         if (
             offline
-            && sourceScope === 'synced_local'
+            && requiresCloudBase
             && typeof API !== 'undefined'
             && typeof API.getOfflineCachedReportUrl === 'function'
         ) {
@@ -923,7 +924,7 @@ const ReportsPage = {
                 this.notify(`Opening cached report ${rid}`, 'info');
                 return;
             }
-            this.notify('Cloud report details are unavailable while offline.', 'warning', {
+            this.notify('Cloud report details are unavailable offline or without a cloud connection.', 'warning', {
                 dedupeKey: `cloud-report-offline-${rid}`,
                 dedupeTtlMs: 10000
             });

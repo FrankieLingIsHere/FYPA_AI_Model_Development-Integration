@@ -402,10 +402,14 @@ const API = {
     },
 
     isCloudReportUnavailableOffline(sourceHint = null) {
-        if (typeof navigator === 'undefined' || navigator.onLine !== false) return false;
         const scope = this.inferReportSourceScope(sourceHint);
         if (scope === 'synced_local' && this.hasLocalReportArtifacts(sourceHint)) return false;
-        return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
+        if (scope === 'cloud' || scope === 'synced_local' || scope === 'shared') {
+            const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+            const cloudBase = this.getCloudBackendBaseUrl();
+            if (offline || !cloudBase) return true;
+        }
+        return false;
     },
 
     parseObjectMaybeJson(value) {
@@ -715,8 +719,7 @@ const API = {
 
     reportHtmlCacheScope(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
-        const base = this.getReportBackendBase(sourceHint) || 'same-origin';
-        return `report-html:${base}:${rid}`;
+        return `report-html:universal:${rid}`;
     },
 
     async writeJsonCache(scope, payload) {
@@ -1644,6 +1647,11 @@ const API = {
         const localBase = this.getLocalBackendBaseUrl();
         const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
         const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+        if (scope === 'cloud' && this.isCloudReportUnavailableOffline(sourceHint)) {
+            const localBase = this.getLocalBackendBaseUrl() || this._normalizeBaseUrl(API_CONFIG.BASE_URL);
+            return `${localBase}${path}`;
+        }
 
         if (scope === 'local') {
             return `${localBase || currentBase || ''}${path}`;

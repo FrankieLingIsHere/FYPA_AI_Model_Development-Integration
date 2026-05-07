@@ -689,7 +689,7 @@ const HomePage = {
             <div class="recent-list" style="display:flex; flex-direction:column; gap:0.65rem;">
                 ${violations.map(v => `
                     <div class="recent-item" 
-                         onclick="window.location.href = API.getReportUrl('${v.report_id}')"
+                         onclick="if (typeof ReportsPage !== 'undefined') ReportsPage.openReport('${v.report_id}'); else window.open(typeof API !== 'undefined' && API.getReportNavigationUrl ? API.getReportNavigationUrl('${v.report_id}') : '/report/${v.report_id}', '_blank');"
                          style="
                             display:flex; 
                             justify-content:space-between; 

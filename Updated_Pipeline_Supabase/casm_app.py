@@ -3331,8 +3331,18 @@ def queue_worker_loop():
                                 logger.info(
                                     f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
                                 )
+                            elif not sync_summary.get('success'):
+                                logger.warning(
+                                    "Auto reconnect local-cache sync did not complete: "
+                                    f"{sync_summary.get('error') or 'unknown error'}"
+                                )
+                            elif sync_summary.get('errors') and int(sync_summary.get('candidates', 0) or 0) > 0:
+                                logger.warning(
+                                    "Auto reconnect local-cache sync found candidate errors: "
+                                    f"{sync_summary.get('errors')}"
+                                )
                         except Exception as sync_err:
-                            logger.debug(f"Auto reconnect local-cache sync skipped: {sync_err}")
+                            logger.warning(f"Auto reconnect local-cache sync failed: {sync_err}")
 
             if (
                 QUEUE_STUCK_REPORT_SWEEP_ENABLED
@@ -5803,6 +5813,14 @@ def api_violations():
 
             if resolved_person_count is None:
                 resolved_person_count = v.get('person_count', 0)
+
+            normalized_ppe_tags = _normalize_violation_type_list(
+                ppe_tags,
+                [f"NO-{item}" for item in missing_ppe],
+            )
+            if normalized_ppe_tags:
+                ppe_tags = normalized_ppe_tags
+                missing_ppe = _missing_ppe_from_violation_types(normalized_ppe_tags)
 
             source_scope, source_reason = _infer_report_source_scope(
                 device_id=v.get('device_id'),
@@ -8339,6 +8357,46 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
         json.dump(state, f, indent=2)
 
 
+def _mark_local_provision_secret_stale(
+    *,
+    machine_id: str,
+    cloud_url: str,
+    error_text: str = '',
+) -> None:
+    """Clear a locally stale provision secret without mutating cloud approval state."""
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url)
+    if not normalized_machine_id:
+        return
+
+    state = _local_mode_load_provision_state()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    state.update({
+        'machine_id': normalized_machine_id,
+        'cloud_url': normalized_cloud_url or state.get('cloud_url') or '',
+        'provision_secret': '',
+        'status': 'credentials_present' if _local_mode_has_supabase_credentials() else 'idle',
+        'updated_at': now_iso,
+        'last_provision_secret_error': 'invalid_or_stale',
+        'last_provision_secret_error_at': now_iso,
+        'last_provision_secret_error_detail': str(error_text or '')[:240],
+    })
+    _local_mode_save_provision_state(state)
+
+
+def _has_recent_local_provision_secret_stale_marker(
+    state: Dict[str, Any],
+    *,
+    max_age_seconds: int = 900,
+) -> bool:
+    if str((state or {}).get('last_provision_secret_error') or '').strip() != 'invalid_or_stale':
+        return False
+    marker_epoch = _parse_iso_epoch((state or {}).get('last_provision_secret_error_at'))
+    if marker_epoch is None:
+        return True
+    return (time.time() - marker_epoch) < max(60, int(max_age_seconds or 900))
+
+
 def _local_mode_normalize_machine_id(raw_machine_id: Any) -> str:
     machine_id = str(raw_machine_id or '').strip()
     if not machine_id:
@@ -8797,6 +8855,7 @@ def _send_local_mode_cloud_heartbeat_once(
                 and bool(recovery_cloud_url)
                 and not _local_mode_cloud_url_is_placeholder(recovery_cloud_url)
                 and bool(recovery_machine_id)
+                and not _has_recent_local_provision_secret_stale_marker(recovery_state)
             )
 
             if can_attempt_recovery:
@@ -8969,6 +9028,18 @@ def _send_local_mode_cloud_heartbeat_once(
                     f"Heartbeat provision_secret recovery failed for {machine_id}: {refresh_err}"
                 )
 
+            _mark_local_provision_secret_stale(
+                machine_id=machine_id,
+                cloud_url=cloud_url,
+                error_text=response_error,
+            )
+            return {
+                'sent': False,
+                'reason': 'provision_secret_stale',
+                'status_code': response_status_code,
+                'error': response_error,
+            }
+
         return {
             'sent': False,
             'reason': 'request_rejected',
@@ -9057,6 +9128,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                 'cloud_url_localhost',
                 'machine_id_missing',
                 'provision_secret_missing',
+                'provision_secret_stale',
                 'supabase_offline_backoff',
                 'cloud_unreachable',
             }
@@ -11440,7 +11512,7 @@ def _sync_local_cache_candidates(
             [
                 f"NO-{item}"
                 for item in (
-                    detection_data.get('missing_ppe') if isinstance(detection_data, dict) else []
+                    (detection_data.get('missing_ppe') if isinstance(detection_data, dict) else []) or []
                 )
             ],
         )
@@ -11562,13 +11634,23 @@ def api_sync_local_cache_to_supabase():
     sync_reason = str(payload.get('reason') or 'manual_api').strip() or 'manual_api'
     sync_origin = str(payload.get('origin') or 'local_synced').strip().lower() or 'local_synced'
 
-    result = _sync_local_cache_candidates(
-        max_items=max_items,
-        dry_run=dry_run,
-        reconcile_reason=sync_reason,
-        require_worker=True,
-        origin=sync_origin,
-    )
+    try:
+        result = _sync_local_cache_candidates(
+            max_items=max_items,
+            dry_run=dry_run,
+            reconcile_reason=sync_reason,
+            require_worker=True,
+            origin=sync_origin,
+        )
+    except Exception as sync_err:
+        logger.error(f"Local-cache sync endpoint failed: {sync_err}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(sync_err),
+            'reconcile_reason': sync_reason,
+            'origin': sync_origin,
+            'dry_run': dry_run,
+        }), 500
 
     if result.get('success'):
         return jsonify(result)

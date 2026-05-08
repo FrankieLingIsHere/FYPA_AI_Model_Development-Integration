@@ -894,6 +894,15 @@ def _build_detection_caption_context(
     )
 
 
+def _caption_has_yolo_ppe_context(caption: str) -> bool:
+    """Return true when a YOLO PPE evidence clause is already present."""
+    normalized = re.sub(r'\s+', ' ', str(caption or '')).strip().lower()
+    return (
+        'yolo detection identified' in normalized
+        and 'ppe deficiencies' in normalized
+    )
+
+
 def _enforce_caption_quality_floor(
     caption: Any,
     detections: List[Dict[str, Any]],
@@ -908,6 +917,8 @@ def _enforce_caption_quality_floor(
             violation_types=violation_types,
         )
         normalized_single = re.sub(r'\s+', ' ', normalized).strip()
+        if context_caption and _caption_has_yolo_ppe_context(normalized_single):
+            return normalized_single, False, ''
         if context_caption and context_caption.lower() not in normalized_single.lower():
             return f"{normalized_single.rstrip(' .')}. {context_caption}", True, 'augmented_yolo_context'
         return normalized_single, False, ''
@@ -931,6 +942,8 @@ def _enforce_caption_quality_floor(
         return normalized, False, ''
 
     normalized_single = re.sub(r'\s+', ' ', normalized).strip()
+    if _caption_has_yolo_ppe_context(normalized_single):
+        return normalized_single, False, ''
     if context_caption.lower() in normalized_single.lower():
         return normalized_single, False, ''
     return f"{normalized_single.rstrip(' .')}. {context_caption}", True, f"augmented_{reason}"

@@ -93,6 +93,29 @@ def test_sanitized_report_fields_stay_word_level():
     _assert("to , to" not in rendered, "Rendered person HTML contains character-split text")
 
 
+def test_scene_description_does_not_duplicate_caption_yolo_addendum():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    caption = (
+        "One individual is present in an indoor office setting. "
+        "YOLO detection identified 1 person(s) in the frame with the following PPE deficiencies: "
+        "Missing Hard Hat, Missing Mask, Missing Safety Vest."
+    )
+
+    visual = subject._build_scene_description(
+        caption,
+        "Indoor / Office",
+        [
+            {"class_name": "Person", "confidence": 0.91},
+            {"class_name": "NO-Hardhat", "confidence": 0.83},
+            {"class_name": "NO-Mask", "confidence": 0.74},
+            {"class_name": "NO-Safety Vest", "confidence": 0.76},
+        ],
+    )
+
+    _assert(visual.count("YOLO detection identified") == 1, "Scene description duplicated YOLO context")
+    _assert("Hardhat, Mask, Safety Vest." not in visual, "Scene description appended raw duplicate labels")
+
+
 def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     subject = ReportGenerator.__new__(ReportGenerator)
 
@@ -134,6 +157,7 @@ def main():
         test_nlp_prompt_injects_yolo_payload,
         test_report_text_cleaning_does_not_split_characters,
         test_sanitized_report_fields_stay_word_level,
+        test_scene_description_does_not_duplicate_caption_yolo_addendum,
         test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe,
     ]
     failures = []

@@ -86,6 +86,24 @@ def test_casm_caption_quality_adds_yolo_context_to_rich_caption():
     _assert(not caption.startswith("Detection-only safety summary:"), "Real caption was replaced by fallback")
 
 
+def test_casm_caption_quality_does_not_duplicate_existing_yolo_context():
+    raw_caption = (
+        "One individual is visible in an indoor office setting. "
+        "YOLO detection identified 1 person(s) in the frame with the following PPE deficiencies: "
+        "Missing Hard Hat, Missing Safety Vest."
+    )
+
+    caption, applied, reason = _enforce_caption_quality_floor(
+        raw_caption,
+        DETECTIONS,
+        violation_types=["NO-Hardhat", "NO-Safety Vest"],
+    )
+
+    _assert(applied is False, "Existing YOLO context should not be augmented again")
+    _assert(reason == "", f"Unexpected reason: {reason}")
+    _assert(caption.count("YOLO detection identified") == 1, "YOLO addendum was duplicated")
+
+
 def test_casm_caption_quality_replaces_provider_failure_only():
     caption, applied, reason = _enforce_caption_quality_floor(
         "Image captioning not available - Gemini API key not configured",
@@ -143,6 +161,7 @@ def main():
     tests = [
         test_casm_caption_quality_augments_short_real_caption,
         test_casm_caption_quality_adds_yolo_context_to_rich_caption,
+        test_casm_caption_quality_does_not_duplicate_existing_yolo_context,
         test_casm_caption_quality_replaces_provider_failure_only,
         test_report_generator_keeps_non_placeholder_caption,
         test_caption_generator_image_path_does_not_shadow_os_module,

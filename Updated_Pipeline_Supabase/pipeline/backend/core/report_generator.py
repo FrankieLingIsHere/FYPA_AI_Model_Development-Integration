@@ -150,6 +150,15 @@ def infer_people_count_from_text(*texts: str) -> int:
     return 0
 
 
+def _text_has_yolo_ppe_context(text: str) -> bool:
+    """Return true when a YOLO PPE evidence clause is already present."""
+    normalized = re.sub(r'\s+', ' ', str(text or '')).strip().lower()
+    return (
+        'yolo detection identified' in normalized
+        and 'ppe deficiencies' in normalized
+    )
+
+
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
@@ -1002,7 +1011,7 @@ class ReportGenerator:
             if d.get('class_name', '').startswith('NO-')
         ]
 
-        if violation_types:
+        if violation_types and not _text_has_yolo_ppe_context(caption_clean):
             unique_violations = list(dict.fromkeys(violation_types))  # preserve order, remove dupes
             violation_text = ', '.join(unique_violations)
             # Count persons: explicit Person detections + infer from violations

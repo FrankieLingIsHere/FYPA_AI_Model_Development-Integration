@@ -131,6 +131,13 @@ const API = {
         if (!normalized) return false;
         const explicitOverride = String((typeof window !== 'undefined' && window.PPE_API_URL) || '').trim();
         if (explicitOverride) return true;
+        const configuredCloudBase = this._normalizeBaseUrl(
+            (typeof window !== 'undefined'
+                && window.__PPE_CONFIG__
+                && window.__PPE_CONFIG__.API_BASE_URL)
+            || ''
+        );
+        if (configuredCloudBase && configuredCloudBase === normalized) return true;
         if (this.isPageServedFromLocalHost() && !this.isLocalBackendBase(normalized)) {
             return false;
         }

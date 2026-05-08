@@ -4813,6 +4813,17 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
+    try:
+        realtime_metadata = dict(metadata)
+        realtime_metadata.update({
+            'status': 'completed' if report_created else 'failed',
+            'error_message': None if report_created else failure_reason,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        })
+        _push_realtime_report_event(realtime_metadata, event_type='report_status')
+    except Exception as realtime_err:
+        logger.debug(f"Could not push queued report status realtime row for {report_id}: {realtime_err}")
+
     if report_created and is_local_cache_sync_job and not cloud_upload_skipped:
         local_has_annotated = annotated_path.exists()
         local_has_report = (violation_dir / 'report.html').exists()
@@ -7184,6 +7195,26 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
 
             if existing:
                 existing_status = str(existing.get('status') or '').strip().lower()
+                for flag_key in ('has_original', 'has_annotated', 'has_report'):
+                    existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))
+                if local_row.get('has_report'):
+                    existing['has_local_report'] = True
+                for detail_key in (
+                    'violation_count',
+                    'person_count',
+                    'missing_ppe',
+                    'ppe_tags',
+                    'violation_summary',
+                    'violation_type',
+                    'device_id',
+                ):
+                    local_value = local_row.get(detail_key)
+                    if local_value not in (None, '', [], {}):
+                        current_value = existing.get(detail_key)
+                        if current_value in (None, '', [], {}):
+                            existing[detail_key] = local_value
+                if not existing.get('source_scope'):
+                    existing.update(_build_source_payload('local', 'local_cache_row'))
                 if local_status in ('completed', 'failed', 'skipped') and existing_status in (
                     'pending', 'queued', 'processing', 'generating', 'unknown', ''
                 ):
@@ -7197,7 +7228,10 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                     existing['error_message'] = local_row.get('error_message')
                 if not existing.get('timestamp') and local_row.get('timestamp'):
                     existing['timestamp'] = local_row.get('timestamp')
-                if not existing.get('updated_at') and local_row.get('updated_at'):
+                if (
+                    not existing.get('updated_at')
+                    or (local_status == 'completed' and local_row.get('has_report'))
+                ) and local_row.get('updated_at'):
                     existing['updated_at'] = local_row.get('updated_at')
                 continue
 

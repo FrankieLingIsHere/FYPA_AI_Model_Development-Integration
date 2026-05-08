@@ -13,6 +13,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
 
         self.assertIn('getReportBackendBase(sourceHint = null)', api_js)
         self.assertIn("scope === 'cloud' || scope === 'synced_local'", api_js)
+        self.assertIn('configuredCloudBase && configuredCloudBase === normalized', api_js)
         self.assertIn("API.getImageUrl(violation.report_id, 'annotated.jpg', violation)", reports_js)
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
 
@@ -42,6 +43,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("host === 'localhost'", realtime_js)
         self.assertIn('return false;', realtime_js)
         self.assertIn('_push_realtime_report_event(preliminary_metadata', casm_app)
+        self.assertIn("_push_realtime_report_event(realtime_metadata, event_type='report_status')", casm_app)
+        self.assertIn("existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))", casm_app)
         self.assertIn('realtime_report_events = deque', casm_app)
 
     def test_synced_local_tag_survives_cloud_mode_repair(self):

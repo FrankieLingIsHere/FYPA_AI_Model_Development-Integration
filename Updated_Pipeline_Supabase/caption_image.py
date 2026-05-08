@@ -73,6 +73,7 @@ VISION_API_MODEL = os.getenv('VISION_API_MODEL', '').strip()
 # Google Gemini fallback
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
 GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')).strip()
+GEMINI_VISION_THINKING_BUDGET = _safe_int_env('GEMINI_VISION_THINKING_BUDGET', 0)
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
@@ -357,6 +358,10 @@ def _call_gemini_vision(prompt: str, image_base64: str, temperature: float = 0.6
             'maxOutputTokens': max_tokens
         }
     }
+    if GEMINI_VISION_THINKING_BUDGET >= 0:
+        payload['generationConfig']['thinkingConfig'] = {
+            'thinkingBudget': GEMINI_VISION_THINKING_BUDGET
+        }
 
     try:
         response = requests.post(endpoint, json=payload, timeout=TIMEOUT)
@@ -794,6 +799,12 @@ def _normalize_caption_text(caption: str) -> str:
         "",
         text,
     ).strip()
+    text = re.sub(
+        r"(?is)^here(?:[â€™']s|\s+is)\s+(?:a\s+)?description\s+"
+        r"(?:of\s+the\s+image\s+)?(?:based\s+(?:solely\s+)?on\s+[^:]{0,120})?:\s*",
+        "",
+        text,
+    ).strip()
     return text
 
 
@@ -867,12 +878,14 @@ def caption_image_llava(image_path, prompt=None):
     default_prompt = """You are a workplace visual analyst. Write one factual caption from this image only.
 
 Output requirements:
-- Single paragraph, 3-5 concise sentences.
-- Start with the total visible people count and the actual scene type (for example indoor office, residential room, warehouse, roadside, construction site) based only on visible evidence.
-- Describe visible body region, posture, clothing, eyewear, and nearby room or site features.
+- Single paragraph, 5-7 complete factual sentences.
+- Do not answer with only one sentence.
+- Start with the actual scene type and total visible people count (for example indoor office/study, residential room, warehouse, roadside, construction site) based only on visible evidence.
+- Describe visible body region, posture, gaze direction, clothing, eyewear, and nearby room or site features such as shelves, cabinets, windows, walls, desks, vehicles, tools, or machinery when they are clearly visible.
 - Mention PPE only when clearly visible; if none is visible, say no PPE is visible.
 
 Strict grounding rules:
+- Do not begin with meta wording such as "Here is a description" or "Based on the image".
 - Do not invent objects, actions, hazards, phones, tablets, vehicles, roads, machinery, tools, or construction activity.
 - Do not infer a worksite or traffic context unless those objects are clearly visible.
 - If visibility is unclear, say it is unclear instead of guessing.
@@ -901,15 +914,16 @@ Strict grounding rules:
             caption = _normalize_caption_text(caption)
 
             if _caption_needs_expansion(caption) and not caption.startswith('ALERT_'):
-                expansion_prompt = """Rewrite the caption with richer factual detail from the image only.
+                expansion_prompt = """The previous caption was too short or generic. Rewrite it with richer factual detail from the image only.
 
 Requirements:
-- Single paragraph, 6-10 sentences.
-- State people count and environment first.
-- For each visible person: action, posture, and context near objects.
-- Mention nearby objects/hazards only if visible.
+- Single paragraph, 5-7 complete sentences.
+- Do not answer with only one sentence.
+- State environment type and people count first.
+- For each visible person: visible body region, posture, gaze direction, clothing, and context near objects.
+- Mention nearby objects or hazards only if visible.
 - Mention PPE only when clearly visible; if not visible, state not visible.
-- No bullet points, no markdown, no meta commentary.
+- No bullet points, no markdown, no meta commentary, no "Here is a description" preamble.
 """
                 expanded = _generate_vision_response(
                     prompt=expansion_prompt,

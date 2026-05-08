@@ -115,6 +115,17 @@ const API = {
         }
     },
 
+    canUseLocalBackendFromPage(baseUrl = null) {
+        const target = this._normalizeBaseUrl(baseUrl || this.getLocalBackendBaseUrl());
+        if (!this.isLocalBackendBase(target)) return true;
+        if (this.isPageServedFromLocalHost()) return true;
+
+        // Deployed HTTPS frontends cannot safely POST to the user's loopback
+        // Flask server; Chrome blocks this as Private Network Access and emits
+        // console errors even when fetch() is caught.
+        return false;
+    },
+
     canUseRemoteCloudBackendFromPage(baseUrl) {
         const normalized = this._normalizeBaseUrl(baseUrl);
         if (!normalized) return false;
@@ -2305,6 +2316,23 @@ const API = {
             const dryRun = !!options.dryRun;
             const origin = String(options.origin || 'local_synced').trim() || 'local_synced';
             const syncBase = this._normalizeBaseUrl(options.baseUrl || options.syncBaseUrl || this.getLocalSyncBackendBaseUrl());
+            const localLoopbackBlocked = this.isLocalBackendBase(syncBase)
+                && !this.canUseLocalBackendFromPage(syncBase)
+                && options.allowBrowserLoopback !== true;
+            if (localLoopbackBlocked) {
+                return {
+                    success: true,
+                    skipped_browser_loopback_blocked: true,
+                    reconcile_reason: reason,
+                    origin,
+                    dry_run: dryRun,
+                    scanned: 0,
+                    candidates: 0,
+                    enqueued: 0,
+                    skipped: 0,
+                    queued_report_ids: []
+                };
+            }
             if (typeof navigator !== 'undefined' && navigator.onLine === false && !dryRun) {
                 return {
                     success: true,

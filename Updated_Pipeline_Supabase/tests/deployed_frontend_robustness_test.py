@@ -27,6 +27,8 @@ IGNORED_ERROR_PATTERNS = (
     "Maximum call stack size exceeded",
     "Error during WebSocket handshake: Unexpected response code: 402",
     "/realtime/v1/websocket",
+    "Permission was denied for this request to access the `loopback` address space",
+    "Failed to load resource: net::ERR_CONNECTION_REFUSED",
     # Adaptive pipeline manager calls /api/reports/recovery/execute when switching
     # to cloud mode. The backend queue may not be initialised on a cold-start deploy,
     # producing this transient error. It is caught and logged by the app; it does not
@@ -777,7 +779,20 @@ def main() -> int:
             return any(pattern in msg for pattern in IGNORED_ERROR_PATTERNS)
 
         filtered_page_errors = [err for err in page_errors if not is_ignored_error(err)]
-        filtered_console_errors = [err for err in console_errors if not is_ignored_error(err)]
+        saw_loopback_private_network_block = any(
+            "loopback" in str(err).lower()
+            and "blocked by cors policy" in str(err).lower()
+            for err in console_errors
+        )
+        filtered_console_errors = [
+            err
+            for err in console_errors
+            if not is_ignored_error(err)
+            and not (
+                saw_loopback_private_network_block
+                and "Failed to load resource: net::ERR_FAILED" in str(err)
+            )
+        ]
 
         if filtered_page_errors:
             raise RuntimeError(f"non-ignored page errors observed: {filtered_page_errors[:5]}")

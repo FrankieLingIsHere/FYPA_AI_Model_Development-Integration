@@ -119,6 +119,12 @@ const ReportsPage = {
     },
 
     async mount() {
+        if (this.timezoneChangeHandler) {
+            window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
+        }
+        this.timezoneChangeHandler = () => this.renderReports();
+        window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
+
         await this.loadReports();
         await this.updateProviderRuntimeBadge();
         this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
@@ -138,9 +144,6 @@ const ReportsPage = {
 
         this.localSyncHandler = (event) => this.applyLocalSyncUpdate((event && event.detail) || {});
         window.addEventListener('ppe-local-report-sync:update', this.localSyncHandler);
-
-        this.timezoneChangeHandler = () => this.renderReports();
-        window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
     },
 
     unmount() {

@@ -283,6 +283,31 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(str(payload.get('provision_secret') or '').strip())
         self.assertEqual(payload.get('notification_reason'), 'status_preserved')
 
+    @patch('casm_app.notify_admin')
+    def test_stale_browser_secret_without_heartbeat_does_not_demote_approved_device(self, mock_notify_admin):
+        machine_id = 'TEST-EDGE-STALE-SECRET-NO-DEMOTE-001'
+        _ = self._request_device(machine_id)
+        self._approve_device(machine_id)
+        mock_notify_admin.reset_mock()
+
+        with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            reissue = self.client.post('/api/provision/request', json={
+                'machine_id': machine_id,
+                'current_provision_secret': 'stale-browser-secret',
+            })
+
+        self.assertEqual(reissue.status_code, 409)
+        payload = reissue.json or {}
+        self.assertEqual(payload.get('status'), 'approved')
+        self.assertEqual(payload.get('device_status'), 'approved')
+        self.assertTrue(payload.get('requires_revalidation'))
+        self.assertIn('left unchanged', payload.get('message') or '')
+
+        devices = _load_pending_devices()
+        self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
+        self.assertTrue((devices.get(machine_id) or {}).get('approved_at'))
+        mock_notify_admin.assert_not_called()
+
     def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
         machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
         provision_secret = self._request_device(machine_id)

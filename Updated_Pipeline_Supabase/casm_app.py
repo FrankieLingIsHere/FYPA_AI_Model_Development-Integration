@@ -1205,6 +1205,10 @@ LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR = os.getenv(
     'LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS = os.getenv(
+    'LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
 LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS = max(
     0,
     int(os.getenv('LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS', '0') or 0)
@@ -1406,6 +1410,17 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
             f"backoff_seconds={int(max(0, supabase_offline_backoff_until_epoch - now_epoch))}, "
             f"error={error_text or 'none'})"
         )
+
+
+def _is_local_pipeline_runtime_active() -> bool:
+    """Return True when this local host should generate/cache reports locally."""
+    if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
+        return False
+    if _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', '')) == 'local':
+        return True
+    if _is_supabase_offline_backoff_active():
+        return True
+    return db_manager is None or storage_manager is None
 
 
 def _is_queue_worker_alive() -> bool:
@@ -3304,10 +3319,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
 
     try:
         trigger_source = (trigger_source or 'live').strip().lower()
-        routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-        local_profile_active = routing_profile == 'local'
+        local_runtime_active = _is_local_pipeline_runtime_active()
         force_local_scope = bool(
-            local_profile_active
+            local_runtime_active
             and _should_force_local_artifact_pipeline(
                 sync_source='local_pipeline',
                 device_id='local_cache',
@@ -3340,7 +3354,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
-        runtime_device_id = 'local_cache' if (force_local_scope or local_profile_active) else 'webcam_0'
+        runtime_device_id = 'local_cache' if local_runtime_active else 'webcam_0'
 
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -3396,9 +3410,9 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'location': 'Live Stream Monitor',
             'detection_count': len(detections or []),
             'status': 'pending',
-            'source_scope': 'local' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'cloud',
-            'source_label': 'Local' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'Cloud',
-            'sync_source': 'local_pipeline' if (force_local_scope or local_profile_active or not _is_hosted_runtime_environment()) else 'live_capture',
+            'source_scope': 'local' if local_runtime_active else 'cloud',
+            'source_label': 'Local' if local_runtime_active else 'Cloud',
+            'sync_source': 'local_pipeline' if local_runtime_active else 'live_capture',
             'has_original': True,
             'has_annotated': False,
             'has_caption': False,
@@ -3410,8 +3424,6 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             logger.info(f"Preliminary metadata saved: {metadata_path}")
         except Exception as meta_err:
             logger.warning(f"Could not save preliminary metadata for {report_id}: {meta_err}")
-
-        _push_realtime_report_event(preliminary_metadata, event_type='violation_detected')
 
         def _mark_local_capture_failed(reason: str):
             try:
@@ -3442,7 +3454,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
 
         # === IMMEDIATE: Insert pending detection event ===
         # Local-first profile must not depend on cloud DB availability during capture.
-        if db_manager and not force_local_scope:
+        if db_manager and not local_runtime_active:
             try:
                 db_manager.insert_detection_event(
                     report_id=report_id,
@@ -3456,14 +3468,36 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
                 logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
+                if _is_supabase_connectivity_failure(e):
+                    local_runtime_active = True
+                    force_local_scope = bool(
+                        _should_force_local_artifact_pipeline(
+                            sync_source='local_pipeline',
+                            device_id='local_cache',
+                        )
+                    )
+                    runtime_device_id = 'local_cache'
+                    preliminary_metadata.update({
+                        'device_id': runtime_device_id,
+                        'source_scope': 'local',
+                        'source_label': 'Local',
+                        'sync_source': 'local_pipeline',
+                    })
+                    try:
+                        with open(metadata_path, 'w', encoding='utf-8') as f:
+                            json.dump(preliminary_metadata, f, indent=2)
+                    except Exception as meta_update_err:
+                        logger.debug(f"Could not restamp local capture metadata for {report_id}: {meta_update_err}")
                 logger.warning(
                     "Could not insert pending event into Supabase; "
                     f"continuing local queue processing ({e})"
                 )
-        elif force_local_scope:
+        elif local_runtime_active:
             logger.info(
                 f"Local scope active for {report_id}; deferring Supabase detection insert until sync"
             )
+
+        _push_realtime_report_event(preliminary_metadata, event_type='violation_detected')
 
         # === QUEUE: Add to queue for async processing ===
         if not ensure_queue_worker_running():
@@ -3490,15 +3524,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'violation_dir': str(violation_dir)
         }
 
-        if force_local_scope:
-            violation_data['source_scope'] = 'local'
-            violation_data['sync_source'] = 'local_pipeline'
-            violation_data['source'] = 'local_pipeline'
-        elif local_profile_active or not _is_hosted_runtime_environment():
-            # Local routing profile is active, OR this is a non-hosted (local-machine)
-            # runtime regardless of CASM_ROUTING_PROFILE. Stamp the local-origin marker
-            # so the report is correctly identified as 'local' (not 'cloud') when the
-            # user switches to cloud mode or views reports via the cloud frontend.
+        if local_runtime_active:
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'
@@ -3524,7 +3550,11 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             queue_capacity_check = int(queue_stats_check.get('capacity', 0) or 0)
             queue_full_check = queue_capacity_check > 0 and queue_size_check >= queue_capacity_check
             if not queue_full_check:
-                fallback_device_id = f'live_capture_{report_id}_{time.time_ns()}'
+                fallback_device_id = (
+                    f'local_capture_{report_id}_{time.time_ns()}'
+                    if local_runtime_active
+                    else f'live_capture_{report_id}_{time.time_ns()}'
+                )
                 success = violation_queue.enqueue(
                     violation_data=violation_data,
                     device_id=fallback_device_id,
@@ -3590,6 +3620,46 @@ def _should_force_local_artifact_pipeline(sync_source: str = '', device_id: str 
     return not _is_local_cache_sync_job_marker(sync_source=sync_source, device_id=device_id)
 
 
+def _is_local_pipeline_origin_marker(
+    *,
+    source_scope: str = '',
+    sync_source: str = '',
+    device_id: str = '',
+) -> bool:
+    """Return True for reports that were born in local/offline capture paths."""
+    if _is_local_cache_sync_job_marker(sync_source=sync_source, device_id=device_id):
+        return False
+
+    normalized_scope = str(source_scope or '').strip().lower()
+    if normalized_scope == 'local':
+        return True
+
+    normalized_source = str(sync_source or '').strip().lower()
+    local_sources = {
+        'local',
+        'local_pipeline',
+        'local_pending_recovery',
+        'offline_local',
+        'offline_local_cache',
+        'browser_local_draft',
+    }
+    if (
+        normalized_source in local_sources
+        or normalized_source.startswith('local_')
+        or normalized_source.startswith('offline_')
+        or normalized_source.startswith('browser_local')
+    ):
+        return True
+
+    normalized_device = str(device_id or '').strip().lower()
+    return (
+        normalized_device in {'local_cache', 'offline_local_cache', 'browser_local_draft'}
+        or normalized_device.startswith('local_')
+        or normalized_device.startswith('offline_')
+        or normalized_device.startswith('browser_local')
+    )
+
+
 def _local_sync_has_complete_cloud_artifacts(
     storage_keys: Dict[str, Any],
     *,
@@ -3636,6 +3706,12 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
             'reason': 'retention_window_active',
             'age_seconds': int(age_seconds),
             'min_age_seconds': int(LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS),
+        }
+
+    if LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS:
+        return {
+            'cleaned': False,
+            'reason': 'offline_artifact_retention_enabled',
         }
 
     if LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR:
@@ -4165,10 +4241,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         sync_source=queued_sync_source,
         device_id=queue_device_id,
     )
-    queue_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-    queue_local_profile_active = queue_routing_profile == 'local'
+    queue_local_runtime_active = _is_local_pipeline_runtime_active()
+    queued_local_origin = _is_local_pipeline_origin_marker(
+        source_scope=queued_source_scope,
+        sync_source=queued_sync_source,
+        device_id=queue_device_id,
+    )
     force_local_artifact_pipeline = bool(
-        queue_local_profile_active
+        (queue_local_runtime_active or queued_local_origin)
         and _should_force_local_artifact_pipeline(
             sync_source=queued_sync_source,
             device_id=queue_device_id,
@@ -4435,16 +4515,16 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'force_local_nlp': force_local_artifact_pipeline,
                 'allow_local_nlp_fallback': force_local_artifact_pipeline,
             }
-            if queued_source_scope:
-                report_data['source_scope'] = queued_source_scope
-            elif force_local_artifact_pipeline:
+            if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
                 report_data['source_scope'] = 'local'
-            if queued_sync_source:
-                report_data['sync_source'] = queued_sync_source
-                report_data['source'] = queued_sync_source
-            elif force_local_artifact_pipeline:
+            elif queued_source_scope:
+                report_data['source_scope'] = queued_source_scope
+            if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
                 report_data['sync_source'] = 'local_pipeline'
                 report_data['source'] = 'local_pipeline'
+            elif queued_sync_source:
+                report_data['sync_source'] = queued_sync_source
+                report_data['source'] = queued_sync_source
 
             if force_local_artifact_pipeline:
                 logger.info(
@@ -4616,10 +4696,26 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'severity': 'HIGH',
         'location': 'Live Stream Monitor',
         'detection_count': len(detections),
+        'has_original': original_path.exists(),
+        'has_annotated': annotated_path.exists(),
         'has_caption': bool(caption),
         'has_report': report_created,
         'failure_reason': failure_reason
     }
+    if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
+        metadata['source_scope'] = 'local'
+        metadata['source_label'] = 'Local'
+    elif queued_source_scope:
+        metadata['source_scope'] = queued_source_scope
+        metadata['source_label'] = 'Local' if queued_source_scope == 'local' else (
+            'Local Synced' if queued_source_scope == 'synced_local' else 'Cloud'
+        )
+    if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
+        metadata['sync_source'] = 'local_pipeline'
+        metadata['source'] = 'local_pipeline'
+    elif queued_sync_source:
+        metadata['sync_source'] = queued_sync_source
+        metadata['source'] = queued_sync_source
 
     metadata_path = violation_dir / 'metadata.json'
     with open(metadata_path, 'w') as f:

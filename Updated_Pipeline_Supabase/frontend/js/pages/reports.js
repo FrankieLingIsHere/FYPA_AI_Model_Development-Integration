@@ -1894,11 +1894,12 @@ const ReportsPage = {
                 ? TimezoneManager.formatDateTime(timestamp)
                 : new Date(timestamp).toLocaleString())
             : 'Unknown time';
-        const imageUrl = violation.local_image_url || (
-            violation.has_annotated
-                ? API.getImageUrl(violation.report_id, 'annotated.jpg', violation)
-                : API.getImageUrl(violation.report_id, 'original.jpg', violation)
-        );
+        const originalImageUrl = API.getImageUrl(violation.report_id, 'original.jpg', violation);
+        const annotatedImageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg', violation);
+        const imageUrl = violation.local_image_url || (violation.has_annotated ? annotatedImageUrl : originalImageUrl);
+        const fallbackImageUrl = (!violation.local_image_url && violation.has_annotated && violation.has_original)
+            ? originalImageUrl
+            : '';
         const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated || violation.has_original);
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
@@ -1926,7 +1927,8 @@ const ReportsPage = {
                 <div style="height: 200px; overflow: hidden; background: #000; position: relative;">
                     ${hasPreviewImage ?
                         `<img src="${imageUrl}" alt="Violation" loading="lazy" decoding="async"
-                               onerror="if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
+                               data-fallback-src="${fallbackImageUrl}"
+                               onerror="if(this.dataset.fallbackSrc){this.src=this.dataset.fallbackSrc; this.dataset.fallbackSrc=''; return;} if(this.dataset.fallbackDone==='1') return; this.dataset.fallbackDone='1'; this.style.display='none'; const fallback=this.parentElement&&this.parentElement.querySelector('[data-image-fallback]'); if(fallback){fallback.style.display='flex';}"
                                style="width: 100%; height: 100%; object-fit: cover;">
                          <div data-image-fallback style="display: none; align-items: center; justify-content: center; height: 100%;">
                             <i class="fas fa-image" style="font-size: 3rem; color: #fff; opacity: 0.3;"></i>

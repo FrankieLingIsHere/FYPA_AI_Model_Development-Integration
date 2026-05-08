@@ -11265,19 +11265,7 @@ def _sync_local_cache_candidates(
         records.append(base)
         return any(_is_strict_local_origin_record(record) for record in records)
 
-    if (db_manager is None or storage_manager is None) and not dry_run:
-        if _is_supabase_offline_backoff_active():
-            snapshot = _get_supabase_offline_backoff_snapshot()
-            return {
-                'success': False,
-                'error': (
-                    'Supabase offline backoff active; local-only mode is currently enforced '
-                    f"(context={snapshot.get('context')}, remaining_seconds={snapshot.get('remaining_seconds')})"
-                )
-            }
-        _attempt_supabase_runtime_recovery(reason=f'sync_local_cache:{reason}', force=True)
-
-    if dry_run and (db_manager is None or storage_manager is None):
+    if dry_run:
         scanned = 0
         candidates = 0
         if VIOLATIONS_DIR.exists():
@@ -11312,7 +11300,20 @@ def _sync_local_cache_candidates(
             'errors': [],
             'worker_running': bool(violation_queue is not None),
             'offline_local_cache_mode': True,
+            'dry_run_mode': 'local_metadata_only',
         }
+
+    if (db_manager is None or storage_manager is None) and not dry_run:
+        if _is_supabase_offline_backoff_active():
+            snapshot = _get_supabase_offline_backoff_snapshot()
+            return {
+                'success': False,
+                'error': (
+                    'Supabase offline backoff active; local-only mode is currently enforced '
+                    f"(context={snapshot.get('context')}, remaining_seconds={snapshot.get('remaining_seconds')})"
+                )
+            }
+        _attempt_supabase_runtime_recovery(reason=f'sync_local_cache:{reason}', force=True)
 
     if db_manager is None:
         return {'success': False, 'error': 'Database manager unavailable'}

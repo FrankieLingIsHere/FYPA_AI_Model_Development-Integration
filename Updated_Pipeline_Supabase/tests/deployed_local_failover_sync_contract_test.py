@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 import requests
 
@@ -11,6 +12,11 @@ BASE_URL = os.environ.get(
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
 ).rstrip("/")
 STRICT_LOCAL_FAILOVER_SYNC = os.environ.get("CASM_LOCAL_FAILOVER_SYNC_STRICT", "1") != "0"
+SYNC_DRY_RUN_ATTEMPTS = max(1, int(os.environ.get("CASM_SYNC_LOCAL_CACHE_DRY_RUN_ATTEMPTS", "3")))
+SYNC_DRY_RUN_BACKOFF_SECONDS = max(
+    1.0,
+    float(os.environ.get("CASM_SYNC_LOCAL_CACHE_DRY_RUN_BACKOFF_SECONDS", "4.0")),
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +88,31 @@ def request_json(method: str, path: str, *, timeout: int = 40, **kwargs):
     return resp.status_code, payload, text_preview
 
 
+def request_json_retry(method: str, path: str, *, attempts: int, timeout: int = 40, **kwargs):
+    last_code = 0
+    last_payload = None
+    last_preview = ""
+
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            code, payload, preview = request_json(method, path, timeout=timeout, **kwargs)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            code, payload, preview = 0, None, str(exc)[:500]
+
+        last_code, last_payload, last_preview = code, payload, preview
+        retryable = code in {0, 429, 500, 502, 503, 504}
+        if not retryable or attempt >= attempts:
+            return code, payload, preview
+
+        print(
+            f"INFO: {path} returned retryable status={code or 'timeout'}; "
+            f"retrying attempt={attempt + 1}/{attempts}"
+        )
+        time.sleep(SYNC_DRY_RUN_BACKOFF_SECONDS * attempt)
+
+    return last_code, last_payload, last_preview
+
+
 
 def ensure_dict(payload, context: str):
     if not isinstance(payload, dict):
@@ -112,9 +143,10 @@ def main() -> int:
             return fail("recovery-options missing local/counts fields", 7)
         print("PASS: recovery-options endpoint contract")
 
-        code, sync_payload, preview = request_json(
+        code, sync_payload, preview = request_json_retry(
             "POST",
             "/api/reports/sync-local-cache",
+            attempts=SYNC_DRY_RUN_ATTEMPTS,
             json={"limit": 40, "dry_run": True},
         )
         if code == 404 and not STRICT_LOCAL_FAILOVER_SYNC:

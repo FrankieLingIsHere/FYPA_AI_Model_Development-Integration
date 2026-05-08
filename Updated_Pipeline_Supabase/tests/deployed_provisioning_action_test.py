@@ -308,6 +308,41 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue((devices.get(machine_id) or {}).get('approved_at'))
         mock_notify_admin.assert_not_called()
 
+    @patch('casm_app.notify_admin')
+    def test_admin_token_can_reissue_stale_secret_without_demoting_approved_device(self, mock_notify_admin):
+        machine_id = 'TEST-EDGE-ADMIN-STALE-SECRET-REISSUE-001'
+        first_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+        mock_notify_admin.reset_mock()
+
+        with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            reissue = self.client.post(
+                '/api/provision/request',
+                json={
+                    'machine_id': machine_id,
+                    'current_provision_secret': 'stale-browser-secret',
+                },
+                headers={'X-Admin-Token': 'test-magic-password'},
+            )
+
+        self.assertEqual(reissue.status_code, 200)
+        payload = reissue.json or {}
+        refreshed_secret = str(payload.get('provision_secret') or '').strip()
+        self.assertTrue(refreshed_secret)
+        self.assertNotEqual(refreshed_secret, first_secret)
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('provisioning_status'), 'approved')
+        self.assertEqual(payload.get('notification_reason'), 'status_preserved')
+
+        devices = _load_pending_devices()
+        self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
+        mock_notify_admin.assert_not_called()
+
+        status_response = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}&provision_secret={refreshed_secret}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+
     def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
         machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
         provision_secret = self._request_device(machine_id)
@@ -853,6 +888,63 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(mock_collect_submission.call_count, 2)
         heartbeat_url = str(mock_post.call_args.args[0])
         self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
+
+    @patch('casm_app._local_mode_save_provision_state')
+    @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
+    @patch('casm_app._local_mode_load_provision_state')
+    @patch('casm_app.requests.post')
+    def test_cloud_heartbeat_stale_secret_recovery_uses_admin_token_without_resending_stale_secret(
+        self,
+        mock_post,
+        mock_load_state,
+        mock_collect_submission,
+        mock_save_state,
+    ):
+        os.environ['CLOUD_URL'] = 'https://cloud.example.test'
+        os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
+
+        mock_load_state.return_value = {
+            'machine_id': 'TEST-EDGE-STALE-HEARTBEAT-001',
+            'provision_secret': 'stale-local-secret-001',
+            'cloud_url': 'https://cloud.example.test',
+            'status': 'approved',
+        }
+        mock_collect_submission.return_value = {
+            'ready': True,
+            'cloud_url': 'https://cloud.example.test',
+            'machine_id': 'TEST-EDGE-STALE-HEARTBEAT-001',
+            'provision_secret': 'stale-local-secret-001',
+            'provision_status': 'approved',
+            'credentials_present': True,
+            'diagnostics': {},
+        }
+        mock_post.side_effect = [
+            self._mock_http_response(401, {'success': False, 'error': 'Invalid provision_secret'}),
+            self._mock_http_response(200, {
+                'success': True,
+                'status': 'stored',
+                'device_status': 'approved',
+                'provision_secret': 'fresh-local-secret-001',
+            }),
+            self._mock_http_response(200, {'success': True, 'status': 'stored'}),
+        ]
+
+        heartbeat_result = _send_local_mode_cloud_heartbeat_once()
+
+        self.assertTrue(heartbeat_result.get('sent'))
+        self.assertEqual(mock_post.call_count, 3)
+
+        refresh_call = mock_post.call_args_list[1]
+        self.assertIn('/api/provision/request', str(refresh_call.args[0]))
+        refresh_json = refresh_call.kwargs.get('json') or {}
+        refresh_headers = refresh_call.kwargs.get('headers') or {}
+        self.assertEqual(refresh_json.get('machine_id'), 'TEST-EDGE-STALE-HEARTBEAT-001')
+        self.assertNotIn('current_provision_secret', refresh_json)
+        self.assertEqual(refresh_headers.get('X-Admin-Token'), 'test-magic-password')
+
+        saved_state = mock_save_state.call_args.args[0]
+        self.assertEqual(saved_state.get('provision_secret'), 'fresh-local-secret-001')
+        self.assertEqual(saved_state.get('status'), 'approved')
 
     @patch('casm_app._local_mode_apply_supabase_credentials')
     @patch('casm_app.requests.get')

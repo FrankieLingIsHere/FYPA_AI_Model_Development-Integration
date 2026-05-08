@@ -8719,12 +8719,11 @@ def _send_local_mode_cloud_heartbeat_once(
 
         if invalid_secret_rejected:
             try:
-                # Include the existing (possibly stale) secret so the cloud can
-                # authenticate the rotation. If it doesn't match either, the
-                # cloud will reject hard and the operator must re-approve.
+                # The heartbeat just proved this local secret is stale. Do not
+                # send it back as current_provision_secret; use the admin token
+                # path when available so cloud approval is preserved instead of
+                # bouncing the device back to pending.
                 refresh_body_payload = {'machine_id': machine_id}
-                if provision_secret:
-                    refresh_body_payload['current_provision_secret'] = provision_secret
                 refresh_headers = {}
                 _local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
                 if _local_admin_token:
@@ -16229,6 +16228,11 @@ def provision_request():
     # admin can review and approve/reject again.
     is_rejected_rerequest = _existing_status_for_auth == 'rejected'
 
+    token_header = request.headers.get('X-Admin-Token', '').strip()
+    request_authenticated_by_admin = bool(
+        ADMIN_PASSWORD and secrets.compare_digest(token_header, ADMIN_PASSWORD)
+    )
+
     # Validate proof-of-prior-trust if presented. Both the secret-bearer path
     # and the admin-token path are accepted; either is sufficient.
     rerequest_authenticated_by_secret = False
@@ -16240,6 +16244,12 @@ def provision_request():
             # storage repair, while the approved local backend is still sending
             # a fresh heartbeat. Treat the heartbeat as proof that this is the
             # same approved host and reissue credentials without demoting it.
+            rerequest_authenticated_by_secret = False
+        elif request_authenticated_by_admin:
+            # Admin-token recovery can intentionally rotate a stale local
+            # secret while preserving approval. Do not treat this as a
+            # device-authenticated secret match; the request remains admin
+            # authenticated and will rotate below.
             rerequest_authenticated_by_secret = False
         else:
             # Wrong secret on a known approved device must not mutate approval
@@ -16283,19 +16293,18 @@ def provision_request():
         and not rerequest_authenticated_by_secret
         and not rerequest_authenticated_by_heartbeat
         and not is_rejected_rerequest
+        and not request_authenticated_by_admin
     ):
-        token_header = request.headers.get('X-Admin-Token', '').strip()
-        if not ADMIN_PASSWORD or not secrets.compare_digest(token_header, ADMIN_PASSWORD):
-            _append_device_audit_event(
-                machine_id,
-                'request_unauthorized',
-                actor='device',
-                metadata={
-                    **_capture_request_metadata(),
-                    'existing_status': _existing_status_for_auth or 'none',
-                },
-            )
-            return jsonify({'error': 'Unauthorized'}), 401
+        _append_device_audit_event(
+            machine_id,
+            'request_unauthorized',
+            actor='device',
+            metadata={
+                **_capture_request_metadata(),
+                'existing_status': _existing_status_for_auth or 'none',
+            },
+        )
+        return jsonify({'error': 'Unauthorized'}), 401
 
     provision_secret = secrets.token_urlsafe(48)
 
@@ -16373,7 +16382,9 @@ def provision_request():
 
     # Capture request metadata for admin risk view + audit log
     request_meta = _capture_request_metadata()
-    if preserve_status and rerequest_authenticated_by_heartbeat and not rerequest_authenticated_by_secret:
+    if preserve_status and request_authenticated_by_admin and not rerequest_authenticated_by_secret:
+        audit_event = 'request_existing_admin'
+    elif preserve_status and rerequest_authenticated_by_heartbeat and not rerequest_authenticated_by_secret:
         audit_event = 'request_existing_heartbeat'
     elif preserve_status:
         audit_event = 'request_existing'

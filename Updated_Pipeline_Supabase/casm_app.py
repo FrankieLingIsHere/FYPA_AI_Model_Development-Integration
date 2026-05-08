@@ -722,6 +722,83 @@ def _extract_violation_types_from_summary(summary: str) -> List[str]:
     return out
 
 
+def _normalize_violation_type_label(value: Any) -> str:
+    """Normalize PPE evidence labels to the YOLO-style NO-* form used by UI tags."""
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    if _is_violation_label(raw):
+        cleaned_no = re.sub(r'^(NO[-\s]+)', '', raw, flags=re.IGNORECASE).strip()
+    else:
+        cleaned_no = re.sub(r'^(Missing|Without|No)[-\s]+', '', raw, flags=re.IGNORECASE).strip()
+
+    normalized = _normalize_label(cleaned_no)
+    if normalized in {'hardhat', 'hard-hat', 'helmet'}:
+        return 'NO-Hardhat'
+    if normalized in {'mask', 'respirator'}:
+        return 'NO-Mask'
+    if normalized in {'safety-vest', 'hi-vis', 'high-vis', 'high-visibility-vest', 'vest'}:
+        return 'NO-Safety Vest'
+    if normalized in {'glove', 'gloves'}:
+        return 'NO-Gloves'
+    if normalized in {'goggle', 'goggles', 'eye-protection', 'safety-glasses'}:
+        return 'NO-Goggles'
+    if normalized in {'safety-shoe', 'safety-shoes', 'safety-boot', 'safety-boots', 'footwear', 'boot', 'boots'}:
+        return 'NO-Safety Shoes'
+    if normalized in {'ppe', 'ppe-violation', 'missing-ppe', 'violation'}:
+        return ''
+    if raw.lower().startswith(('missing ', 'without ', 'no-', 'no ')):
+        return f"NO-{cleaned_no}"
+    return ''
+
+
+def _normalize_violation_type_list(*sources: Any) -> List[str]:
+    """Collect unique normalized NO-* PPE labels from mixed persisted sources."""
+    normalized: List[str] = []
+    seen: set = set()
+
+    def _consume(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            _consume(value.get('class_name') or value.get('class') or value.get('label') or value.get('name'))
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _consume(item)
+            return
+        label = _normalize_violation_type_label(value)
+        key = label.lower()
+        if label and key not in seen:
+            seen.add(key)
+            normalized.append(label)
+
+    for source in sources:
+        _consume(source)
+
+    return normalized
+
+
+def _violation_types_are_generic(violation_types: Any) -> bool:
+    normalized = _normalize_violation_type_list(violation_types)
+    return not normalized
+
+
+def _missing_ppe_from_violation_types(violation_types: List[str]) -> List[str]:
+    missing: List[str] = []
+    seen: set = set()
+    for raw_type in violation_types or []:
+        formatted = format_violation_type(raw_type)
+        clean = re.sub(r'^(Missing\s+)', '', formatted, flags=re.IGNORECASE).strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key not in seen:
+            seen.add(key)
+            missing.append(clean)
+    return missing
+
+
 def _resolve_violation_types_and_count(
     detections: List[Dict[str, Any]],
     *,
@@ -730,9 +807,9 @@ def _resolve_violation_types_and_count(
     fallback_count: Optional[int] = None
 ) -> Tuple[List[str], int]:
     """Resolve robust violation labels/count even when stored detection payload is partial."""
-    violation_types = _extract_violation_types_from_detections(detections)
+    violation_types = _normalize_violation_type_list(_extract_violation_types_from_detections(detections))
     if not violation_types:
-        violation_types = _extract_violation_types_from_summary(violation_summary or '')
+        violation_types = _normalize_violation_type_list(_extract_violation_types_from_summary(violation_summary or ''))
 
     candidate_counts: List[int] = []
     if fallback_count is not None:
@@ -3864,6 +3941,9 @@ def _handoff_partial_local_report_to_cloud(
     timestamp: Any,
     detections: List[Dict[str, Any]],
     queued_violation_count: Any,
+    queued_violation_types: Optional[List[str]],
+    queued_missing_ppe: Optional[List[str]],
+    queued_ppe_tags: Optional[List[str]],
     original_path: Path,
     annotated_path: Path,
     device_id: str,
@@ -3933,15 +4013,19 @@ def _handoff_partial_local_report_to_cloud(
     except Exception:
         ts_value = _parse_report_id_timestamp(report_id).isoformat()
 
-    violation_types_raw = _extract_violation_types_from_detections(detections)
-    if not violation_types_raw:
-        violation_types_raw = []
+    violation_types_raw = _normalize_violation_type_list(
+        detections,
+        queued_violation_types,
+        queued_ppe_tags,
+        [f"NO-{item}" for item in (queued_missing_ppe or [])],
+    )
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
     violation_summary_text = (
-        ', '.join(violation_types_formatted)
+        f"PPE Violation Detected: {', '.join(violation_types_formatted)}"
         if violation_types_formatted
         else 'PPE Violation Detected'
     )
+    missing_ppe_values = _missing_ppe_from_violation_types(violation_types_raw)
     try:
         queued_count_int = int(queued_violation_count or 0)
     except Exception:
@@ -3970,6 +4054,10 @@ def _handoff_partial_local_report_to_cloud(
 
     metadata: Dict[str, Any] = {
         'detections': detections if isinstance(detections, list) else [],
+        'violation_types': violation_types_formatted,
+        'ppe_tags': violation_types_raw,
+        'missing_ppe': missing_ppe_values,
+        'violation_summary': violation_summary_text,
         'source_scope': source_scope_marker,
         'sync_source': sync_source_marker,
         'source': sync_source_marker,
@@ -4068,6 +4156,9 @@ def _handle_local_cache_sync_job(
     timestamp: Any,
     detections: List[Dict[str, Any]],
     queued_violation_count: Any,
+    queued_violation_types: Optional[List[str]],
+    queued_missing_ppe: Optional[List[str]],
+    queued_ppe_tags: Optional[List[str]],
     original_path: Path,
     annotated_path: Path,
     queue_device_id: str,
@@ -4141,9 +4232,33 @@ def _handle_local_cache_sync_job(
         except Exception:
             caption_text = ''
 
-    violation_types_raw = _extract_violation_types_from_detections(detections)
+    local_metadata = {}
+    metadata_path = violation_dir / 'metadata.json'
+    if metadata_path.exists():
+        try:
+            parsed_metadata = json.loads(metadata_path.read_text(encoding='utf-8', errors='ignore') or '{}')
+            if isinstance(parsed_metadata, dict):
+                local_metadata = parsed_metadata
+        except Exception as metadata_err:
+            logger.debug(f"Could not read local metadata for sync tags ({report_id}): {metadata_err}")
+
+    violation_types_raw = _normalize_violation_type_list(
+        detections,
+        queued_violation_types,
+        queued_ppe_tags,
+        [f"NO-{item}" for item in (queued_missing_ppe or [])],
+        local_metadata.get('violation_types'),
+        local_metadata.get('ppe_tags'),
+        [f"NO-{item}" for item in (local_metadata.get('missing_ppe') or [])],
+        _extract_violation_types_from_summary(local_metadata.get('violation_summary') or ''),
+    )
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
-    violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
+    violation_summary_text = (
+        f"PPE Violation Detected: {', '.join(violation_types_formatted)}"
+        if violation_types_formatted
+        else 'PPE Violation Detected'
+    )
+    missing_ppe_values = _missing_ppe_from_violation_types(violation_types_raw)
 
     sync_source_marker = str(queued_sync_source or 'sync_local_cache').strip().lower() or 'sync_local_cache'
     source_scope_marker = str(queued_source_scope or 'synced_local').strip().lower() or 'synced_local'
@@ -4152,6 +4267,10 @@ def _handle_local_cache_sync_job(
 
     metadata: Dict[str, Any] = {
         'detections': detections,
+        'violation_types': violation_types_formatted,
+        'ppe_tags': violation_types_raw,
+        'missing_ppe': missing_ppe_values,
+        'violation_summary': violation_summary_text,
         'source_scope': source_scope_marker,
         'sync_source': sync_source_marker,
         'source': sync_source_marker,
@@ -4359,6 +4478,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             timestamp=timestamp,
             detections=detections,
             queued_violation_count=queued_violation_count,
+            queued_violation_types=violation_types if isinstance(violation_types, list) else [],
+            queued_missing_ppe=data.get('missing_ppe') if isinstance(data.get('missing_ppe'), list) else [],
+            queued_ppe_tags=data.get('ppe_tags') if isinstance(data.get('ppe_tags'), list) else [],
             original_path=original_path,
             annotated_path=annotated_path,
             queue_device_id=queue_device_id,
@@ -5767,6 +5889,22 @@ def api_violations():
                     existing['error_message'] = local_row.get('error_message')
                 if not existing.get('timestamp') and local_row.get('timestamp'):
                     existing['timestamp'] = local_row.get('timestamp')
+                for detail_key in ('missing_ppe', 'ppe_tags'):
+                    local_values = local_row.get(detail_key)
+                    if isinstance(local_values, list) and local_values and not existing.get(detail_key):
+                        existing[detail_key] = list(local_values)
+                local_summary = local_row.get('violation_summary')
+                existing_summary = str(existing.get('violation_summary') or '').strip().lower()
+                if local_summary and existing_summary in ('', 'ppe violation', 'ppe violation detected', 'violation queued for report generation'):
+                    existing['violation_summary'] = local_summary
+                try:
+                    existing_count_int = int(existing.get('violation_count') or 0)
+                    local_count_int = int(local_row.get('violation_count') or 0)
+                except Exception:
+                    existing_count_int = 0
+                    local_count_int = 0
+                if local_count_int > 1 and existing_count_int <= 1:
+                    existing['violation_count'] = local_count_int
 
                 existing_scope = str(existing.get('source_scope') or '').strip().lower()
                 existing_device_key = str(existing.get('device_id') or '').strip().lower()
@@ -10737,8 +10875,10 @@ def api_report_recovery_execute():
                 violation_summary=violation_summary_text,
                 fallback_count=fallback_count,
             )
-            if not violation_types and local_violation_types:
+            local_violation_types = _normalize_violation_type_list(local_violation_types)
+            if local_violation_types and _violation_types_are_generic(violation_types):
                 violation_types = local_violation_types
+                resolved_violation_count = max(int(resolved_violation_count or 0), len(violation_types), 1)
 
             if not annotated_path.exists():
                 try:
@@ -11290,12 +11430,34 @@ def _sync_local_cache_candidates(
             violation_summary=violation_summary_text,
             fallback_count=event.get('violation_count') if isinstance(event, dict) else None,
         )
+        local_metadata_violation_types = _normalize_violation_type_list(
+            metadata.get('violation_types'),
+            metadata.get('ppe_tags'),
+            [f"NO-{item}" for item in (metadata.get('missing_ppe') or [])],
+            _extract_violation_types_from_summary(metadata.get('violation_summary') or ''),
+            detection_data.get('violation_types') if isinstance(detection_data, dict) else [],
+            detection_data.get('ppe_tags') if isinstance(detection_data, dict) else [],
+            [
+                f"NO-{item}"
+                for item in (
+                    detection_data.get('missing_ppe') if isinstance(detection_data, dict) else []
+                )
+            ],
+        )
+        if local_metadata_violation_types and _violation_types_are_generic(violation_types):
+            violation_types = local_metadata_violation_types
+        elif local_metadata_violation_types:
+            violation_types = _normalize_violation_type_list(violation_types, local_metadata_violation_types)
+        resolved_violation_count = max(int(resolved_violation_count or 0), len(violation_types), 1)
+        missing_ppe_values = _missing_ppe_from_violation_types(violation_types)
 
         violation_data = {
             'report_id': report_id,
             'timestamp': ts_value,
             'detections': detections,
             'violation_types': violation_types,
+            'ppe_tags': violation_types,
+            'missing_ppe': missing_ppe_values,
             'violation_count': resolved_violation_count,
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path if annotated_path.exists() else original_path),
@@ -11482,6 +11644,14 @@ def api_report_local_draft_handoff():
             or request.form.get('timestamp')
             or _parse_report_id_timestamp(report_id).isoformat()
         )
+        metadata_violation_types = _normalize_violation_type_list(
+            metadata.get('violation_types'),
+            metadata.get('ppe_tags'),
+            [f"NO-{item}" for item in (metadata.get('missing_ppe') or [])],
+            _extract_violation_types_from_summary(metadata.get('violation_summary') or ''),
+            detections,
+        )
+        metadata_missing_ppe = _missing_ppe_from_violation_types(metadata_violation_types)
         device_id = str(
             metadata.get('device_id')
             or request.form.get('device_id')
@@ -11507,6 +11677,9 @@ def api_report_local_draft_handoff():
             timestamp=timestamp_value,
             detections=[d for d in detections if isinstance(d, dict)],
             queued_violation_count=metadata.get('violation_count') or metadata.get('detection_count') or 1,
+            queued_violation_types=metadata_violation_types,
+            queued_missing_ppe=metadata_missing_ppe,
+            queued_ppe_tags=metadata_violation_types,
             original_path=original_path,
             annotated_path=annotated_path,
             device_id=device_id,
@@ -11545,8 +11718,10 @@ def api_report_local_draft_handoff():
                         'report_id': report_id,
                         'timestamp': timestamp_value,
                         'detections': [d for d in detections if isinstance(d, dict)],
-                        'violation_types': _extract_violation_types_from_detections(detections),
-                        'violation_count': metadata.get('violation_count') or 1,
+                        'violation_types': metadata_violation_types,
+                        'ppe_tags': metadata_violation_types,
+                        'missing_ppe': metadata_missing_ppe,
+                        'violation_count': max(int(metadata.get('violation_count') or 0), len(metadata_violation_types), 1),
                         'original_image_path': str(original_path),
                         'annotated_image_path': str(annotated_path),
                         'violation_dir': str(violation_dir),

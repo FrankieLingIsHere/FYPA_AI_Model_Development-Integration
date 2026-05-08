@@ -84,6 +84,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('device_id=queue_sync_device_id', casm_app)
         self.assertIn('def _realtime_source_payload(scope: str, reason: str)', casm_app)
         self.assertIn("os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '4')", casm_app)
+        self.assertIn('def _normalize_violation_type_label(value: Any) -> str:', casm_app)
+        self.assertIn("'ppe_tags': violation_types_raw", casm_app)
+        self.assertIn("'missing_ppe': missing_ppe_values", casm_app)
+        self.assertIn("for detail_key in ('missing_ppe', 'ppe_tags')", casm_app)
 
 
 if __name__ == '__main__':

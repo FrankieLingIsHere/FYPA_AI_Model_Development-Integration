@@ -227,6 +227,24 @@ def _get_cached_rendered_report_html(report_id: str, report_html_key: str) -> Op
         return content if isinstance(content, str) else None
 
 
+def _get_any_cached_rendered_report_html(report_id: str) -> Optional[str]:
+    """Return a warm rendered report by report_id before slower metadata lookups."""
+    if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
+        return None
+
+    now = time.time()
+    with report_rendered_cache_lock:
+        entry = report_rendered_cache.get(report_id)
+        if not entry:
+            return None
+        expires_at = float(entry.get('expires_at') or 0)
+        if expires_at <= now:
+            report_rendered_cache.pop(report_id, None)
+            return None
+        content = entry.get('content')
+        return content if isinstance(content, str) else None
+
+
 def _set_cached_rendered_report_html(report_id: str, report_html_key: str, content: str) -> None:
     if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
         return
@@ -6831,6 +6849,15 @@ def api_report_prefetch(report_id):
     try:
         local_report_html = VIOLATIONS_DIR / report_id / 'report.html'
 
+        if _get_any_cached_rendered_report_html(report_id):
+            return jsonify({
+                'success': True,
+                'report_id': report_id,
+                'warmed': True,
+                'layer': 'rendered_cache',
+                'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+            })
+
         def _local_prefetch_response(
             source: str,
             violation: Optional[Dict[str, Any]] = None,
@@ -12451,6 +12478,11 @@ def api_device_stats(device_id):
 def view_report(report_id):
     """View a specific violation report from Supabase or local storage."""
     failed_view = str(request.args.get('failed', '0')).lower() in ('1', 'true', 'yes')
+
+    if not failed_view:
+        cached_rendered = _get_any_cached_rendered_report_html(report_id)
+        if cached_rendered:
+            return _report_html_response(cached_rendered)
 
     if storage_manager is None or db_manager is None:
         # Fallback to local filesystem

@@ -1326,8 +1326,20 @@ const ReportsPage = {
             case 'processing':
                 return 'The report job is actively processing and generation is in progress.';
             case 'pending':
+                if (violation && violation.active_report_id && String(violation.active_report_id) !== String(violation.report_id || '')) {
+                    return `Queued for local generation. The local worker is currently processing ${violation.active_report_id}.`;
+                }
+                if (violation && violation.queue_position) {
+                    return `Queued for local generation at position ${violation.queue_position}.`;
+                }
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'queued':
+                if (violation && violation.active_report_id && String(violation.active_report_id) !== String(violation.report_id || '')) {
+                    return `Queued for local generation. The local worker is currently processing ${violation.active_report_id}.`;
+                }
+                if (violation && violation.queue_position) {
+                    return `Queued for local generation at position ${violation.queue_position}.`;
+                }
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'failed':
                 return `Report generation failed. ${violation.error_message || 'Please try again or contact support.'}`;
@@ -1656,7 +1668,7 @@ const ReportsPage = {
 
         if (status === 'pending' || status === 'queued') {
             this.setModalStage('queued');
-            this.setModalStatusText('Report is queued for generation...');
+            this.setModalStatusText((data && data.message) || 'Report is queued for generation...');
             return false;
         }
 

@@ -7,7 +7,7 @@ VERCEL_URL = os.environ.get(
     "https://fypa-ai-model-development-integrati.vercel.app",
 ).rstrip("/")
 
-MAX_WAIT_SECONDS = int(os.environ.get("CASM_FRONTEND_VISUAL_MAX_WAIT_SECONDS", "120"))
+MAX_WAIT_SECONDS = int(os.environ.get("CASM_FRONTEND_VISUAL_MAX_WAIT_SECONDS", "180"))
 
 
 def fail(message: str, code: int = 2) -> int:
@@ -18,6 +18,7 @@ def fail(message: str, code: int = 2) -> int:
 def main() -> int:
     try:
         from selenium import webdriver
+        from selenium.common.exceptions import TimeoutException
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
     except Exception as exc:
@@ -141,6 +142,22 @@ def main() -> int:
 
         print("PASS: selenium visual layout integrity checks")
         return 0
+    except TimeoutException as exc:
+        diagnostics = {}
+        if driver is not None:
+            with suppress(Exception):
+                diagnostics["url"] = driver.current_url
+            with suppress(Exception):
+                diagnostics["title"] = driver.title
+            with suppress(Exception):
+                diagnostics["body_class"] = driver.find_element(By.TAG_NAME, "body").get_attribute("class")
+            with suppress(Exception):
+                diagnostics["ready_state"] = driver.execute_script("return document.readyState")
+        return fail(
+            f"selenium visual layout integrity timed out after {MAX_WAIT_SECONDS}s: "
+            f"{diagnostics or str(exc)}",
+            31,
+        )
     except Exception as exc:
         return fail(f"selenium visual layout integrity unhandled error: {exc}", 31)
     finally:

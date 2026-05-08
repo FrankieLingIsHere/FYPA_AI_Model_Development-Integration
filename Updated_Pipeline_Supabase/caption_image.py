@@ -76,10 +76,12 @@ GEMINI_VISION_MODEL = os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL',
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
-OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 360)
+OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
 OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
 OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
+VISION_CAPTION_MAX_TOKENS = max(120, _safe_int_env('VISION_CAPTION_MAX_TOKENS', 320))
+VISION_EXPANSION_MAX_TOKENS = max(180, _safe_int_env('VISION_EXPANSION_MAX_TOKENS', 450))
 OLLAMA_AUTO_RECOVER_ENABLED = os.getenv('OLLAMA_AUTO_RECOVER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
 OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS = max(5, _safe_int_env('OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS', 45))
 OLLAMA_AUTO_RECOVER_WAIT_SECONDS = max(1, _safe_int_env('OLLAMA_AUTO_RECOVER_WAIT_SECONDS', 8))
@@ -894,7 +896,7 @@ Strict grounding rules:
             prompt=caption_prompt,
             image_base64=image_base64,
             temperature=0.6,
-            max_tokens=650
+            max_tokens=VISION_CAPTION_MAX_TOKENS
         )
 
         if caption:
@@ -915,7 +917,7 @@ Requirements:
                     prompt=expansion_prompt,
                     image_base64=image_base64,
                     temperature=0.4,
-                    max_tokens=750
+                    max_tokens=VISION_EXPANSION_MAX_TOKENS
                 )
                 expanded = _normalize_caption_text(expanded)
                 if expanded and not expanded.startswith('ALERT_'):

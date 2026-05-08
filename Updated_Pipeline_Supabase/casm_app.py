@@ -1597,6 +1597,85 @@ def reset_report_progress():
         }
 
 
+def _get_queue_context_for_report(report_id: str) -> Dict[str, Any]:
+    """Return queue/progress context for a report without mutating worker state."""
+    target = str(report_id or '').strip()
+    context: Dict[str, Any] = {
+        'queue_size': 0,
+        'queue_position': None,
+        'queued': False,
+        'worker_running': _is_queue_worker_alive(),
+        'active_report_id': None,
+        'active_step': None,
+        'active_status': None,
+        'worker_heartbeat_age_seconds': None,
+    }
+    if not target:
+        return context
+
+    try:
+        heartbeat_age = _queue_worker_heartbeat_age_seconds()
+        if heartbeat_age is not None:
+            context['worker_heartbeat_age_seconds'] = round(heartbeat_age, 2)
+    except Exception:
+        pass
+
+    try:
+        if violation_queue is not None:
+            stats = violation_queue.get_stats() if hasattr(violation_queue, 'get_stats') else {}
+            context['queue_size'] = int((stats or {}).get('current_size', 0) or 0)
+            if hasattr(violation_queue, 'get_queue_preview'):
+                preview = violation_queue.get_queue_preview(limit=100)
+                for index, item in enumerate(preview, start=1):
+                    if str((item or {}).get('report_id') or '').strip() == target:
+                        context['queue_position'] = index
+                        context['queued'] = True
+                        break
+    except Exception:
+        pass
+
+    try:
+        progress = get_report_progress() or {}
+        progress_status = str(progress.get('status') or '').strip().lower()
+        progress_current = str(progress.get('current') or '').strip()
+        if progress_status in ('waiting', 'processing', 'generating', 'running', 'active'):
+            context['active_report_id'] = progress_current or None
+            context['active_step'] = progress.get('current_step')
+            context['active_status'] = progress_status
+    except Exception:
+        pass
+
+    return context
+
+
+def _is_report_queued_or_processing(report_id: str) -> bool:
+    """Return true if a report is either waiting in queue or currently active."""
+    target = str(report_id or '').strip()
+    if not target:
+        return False
+
+    try:
+        if violation_queue is not None and hasattr(violation_queue, 'is_report_queued'):
+            if violation_queue.is_report_queued(target):
+                return True
+    except Exception:
+        pass
+
+    try:
+        progress = get_report_progress() or {}
+        progress_current = str(progress.get('current') or '').strip()
+        progress_status = str(progress.get('status') or '').strip().lower()
+        if (
+            progress_current == target
+            and progress_status in ('waiting', 'processing', 'generating', 'running', 'active')
+        ):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -2440,7 +2519,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             summary['skipped_recent'] += 1
             continue
 
-        if violation_queue.is_report_queued(report_id):
+        if _is_report_queued_or_processing(report_id):
             summary['skipped_already_queued'] += 1
             continue
 
@@ -2792,7 +2871,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                 )
                 continue
 
-        if violation_queue.is_report_queued(report_id):
+        if _is_report_queued_or_processing(report_id):
             summary['skipped_already_queued'] += 1
             continue
 
@@ -6292,72 +6371,99 @@ def api_get_violation(report_id):
         return jsonify({'error': 'Failed to fetch violation'}), 500
 
 
+def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any]]:
+    """Build report status from local artifacts for offline/backoff runtimes."""
+    report_id = str(report_id or '').strip()
+    if not report_id:
+        return None
+
+    violation_dir = VIOLATIONS_DIR / report_id
+    if not violation_dir.exists():
+        return None
+
+    has_report = (violation_dir / 'report.html').exists()
+    has_original = (violation_dir / 'original.jpg').exists()
+    has_annotated = (violation_dir / 'annotated.jpg').exists()
+    has_caption = (violation_dir / 'caption.txt').exists()
+    failure_path = violation_dir / 'generation_failure.txt'
+    skipped_marker_path = None
+    for candidate in (
+        violation_dir / 'SKIPPED_NO_RETRY.txt',
+        violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
+    ):
+        if candidate.exists():
+            skipped_marker_path = candidate
+            break
+
+    status = 'pending'
+    error_message = None
+    if has_report:
+        status = 'completed'
+    elif failure_path.exists():
+        status = 'failed'
+        error_message = _read_generation_failure_reason(failure_path)
+    elif skipped_marker_path is not None:
+        status = 'skipped'
+        error_message = _read_generation_failure_reason(skipped_marker_path)
+    elif has_annotated or has_caption:
+        status = 'generating'
+    elif has_original:
+        status = 'pending'
+
+    queue_context = _get_queue_context_for_report(report_id)
+    if status in ('pending', 'generating'):
+        if str(queue_context.get('active_report_id') or '') == report_id:
+            status = 'generating'
+        elif queue_context.get('queued'):
+            status = 'pending'
+
+    message_map = {
+        'pending': 'Report is queued for processing',
+        'queued': 'Report is queued for processing',
+        'generating': 'AI is analyzing the violation and generating the report',
+        'completed': 'Report is ready',
+        'failed': f"Report generation failed: {error_message or 'Unknown error'}",
+        'skipped': f"Skipped - not a work environment: {error_message or 'Invalid scene'}",
+    }
+
+    if status == 'pending' and queue_context.get('queued'):
+        position = queue_context.get('queue_position')
+        active_report_id = queue_context.get('active_report_id')
+        if active_report_id and active_report_id != report_id:
+            position_text = f" at position {position}" if position else ""
+            message_map['pending'] = (
+                f"Report is queued for local generation"
+                f"{position_text}; "
+                f"the local worker is currently processing {active_report_id}."
+            )
+        elif position:
+            message_map['pending'] = f"Report is queued for local generation at position {position}."
+
+    return {
+        'status': status,
+        'has_report': has_report,
+        'has_original': has_original,
+        'has_annotated': has_annotated,
+        'error_message': error_message,
+        'message': message_map.get(status, 'Status unknown'),
+        'source_scope': 'local',
+        'source_label': 'Local',
+        **queue_context,
+    }
+
+
 @app.route('/api/report/<report_id>/status')
 def api_report_status(report_id):
     """Get the status of a specific report (for fallback modal)."""
+    local_payload = _build_local_report_status_payload(report_id)
     if db_manager is None:
-        # Fallback to local filesystem
-        violation_dir = VIOLATIONS_DIR / report_id
-        if not violation_dir.exists():
+        if not local_payload:
             return jsonify({
                 'status': 'not_found',
                 'message': 'Report not found'
             })
 
-        has_report = (violation_dir / 'report.html').exists()
-        has_original = (violation_dir / 'original.jpg').exists()
-        has_annotated = (violation_dir / 'annotated.jpg').exists()
-        has_caption = (violation_dir / 'caption.txt').exists()
-        failure_path = violation_dir / 'generation_failure.txt'
-        skipped_marker_path = None
-        for candidate in (
-            violation_dir / 'SKIPPED_NO_RETRY.txt',
-            violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
-        ):
-            if candidate.exists():
-                skipped_marker_path = candidate
-                break
-
-        status = 'pending'
-        error_message = None
-        if has_report:
-            status = 'completed'
-        elif failure_path.exists():
-            status = 'failed'
-            error_message = _read_generation_failure_reason(failure_path)
-        elif skipped_marker_path is not None:
-            status = 'skipped'
-            error_message = _read_generation_failure_reason(skipped_marker_path)
-        elif has_annotated or has_caption:
-            status = 'generating'
-        elif has_original:
-            status = 'pending'
-
-        progress = get_report_progress() or {}
-        progress_current = str(progress.get('current') or '').strip()
-        progress_status = str(progress.get('status') or '').strip().lower()
-        if status in ('pending', 'generating') and progress_current == str(report_id).strip():
-            if progress_status in ('processing', 'running', 'active'):
-                status = 'generating'
-            elif progress_status in ('queued', 'pending'):
-                status = 'pending'
-
-        message_map = {
-            'pending': 'Report is queued for processing',
-            'queued': 'Report is queued for processing',
-            'generating': 'AI is analyzing the violation and generating the report',
-            'completed': 'Report is ready',
-            'failed': f"Report generation failed: {error_message or 'Unknown error'}",
-            'skipped': f"Skipped - not a work environment: {error_message or 'Invalid scene'}",
-        }
-        return jsonify({
-            'status': status,
-            'has_report': has_report,
-            'has_original': has_original,
-            'has_annotated': has_annotated,
-            'error_message': error_message,
-            'message': message_map.get(status, 'Status unknown')
-        })
+        return jsonify(local_payload)
 
     # Use Supabase
     try:
@@ -6465,11 +6571,43 @@ def api_report_status(report_id):
                 if status_info.get('has_report') and status_info.get('status') == 'completed':
                     status_info['error_message'] = None
 
+        if not status_info and local_payload:
+            return jsonify(local_payload)
+
         if not status_info:
             return jsonify({
                 'status': 'not_found',
                 'message': 'Report not found'
             })
+
+        if local_payload:
+            local_status = str(local_payload.get('status') or '').strip().lower()
+            status_info['has_report'] = bool(status_info.get('has_report')) or bool(local_payload.get('has_report'))
+            status_info['has_original'] = bool(status_info.get('has_original')) or bool(local_payload.get('has_original'))
+            status_info['has_annotated'] = bool(status_info.get('has_annotated')) or bool(local_payload.get('has_annotated'))
+            if local_status == 'completed' and local_payload.get('has_report'):
+                status_info['status'] = 'completed'
+                status_info['error_message'] = None
+            elif (
+                local_status in ('pending', 'generating')
+                and str(status_info.get('status') or '').strip().lower() in ('', 'unknown', 'not_found', 'pending', 'generating')
+            ):
+                status_info['status'] = local_status
+                status_info['message'] = local_payload.get('message')
+            for key in (
+                'queue_size',
+                'queue_position',
+                'queued',
+                'worker_running',
+                'active_report_id',
+                'active_step',
+                'active_status',
+                'worker_heartbeat_age_seconds',
+                'source_scope',
+                'source_label',
+            ):
+                if key in local_payload:
+                    status_info[key] = local_payload.get(key)
 
         status = status_info.get('status', 'unknown')
         generating_message = (
@@ -6494,10 +6632,23 @@ def api_report_status(report_id):
             'device_id': status_info.get('device_id'),
             'error_message': status_info.get('error_message'),
             'alert_message': status_info.get('alert_message'),
-            'message': messages.get(status, 'Status unknown')
+            'queue_size': status_info.get('queue_size'),
+            'queue_position': status_info.get('queue_position'),
+            'queued': status_info.get('queued'),
+            'worker_running': status_info.get('worker_running'),
+            'active_report_id': status_info.get('active_report_id'),
+            'active_step': status_info.get('active_step'),
+            'active_status': status_info.get('active_status'),
+            'worker_heartbeat_age_seconds': status_info.get('worker_heartbeat_age_seconds'),
+            'source_scope': status_info.get('source_scope'),
+            'source_label': status_info.get('source_label'),
+            'message': status_info.get('message') or messages.get(status, 'Status unknown')
         })
 
     except Exception as e:
+        if local_payload:
+            logger.warning(f"Report status falling back to local artifacts for {report_id}: {e}")
+            return jsonify(local_payload)
         logger.error(f"Error fetching report status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch status'}), 500
 
@@ -6648,6 +6799,13 @@ def api_queue_status():
         if hasattr(violation_queue, 'get_queue_preview'):
             queue_preview = violation_queue.get_queue_preview(limit=20)
         heartbeat_age_seconds = _queue_worker_heartbeat_age_seconds()
+        progress = get_report_progress() or {}
+        progress_status = str(progress.get('status') or '').strip().lower()
+        active_report_id = None
+        active_step = None
+        if progress_status in ('waiting', 'processing', 'generating', 'running', 'active'):
+            active_report_id = str(progress.get('current') or '').strip() or None
+            active_step = progress.get('current_step')
         return jsonify({
             'available': True,
             'runtime': {
@@ -6663,6 +6821,9 @@ def api_queue_status():
             'total_rate_limited': stats.get('total_rate_limited', 0),
             'worker_running': _is_queue_worker_alive(),
             'watchdog_running': _is_queue_watchdog_alive(),
+            'active_report_id': active_report_id,
+            'active_step': active_step,
+            'active_status': progress_status or None,
             'worker_heartbeat_age_seconds': (
                 round(heartbeat_age_seconds, 2)
                 if heartbeat_age_seconds is not None
@@ -6813,6 +6974,13 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         else:
             continue
 
+        queue_context = _get_queue_context_for_report(report_id)
+        if status in ('pending', 'generating'):
+            if str(queue_context.get('active_report_id') or '') == report_id:
+                status = 'generating'
+            elif queue_context.get('queued'):
+                status = 'pending'
+
         timestamp_value = None
         try:
             timestamp_value = _parse_report_id_timestamp(report_id).isoformat()
@@ -6913,6 +7081,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
             'violation_summary': metadata_violation_summary,
             'violation_type': metadata_violation_type,
             'device_id': metadata_device_id,
+            **queue_context,
         })
 
     return rows
@@ -10473,7 +10642,7 @@ def api_report_recovery_execute():
 
         report_id = item.get('report_id')
         try:
-            if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
+            if _is_report_queued_or_processing(report_id):
                 skipped_count += 1
                 continue
 
@@ -10960,7 +11129,7 @@ def _sync_local_cache_candidates(
             except Exception as status_heal_err:
                 logger.debug(f"Could not auto-heal stale status for {report_id}: {status_heal_err}")
 
-        if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
+        if _is_report_queued_or_processing(report_id):
             skipped += 1
             continue
 
@@ -11321,7 +11490,7 @@ def api_report_local_draft_handoff():
 
         if not already_generating:
             if ensure_queue_worker_running() and violation_queue is not None:
-                if hasattr(violation_queue, 'is_report_queued') and violation_queue.is_report_queued(report_id):
+                if _is_report_queued_or_processing(report_id):
                     queued = True
                 else:
                     queue_payload = {
@@ -11490,6 +11659,14 @@ def api_pending_reports():
             'has_report': bool(row.get('has_report')),
             'source_scope': local_artifact_scope,
             'source_label': _source_label(local_artifact_scope),
+            'queue_size': row.get('queue_size'),
+            'queue_position': row.get('queue_position'),
+            'queued': row.get('queued'),
+            'worker_running': row.get('worker_running'),
+            'active_report_id': row.get('active_report_id'),
+            'active_step': row.get('active_step'),
+            'active_status': row.get('active_status'),
+            'worker_heartbeat_age_seconds': row.get('worker_heartbeat_age_seconds'),
         }
 
     if db_manager is not None:

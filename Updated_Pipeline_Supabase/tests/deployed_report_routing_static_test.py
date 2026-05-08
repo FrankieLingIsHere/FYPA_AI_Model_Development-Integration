@@ -47,6 +47,16 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))", casm_app)
         self.assertIn('realtime_report_events = deque', casm_app)
 
+    def test_local_notifications_survive_initial_load_and_preliminary_rows(self):
+        realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')
+        monitor_js = (ROOT / 'frontend' / 'js' / 'violation-monitor.js').read_text(encoding='utf-8')
+
+        self.assertIn('NEW real-time violation arrived during initial load', monitor_js)
+        self.assertIn('violationTime > sessionStartWithBuffer', monitor_js)
+        self.assertIn('rowNeedsLifecycleFallback', realtime_js)
+        self.assertIn("progressStatus === 'generating'", realtime_js)
+        self.assertIn('!progressRowHasReport', realtime_js)
+
     def test_synced_local_tag_survives_cloud_mode_repair(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
 

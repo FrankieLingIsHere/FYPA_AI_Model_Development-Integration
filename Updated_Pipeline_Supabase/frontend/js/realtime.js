@@ -350,9 +350,12 @@ const RealtimeSync = {
         const progressReportId = String(progress.current || '').trim();
         const progressStatus = String(progress.status || '').trim().toLowerCase();
         const progressStep = String(progress.current_step || '').trim();
-        const hasProgressReportRow = !!(progressReportId && reports.some((row) => {
+        const progressReportRow = progressReportId ? reports.find((row) => {
             return String((row && row.report_id) || '').trim() === progressReportId;
-        }));
+        }) : null;
+        const hasProgressReportRow = !!progressReportRow;
+        const progressRowStatus = String((progressReportRow && progressReportRow.status) || '').trim().toLowerCase();
+        const progressRowHasReport = !!(progressReportRow && progressReportRow.has_report);
         const isActiveProgress = !!(
             progressReportId
             && (progressStatus === 'waiting' || progressStatus === 'processing' || progressStatus === 'generating')
@@ -390,10 +393,25 @@ const RealtimeSync = {
         const changedReport = this.lastProgressReportId !== progressReportId;
         const changedStatus = this.lastProgressStatus !== progressStatus;
         const changedStep = this.lastProgressStep !== progressStep;
-        const allowProgressFallback = !hasProgressReportRow;
+        const rowNeedsLifecycleFallback = !!(
+            progressReportRow
+            && !progressRowHasReport
+            && (
+                isActiveProgress
+                || progressStatus === 'completed'
+                || progressStatus === 'error'
+                || progressStatus === 'failed'
+            )
+            && progressRowStatus !== 'failed'
+            && progressRowStatus !== 'skipped'
+        );
+        const allowProgressFallback = !hasProgressReportRow || rowNeedsLifecycleFallback;
 
         if (allowProgressFallback) {
-            if ((progressStatus === 'waiting' || progressStatus === 'processing') && (changedReport || changedStatus)) {
+            if (
+                (progressStatus === 'waiting' || progressStatus === 'processing' || progressStatus === 'generating')
+                && (changedReport || changedStatus)
+            ) {
                 NotificationManager.reportGenerating(progressReportId, {
                     title: progressStatus === 'waiting' ? 'Report Queued' : 'Report Generating'
                 });

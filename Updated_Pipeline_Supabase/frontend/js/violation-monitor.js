@@ -401,18 +401,34 @@ const ViolationMonitor = {
         let pendingCount = 0;
         let generatingCount = 0;
         let failedCount = 0;
+        const sessionStartWithBuffer = new Date(this.sessionStartTime.getTime() - 5000);
 
         for (const v of violations) {
             const reportId = String((v && v.report_id) || '').trim();
             if (!reportId) continue;
             const violationTime = new Date(v.timestamp);
             const status = this.normalizeStatusValue(v.status, !!v.has_report);
+            const isNewDuringSession = Number.isFinite(violationTime.getTime())
+                && violationTime > sessionStartWithBuffer;
+
+            if (isNewDuringSession) {
+                console.log(`[ViolationMonitor] NEW real-time violation arrived during initial load: ${reportId}`);
+                this._notifyViolationDetected(v);
+
+                if (status === 'generating') {
+                    this._notifyReportGenerating(v);
+                } else if (status === 'completed') {
+                    this._notifyReportReady(v);
+                } else if (status === 'failed') {
+                    this._notifyReportFailed(v);
+                }
+            }
 
             // Track all violations
             this.knownViolations.set(reportId, { status, timestamp: violationTime });
 
             // Count new violations since last visit
-            if (this.lastVisitTime && violationTime > this.lastVisitTime) {
+            if (!isNewDuringSession && this.lastVisitTime && violationTime > this.lastVisitTime) {
                 newSinceLastVisit++;
             }
 

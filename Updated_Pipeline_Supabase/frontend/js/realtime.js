@@ -13,6 +13,7 @@ const RealtimeSync = {
     lastProgressReportId: null,
     lastProgressStatus: null,
     lastProgressStep: '',
+    detectedReportNotifiedAt: {},
     pendingSnapshotFetch: false,
     lastSnapshotAt: 0,
     supabaseFailureCount: 0,
@@ -236,6 +237,7 @@ const RealtimeSync = {
 
             const payload = await response.json();
             this.emitPageUpdate(payload);
+            this.emitViolationDetectedNotifications(payload);
             this.emitStatusNotifications(payload);
         } catch (error) {
             console.warn('Failed to fetch realtime snapshot:', error);
@@ -314,6 +316,7 @@ const RealtimeSync = {
         try {
             const payload = JSON.parse(event.data || '{}');
             this.emitPageUpdate(payload);
+            this.emitViolationDetectedNotifications(payload);
             this.emitStatusNotifications(payload);
             // Trigger ViolationMonitor's "PPE Violation Detected!" toast / voice
             // alert pipeline immediately whenever the SSE/WS stream pushes a new
@@ -340,6 +343,95 @@ const RealtimeSync = {
         window.dispatchEvent(new CustomEvent('ppe-realtime:update', {
             detail: payload
         }));
+    },
+
+    emitViolationDetectedNotifications(payload) {
+        const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        if (!reports.length) return;
+
+        const nowEpochMs = Date.now();
+        const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
+        const progressReportId = String(progress.current || '').trim();
+        const progressStatus = String(progress.status || '').trim().toLowerCase();
+        const activeProgressStatuses = ['waiting', 'processing', 'generating'];
+
+        Object.keys(this.detectedReportNotifiedAt || {}).forEach((reportId) => {
+            if (nowEpochMs - Number(this.detectedReportNotifiedAt[reportId] || 0) > 15 * 60 * 1000) {
+                delete this.detectedReportNotifiedAt[reportId];
+            }
+        });
+
+        const isRecentRow = (row) => {
+            const raw = row && (row.updated_at || row.timestamp);
+            if (!raw) return false;
+            const ts = Date.parse(raw);
+            if (!Number.isFinite(ts)) return false;
+            return (nowEpochMs - ts) <= 120000;
+        };
+
+        reports.forEach((row) => {
+            if (!row || typeof row !== 'object') return;
+            const reportId = String(row.report_id || '').trim();
+            if (!reportId) return;
+            if (this.detectedReportNotifiedAt[reportId]) return;
+
+            const eventType = String(row.event_type || '').trim().toLowerCase();
+            const sourceScope = String(row.source_scope || row.report_scope || row.scope || '').trim().toLowerCase();
+            const rowStatus = String(row.status || '').trim().toLowerCase();
+            const isCurrentProgress = reportId === progressReportId && activeProgressStatuses.includes(progressStatus);
+            const isLiveViolationRow = eventType === 'violation_detected';
+            const isFreshLocalLifecycleRow = (
+                sourceScope === 'local'
+                && isRecentRow(row)
+                && ['pending', 'queued', 'processing', 'generating', 'completed'].includes(rowStatus)
+            );
+
+            if (!isLiveViolationRow && !isCurrentProgress && !isFreshLocalLifecycleRow) {
+                return;
+            }
+
+            const violation = {
+                ...row,
+                report_id: reportId,
+                timestamp: row.timestamp || row.updated_at || new Date().toISOString(),
+                severity: row.severity || 'HIGH',
+                violation_type: row.violation_type || 'PPE Violation',
+                violation_summary: row.violation_summary || 'PPE Violation Detected',
+            };
+
+            try {
+                if (
+                    typeof ViolationMonitor !== 'undefined'
+                    && typeof ViolationMonitor._notifyViolationDetected === 'function'
+                ) {
+                    ViolationMonitor._notifyViolationDetected(violation);
+                    if (
+                        ViolationMonitor.knownViolations
+                        && typeof ViolationMonitor.knownViolations.has === 'function'
+                        && typeof ViolationMonitor.knownViolations.set === 'function'
+                        && !ViolationMonitor.knownViolations.has(reportId)
+                    ) {
+                        const normalizedStatus = (
+                            typeof ViolationMonitor.normalizeStatusValue === 'function'
+                                ? ViolationMonitor.normalizeStatusValue(rowStatus, !!row.has_report)
+                                : (rowStatus || 'pending')
+                        );
+                        ViolationMonitor.knownViolations.set(reportId, {
+                            status: normalizedStatus,
+                            timestamp: new Date(violation.timestamp)
+                        });
+                    }
+                } else if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.violation === 'function') {
+                    NotificationManager.violation(violation.violation_summary, reportId, {
+                        dedupeKey: `detected_${reportId}`,
+                        dedupeTtlMs: 15 * 60 * 1000
+                    });
+                }
+                this.detectedReportNotifiedAt[reportId] = nowEpochMs;
+            } catch (notifyErr) {
+                console.warn('Realtime violation notification failed:', notifyErr);
+            }
+        });
     },
 
     emitStatusNotifications(payload) {

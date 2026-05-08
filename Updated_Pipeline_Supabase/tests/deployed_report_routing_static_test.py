@@ -53,6 +53,9 @@ class ReportRoutingStaticTest(unittest.TestCase):
 
         self.assertIn('NEW real-time violation arrived during initial load', monitor_js)
         self.assertIn('violationTime > sessionStartWithBuffer', monitor_js)
+        self.assertIn('emitViolationDetectedNotifications(payload)', realtime_js)
+        self.assertIn('eventType === \'violation_detected\'', realtime_js)
+        self.assertIn('ViolationMonitor._notifyViolationDetected(violation)', realtime_js)
         self.assertIn('rowNeedsLifecycleFallback', realtime_js)
         self.assertIn("progressStatus === 'generating'", realtime_js)
         self.assertIn('!progressRowHasReport', realtime_js)
@@ -75,6 +78,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('allow_placeholder_report and force_reprocess_requested', casm_app)
         self.assertIn('queue_sync_device_id = f"local_cache_sync_{report_id}_{time.time_ns()}"', casm_app)
         self.assertIn('device_id=queue_sync_device_id', casm_app)
+        self.assertIn('def _realtime_source_payload(scope: str, reason: str)', casm_app)
+        self.assertIn("os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '4')", casm_app)
 
 
 if __name__ == '__main__':

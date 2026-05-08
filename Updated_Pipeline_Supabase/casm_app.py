@@ -1188,11 +1188,11 @@ SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS = max(
 )
 SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
     30,
-    int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '180') or 180)
+    int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '30') or 30)
 )
 SUPABASE_AUTO_SYNC_BATCH_SIZE = max(
     0,
-    min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '0') or 0))
+    min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '4') or 4))
 )
 LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
     'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
@@ -7085,6 +7085,22 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
 
 def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
     """Collect compact realtime state for frontend auto-refresh subscribers."""
+    def _realtime_source_payload(scope: str, reason: str) -> Dict[str, str]:
+        normalized_scope = str(scope or '').strip().lower()
+        if normalized_scope not in ('local', 'cloud', 'shared', 'synced_local'):
+            normalized_scope = 'cloud'
+        label_map = {
+            'local': 'Local',
+            'cloud': 'Cloud',
+            'shared': 'Shared',
+            'synced_local': 'Local Synced',
+        }
+        return {
+            'source_scope': normalized_scope,
+            'source_label': label_map.get(normalized_scope, 'Cloud'),
+            'source_reason': str(reason or '').strip() or 'realtime_snapshot',
+        }
+
     queue_data = {
         'available': violation_queue is not None,
         'worker_running': _is_queue_worker_alive(),
@@ -7199,7 +7215,7 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                         if current_value in (None, '', [], {}):
                             existing[detail_key] = local_value
                 if not existing.get('source_scope'):
-                    existing.update(_build_source_payload('local', 'local_cache_row'))
+                    existing.update(_realtime_source_payload('local', 'local_cache_row'))
                 if local_status in ('completed', 'failed', 'skipped') and existing_status in (
                     'pending', 'queued', 'processing', 'generating', 'unknown', ''
                 ):
@@ -7225,7 +7241,19 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
                 'status': local_status,
                 'error_message': local_row.get('error_message'),
                 'timestamp': local_row.get('timestamp'),
-                'updated_at': local_row.get('updated_at')
+                'updated_at': local_row.get('updated_at'),
+                'has_original': bool(local_row.get('has_original')),
+                'has_annotated': bool(local_row.get('has_annotated')),
+                'has_report': bool(local_row.get('has_report')),
+                'has_local_report': bool(local_row.get('has_report')),
+                'violation_count': local_row.get('violation_count'),
+                'person_count': local_row.get('person_count'),
+                'missing_ppe': local_row.get('missing_ppe') or [],
+                'ppe_tags': local_row.get('ppe_tags') or [],
+                'violation_summary': local_row.get('violation_summary'),
+                'violation_type': local_row.get('violation_type'),
+                'device_id': local_row.get('device_id') or 'local_cache',
+                **_realtime_source_payload('local', 'local_cache_row'),
             }
             report_rows.append(snapshot_row)
             by_id[report_id] = snapshot_row

@@ -64,6 +64,18 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("source_scope_marker = 'synced_local'", casm_app)
         self.assertIn("'browser_local_draft_handoff'", casm_app)
 
+    def test_local_sync_and_generation_quality_guards(self):
+        casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+        caption_image = (ROOT / 'caption_image.py').read_text(encoding='utf-8')
+
+        self.assertIn("OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 360)", caption_image)
+        self.assertIn('max_tokens=650', caption_image)
+        self.assertIn('max_tokens=750', caption_image)
+        self.assertNotIn('allow_placeholder_report = True\n\n    logger.info', casm_app)
+        self.assertIn('allow_placeholder_report and force_reprocess_requested', casm_app)
+        self.assertIn('queue_sync_device_id = f"local_cache_sync_{report_id}_{time.time_ns()}"', casm_app)
+        self.assertIn('device_id=queue_sync_device_id', casm_app)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

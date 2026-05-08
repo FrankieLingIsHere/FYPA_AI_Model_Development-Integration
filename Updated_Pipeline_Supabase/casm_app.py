@@ -4349,10 +4349,6 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
-    if force_local_artifact_pipeline:
-        # Local-first runs should still produce a report artifact so reconnect sync can
-        # flush to cloud even when local NLP generation fails.
-        allow_placeholder_report = True
 
     logger.info(f" Processing queued violation: {report_id}")
 
@@ -4678,23 +4674,16 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.error(f" Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
 
-    if not report_created and allow_placeholder_report and (
-        force_reprocess_requested or force_local_artifact_pipeline
-    ):
+    if not report_created and allow_placeholder_report and force_reprocess_requested:
         try:
-            fallback_source = 'forced reprocess' if force_reprocess_requested else 'local-first runtime'
             logger.warning(
-                f"Placeholder report fallback activated for {report_id} ({fallback_source}); "
+                f"Placeholder report fallback activated for {report_id} (forced reprocess); "
                 "creating placeholder HTML report."
             )
             create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
             if (violation_dir / 'report.html').exists():
                 report_created = True
-                fallback_message = (
-                    'Forced reprocess used placeholder report fallback'
-                    if force_reprocess_requested
-                    else 'Local-first runtime used placeholder report fallback'
-                )
+                fallback_message = 'Forced reprocess used placeholder report fallback'
                 if not failure_reason:
                     failure_reason = fallback_message
                 else:
@@ -4704,11 +4693,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         db_manager.update_detection_status(
                             report_id,
                             'completed',
-                            (
-                                'Generated placeholder fallback report after forced reprocess recovery path'
-                                if force_reprocess_requested
-                                else 'Generated placeholder fallback report after local-first recovery path'
-                            )
+                            'Generated placeholder fallback report after forced reprocess recovery path'
                         )
                     except Exception as status_err:
                         _activate_local_offline_runtime('process_queued_violation.status_placeholder_completed', status_err)
@@ -11295,6 +11280,7 @@ def _sync_local_cache_candidates(
         if original_sync_source:
             violation_data['origin_sync_source'] = original_sync_source
         event_device_id = (event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync'
+        queue_sync_device_id = f"local_cache_sync_{report_id}_{time.time_ns()}"
 
         try:
             if not event and hasattr(db_manager, 'insert_detection_event'):
@@ -11310,7 +11296,7 @@ def _sync_local_cache_candidates(
 
             queued = violation_queue.enqueue(
                 violation_data=violation_data,
-                device_id=event_device_id,
+                device_id=queue_sync_device_id,
                 report_id=report_id,
                 severity=sync_queue_severity,
                 expedite=sync_queue_expedite,
@@ -11333,10 +11319,11 @@ def _sync_local_cache_candidates(
                         event_type='local_cache_sync_queued',
                         message=f'Queued local cache report for Supabase reconciliation ({reason})',
                         report_id=report_id,
-                        device_id=event_device_id,
+                        device_id=queue_sync_device_id,
                         metadata={
                             'reason': reason,
                             'source': 'sync_local_cache',
+                            'event_device_id': event_device_id,
                             'has_local_report': bool(local_has_report),
                             'has_cloud_original': has_cloud_original,
                             'has_cloud_annotated': has_cloud_annotated,

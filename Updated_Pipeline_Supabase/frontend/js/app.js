@@ -1,5 +1,7 @@
 const STARTUP_STATUS_ENDPOINT = '/api/system/startup-status';
 const STARTUP_POLL_INTERVAL_MS = 5000;
+const STARTUP_GATE_SOFT_TIMEOUT_MS = 15000;
+const STARTUP_GATE_MAX_BLOCKING_FETCH_FAILURES = 3;
 const BACKEND_PROBE_TIMEOUT_MS = 2600;
 let appBootstrapped = false;
 let startupGateInFlight = false;
@@ -767,7 +769,10 @@ async function initializeWithStartupGate() {
     });
 
     try {
-        await waitForStartupReady();
+        const startupResult = await waitForStartupReady();
+        if (startupResult && startupResult.softReady) {
+            console.warn('Startup gate released before backend readiness completed:', startupResult.reason || 'soft-ready');
+        }
     } catch (error) {
         showStartupError(error.message || 'Startup validation failed.');
         return;
@@ -812,11 +817,28 @@ async function initializeWithStartupGate() {
 }
 
 async function waitForStartupReady() {
+    const startedAt = Date.now();
     const timeoutAt = Date.now() + (10 * 60 * 1000);
     let lastResolutionAtMs = 0;
     let consecutiveFetchFailures = 0;
 
+    const releaseSoftStartupGate = (reason, detail = '') => {
+        updateStartupUi({
+            progress: 100,
+            current_step: 'Backend startup is still finishing. Launching interface...',
+        });
+        return {
+            softReady: true,
+            reason,
+            detail,
+        };
+    };
+
     while (Date.now() < timeoutAt) {
+        if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+            return releaseSoftStartupGate('startup_checks_soft_timeout');
+        }
+
         try {
             const startupController = new AbortController();
             const startupTimeoutId = setTimeout(() => startupController.abort(), 12000);
@@ -836,7 +858,13 @@ async function waitForStartupReady() {
             const failedCheck = findFailedStartupCheck(payload);
             if (failedCheck) {
                 const detail = failedCheck.detail ? `: ${failedCheck.detail}` : '';
-                throw new Error(`${failedCheck.label || 'Startup check failed'}${detail}`);
+                const failureMessage = `${failedCheck.label || 'Startup check failed'}${detail}`;
+                if (/yolo|model path|pipeline modules|pipeline components/i.test(failureMessage)) {
+                    throw new Error(failureMessage);
+                }
+                if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+                    return releaseSoftStartupGate('startup_noncritical_check_failed', failureMessage);
+                }
             }
 
             if (payload && payload.ready) {
@@ -851,10 +879,17 @@ async function waitForStartupReady() {
 
             if (response.status >= 500 || (payload && payload.status === 'error')) {
                 const failureReason = (payload && payload.error_message) || 'Startup setup failed on backend.';
-                throw new Error(failureReason);
+                if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+                    return releaseSoftStartupGate('startup_status_unavailable', failureReason);
+                }
+                updateStartupUi({
+                    ...(payload || {}),
+                    progress: Math.max(5, Number((payload && payload.progress) || 5)),
+                    current_step: failureReason
+                });
             }
         } catch (error) {
-            if (error && error.message && /startup check failed|startup setup failed|yolo|model path|pipeline|supabase/i.test(error.message)) {
+            if (error && error.message && /startup check failed|startup setup failed|yolo|model path|pipeline/i.test(error.message)) {
                 throw error;
             }
             consecutiveFetchFailures += 1;
@@ -880,9 +915,13 @@ async function waitForStartupReady() {
                 current_step: 'Waiting for backend startup checks to respond...'
             });
 
-            if (consecutiveFetchFailures >= 8) {
-                throw new Error(
-                    'Unable to reach backend startup API. Check Railway backend URL and CORS ALLOWED_ORIGINS settings.'
+            if (
+                consecutiveFetchFailures >= STARTUP_GATE_MAX_BLOCKING_FETCH_FAILURES
+                || (Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS
+            ) {
+                return releaseSoftStartupGate(
+                    'startup_api_unreachable',
+                    error && error.message ? error.message : ''
                 );
             }
         }
@@ -890,7 +929,7 @@ async function waitForStartupReady() {
         await sleep(STARTUP_POLL_INTERVAL_MS);
     }
 
-    throw new Error('Startup timed out. Please verify model files and Supabase connectivity, then retry.');
+    return releaseSoftStartupGate('startup_checks_long_timeout');
 }
 
 function findFailedStartupCheck(payload) {

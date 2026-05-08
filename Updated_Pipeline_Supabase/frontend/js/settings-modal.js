@@ -607,14 +607,12 @@ const GlobalSettingsModal = {
         const hasStoredProvisionSecret = !!provisionSecret;
 
         if (allowRequest && (!provisionSecret || options.forceRequest === true)) {
-            const forceExistingRefresh = options.forceRequest === true
-                && ['approved', 'provisioned', 'active', 'validation_required'].includes(storedStatus);
             const requestResult = await API.requestCloudProvisioningApproval({
                 machineId,
                 // Pass the stored secret (if any) so the backend can authenticate
                 // a rotation without an admin token. Brand-new devices have no
                 // stored secret and must be admin-approved out-of-band.
-                currentProvisionSecret: forceExistingRefresh ? '' : (provisionSecret || '')
+                currentProvisionSecret: provisionSecret || ''
             });
             if (!requestResult || requestResult.success === false) {
                 return {
@@ -1255,9 +1253,7 @@ const GlobalSettingsModal = {
                 || currentStatus === 'provisioned'
                 || currentStatus === 'active'
                 || currentStatus === 'validation_required';
-            const currentSecret = refreshExistingApproval
-                ? ''
-                : String(stored.provisionSecret || '').trim();
+            const currentSecret = String(stored.provisionSecret || '').trim();
 
             const requestResult = await API.requestCloudProvisioningApproval({
                 machineId,
@@ -1267,7 +1263,9 @@ const GlobalSettingsModal = {
             if (!requestResult || requestResult.success === false) {
                 let errMsg = String((requestResult && requestResult.error) || 'Failed to submit provisioning request.');
                 if (/unauthorized|timeout|timed out|failed to fetch/i.test(errMsg) && refreshExistingApproval) {
-                    errMsg = 'Could not re-validate installer access yet. Start the local backend on this approved host, wait for heartbeat, then rerun Local Mode Checkup.';
+                    errMsg = currentSecret
+                        ? 'Could not re-validate installer access with the saved token yet. Check the cloud connection and try Local Mode Checkup again.'
+                        : 'Installer validation token is missing in this browser. Re-request provisioning from this device or have an admin re-issue installer access.';
                 }
                 this.setProviderStatus(errMsg, 'error');
                 this.showNotification(errMsg, 'error');

@@ -6831,6 +6831,39 @@ def api_report_prefetch(report_id):
     try:
         local_report_html = VIOLATIONS_DIR / report_id / 'report.html'
 
+        def _local_prefetch_response(
+            source: str,
+            violation: Optional[Dict[str, Any]] = None,
+            event: Optional[Dict[str, Any]] = None,
+            cache_key: Optional[str] = None,
+        ):
+            try:
+                trace_payload = _build_traceability_payload(
+                    report_id=report_id,
+                    violation=violation or {},
+                    event=event or {},
+                    source=source,
+                    failed_view_requested=False,
+                )
+                _rendered, layer = _render_local_report_html_for_view(
+                    local_report_html,
+                    trace_payload,
+                    cache_key=cache_key,
+                )
+                return jsonify({
+                    'success': True,
+                    'report_id': report_id,
+                    'warmed': True,
+                    'layer': layer,
+                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
+                })
+            except FallbackReportTemplateError:
+                logger.warning(f"Report prefetch blocked fallback-template local HTML for {report_id}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Report content is fallback-template output. Regenerate to use model-generated response.'
+                }), 409
+
         restriction_block = None
         if storage_manager is not None:
             blocked = _egress_budget_blocked_response()
@@ -6856,37 +6889,21 @@ def api_report_prefetch(report_id):
 
         if storage_manager is None or db_manager is None:
             if local_report_html.exists():
-                return jsonify({
-                    'success': True,
-                    'report_id': report_id,
-                    'warmed': True,
-                    'layer': 'local_filesystem',
-                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
-                })
+                return _local_prefetch_response('local_filesystem_prefetch')
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
         violation = db_manager.get_violation(report_id)
         if not violation:
             if local_report_html.exists():
-                return jsonify({
-                    'success': True,
-                    'report_id': report_id,
-                    'warmed': True,
-                    'layer': 'local_filesystem',
-                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
-                })
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+                return _local_prefetch_response('local_filesystem_prefetch', event=event)
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
         report_html_key = violation.get('report_html_key')
         if not report_html_key:
             if local_report_html.exists():
-                return jsonify({
-                    'success': True,
-                    'report_id': report_id,
-                    'warmed': True,
-                    'layer': 'local_filesystem',
-                    'duration_ms': round((time.perf_counter() - started) * 1000, 2)
-                })
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+                return _local_prefetch_response('local_filesystem_prefetch', violation=violation, event=event)
             return jsonify({'success': False, 'error': 'Report HTML not available'}), 404
 
         rendered = _get_cached_rendered_report_html(report_id, report_html_key)
@@ -6903,13 +6920,16 @@ def api_report_prefetch(report_id):
         source_layer = 'source_cache'
         if html_content is None:
             if local_report_html.exists():
-                try:
-                    local_html = local_report_html.read_text(encoding='utf-8', errors='ignore')
-                    if local_html and not _looks_like_fallback_template_html(local_html):
-                        html_content = local_html
-                        source_layer = 'local_filesystem'
-                except Exception:
-                    html_content = None
+                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+                local_response = _local_prefetch_response(
+                    'local_filesystem_prefetch',
+                    violation=violation,
+                    event=event,
+                    cache_key=report_html_key,
+                )
+                status_code = local_response[1] if isinstance(local_response, tuple) and len(local_response) > 1 else 200
+                if status_code == 200:
+                    return local_response
 
             if html_content is None:
                 html_content = storage_manager.download_file_content(report_html_key)
@@ -12497,23 +12517,29 @@ def view_report(report_id):
                 )
             abort(404, description="Report not found")
 
+        report_html_key = violation.get('report_html_key')
+
         if local_report_html.exists() and not failed_view and event_status not in ('failed', 'partial', 'skipped'):
             try:
-                local_html = local_report_html.read_text(encoding='utf-8', errors='ignore')
-                if local_html and not _looks_like_fallback_template_html(local_html):
-                    trace_payload = _build_traceability_payload(
-                        report_id=report_id,
-                        violation=violation or {},
-                        event=event or {},
-                        source='local_filesystem_cache',
-                        failed_view_requested=failed_view,
-                    )
-                    return _read_local_report_with_trace(local_report_html, trace_payload)
+                trace_payload = _build_traceability_payload(
+                    report_id=report_id,
+                    violation=violation or {},
+                    event=event or {},
+                    source='local_filesystem_cache',
+                    failed_view_requested=failed_view,
+                )
+                local_html, _layer = _render_local_report_html_for_view(
+                    local_report_html,
+                    trace_payload,
+                    cache_key=report_html_key or None,
+                )
+                return _report_html_response(local_html)
+            except FallbackReportTemplateError:
+                logger.warning(f"Local cached report HTML is fallback-template output for {report_id}; checking cloud copy.")
             except Exception:
                 pass
 
         # Get signed URL for report HTML
-        report_html_key = violation.get('report_html_key')
         if not report_html_key:
             if failed_view and event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
@@ -12543,12 +12569,7 @@ def view_report(report_id):
         if not failed_view:
             cached_rendered = _get_cached_rendered_report_html(report_id, report_html_key)
             if cached_rendered:
-                return cached_rendered, 200, {
-                    'Content-Type': 'text/html; charset=utf-8',
-                    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                }
+                return _report_html_response(cached_rendered)
 
         # Download the HTML content and render it
         try:
@@ -12606,12 +12627,7 @@ def view_report(report_id):
             html_content = _inject_traceability_widget(html_content, trace_payload)
             if not failed_view:
                 _set_cached_rendered_report_html(report_id, report_html_key, html_content)
-            return html_content, 200, {
-                'Content-Type': 'text/html; charset=utf-8',
-                'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            }
+            return _report_html_response(html_content)
         except HTTPException:
             raise
         except Exception as e:
@@ -13459,32 +13475,72 @@ def _repair_report_documentation_block(html_content: str, report_id: str) -> str
         return html_content
 
 
+class FallbackReportTemplateError(Exception):
+    """Raised when a stored report HTML is only the disabled fallback template."""
+
+
+def _report_html_response(html_content: str):
+    return html_content, 200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
+
+
+def _local_report_html_cache_key(local_report_html: Path) -> str:
+    try:
+        stat = local_report_html.stat()
+        return f"local:{stat.st_mtime_ns}:{stat.st_size}"
+    except Exception:
+        return f"local:{local_report_html}"
+
+
+def _render_local_report_html_for_view(
+    local_report_html: Path,
+    trace_payload: Dict[str, Any],
+    cache_key: Optional[str] = None,
+    allow_cache: bool = True,
+) -> Tuple[str, str]:
+    report_id = str(trace_payload.get('report_id') or local_report_html.parent.name or '').strip()
+    resolved_cache_key = cache_key or _local_report_html_cache_key(local_report_html)
+
+    if allow_cache and report_id and resolved_cache_key:
+        cached_rendered = _get_cached_rendered_report_html(report_id, resolved_cache_key)
+        if cached_rendered:
+            return cached_rendered, 'rendered_cache'
+
+    with open(local_report_html, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+
+    if _looks_like_fallback_template_html(html_content):
+        raise FallbackReportTemplateError()
+
+    if report_id and resolved_cache_key:
+        _set_cached_report_html_content(report_id, resolved_cache_key, html_content)
+
+    rendered = _repair_report_documentation_block(html_content, report_id or 'UNKNOWN')
+    rendered = _normalize_report_footer_branding(rendered)
+    rendered = _inject_traceability_widget(rendered, trace_payload)
+
+    if allow_cache and report_id and resolved_cache_key:
+        _set_cached_rendered_report_html(report_id, resolved_cache_key, rendered)
+
+    return rendered, 'local_filesystem'
+
+
 def _read_local_report_with_trace(local_report_html: Path, trace_payload: Dict[str, Any]):
     """Read local report HTML and inject traceability widget before returning response."""
     try:
-        with open(local_report_html, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-
-        if _looks_like_fallback_template_html(html_content):
-            logger.warning(f"Blocked fallback-template local HTML for report {trace_payload.get('report_id')}")
-            return _render_regenerate_report_page(
-                str(trace_payload.get('report_id') or ''),
-                "Report content is fallback-template output. Regenerate to use model-generated response.",
-                status_code=409
-            )
-
-        html_content = _repair_report_documentation_block(
-            html_content,
-            str(trace_payload.get('report_id') or 'UNKNOWN')
+        html_content, _layer = _render_local_report_html_for_view(local_report_html, trace_payload)
+        return _report_html_response(html_content)
+    except FallbackReportTemplateError:
+        logger.warning(f"Blocked fallback-template local HTML for report {trace_payload.get('report_id')}")
+        return _render_regenerate_report_page(
+            str(trace_payload.get('report_id') or ''),
+            "Report content is fallback-template output. Regenerate to use model-generated response.",
+            status_code=409
         )
-        html_content = _normalize_report_footer_branding(html_content)
-        html_content = _inject_traceability_widget(html_content, trace_payload)
-        return html_content, 200, {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-        }
     except HTTPException:
         raise
     except Exception as e:

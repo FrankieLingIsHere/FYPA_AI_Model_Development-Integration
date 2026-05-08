@@ -558,6 +558,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertNotIn('set "CASM_CLOUD_URL=__CASM_CLOUD_URL__"', rendered_installer)
         self.assertNotIn('set "CASM_INSTALLER_VERSION=__CASM_INSTALLER_VERSION__"', rendered_installer)
         self.assertNotIn('set "CASM_MACHINE_ID=__CASM_MACHINE_ID__"', rendered_installer)
+        self.assertNotIn('set "CASM_PROVISION_SECRET=__CASM_PROVISION_SECRET__"', rendered_installer)
         self.assertNotIn('set "CASM_SUPABASE_URL=__CASM_SUPABASE_URL__"', rendered_installer)
         self.assertNotIn('set "CASM_SUPABASE_DB_URL=__CASM_SUPABASE_DB_URL__"', rendered_installer)
         self.assertNotIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=__CASM_SUPABASE_SERVICE_ROLE_KEY__"', rendered_installer)
@@ -565,7 +566,9 @@ class ProvisioningActionTest(unittest.TestCase):
         # Internal guard checks and self-update token maps must preserve placeholders
         # so launcher self-refresh can re-render from template safely.
         self.assertIn('if /I "!CASM_CLOUD_URL!"=="__CASM_CLOUD_URL__"', rendered_installer)
+        self.assertIn('if /I "!CASM_PROVISION_SECRET!"=="__CASM_PROVISION_SECRET__"', rendered_installer)
         self.assertIn("'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'", rendered_installer)
+        self.assertIn("'__CASM_PROVISION_SECRET__'='CASM_PROVISION_SECRET'", rendered_installer)
         self.assertGreaterEqual(
             rendered_installer.count("'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"),
             2,
@@ -578,6 +581,8 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('set "CASM_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "CASM_SOURCE_ROOT=', rendered_installer)
         self.assertIn('set "CASM_CLOUD_URL=', rendered_installer)
+        self.assertIn(f'set "CASM_PROVISION_SECRET={provision_secret}"', rendered_installer)
+        self.assertIn('local_mode_provision_state.json', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
@@ -619,7 +624,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
 
         token_map_key = "'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"
+        provision_token_map_key = "'__CASM_PROVISION_SECRET__'='CASM_PROVISION_SECRET'"
         self.assertGreaterEqual(installer_bat.count(token_map_key), 2)
+        self.assertGreaterEqual(installer_bat.count(provision_token_map_key), 2)
         self.assertGreaterEqual(installer_bat.count('$lineMap = [ordered]@{}'), 2)
 
     def test_frontend_redownload_flow_refreshes_missing_provision_secret(self):

@@ -339,8 +339,9 @@ STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = max(0, min(STARTUP_AUTO_PROVISION_MAX_ATTE
 LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED = os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED', 'true').lower() == 'true'
 # Adaptive heartbeat: cycle starts at MIN interval after any state change or
 # error, and exponentially climbs to MAX interval while state is steady.
-# This keeps the "presence" signal alive while collapsing egress: at steady
-# state we send ~144 heartbeats/day instead of ~3,500.
+# This keeps the "presence" signal alive while avoiding per-second polling.
+# MAX is later clamped below the freshness window so the cloud UI does not
+# mark a healthy local backend stale during steady state.
 try:
     LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS', '60')
@@ -422,6 +423,23 @@ except (TypeError, ValueError):
 LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = max(
     30,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS, 3600),
+)
+LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = min(
+    LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS,
+    max(
+        LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS,
+        int(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS // 2),
+    ),
+)
+try:
+    LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = int(
+        os.getenv('LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS', '45')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = 45
+LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = max(
+    15,
+    min(LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS, 300),
 )
 try:
     LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = int(
@@ -8387,14 +8405,19 @@ def _mark_local_provision_secret_stale(
 def _has_recent_local_provision_secret_stale_marker(
     state: Dict[str, Any],
     *,
-    max_age_seconds: int = 900,
+    max_age_seconds: Optional[int] = None,
 ) -> bool:
     if str((state or {}).get('last_provision_secret_error') or '').strip() != 'invalid_or_stale':
         return False
     marker_epoch = _parse_iso_epoch((state or {}).get('last_provision_secret_error_at'))
     if marker_epoch is None:
         return True
-    return (time.time() - marker_epoch) < max(60, int(max_age_seconds or 900))
+    recovery_window = (
+        LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS
+        if max_age_seconds is None
+        else int(max_age_seconds or LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS)
+    )
+    return (time.time() - marker_epoch) < max(15, recovery_window)
 
 
 def _local_mode_normalize_machine_id(raw_machine_id: Any) -> str:
@@ -14419,8 +14442,16 @@ def api_llm_ping():
         payload['error'] = f"Model '{model}' is not pulled. Run: ollama pull {model}"
         return jsonify(payload), 503
 
-    prompt = (request.get_json(silent=True) or {}).get('prompt') if request.method == 'POST' else None
+    ping_body = request.get_json(silent=True) if request.method == 'POST' else {}
+    if not isinstance(ping_body, dict):
+        ping_body = {}
+    prompt = ping_body.get('prompt') if request.method == 'POST' else None
     prompt = (prompt or 'Reply with the single word: PONG').strip()
+    try:
+        max_tokens = int(ping_body.get('num_predict') or 4)
+    except (TypeError, ValueError):
+        max_tokens = 4
+    max_tokens = max(1, min(max_tokens, 8))
 
     start = time.monotonic()
     try:
@@ -14430,7 +14461,8 @@ def api_llm_ping():
                 'model': model,
                 'prompt': prompt,
                 'stream': False,
-                'options': {'temperature': 0.0, 'num_predict': 32},
+                'keep_alive': '10m',
+                'options': {'temperature': 0.0, 'num_predict': max_tokens},
             },
             timeout=20,
         )
@@ -15999,7 +16031,12 @@ def _resolve_machine_id_from_local_provision_state(
     return resolved_machine_id
 
 
-def _issue_bootstrap_token(machine_id: str, purpose: str, ttl_seconds: int) -> str:
+def _issue_bootstrap_token(
+    machine_id: str,
+    purpose: str,
+    ttl_seconds: int,
+    extra_payload: Optional[Dict[str, Any]] = None,
+) -> str:
     now_epoch = int(time.time())
     payload = {
         'machine_id': machine_id,
@@ -16009,6 +16046,11 @@ def _issue_bootstrap_token(machine_id: str, purpose: str, ttl_seconds: int) -> s
         'jti': secrets.token_urlsafe(18),
         'one_time': True,
     }
+    if isinstance(extra_payload, dict):
+        for key, value in extra_payload.items():
+            key_text = str(key or '').strip()
+            if key_text and key_text not in payload:
+                payload[key_text] = value
     payload_blob = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
     payload_part = _b64url_encode(payload_blob)
     signature = hmac.new(
@@ -16096,11 +16138,16 @@ def _get_server_provisioning_credentials() -> Tuple[Dict[str, str], List[str]]:
     return credentials, missing_keys
 
 
-def _issue_installer_redirect(machine_id: str) -> Response:
+def _issue_installer_redirect(machine_id: str, provision_secret: str = '') -> Response:
+    token_extra: Dict[str, Any] = {}
+    provision_secret = str(provision_secret or '').strip()
+    if provision_secret:
+        token_extra['provision_secret'] = provision_secret
     installer_token = _issue_bootstrap_token(
         machine_id,
         'installer_download',
         INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
+        extra_payload=token_extra,
     )
     return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
@@ -16131,6 +16178,7 @@ def _resolve_installer_cloud_url(request_host_url: str = '') -> str:
 def _resolve_installer_template_context(
     request_host_url: str = '',
     installer_machine_id: str = '',
+    installer_provision_secret: str = '',
 ) -> Dict[str, str]:
     repo_zip_url = _sanitize_batch_template_value(
         os.getenv('INSTALLER_REPO_ZIP_URL', DEFAULT_INSTALLER_REPO_ZIP_URL)
@@ -16144,6 +16192,9 @@ def _resolve_installer_template_context(
         machine_id = ''
     if machine_id.lower() == 'admin-installer':
         machine_id = ''
+    provision_secret = _sanitize_batch_template_value(installer_provision_secret)
+    if not re.fullmatch(r'[A-Za-z0-9_\-]{16,256}', provision_secret):
+        provision_secret = ''
 
     commit_hint = (
         str(os.getenv('RAILWAY_GIT_COMMIT_SHA', '')).strip()
@@ -16169,6 +16220,7 @@ def _resolve_installer_template_context(
         '__CASM_CLOUD_URL__': cloud_url,
         '__CASM_INSTALLER_VERSION__': installer_version,
         '__CASM_MACHINE_ID__': machine_id,
+        '__CASM_PROVISION_SECRET__': provision_secret,
         '__CASM_SUPABASE_URL__': installer_supabase_url,
         '__CASM_SUPABASE_DB_URL__': installer_supabase_db_url,
         '__CASM_SUPABASE_SERVICE_ROLE_KEY__': installer_supabase_service_key,
@@ -16179,11 +16231,13 @@ def _render_installer_batch_script(
     template_path: Path,
     request_host_url: str = '',
     installer_machine_id: str = '',
+    installer_provision_secret: str = '',
 ) -> Tuple[str, str]:
     content = template_path.read_text(encoding='utf-8')
     context = _resolve_installer_template_context(
         request_host_url=request_host_url,
         installer_machine_id=installer_machine_id,
+        installer_provision_secret=installer_provision_secret,
     )
     # Only replace placeholder assignment lines so guard checks and self-update
     # token maps keep placeholder literals intact in downloaded installers.
@@ -16777,6 +16831,7 @@ def provision_status():
             machine_id,
             'installer_download',
             INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
+            extra_payload={'provision_secret': provision_secret},
         )
         return jsonify({
             'status': current_status,
@@ -16932,7 +16987,7 @@ def request_bootstrap_installer():
         if not provision_secret:
             return _json_error('provision_secret is required to download the installer', 401)
 
-        return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id))
+        return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id, provision_secret))
 
     if provision_secret:
         return _json_error('machine_id is required when provision_secret is provided', 400)
@@ -16969,6 +17024,7 @@ def download_bootstrap_installer():
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
 
     installer_machine_id = str((token_payload or {}).get('machine_id') or '').strip()
+    installer_provision_secret = str((token_payload or {}).get('provision_secret') or '').strip()
 
     installer_name = 'CASM_LocalInstaller.bat'
     installer_dir = Path(app.static_folder or 'frontend') / 'static'
@@ -16981,6 +17037,7 @@ def download_bootstrap_installer():
             installer_path,
             request_host_url=request.host_url,
             installer_machine_id=installer_machine_id,
+            installer_provision_secret=installer_provision_secret,
         )
     except Exception as render_exc:
         logger.error(f"Failed to render installer template: {render_exc}")

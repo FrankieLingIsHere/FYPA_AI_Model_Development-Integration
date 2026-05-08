@@ -2,6 +2,7 @@ import html
 import os
 import re
 import sys
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -15,6 +16,11 @@ BASE_URL = os.environ.get(
 MAX_VIOLATION_SCAN = max(10, int(os.environ.get("CASM_REPORT_QUALITY_MAX_SCAN", "80")))
 MAX_REPORT_QUALITY_CANDIDATES = max(1, int(os.environ.get("CASM_REPORT_QUALITY_MAX_CANDIDATES", "12")))
 MIN_SCENE_DESC_CHARS = max(40, int(os.environ.get("CASM_REPORT_QUALITY_MIN_CHARS", "120")))
+VIOLATION_FETCH_ATTEMPTS = max(1, int(os.environ.get("CASM_REPORT_QUALITY_VIOLATION_FETCH_ATTEMPTS", "4")))
+VIOLATION_FETCH_BACKOFF_SECONDS = max(
+    0.5,
+    float(os.environ.get("CASM_REPORT_QUALITY_VIOLATION_FETCH_BACKOFF_SECONDS", "3.0")),
+)
 ENFORCE_SCENE_GROUNDED_FLOOR = str(os.environ.get("CASM_REPORT_QUALITY_ENFORCE_GROUNDED_SCENE", "1")).strip().lower() in {
     "1",
     "true",
@@ -71,6 +77,47 @@ def request_text(method: str, path: str, *, timeout: int = 40, **kwargs):
     url = f"{BASE_URL}{path}"
     response = requests.request(method=method.upper(), url=url, timeout=timeout, **kwargs)
     return response.status_code, (response.text or "")
+
+
+def fetch_violations_with_retry():
+    last_status = 0
+    last_payload = None
+    last_preview = ""
+
+    for attempt in range(1, VIOLATION_FETCH_ATTEMPTS + 1):
+        cache_buster = int(time.time() * 1000)
+        status_code, violations, text_preview = request_json(
+            "GET",
+            f"/api/violations?limit={MAX_VIOLATION_SCAN}&quality_probe={cache_buster}",
+            timeout=35,
+        )
+        last_status = status_code
+        last_payload = violations
+        last_preview = text_preview
+
+        if status_code < 400 and isinstance(violations, list) and violations:
+            if attempt > 1:
+                print(f"INFO: /api/violations recovered after retry attempt={attempt}")
+            return status_code, violations, text_preview
+
+        retryable_empty = status_code < 400 and (not isinstance(violations, list) or not violations)
+        retryable_status = status_code in {429, 500, 502, 503, 504}
+        if attempt < VIOLATION_FETCH_ATTEMPTS and (retryable_empty or retryable_status):
+            reason = (
+                "empty payload"
+                if retryable_empty
+                else f"HTTP {status_code}"
+            )
+            print(
+                f"INFO: /api/violations returned {reason}; "
+                f"retrying attempt={attempt + 1}/{VIOLATION_FETCH_ATTEMPTS}"
+            )
+            time.sleep(VIOLATION_FETCH_BACKOFF_SECONDS * attempt)
+            continue
+
+        break
+
+    return last_status, last_payload, last_preview
 
 
 def extract_ai_scene_description(report_html: str) -> str:
@@ -177,11 +224,7 @@ def rank_quality_candidate(item: Dict) -> tuple:
 
 def main() -> int:
     try:
-        status_code, violations, text_preview = request_json(
-            "GET",
-            f"/api/violations?limit={MAX_VIOLATION_SCAN}",
-            timeout=35,
-        )
+        status_code, violations, text_preview = fetch_violations_with_retry()
         if status_code >= 400:
             return fail(f"/api/violations failed ({status_code}): {text_preview}", 3)
         if not isinstance(violations, list) or not violations:

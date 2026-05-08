@@ -2323,18 +2323,45 @@ const API = {
             if (!dryRun && options.skipCandidateCheck !== true) {
                 const candidates = await this.getLocalSyncCandidateSummary();
                 if (!candidates.count) {
-                    return {
-                        success: true,
-                        skipped_no_local_candidates: true,
-                        reconcile_reason: reason,
-                        origin,
-                        dry_run: false,
-                        scanned: 0,
-                        candidates: 0,
-                        enqueued: 0,
-                        skipped: 0,
-                        queued_report_ids: []
-                    };
+                    let backendCandidates = 0;
+                    let backendCandidateProbe = null;
+                    if (options.backendCandidateCheck !== false) {
+                        try {
+                            const probeResponse = await this._fetchWithTimeout(`${syncBase}/api/reports/sync-local-cache`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                cache: 'no-store',
+                                body: JSON.stringify({
+                                    limit,
+                                    reason,
+                                    dry_run: true,
+                                    origin,
+                                    source_scope: 'synced_local'
+                                })
+                            }, Number(options.candidateTimeoutMs || 12000));
+                            backendCandidateProbe = await probeResponse.json().catch(() => ({}));
+                            if (probeResponse.ok && backendCandidateProbe && backendCandidateProbe.success !== false) {
+                                backendCandidates = Number(backendCandidateProbe.candidates || 0);
+                            }
+                        } catch (probeError) {
+                            console.debug('Backend local-cache candidate probe skipped:', probeError);
+                        }
+                    }
+
+                    if (backendCandidates <= 0) {
+                        return {
+                            success: true,
+                            skipped_no_local_candidates: true,
+                            reconcile_reason: reason,
+                            origin,
+                            dry_run: false,
+                            scanned: Number((backendCandidateProbe && backendCandidateProbe.scanned) || 0),
+                            candidates: 0,
+                            enqueued: 0,
+                            skipped: 0,
+                            queued_report_ids: []
+                        };
+                    }
                 }
             }
 

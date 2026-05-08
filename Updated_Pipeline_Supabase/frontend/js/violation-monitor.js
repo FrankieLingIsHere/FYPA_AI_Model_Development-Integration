@@ -154,7 +154,7 @@ const ViolationMonitor = {
             const violations = await this.fetchMonitorViolations(options);
 
             if (this.isInitialLoad) {
-                // INITIAL LOAD: Show summary notification, not individual ones
+                // INITIAL LOAD: hydrate baseline state without replaying historical toasts.
                 this._handleInitialLoad(violations);
                 this.isInitialLoad = false;
                 return;
@@ -165,15 +165,13 @@ const ViolationMonitor = {
                 const reportId = violation.report_id;
                 if (!reportId) continue;
                 const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
-                const violationTime = new Date(violation.timestamp);
+                const violationTime = this.parseEventDate(violation.timestamp) || this.getLifecycleEventDate(violation) || new Date(0);
                 const previousData = this.knownViolations.get(reportId);
 
                 // Check if this is a NEW violation (not seen before)
                 if (!previousData) {
-                    // Only show real-time notifications for violations created AFTER session started
-                    // (with a 5s grace buffer to account for minor clock drift)
-                    const sessionStartWithBuffer = new Date(this.sessionStartTime.getTime() - 5000);
-                    const isNewDuringSession = violationTime > sessionStartWithBuffer;
+                    // Only show real-time notifications for violations created after this page session started.
+                    const isNewDuringSession = violationTime >= this.sessionStartTime;
 
                     if (isNewDuringSession) {
                         console.log(`[ViolationMonitor] 🆕 NEW real-time violation detected via polling fallback: ${reportId}`);
@@ -201,16 +199,20 @@ const ViolationMonitor = {
                 else if (previousData.status !== status) {
                     console.log(`[ViolationMonitor] Status change: ${reportId} ${previousData.status} -> ${status}`);
 
-                    // Notify for ANY status change (even for old violations being reprocessed)
-                    // We removed the 'wasRealtime' check to ensure reprocessed reports trigger notifications
-                    if (status === 'generating' && previousData.status === 'pending') {
-                        this._notifyReportGenerating(violation);
-                    }
-                    else if (status === 'completed') {
-                        this._notifyReportReady(violation);
-                    }
-                    else if (status === 'failed') {
-                        this._notifyReportFailed(violation);
+                    // Only toast lifecycle changes that actually happened during this page session.
+                    // Historical rows can still hydrate status without replaying old notifications.
+                    if (this.isLifecycleEventDuringSession(violation)) {
+                        if (status === 'generating' && previousData.status === 'pending') {
+                            this._notifyReportGenerating(violation);
+                        }
+                        else if (status === 'completed') {
+                            this._notifyReportReady(violation);
+                        }
+                        else if (status === 'failed') {
+                            this._notifyReportFailed(violation);
+                        }
+                    } else {
+                        console.log(`[ViolationMonitor] Historical status change hydrated without toast: ${reportId}`);
                     }
 
                     // Update tracked status
@@ -390,73 +392,57 @@ const ViolationMonitor = {
         return 0;
     },
 
+    parseEventDate(value) {
+        if (!value) return null;
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? date : null;
+    },
+
+    getLifecycleEventDate(violation) {
+        if (!violation || typeof violation !== 'object') return null;
+        const candidates = [
+            violation.updated_at,
+            violation.status_updated_at,
+            violation.report_updated_at,
+            violation.completed_at,
+            violation.generated_at,
+            violation.failed_at,
+            violation.timestamp
+        ];
+        for (const candidate of candidates) {
+            const parsed = this.parseEventDate(candidate);
+            if (parsed) return parsed;
+        }
+        return null;
+    },
+
+    isLifecycleEventDuringSession(violation) {
+        const eventDate = this.getLifecycleEventDate(violation);
+        if (!eventDate || !this.sessionStartTime) return false;
+        return eventDate >= this.sessionStartTime;
+    },
+
     _handleInitialLoad(violations) {
         if (!violations || violations.length === 0) {
             console.log('[ViolationMonitor] No violations in database');
             return;
         }
 
-        // Count violations and status
-        let newSinceLastVisit = 0;
-        let pendingCount = 0;
-        let generatingCount = 0;
-        let failedCount = 0;
-        const sessionStartWithBuffer = new Date(this.sessionStartTime.getTime() - 5000);
-
         for (const v of violations) {
             const reportId = String((v && v.report_id) || '').trim();
             if (!reportId) continue;
-            const violationTime = new Date(v.timestamp);
+            const violationTime = this.parseEventDate(v.timestamp) || this.getLifecycleEventDate(v) || new Date(0);
             const status = this.normalizeStatusValue(v.status, !!v.has_report);
-            const isNewDuringSession = Number.isFinite(violationTime.getTime())
-                && violationTime > sessionStartWithBuffer;
 
-            if (isNewDuringSession) {
-                console.log(`[ViolationMonitor] NEW real-time violation arrived during initial load: ${reportId}`);
-                this._notifyViolationDetected(v);
-
-                if (status === 'generating') {
-                    this._notifyReportGenerating(v);
-                } else if (status === 'completed') {
-                    this._notifyReportReady(v);
-                } else if (status === 'failed') {
-                    this._notifyReportFailed(v);
-                }
-            }
-
-            // Track all violations
             this.knownViolations.set(reportId, { status, timestamp: violationTime });
-
-            // Count new violations since last visit
-            if (!isNewDuringSession && this.lastVisitTime && violationTime > this.lastVisitTime) {
-                newSinceLastVisit++;
-            }
-
-            // Count by status
-            if (status === 'pending') pendingCount++;
-            if (status === 'generating') generatingCount++;
-            if (status === 'failed') failedCount++;
         }
 
-        console.log(`[ViolationMonitor] Initial load: ${violations.length} total, ${newSinceLastVisit} new since last visit`);
+        console.log(`[ViolationMonitor] Initial load hydrated ${violations.length} violation(s); startup notifications suppressed`);
+        const pendingCount = 0;
+        const generatingCount = 0;
+        const failedCount = 0;
 
-        // Show ONE summary notification if there are new violations since last visit
-        if (newSinceLastVisit > 0) {
-            NotificationManager.show(
-                `${newSinceLastVisit} new violation${newSinceLastVisit > 1 ? 's' : ''} detected since your last visit`,
-                'info',
-                8000,
-                {
-                    title: 'Violation Summary',
-                    action: {
-                        text: 'View Reports',
-                        onClick: `Router.navigate('reports')`
-                    }
-                }
-            );
-        }
-
-        // Show pending/generating summary if any (combined into one)
+        // Startup processing summaries are disabled so historical rows do not replay notifications.
         const inProgress = pendingCount + generatingCount;
         if (inProgress > 0) {
             setTimeout(() => {
@@ -471,7 +457,7 @@ const ViolationMonitor = {
             }, 1500);
         }
 
-        // Show failed summary if any
+        // Startup failed-report summaries are disabled for the same reason.
         if (failedCount > 0) {
             setTimeout(() => {
                 NotificationManager.show(

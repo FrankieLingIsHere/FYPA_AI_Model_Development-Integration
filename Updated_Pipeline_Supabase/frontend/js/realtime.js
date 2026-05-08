@@ -14,6 +14,8 @@ const RealtimeSync = {
     lastProgressStatus: null,
     lastProgressStep: '',
     detectedReportNotifiedAt: {},
+    sessionStartedAtMs: 0,
+    statusNotificationsHydrated: false,
     pendingSnapshotFetch: false,
     lastSnapshotAt: 0,
     supabaseFailureCount: 0,
@@ -22,6 +24,8 @@ const RealtimeSync = {
     start() {
         if (this.started) return;
         this.started = true;
+        this.sessionStartedAtMs = Date.now();
+        this.statusNotificationsHydrated = false;
 
         // Listen for network state changes to automatically reconnect and 
         // trigger UI refreshes when switching between cloud/local modes.
@@ -350,23 +354,17 @@ const RealtimeSync = {
         if (!reports.length) return;
 
         const nowEpochMs = Date.now();
-        const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
-        const progressReportId = String(progress.current || '').trim();
-        const progressStatus = String(progress.status || '').trim().toLowerCase();
-        const activeProgressStatuses = ['waiting', 'processing', 'generating'];
-
         Object.keys(this.detectedReportNotifiedAt || {}).forEach((reportId) => {
             if (nowEpochMs - Number(this.detectedReportNotifiedAt[reportId] || 0) > 15 * 60 * 1000) {
                 delete this.detectedReportNotifiedAt[reportId];
             }
         });
 
-        const isRecentRow = (row) => {
+        const getRowEventEpoch = (row) => {
             const raw = row && (row.updated_at || row.timestamp);
-            if (!raw) return false;
+            if (!raw) return null;
             const ts = Date.parse(raw);
-            if (!Number.isFinite(ts)) return false;
-            return (nowEpochMs - ts) <= 120000;
+            return Number.isFinite(ts) ? ts : null;
         };
 
         reports.forEach((row) => {
@@ -376,17 +374,11 @@ const RealtimeSync = {
             if (this.detectedReportNotifiedAt[reportId]) return;
 
             const eventType = String(row.event_type || '').trim().toLowerCase();
-            const sourceScope = String(row.source_scope || row.report_scope || row.scope || '').trim().toLowerCase();
-            const rowStatus = String(row.status || '').trim().toLowerCase();
-            const isCurrentProgress = reportId === progressReportId && activeProgressStatuses.includes(progressStatus);
             const isLiveViolationRow = eventType === 'violation_detected';
-            const isFreshLocalLifecycleRow = (
-                sourceScope === 'local'
-                && isRecentRow(row)
-                && ['pending', 'queued', 'processing', 'generating', 'completed'].includes(rowStatus)
-            );
+            const eventEpoch = getRowEventEpoch(row);
+            const happenedAfterPageStart = eventEpoch !== null && eventEpoch >= this.sessionStartedAtMs;
 
-            if (!isLiveViolationRow && !isCurrentProgress && !isFreshLocalLifecycleRow) {
+            if (!isLiveViolationRow || !happenedAfterPageStart) {
                 return;
             }
 
@@ -413,8 +405,8 @@ const RealtimeSync = {
                     ) {
                         const normalizedStatus = (
                             typeof ViolationMonitor.normalizeStatusValue === 'function'
-                                ? ViolationMonitor.normalizeStatusValue(rowStatus, !!row.has_report)
-                                : (rowStatus || 'pending')
+                                ? ViolationMonitor.normalizeStatusValue(row.status, !!row.has_report)
+                                : (row.status || 'pending')
                         );
                         ViolationMonitor.knownViolations.set(reportId, {
                             status: normalizedStatus,
@@ -468,6 +460,14 @@ const RealtimeSync = {
             }
             return isRecentRow(row);
         };
+
+        if (!this.statusNotificationsHydrated) {
+            this.statusNotificationsHydrated = true;
+            this.lastProgressReportId = progressReportId || null;
+            this.lastProgressStatus = progressStatus || null;
+            this.lastProgressStep = progressStep;
+            return;
+        }
 
         // DB row notifications are now exclusively handled by ViolationMonitor
         // to prevent duplication. RealtimeSync already triggers ViolationMonitor

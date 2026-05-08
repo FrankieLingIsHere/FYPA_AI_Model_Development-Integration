@@ -21,6 +21,7 @@ IGNORED_ERROR_PATTERNS = (
     "Cannot read properties of null (reading 'addEventListener')",
     "this.realtimeConnectionHandler is not a function",
     "Failed to load resource: the server responded with a status of 503 ()",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
     "Failed to load resource: the server responded with a status of 404 ()",
     "Failed to fetch realtime snapshot:",
     "Error starting live stream: NotSupportedError: Not supported",
@@ -565,9 +566,7 @@ def main() -> int:
             )
             context.add_init_script(
                 """
-                () => {
-                    window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK = true;
-                }
+                window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK = true;
                 """
             )
             page = context.new_page()

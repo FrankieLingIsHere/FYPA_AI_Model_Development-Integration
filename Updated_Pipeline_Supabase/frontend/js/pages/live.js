@@ -1550,7 +1550,13 @@ const LivePage = {
                 }
 
             } catch (error) {
-                console.error('Error starting live stream:', error);
+                const errorMessage = (error && error.message) ? String(error.message) : String(error || '');
+                const expectedWebcamUnavailable = selectedSource === 'webcam' && isWebcamUnavailableMessage(errorMessage);
+                if (expectedWebcamUnavailable) {
+                    console.warn('Live stream could not start because the backend webcam is unavailable:', error);
+                } else {
+                    console.error('Error starting live stream:', error);
+                }
 
                 if (shouldUseBrowserCaptureSource()) {
                     const usingPhoneSource = selectedSource === 'phone';

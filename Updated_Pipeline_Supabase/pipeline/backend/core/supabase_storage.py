@@ -87,6 +87,9 @@ class SupabaseStorageManager:
             )
         )
         self._egress_block_reason: str = ''
+        self.precheck_exists_before_upload = str(
+            os.getenv('SUPABASE_STORAGE_PRECHECK_EXISTS', 'false') or 'false'
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
         
         # Initialize Supabase client
         try:
@@ -305,7 +308,7 @@ class SupabaseStorageManager:
             logger.debug(f"Skip image upload (project restricted): {full_key}")
             return None
 
-        if not upsert and self._object_exists(self.images_bucket, storage_key):
+        if self.precheck_exists_before_upload and not upsert and self._object_exists(self.images_bucket, storage_key):
             logger.info(f"Image already exists in storage, reusing key: {full_key}")
             return full_key
         
@@ -375,7 +378,7 @@ class SupabaseStorageManager:
             logger.debug(f"Skip report upload (project restricted): {full_key}")
             return None
 
-        if not upsert and self._object_exists(self.reports_bucket, storage_key):
+        if self.precheck_exists_before_upload and not upsert and self._object_exists(self.reports_bucket, storage_key):
             logger.info(f"Report already exists in storage, reusing key: {full_key}")
             return full_key
         

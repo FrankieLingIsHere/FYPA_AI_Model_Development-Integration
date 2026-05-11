@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+import time
 
 from pipeline.backend.core.report_generator import ReportGenerator
 from pipeline.backend.core.supabase_storage import SupabaseStorageManager
@@ -91,15 +92,26 @@ class SupabaseReportGenerator(ReportGenerator):
                 - storage_keys: Dict of Supabase storage keys
         """
         report_id = report_data.get('report_id')
+        generation_started = time.perf_counter()
+        generation_timings: Dict[str, float] = {}
+
+        def _record_timing(stage: str, started_at: float) -> None:
+            generation_timings[stage] = round(time.perf_counter() - started_at, 3)
+
         logger.info(f"Generating Supabase-backed report: {report_id}")
+
+        progress_status_marked = False
 
         def _safe_update_progress(stage: str):
             """Update progress if supported, otherwise keep status at generating."""
+            nonlocal progress_status_marked
             try:
                 if hasattr(self.db_manager, 'update_progress'):
                     self.db_manager.update_progress(report_id, stage)
                 elif hasattr(self.db_manager, 'update_detection_status'):
-                    self.db_manager.update_detection_status(report_id, 'generating')
+                    if not progress_status_marked:
+                        self.db_manager.update_detection_status(report_id, 'generating')
+                        progress_status_marked = True
             except Exception as progress_error:
                 logger.debug(f"Progress update skipped ({stage}): {progress_error}")
 
@@ -123,15 +135,17 @@ class SupabaseReportGenerator(ReportGenerator):
             if isinstance(detection_metadata, dict):
                 device_id = str(detection_metadata.get('device_id') or '').strip()
 
-        def _ensure_detection_event_started() -> None:
+        def _ensure_detection_event_started() -> bool:
             """Persist the cloud row before slow NLP/storage work begins."""
+            nonlocal progress_status_marked
             if cloud_upload_disabled:
-                return
+                return False
             if not report_id or self.db_manager is None:
-                return
+                return False
 
             try:
                 timestamp = report_data.get('timestamp', datetime.now())
+                persisted = False
 
                 existing_event = None
                 if hasattr(self.db_manager, 'get_detection_event'):
@@ -146,6 +160,8 @@ class SupabaseReportGenerator(ReportGenerator):
                         status='generating'
                     )
                     logger.info(f"Marked detection event generating before report work: {report_id}")
+                    persisted = True
+                    progress_status_marked = True
                 elif not existing_event and hasattr(self.db_manager, 'insert_detection_event'):
                     detection_result = self.db_manager.insert_detection_event(
                         report_id=report_id,
@@ -158,21 +174,36 @@ class SupabaseReportGenerator(ReportGenerator):
                     )
                     if detection_result:
                         logger.info(f"Inserted detection event before report work: {report_id}")
+                        persisted = True
+                        progress_status_marked = True
                     else:
                         logger.warning(f"Initial detection event insert returned empty: {report_id}")
 
                 _safe_update_progress('generating_report')
+                return persisted
             except Exception as e:
                 logger.error(f"Error ensuring initial detection event for {report_id}: {e}")
+                return False
 
-        _ensure_detection_event_started()
+        timing_started = time.perf_counter()
+        initial_event_ready = _ensure_detection_event_started()
+        _record_timing('supabase_initial_event_seconds', timing_started)
         
         # Step 1: Generate local files using parent class
+        timing_started = time.perf_counter()
         result = super().generate_report(report_data)
+        _record_timing('local_report_generate_seconds', timing_started)
         
         if not result:
             logger.error(f"Failed to generate local report: {report_id}")
             return result
+        parent_timings = result.get('generation_timings') if isinstance(result, dict) else None
+        if isinstance(parent_timings, dict):
+            for key, value in parent_timings.items():
+                try:
+                    generation_timings[f"local_{key}"] = round(float(value), 3)
+                except Exception:
+                    pass
 
         # Step 1.5: Validate caption against annotations
         caption = report_data.get('caption', '')
@@ -181,7 +212,9 @@ class SupabaseReportGenerator(ReportGenerator):
         
         validation_result = None
         try:
+            timing_started = time.perf_counter()
             validation_result = validate_caption(caption, detections, detected_classes)
+            _record_timing('caption_validation_seconds', timing_started)
             
             if not validation_result['is_valid']:
                 logger.warning(f"Caption validation failed for {report_id}:")
@@ -207,15 +240,16 @@ class SupabaseReportGenerator(ReportGenerator):
 
         # Step 2: Ensure detection event exists in Supabase Postgres
         try:
+            timing_started = time.perf_counter()
             timestamp = report_data.get('timestamp', datetime.now())
 
-            existing_event = None
-            if hasattr(self.db_manager, 'get_detection_event'):
+            existing_event = {'report_id': report_id} if initial_event_ready else None
+            if not existing_event and hasattr(self.db_manager, 'get_detection_event'):
                 existing_event = self.db_manager.get_detection_event(report_id)
 
             if existing_event:
                 detection_result = report_id
-                if hasattr(self.db_manager, 'update_detection_event'):
+                if not initial_event_ready and hasattr(self.db_manager, 'update_detection_event'):
                     self.db_manager.update_detection_event(
                         report_id=report_id,
                         person_count=person_count,
@@ -223,6 +257,7 @@ class SupabaseReportGenerator(ReportGenerator):
                         severity=severity,
                         status='generating'
                     )
+                    progress_status_marked = True
             else:
                 detection_result = self.db_manager.insert_detection_event(
                     report_id=report_id,
@@ -242,6 +277,7 @@ class SupabaseReportGenerator(ReportGenerator):
                 
             # --- START PROGRESS TRACKING ---
             _safe_update_progress('analyzing_scene')
+            _record_timing('supabase_detection_event_seconds', timing_started)
 
         except Exception as e:
             logger.error(f"Error inserting detection event: {e}")
@@ -250,7 +286,8 @@ class SupabaseReportGenerator(ReportGenerator):
         # Step 3: Upload artifacts to Supabase Storage
         storage_keys = {}
         try:
-            _safe_update_progress('uploading_images')
+            _safe_update_progress('uploading_artifacts')
+            timing_started = time.perf_counter()
             
             original_image_path = report_data.get('original_image_path')
             annotated_image_path = report_data.get('annotated_image_path')
@@ -260,39 +297,20 @@ class SupabaseReportGenerator(ReportGenerator):
             # Check if this is a reprocessing operation (should overwrite existing files)
             is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
             
-            # Upload Images first to avail for report
+            # The parent generator has already written all local artifacts, so upload
+            # them in one pass and avoid extra progress/status round trips.
             upload_results = self.storage_manager.upload_violation_artifacts(
                 report_id=report_id,
                 original_image_path=Path(original_image_path) if original_image_path else None,
                 annotated_image_path=Path(annotated_image_path) if annotated_image_path else None,
-                report_html_path=None, # Defer HTML/PDF upload until final
-                report_pdf_path=None,
-                upsert=is_reprocessing
-            )
-            storage_keys.update(upload_results)
-            
-            _safe_update_progress('generating_report')
-
-            # --- Now generate report content (NLP/HTML) ---
-            # NOTE: parent generate_report is already called at Step 1, 
-            # so we're just retrofitting the progress here for the NEXT steps 
-            # if we were to split it up differently. 
-            # Since local gen is fast, we focus on the "Upload/DB" stages as 'processing'.
-            
-            # Since HTML is already generated locally, we upload it now
-            upload_results_docs = self.storage_manager.upload_violation_artifacts(
-                report_id=report_id,
-                original_image_path=None,
-                annotated_image_path=None,
                 report_html_path=html_path,
                 report_pdf_path=pdf_path,
                 upsert=is_reprocessing
             )
-            # Only update keys that have actual values (not None)
-            # This prevents overwriting image keys from first upload with None
-            for key, value in upload_results_docs.items():
+            for key, value in upload_results.items():
                 if value is not None:
                     storage_keys[key] = value
+            _record_timing('supabase_storage_upload_seconds', timing_started)
             
             _safe_update_progress('finalizing')
             logger.info(f"Uploaded artifacts to Supabase Storage: {report_id}")
@@ -303,11 +321,13 @@ class SupabaseReportGenerator(ReportGenerator):
         
         # Store storage keys in result for reprocessing scenarios
         result['storage_keys'] = storage_keys
+        result['generation_timings'] = generation_timings
         
         # Step 4: Persist violation record with storage keys and validation.
         # For reprocessing, update the existing row to avoid stale caption/NLP data drift.
         is_reprocessing = report_data.get('detection_data', {}).get('reprocessed', False)
         try:
+            timing_started = time.perf_counter()
             violation_summary = report_data.get('violation_summary')
             caption = report_data.get('caption', '')
             nlp_analysis = result.get('nlp_analysis')
@@ -378,6 +398,7 @@ class SupabaseReportGenerator(ReportGenerator):
                     'warnings': validation_result['warnings'],
                     'summary': validation_result['validation_summary']
                 }
+            metadata['generation_timings'] = generation_timings
 
             existing_violation = None
             if hasattr(self.db_manager, 'get_violation'):
@@ -441,6 +462,7 @@ class SupabaseReportGenerator(ReportGenerator):
                     logger.info(f"Inserted violation record: {violation_id}")
                 else:
                     logger.error(f"Failed to insert violation record: {report_id}")
+            _record_timing('supabase_violation_persist_seconds', timing_started)
 
         except Exception as e:
             logger.error(f"Error persisting violation record: {e}")
@@ -449,6 +471,7 @@ class SupabaseReportGenerator(ReportGenerator):
         # Step 5: Log event to flood_logs (skip for reprocessing)
         if not is_reprocessing:
             try:
+                timing_started = time.perf_counter()
                 self.db_manager.log_event(
                     event_type='report_generated',
                     message=f"Report generated and uploaded: {report_id}",
@@ -461,10 +484,13 @@ class SupabaseReportGenerator(ReportGenerator):
                         'storage_keys': storage_keys
                     }
                 )
+                _record_timing('supabase_flood_log_seconds', timing_started)
             except Exception as e:
                 logger.error(f"Error logging event: {e}")
                 # Continue anyway
         
+        _record_timing('supabase_report_total_seconds', generation_started)
+        result['generation_timings'] = generation_timings
         logger.info(f"[OK] Supabase-backed report completed: {report_id}")
         return result
 

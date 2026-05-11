@@ -1941,6 +1941,12 @@ Required JSON object:
                 - nlp_analysis: NLP analysis data
         """
         report_id = str(report_data.get('report_id') or '').strip() or 'unknown'
+        generation_started = time.perf_counter()
+        generation_timings: Dict[str, float] = {}
+
+        def _record_timing(stage: str, started_at: float) -> None:
+            generation_timings[stage] = round(time.perf_counter() - started_at, 3)
+
         generation_epoch = self.get_provider_runtime_epoch()
         logger.info(
             "Generating report: %s (routing_profile=%s, provider_epoch=%s)",
@@ -1958,6 +1964,7 @@ Required JSON object:
                 report_data['vlm_caption'] = caption_floor
 
         # Step 1: RAG - Retrieve relevant context
+        rag_started = time.perf_counter()
         # Check for Malaysian regulations context injection
         regulation_context = ""
         detections = report_data.get('detections', [])
@@ -2001,8 +2008,10 @@ Required JSON object:
             # Also get similar incidents from CSV (optional)
             similar_incidents = self._find_similar_incidents(query_text, self.num_similar)
             logger.info(f"Found {len(similar_incidents)} similar incidents")
+        _record_timing('rag_context_seconds', rag_started)
 
         # Step 2: NLP - Generate analysis
+        prompt_started = time.perf_counter()
         nlp_analysis = None
         prompt = self._build_nlp_prompt(report_data, similar_incidents, dosh_context)
 
@@ -2013,6 +2022,7 @@ Required JSON object:
         # Inject regulation context into prompt if using Gemini
         if regulation_context:
             prompt = regulation_context + "\n" + prompt
+        _record_timing('prompt_build_seconds', prompt_started)
 
         # Try NLP providers in configured order.
         image_path = report_data.get('original_image_path')
@@ -2096,6 +2106,7 @@ Required JSON object:
             len(prompt or ''),
         )
 
+        nlp_started = time.perf_counter()
         for provider in effective_provider_order:
             if nlp_analysis:
                 break
@@ -2194,6 +2205,7 @@ Required JSON object:
                     self.sticky_nlp_provider_until_epoch = time.time() + max(30, self.sticky_nlp_provider_ttl_seconds)
                 logger.info(f"NLP analysis succeeded with provider: {provider_name}")
                 break
+        _record_timing('nlp_provider_seconds', nlp_started)
 
         if not nlp_analysis:
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
@@ -2210,6 +2222,7 @@ Required JSON object:
                     effective_provider_order,
                     detail,
                 )
+                _record_timing('report_total_seconds', generation_started)
                 raise RuntimeError(f"NLP analysis failed: {detail}")
             logger.warning(
                 "[NLP_FALLBACK_APPLIED] report=%s allow_nlp_fallback=%s force_local_nlp=%s "
@@ -2260,6 +2273,7 @@ Required JSON object:
                 logger.info("NLP output missing summary; synthesizing grounded summary")
                 nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
+        postprocess_started = time.perf_counter()
         if isinstance(nlp_analysis, dict):
             if self.last_nlp_provider and not nlp_analysis.get('provider'):
                 nlp_analysis['provider'] = self.last_nlp_provider
@@ -2347,6 +2361,7 @@ Required JSON object:
         if len(nlp_analysis.get('summary', '')) < 50 or 'the worker' in nlp_analysis.get('summary', '').lower()[:20]:
             logger.info("Re-grounding summary with executive Malaysian safety context")
             nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
+        _record_timing('nlp_postprocess_seconds', postprocess_started)
 
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
 
@@ -2354,19 +2369,23 @@ Required JSON object:
 
         # Step 3: Generate HTML report
         self._assert_generation_epoch_current(generation_epoch, report_id, 'before html render')
+        html_started = time.perf_counter()
         html_path = self._generate_html_report(report_data, nlp_analysis)
+        _record_timing('html_render_seconds', html_started)
 
         # Step 3b: Write a traceability sidecar JSON next to the local report
         # so the offline / local-filesystem fallback path in casm_app.py can
         # populate the traceability widget instead of showing nulls when
         # Supabase isn't reachable or the violation row hasn't synced yet.
         try:
+            sidecar_started = time.perf_counter()
             self._write_traceability_sidecar(
                 report_data=report_data,
                 nlp_analysis=nlp_analysis,
                 raw_nlp_analysis=raw_nlp_analysis,
                 nlp_integrity=nlp_integrity,
             )
+            _record_timing('sidecar_write_seconds', sidecar_started)
         except Exception as sidecar_err:
             logger.warning(
                 "Failed to write traceability sidecar for %s: %s",
@@ -2376,8 +2395,11 @@ Required JSON object:
         # Step 4: Generate PDF (if enabled)
         pdf_path = None
         if self.enable_pdf and self.format in ['pdf', 'both']:
+            pdf_started = time.perf_counter()
             pdf_path = self._generate_pdf_report(html_path, report_data.get('report_id'))
+            _record_timing('pdf_render_seconds', pdf_started)
 
+        _record_timing('report_total_seconds', generation_started)
         logger.info(f"[OK] Report generated: {report_data.get('report_id')}")
 
         return {
@@ -2386,6 +2408,7 @@ Required JSON object:
             'nlp_analysis': nlp_analysis,
             'nlp_analysis_raw': raw_nlp_analysis,
             'nlp_integrity': nlp_integrity,
+            'generation_timings': generation_timings,
         }
 
     def _generate_fallback_analysis(self, report_data: Dict[str, Any]) -> Dict[str, Any]:

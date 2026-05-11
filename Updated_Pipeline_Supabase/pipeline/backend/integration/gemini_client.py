@@ -121,6 +121,15 @@ class GeminiClient:
         self.max_retries = gemini_config.get('max_retries', 3)
         self.paid_plan = bool(gemini_config.get('paid_plan', False))
         self.required = bool(gemini_config.get('required', GEMINI_REQUIRED_BY_DEFAULT))
+        try:
+            self.vision_thinking_budget = int(os.getenv('GEMINI_VISION_THINKING_BUDGET', '0') or 0)
+        except (TypeError, ValueError):
+            self.vision_thinking_budget = 0
+        try:
+            self.vision_max_output_tokens = int(os.getenv('GEMINI_VISION_MAX_OUTPUT_TOKENS', '900') or 900)
+        except (TypeError, ValueError):
+            self.vision_max_output_tokens = 900
+        self.vision_max_output_tokens = max(300, min(self.vision_max_output_tokens, 2000))
         self.last_error = None
         self.last_parse_strategy = None
         self.raw_capture_enabled = str(os.getenv('GEMINI_RAW_CAPTURE_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -477,6 +486,113 @@ class GeminiClient:
     # IMAGE CAPTIONING
     # =========================================================================
 
+    def _build_vision_generation_config(self, *, temperature: float = 0.3, max_output_tokens: Optional[int] = None):
+        """Build Gemini Vision config with thinking disabled by default for complete captions."""
+        config_kwargs = {
+            'temperature': temperature,
+            'max_output_tokens': max_output_tokens or self.vision_max_output_tokens,
+        }
+        if self.vision_thinking_budget >= 0 and hasattr(types, 'ThinkingConfig'):
+            config_kwargs['thinking_config'] = types.ThinkingConfig(
+                thinking_budget=self.vision_thinking_budget
+            )
+        return types.GenerateContentConfig(**config_kwargs)
+
+    def _extract_finish_reason(self, response: Any) -> str:
+        try:
+            return str(response.candidates[0].finish_reason or '')
+        except Exception:
+            return ''
+
+    def _normalize_caption_text(self, caption: str) -> str:
+        """Remove model boilerplate and normalize caption whitespace."""
+        text = re.sub(r'\s+', ' ', str(caption or '')).strip()
+        if not text:
+            return ''
+
+        text = re.sub(r'^(?:[-*]\s*)+', '', text).strip()
+        prefixes = (
+            "Here is a description of the image:",
+            "Here is a description:",
+            "Based on the image,",
+            "In the image,",
+            "In the image",
+            "The image shows",
+            "The image depicts",
+            "This image shows",
+            "This image depicts",
+            "In this image,",
+            "In this image",
+        )
+        for prefix in prefixes:
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip(" ,:")
+                break
+
+        if text and text[0].islower():
+            text = text[0].upper() + text[1:]
+        return text
+
+    def _caption_needs_expansion(self, caption: str, finish_reason: str = '') -> bool:
+        """Detect captions that are too short, generic, or visibly truncated."""
+        text = self._normalize_caption_text(caption)
+        if not text:
+            return True
+
+        finish_upper = str(finish_reason or '').upper()
+        if 'MAX_TOKENS' in finish_upper:
+            return True
+
+        lowered = text.lower()
+        words = re.findall(r"[a-z0-9']+", lowered)
+        sentence_count = len(re.findall(r'[.!?](?:\s|$)', text))
+        if len(text) < 220 or len(words) < 35 or sentence_count < 3:
+            return True
+
+        generic_markers = (
+            'person is visible',
+            'people are visible',
+            'unable to determine',
+            'cannot determine',
+            'indoor environment',
+            'outdoor environment',
+        )
+        if any(marker in lowered for marker in generic_markers) and len(words) < 55:
+            return True
+
+        last_word_match = re.search(r"([a-z']+)[.!?]?$", lowered)
+        last_word = last_word_match.group(1) if last_word_match else ''
+        dangling_last_words = {
+            'a', 'an', 'and', 'at', 'beside', 'by', 'for', 'from', 'in',
+            'including', 'near', 'of', 'on', 'or', 'partially', 'the',
+            'to', 'toward', 'under', 'with', 'wearing',
+        }
+        if last_word in dangling_last_words:
+            return True
+        if re.search(r'\b(is|are|was|were|appears|seems|looks)\s+(?:partially|likely)?\.?$', lowered):
+            return True
+
+        return False
+
+    def _call_gemini_caption_once(
+        self,
+        prompt: str,
+        image_part: Any,
+        *,
+        temperature: float = 0.3,
+        max_output_tokens: Optional[int] = None,
+    ) -> tuple:
+        response = self.client.models.generate_content(
+            model=self.vision_model_name,
+            contents=[prompt, image_part],
+            config=self._build_vision_generation_config(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        )
+        text = self._normalize_caption_text(response.text if response and response.text else '')
+        return text, self._extract_finish_reason(response)
+
     def caption_image(
         self,
         image_path: str,
@@ -500,15 +616,19 @@ class GeminiClient:
         # Default safety-focused prompt with stronger people/action/situation structure.
         # Aligned with Local Mode successful pattern for maximum descriptive quality.
         prompt = custom_prompt or (
-            "You are a professional workplace safety inspector. Analyze this image and describe:\n"
-            "1. The total number of visible people and the specific scene type.\n"
-            "2. What each person is doing, their visible body region, and their immediate context.\n"
-            "3. Safety equipment they are wearing or missing (be very specific).\n"
-            "4. Visible hazards (machines, vehicles, slippery floors, tools).\n"
-            "Output rules:\n"
-            "- Write a single paragraph (3-6 sentences).\n"
-            "- Be specific and factual. Do not invent details.\n"
-            "- Professional natural English, no markdown, avoid 'In the image'."
+            "You are a workplace visual analyst. Write one factual caption from this image only.\n\n"
+            "Output requirements:\n"
+            "- Single paragraph, 5-7 complete factual sentences.\n"
+            "- Start with the actual scene type and total visible people count based only on visible evidence.\n"
+            "- Describe visible body region, posture, gaze direction, clothing, eyewear, and nearby room or site features.\n"
+            "- Mention PPE only when clearly visible; if none is visible, say no PPE is visible.\n"
+            "- Do not stop mid-sentence; every sentence must be complete.\n\n"
+            "Strict grounding rules:\n"
+            "- Do not begin with meta wording such as \"Here is a description\" or \"Based on the image\".\n"
+            "- Do not invent objects, actions, hazards, phones, tablets, vehicles, roads, machinery, tools, or construction activity.\n"
+            "- Do not infer a worksite or traffic context unless those objects are clearly visible.\n"
+            "- If visibility is unclear, say it is unclear instead of guessing.\n"
+            "- Natural professional English, no bullet points, no markdown, no preamble."
         )
 
         # Load image
@@ -523,18 +643,48 @@ class GeminiClient:
 
                 logger.info(f"Generating caption (attempt {attempt + 1}/{self.max_retries})...")
 
-                response = self.client.models.generate_content(
-                    model=self.vision_model_name,
-                    contents=[prompt, image_part],
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,  # Lower temp for factual description
-                        max_output_tokens=700,
-                    )
+                caption, finish_reason = self._call_gemini_caption_once(
+                    prompt,
+                    image_part,
+                    temperature=0.3,
+                    max_output_tokens=self.vision_max_output_tokens,
                 )
 
-                if response and response.text:
-                    caption = response.text.strip()
-                    logger.info(f" Caption generated ({len(caption)} chars): {caption[:100]}...")
+                if caption:
+                    if self._caption_needs_expansion(caption, finish_reason):
+                        logger.warning(
+                            "Gemini caption was short/incomplete "
+                            f"(finish_reason={finish_reason or 'unknown'}, chars={len(caption)}); retrying"
+                        )
+                        expansion_prompt = (
+                            "The previous caption was too short or incomplete. Rewrite it with richer factual detail "
+                            "from the image only.\n\n"
+                            "Requirements:\n"
+                            "- Single paragraph, 5-7 complete sentences.\n"
+                            "- State environment type and visible people count first.\n"
+                            "- For each visible person: visible body region, posture, gaze direction, clothing, and nearby objects.\n"
+                            "- Mention nearby objects or hazards only if visible.\n"
+                            "- Mention PPE only when clearly visible; if not visible, state no PPE is visible.\n"
+                            "- Do not stop mid-sentence. No bullet points, markdown, or meta commentary.\n\n"
+                            f"Previous incomplete caption: {caption}"
+                        )
+                        expanded, expanded_finish_reason = self._call_gemini_caption_once(
+                            expansion_prompt,
+                            image_part,
+                            temperature=0.2,
+                            max_output_tokens=max(self.vision_max_output_tokens, 1000),
+                        )
+                        if expanded and (
+                            len(expanded) > len(caption)
+                            or not self._caption_needs_expansion(expanded, expanded_finish_reason)
+                        ):
+                            caption = expanded
+                            finish_reason = expanded_finish_reason
+
+                    logger.info(
+                        f" Caption generated ({len(caption)} chars, finish_reason={finish_reason or 'unknown'}): "
+                        f"{caption[:100]}..."
+                    )
                     return caption
                 else:
                     logger.warning(f"Empty response from Gemini (attempt {attempt + 1})")

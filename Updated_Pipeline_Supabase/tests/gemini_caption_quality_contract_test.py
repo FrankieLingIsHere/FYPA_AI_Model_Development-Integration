@@ -12,7 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pipeline.backend.integration.gemini_client import GEMINI_AVAILABLE, GeminiClient
+from pipeline.backend.integration.gemini_client import (
+    DEFAULT_GEMINI_MODEL_CANDIDATES,
+    GEMINI_AVAILABLE,
+    GeminiClient,
+)
 
 
 def _assert(condition, message):
@@ -77,11 +81,36 @@ def test_rich_caption_passes_quality_floor():
     )
 
 
+def test_default_model_candidates_include_current_flash_aliases():
+    _assert("gemini-flash-lite-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+    _assert("gemini-flash-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+
+
+def test_caption_failover_switches_vision_model_name():
+    subject = _subject()
+    subject.model_candidates = [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-flash-lite-latest",
+    ]
+    subject.model_name = "gemini-2.5-flash"
+    subject.vision_model_name = "gemini-2.5-flash"
+    subject.last_model_switch_reason = None
+
+    switched = subject._try_switch_to_next_model("quota/resource exhaustion (caption)", target="vision")
+
+    _assert(switched is True, "Expected caption failover to switch models")
+    _assert(subject.vision_model_name == "gemini-2.5-flash-lite", subject.vision_model_name)
+    _assert(subject.model_name == "gemini-2.5-flash", "Caption failover should not rewrite report model")
+
+
 def main():
     tests = [
         test_vision_config_disables_thinking_by_default,
         test_short_or_truncated_caption_requires_retry,
         test_rich_caption_passes_quality_floor,
+        test_default_model_candidates_include_current_flash_aliases,
+        test_caption_failover_switches_vision_model_name,
     ]
     failures = []
     for test_fn in tests:

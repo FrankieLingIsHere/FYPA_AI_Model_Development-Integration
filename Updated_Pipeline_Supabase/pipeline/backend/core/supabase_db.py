@@ -749,6 +749,56 @@ class SupabaseDatabaseManager:
             self._raise_if_connection_failure(e, f'get_detection_event:{report_id}')
             logger.error(f"Failed to get detection event {report_id}: {e}")
             return None
+
+    def get_report_status_bundle(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve detection-event and violation status fields in a single query.
+
+        This lightweight bundle powers report status/view endpoints that would
+        otherwise issue two sequential queries for the same report_id.
+        """
+        self._ensure_connection()
+        _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
+                cur.execute("SET LOCAL lock_timeout = %s", (max(500, _stmt_ms // 2),))
+                cur.execute("""
+                    SELECT
+                        de.report_id,
+                        de.timestamp AS event_timestamp,
+                        de.updated_at AS event_updated_at,
+                        de.person_count,
+                        de.violation_count,
+                        de.severity,
+                        de.status AS event_status,
+                        de.error_message AS event_error_message,
+                        de.device_id AS event_device_id,
+                        v.id AS violation_id,
+                        v.violation_summary,
+                        v.caption,
+                        v.nlp_analysis,
+                        v.detection_data,
+                        v.original_image_key,
+                        v.annotated_image_key,
+                        v.report_html_key,
+                        v.report_pdf_key,
+                        v.device_id AS violation_device_id
+                    FROM public.detection_events de
+                    LEFT JOIN public.violations v ON de.report_id = v.report_id
+                    WHERE de.report_id = %s
+                    LIMIT 1
+                """, (report_id,))
+
+                result = cur.fetchone()
+                return dict(result) if result else None
+
+        except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, f'get_report_status_bundle:{report_id}')
+            logger.error(f"Failed to get report status bundle {report_id}: {e}")
+            return None
     
     def get_recent_detection_events(self, limit: int = 10) -> List[Dict[str, Any]]:
         """

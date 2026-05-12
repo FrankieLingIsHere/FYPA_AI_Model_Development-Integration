@@ -125,6 +125,88 @@ report_rendered_cache_lock = Lock()
 report_rendered_cache: Dict[str, Dict[str, Any]] = {}
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+QUEUE_CONTEXT_CACHE_TTL_SECONDS = max(0.0, _env_float('QUEUE_CONTEXT_CACHE_TTL_SECONDS', 0.40))
+queue_context_snapshot_cache_lock = Lock()
+queue_context_snapshot_cache: Dict[str, Any] = {'ts': 0.0, 'snapshot': None}
+
+LOCAL_REPORT_STATE_CACHE_TTL_SECONDS = max(0.0, _env_float('LOCAL_REPORT_STATE_CACHE_TTL_SECONDS', 0.75))
+local_report_state_cache_lock = Lock()
+local_report_state_cache: Dict[str, Any] = {'ts': 0.0, 'limit': 0, 'rows': []}
+
+VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS = max(0.0, _env_float('VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS', 0.90))
+STATS_SNAPSHOT_CACHE_TTL_SECONDS = max(0.0, _env_float('STATS_SNAPSHOT_CACHE_TTL_SECONDS', 1.20))
+dashboard_snapshot_cache_lock = Lock()
+dashboard_snapshot_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
+    'violations': {},
+    'stats': {},
+}
+
+
+def _invalidate_queue_context_snapshot_cache() -> None:
+    with queue_context_snapshot_cache_lock:
+        queue_context_snapshot_cache['ts'] = 0.0
+        queue_context_snapshot_cache['snapshot'] = None
+
+
+def _invalidate_local_report_state_cache() -> None:
+    with local_report_state_cache_lock:
+        local_report_state_cache['ts'] = 0.0
+        local_report_state_cache['limit'] = 0
+        local_report_state_cache['rows'] = []
+
+
+def _invalidate_dashboard_snapshot_cache(bucket: Optional[str] = None) -> None:
+    with dashboard_snapshot_cache_lock:
+        if bucket:
+            dashboard_snapshot_cache.setdefault(bucket, {}).clear()
+        else:
+            for cache_bucket in dashboard_snapshot_cache.values():
+                cache_bucket.clear()
+
+
+def _get_cached_dashboard_snapshot(bucket: str, cache_key: str, ttl_seconds: float):
+    if ttl_seconds <= 0:
+        return None
+
+    now = time.time()
+    with dashboard_snapshot_cache_lock:
+        bucket_cache = dashboard_snapshot_cache.setdefault(bucket, {})
+        entry = bucket_cache.get(cache_key)
+        if not entry:
+            return None
+        expires_at = float(entry.get('expires_at') or 0.0)
+        if expires_at <= now:
+            bucket_cache.pop(cache_key, None)
+            return None
+        return entry.get('payload')
+
+
+def _set_cached_dashboard_snapshot(bucket: str, cache_key: str, payload: Any, ttl_seconds: float) -> None:
+    if ttl_seconds <= 0:
+        return
+
+    with dashboard_snapshot_cache_lock:
+        bucket_cache = dashboard_snapshot_cache.setdefault(bucket, {})
+        bucket_cache[cache_key] = {
+            'expires_at': time.time() + ttl_seconds,
+            'payload': payload,
+        }
+        if len(bucket_cache) > 48:
+            stale_keys = sorted(
+                bucket_cache,
+                key=lambda key: float(bucket_cache[key].get('expires_at') or 0.0)
+            )[:16]
+            for key in stale_keys:
+                bucket_cache.pop(key, None)
+
+
 def _get_cached_report_html_content(report_id: str, report_html_key: str) -> Optional[str]:
     if REPORT_HTML_CACHE_TTL_SECONDS <= 0:
         return None
@@ -190,6 +272,8 @@ def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
 
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
+        _invalidate_local_report_state_cache()
+        _invalidate_dashboard_snapshot_cache()
     except Exception as e:
         logger.debug(f"Could not persist cached report HTML for {report_id}: {e}")
 
@@ -1692,6 +1776,7 @@ def update_report_progress(
         if status == 'completed':
             report_progress['completed'] = report_progress.get('total', 0)
         report_progress['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _invalidate_queue_context_snapshot_cache()
 
 def get_report_progress():
     """Get current report generation progress."""
@@ -1711,42 +1796,48 @@ def reset_report_progress():
             'error_message': None,
             'updated_at': None
         }
+    _invalidate_queue_context_snapshot_cache()
 
 
-def _get_queue_context_for_report(report_id: str) -> Dict[str, Any]:
-    """Return queue/progress context for a report without mutating worker state."""
-    target = str(report_id or '').strip()
-    context: Dict[str, Any] = {
+def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
+    """Capture queue/progress state once so list endpoints can reuse it cheaply."""
+    now = time.time()
+    if not force_refresh and QUEUE_CONTEXT_CACHE_TTL_SECONDS > 0:
+        with queue_context_snapshot_cache_lock:
+            cached_snapshot = queue_context_snapshot_cache.get('snapshot')
+            cached_ts = float(queue_context_snapshot_cache.get('ts') or 0.0)
+            if cached_snapshot is not None and (now - cached_ts) < QUEUE_CONTEXT_CACHE_TTL_SECONDS:
+                return dict(cached_snapshot)
+
+    snapshot: Dict[str, Any] = {
         'queue_size': 0,
-        'queue_position': None,
-        'queued': False,
         'worker_running': _is_queue_worker_alive(),
         'active_report_id': None,
         'active_step': None,
         'active_status': None,
         'worker_heartbeat_age_seconds': None,
+        'queue_positions': {},
     }
-    if not target:
-        return context
 
     try:
         heartbeat_age = _queue_worker_heartbeat_age_seconds()
         if heartbeat_age is not None:
-            context['worker_heartbeat_age_seconds'] = round(heartbeat_age, 2)
+            snapshot['worker_heartbeat_age_seconds'] = round(heartbeat_age, 2)
     except Exception:
         pass
 
     try:
         if violation_queue is not None:
             stats = violation_queue.get_stats() if hasattr(violation_queue, 'get_stats') else {}
-            context['queue_size'] = int((stats or {}).get('current_size', 0) or 0)
+            snapshot['queue_size'] = int((stats or {}).get('current_size', 0) or 0)
             if hasattr(violation_queue, 'get_queue_preview'):
                 preview = violation_queue.get_queue_preview(limit=100)
+                queue_positions: Dict[str, int] = {}
                 for index, item in enumerate(preview, start=1):
-                    if str((item or {}).get('report_id') or '').strip() == target:
-                        context['queue_position'] = index
-                        context['queued'] = True
-                        break
+                    preview_report_id = str((item or {}).get('report_id') or '').strip()
+                    if preview_report_id and preview_report_id not in queue_positions:
+                        queue_positions[preview_report_id] = index
+                snapshot['queue_positions'] = queue_positions
     except Exception:
         pass
 
@@ -1755,13 +1846,40 @@ def _get_queue_context_for_report(report_id: str) -> Dict[str, Any]:
         progress_status = str(progress.get('status') or '').strip().lower()
         progress_current = str(progress.get('current') or '').strip()
         if progress_status in ('waiting', 'processing', 'generating', 'running', 'active'):
-            context['active_report_id'] = progress_current or None
-            context['active_step'] = progress.get('current_step')
-            context['active_status'] = progress_status
+            snapshot['active_report_id'] = progress_current or None
+            snapshot['active_step'] = progress.get('current_step')
+            snapshot['active_status'] = progress_status
     except Exception:
         pass
 
-    return context
+    if QUEUE_CONTEXT_CACHE_TTL_SECONDS > 0:
+        with queue_context_snapshot_cache_lock:
+            queue_context_snapshot_cache['ts'] = now
+            queue_context_snapshot_cache['snapshot'] = dict(snapshot)
+
+    return snapshot
+
+
+def _queue_context_for_target_from_snapshot(report_id: str, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    target = str(report_id or '').strip()
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    queue_positions = snapshot.get('queue_positions') if isinstance(snapshot.get('queue_positions'), dict) else {}
+    queue_position = queue_positions.get(target) if target else None
+    return {
+        'queue_size': int(snapshot.get('queue_size') or 0),
+        'queue_position': queue_position,
+        'queued': bool(queue_position),
+        'worker_running': bool(snapshot.get('worker_running')),
+        'active_report_id': snapshot.get('active_report_id'),
+        'active_step': snapshot.get('active_step'),
+        'active_status': snapshot.get('active_status'),
+        'worker_heartbeat_age_seconds': snapshot.get('worker_heartbeat_age_seconds'),
+    }
+
+
+def _get_queue_context_for_report(report_id: str) -> Dict[str, Any]:
+    """Return queue/progress context for a report without mutating worker state."""
+    return _queue_context_for_target_from_snapshot(report_id, _get_queue_context_snapshot())
 
 
 def _is_report_queued_or_processing(report_id: str) -> bool:
@@ -1770,26 +1888,11 @@ def _is_report_queued_or_processing(report_id: str) -> bool:
     if not target:
         return False
 
-    try:
-        if violation_queue is not None and hasattr(violation_queue, 'is_report_queued'):
-            if violation_queue.is_report_queued(target):
-                return True
-    except Exception:
-        pass
-
-    try:
-        progress = get_report_progress() or {}
-        progress_current = str(progress.get('current') or '').strip()
-        progress_status = str(progress.get('status') or '').strip().lower()
-        if (
-            progress_current == target
-            and progress_status in ('waiting', 'processing', 'generating', 'running', 'active')
-        ):
-            return True
-    except Exception:
-        pass
-
-    return False
+    snapshot = _get_queue_context_snapshot()
+    queue_positions = snapshot.get('queue_positions') if isinstance(snapshot.get('queue_positions'), dict) else {}
+    if target in queue_positions:
+        return True
+    return str(snapshot.get('active_report_id') or '').strip() == target
 
 
 def _utc_now_iso() -> str:
@@ -5670,6 +5773,17 @@ def api_violations():
     """Get all violations with details from Supabase."""
     requested_limit = request.args.get('limit', 200, type=int)
     limit = max(1, min(requested_limit or 200, 5000))
+    cache_key = (
+        f"limit={limit}|db={'present' if db_manager is not None else 'absent'}|"
+        f"offline={int(_is_supabase_offline_backoff_active())}"
+    )
+    cached_payload = _get_cached_dashboard_snapshot(
+        'violations',
+        cache_key,
+        VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
+    )
+    if cached_payload is not None:
+        return jsonify(cached_payload)
 
     def _normalize_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()
@@ -5892,9 +6006,23 @@ def api_violations():
         return local_violations[:max(1, int(limit or 1))]
 
     if db_manager is None:
-        return jsonify(_collect_local_violation_rows('filesystem_fallback'))
+        payload = _collect_local_violation_rows('filesystem_fallback')
+        _set_cached_dashboard_snapshot(
+            'violations',
+            cache_key,
+            payload,
+            VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
+        return jsonify(payload)
     if _is_supabase_offline_backoff_active():
-        return jsonify(_collect_local_violation_rows('filesystem_fallback_offline_backoff'))
+        payload = _collect_local_violation_rows('filesystem_fallback_offline_backoff')
+        _set_cached_dashboard_snapshot(
+            'violations',
+            cache_key,
+            payload,
+            VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
+        return jsonify(payload)
 
     # Use Supabase - get ALL violations including pending
     try:
@@ -6202,6 +6330,12 @@ def api_violations():
         )
         formatted_violations = formatted_violations[:max(1, int(limit or 1))]
 
+        _set_cached_dashboard_snapshot(
+            'violations',
+            cache_key,
+            formatted_violations,
+            VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
         return jsonify(formatted_violations)
 
     except Exception as e:
@@ -6214,12 +6348,29 @@ def api_violations():
             )
         else:
             logger.warning("Supabase fetch error with no local violation rows; returning empty local fallback")
+        _set_cached_dashboard_snapshot(
+            'violations',
+            cache_key,
+            fallback_rows,
+            VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
         return jsonify(fallback_rows)
 
 
 @app.route('/api/stats')
 def api_stats():
     """Get unified violation statistics across cloud and local/synced-local caches."""
+    cache_key = (
+        f"db={'present' if db_manager is not None else 'absent'}|"
+        f"offline={int(_is_supabase_offline_backoff_active())}"
+    )
+    cached_payload = _get_cached_dashboard_snapshot(
+        'stats',
+        cache_key,
+        STATS_SNAPSHOT_CACHE_TTL_SECONDS,
+    )
+    if cached_payload is not None:
+        return jsonify(cached_payload)
 
     now = get_local_time()
     tz_info = now.tzinfo or get_timezone_info()
@@ -6496,6 +6647,12 @@ def api_stats():
                 existing['source_scope'] = 'synced_local'
 
         stats = _build_stats_payload(list(by_report.values()))
+        _set_cached_dashboard_snapshot(
+            'stats',
+            cache_key,
+            stats,
+            STATS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
         return jsonify(stats)
 
     except Exception as e:
@@ -6514,7 +6671,14 @@ def api_stats():
                 'status': str(row.get('status') or 'pending').strip().lower() or 'pending',
                 'source_scope': 'local',
             })
-        return jsonify(_build_stats_payload(fallback_rows))
+        stats_payload = _build_stats_payload(fallback_rows)
+        _set_cached_dashboard_snapshot(
+            'stats',
+            cache_key,
+            stats_payload,
+            STATS_SNAPSHOT_CACHE_TTL_SECONDS,
+        )
+        return jsonify(stats_payload)
 
 
 @app.route('/api/stats/merge-cache', methods=['POST'])
@@ -6738,6 +6902,68 @@ def api_get_violation(report_id):
         return jsonify({'error': 'Failed to fetch violation'}), 500
 
 
+def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Fetch report event + violation with one DB round-trip when available."""
+    if db_manager is None:
+        return None, None
+
+    report_id = str(report_id or '').strip()
+    if not report_id:
+        return None, None
+
+    bundle_method = getattr(db_manager, 'get_report_status_bundle', None)
+    if callable(bundle_method):
+        bundle = bundle_method(report_id)
+        if not bundle:
+            return None, None
+
+        event = {
+            'report_id': bundle.get('report_id'),
+            'timestamp': bundle.get('event_timestamp'),
+            'updated_at': bundle.get('event_updated_at'),
+            'person_count': bundle.get('person_count'),
+            'violation_count': bundle.get('violation_count'),
+            'severity': bundle.get('severity'),
+            'status': bundle.get('event_status'),
+            'error_message': bundle.get('event_error_message'),
+            'device_id': bundle.get('event_device_id'),
+        }
+
+        violation = None
+        if (
+            bundle.get('violation_id')
+            or bundle.get('report_html_key')
+            or bundle.get('original_image_key')
+            or bundle.get('annotated_image_key')
+            or bundle.get('detection_data')
+            or bundle.get('caption')
+            or bundle.get('violation_summary')
+        ):
+            violation = {
+                'id': bundle.get('violation_id'),
+                'report_id': bundle.get('report_id'),
+                'caption': bundle.get('caption'),
+                'violation_summary': bundle.get('violation_summary'),
+                'nlp_analysis': bundle.get('nlp_analysis'),
+                'detection_data': bundle.get('detection_data'),
+                'original_image_key': bundle.get('original_image_key'),
+                'annotated_image_key': bundle.get('annotated_image_key'),
+                'report_html_key': bundle.get('report_html_key'),
+                'report_pdf_key': bundle.get('report_pdf_key'),
+                'device_id': bundle.get('violation_device_id'),
+                'timestamp': bundle.get('event_timestamp'),
+                'person_count': bundle.get('person_count'),
+                'violation_count': bundle.get('violation_count'),
+                'severity': bundle.get('severity'),
+            }
+
+        return event, violation
+
+    event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+    violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+    return event, violation
+
+
 def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any]]:
     """Build report status from local artifacts for offline/backoff runtimes."""
     report_id = str(report_id or '').strip()
@@ -6942,8 +7168,7 @@ def api_report_status(report_id):
         if hasattr(db_manager, 'get_status'):
             status_info = db_manager.get_status(report_id)
         else:
-            event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
-            violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
+            event, violation = _get_report_event_and_violation(report_id)
             local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists())
 
             if not event and not violation:
@@ -7221,17 +7446,15 @@ def api_report_prefetch(report_id):
                 return _local_prefetch_response('local_filesystem_prefetch')
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
-        violation = db_manager.get_violation(report_id)
+        event, violation = _get_report_event_and_violation(report_id)
         if not violation:
             if local_report_html.exists():
-                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
                 return _local_prefetch_response('local_filesystem_prefetch', event=event)
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
         report_html_key = violation.get('report_html_key')
         if not report_html_key:
             if local_report_html.exists():
-                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
                 return _local_prefetch_response('local_filesystem_prefetch', violation=violation, event=event)
             return jsonify({'success': False, 'error': 'Report HTML not available'}), 404
 
@@ -7249,7 +7472,6 @@ def api_report_prefetch(report_id):
         source_layer = 'source_cache'
         if html_content is None:
             if local_report_html.exists():
-                event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
                 local_response = _local_prefetch_response(
                     'local_filesystem_prefetch',
                     violation=violation,
@@ -7278,7 +7500,6 @@ def api_report_prefetch(report_id):
         _set_cached_report_html_content(report_id, report_html_key, html_content)
         _persist_local_report_html_cache(report_id, html_content)
 
-        event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
         trace_payload = _build_traceability_payload(
             report_id=report_id,
             violation=violation or {},
@@ -7420,6 +7641,8 @@ def _push_realtime_report_event(report_row: Dict[str, Any], event_type: str = 'v
 
     with realtime_event_lock:
         realtime_report_events.append(event_row)
+    _invalidate_local_report_state_cache()
+    _invalidate_dashboard_snapshot_cache()
 
 
 def _get_realtime_report_events(limit: int = 40) -> List[Dict[str, Any]]:
@@ -7428,13 +7651,12 @@ def _get_realtime_report_events(limit: int = 40) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows if isinstance(row, dict)]
 
 
-def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
-    """Collect local report lifecycle rows from filesystem artifacts."""
-    if not VIOLATIONS_DIR.exists():
-        return []
-
-    max_rows = max(1, int(limit or 1))
+def _scan_local_report_state_rows_uncached(
+    max_rows: int,
+    queue_snapshot: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
+    queue_snapshot = queue_snapshot if isinstance(queue_snapshot, dict) else _get_queue_context_snapshot()
 
     try:
         violation_dirs = sorted(
@@ -7493,7 +7715,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
         else:
             continue
 
-        queue_context = _get_queue_context_for_report(report_id)
+        queue_context = _queue_context_for_target_from_snapshot(report_id, queue_snapshot)
         if status in ('pending', 'generating'):
             if str(queue_context.get('active_report_id') or '') == report_id:
                 status = 'generating'
@@ -7602,6 +7824,34 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
             'device_id': metadata_device_id,
             **queue_context,
         })
+
+    return rows
+
+
+def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
+    """Collect local report lifecycle rows from filesystem artifacts."""
+    if not VIOLATIONS_DIR.exists():
+        return []
+
+    max_rows = max(1, int(limit or 1))
+    now = time.time()
+
+    if LOCAL_REPORT_STATE_CACHE_TTL_SECONDS > 0:
+        with local_report_state_cache_lock:
+            cached_rows = local_report_state_cache.get('rows') or []
+            cached_limit = int(local_report_state_cache.get('limit') or 0)
+            cached_ts = float(local_report_state_cache.get('ts') or 0.0)
+            if cached_rows and cached_limit >= max_rows and (now - cached_ts) < LOCAL_REPORT_STATE_CACHE_TTL_SECONDS:
+                return [dict(row) for row in cached_rows[:max_rows] if isinstance(row, dict)]
+
+    queue_snapshot = _get_queue_context_snapshot()
+    rows = _scan_local_report_state_rows_uncached(max_rows=max_rows, queue_snapshot=queue_snapshot)
+
+    if LOCAL_REPORT_STATE_CACHE_TTL_SECONDS > 0:
+        with local_report_state_cache_lock:
+            local_report_state_cache['ts'] = now
+            local_report_state_cache['limit'] = max_rows
+            local_report_state_cache['rows'] = [dict(row) for row in rows]
 
     return rows
 
@@ -11097,6 +11347,13 @@ def api_provider_routing_settings():
             reason='api_provider_routing_settings',
         )
 
+        # Mode/profile switches must invalidate short-lived dashboard/runtime
+        # caches immediately so local<->cloud flips do not briefly render stale
+        # source tags or queue/state snapshots from the previous profile.
+        _invalidate_queue_context_snapshot_cache()
+        _invalidate_local_report_state_cache()
+        _invalidate_dashboard_snapshot_cache()
+
         resp_body = {
             'success': True,
             'message': 'Provider routing settings updated',
@@ -11409,6 +11666,10 @@ def api_report_recovery_execute():
             _activate_local_offline_runtime('api_report_recovery_execute.enqueue', e)
             errors.append(f"{report_id}: {e}")
             skipped_count += 1
+
+    _invalidate_queue_context_snapshot_cache()
+    _invalidate_local_report_state_cache()
+    _invalidate_dashboard_snapshot_cache()
 
     return jsonify({
         'success': True,
@@ -12026,6 +12287,10 @@ def api_sync_local_cache_to_supabase():
         }), 500
 
     if result.get('success'):
+        if not dry_run:
+            _invalidate_queue_context_snapshot_cache()
+            _invalidate_local_report_state_cache()
+            _invalidate_dashboard_snapshot_cache()
         return jsonify(result)
 
     error_message = str(result.get('error') or '').lower()
@@ -12203,6 +12468,10 @@ def api_report_local_draft_handoff():
                 )
             except Exception as status_err:
                 logger.debug(f"Could not mark browser local draft queued for {report_id}: {status_err}")
+
+        _invalidate_queue_context_snapshot_cache()
+        _invalidate_local_report_state_cache()
+        _invalidate_dashboard_snapshot_cache()
 
         return jsonify({
             'success': True,
@@ -12812,12 +13081,10 @@ def view_report(report_id):
 
     # Use Supabase
     try:
-        event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
+        event, violation = _get_report_event_and_violation(report_id)
         event_status = str((event or {}).get('status') or '').strip().lower()
         event_error = (event or {}).get('error_message') or 'Unknown generation error'
 
-        # Get violation data from database
-        violation = db_manager.get_violation(report_id)
         trace_payload = _build_traceability_payload(
             report_id=report_id,
             violation=violation or {},

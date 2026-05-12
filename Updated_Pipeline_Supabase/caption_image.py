@@ -808,6 +808,102 @@ def _normalize_caption_text(caption: str) -> str:
     return text
 
 
+def _try_parse_local_caption_json(raw_text: str):
+    """Parse Ollama local caption JSON payloads, including fenced code blocks."""
+    if not raw_text:
+        return None
+
+    text = str(raw_text).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+
+    candidate = text[start:end + 1]
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _render_local_caption_from_json(payload: dict) -> str:
+    """Render a deterministic prose caption from structured local-model output."""
+    if not isinstance(payload, dict):
+        return ""
+
+    scene = str(payload.get("scene") or "").strip().rstrip(".")
+    people_count = payload.get("people_count")
+    visible_people = payload.get("visible_people")
+    major_objects = payload.get("major_objects")
+    ppe_visible = payload.get("ppe_visible")
+
+    if not isinstance(visible_people, list):
+        visible_people = [visible_people] if visible_people else []
+    if not isinstance(major_objects, list):
+        major_objects = [major_objects] if major_objects else []
+    if isinstance(ppe_visible, str):
+        ppe_visible = [ppe_visible] if ppe_visible.strip() else []
+    elif not isinstance(ppe_visible, list):
+        ppe_visible = []
+
+    visible_people = [str(item).strip().strip(".") for item in visible_people if str(item).strip()]
+    major_objects = [str(item).strip().strip(".") for item in major_objects if str(item).strip()]
+    ppe_visible = [str(item).strip().strip(".") for item in ppe_visible if str(item).strip()]
+
+    try:
+        people_count = max(0, int(people_count))
+    except (TypeError, ValueError):
+        people_count = len(visible_people)
+
+    if people_count <= 0 and not scene and not visible_people and not major_objects:
+        return ""
+
+    scene_lower = scene.lower()
+    if scene_lower in ("indoor", "outdoor"):
+        scene = f"{scene_lower} setting"
+        scene_lower = scene
+
+    def _with_article(text: str) -> str:
+        cleaned = str(text or "").strip().lower()
+        if not cleaned:
+            return ""
+        if cleaned.startswith(("a ", "an ", "the ")):
+            return cleaned
+        article = "an" if cleaned[0] in "aeiou" else "a"
+        return f"{article} {cleaned}"
+
+    if scene:
+        first_sentence = (
+            f"This is {_with_article(scene)} with "
+            f"{people_count} visible {'person' if people_count == 1 else 'people'}."
+        )
+    else:
+        first_sentence = f"There {'is' if people_count == 1 else 'are'} {people_count} visible {'person' if people_count == 1 else 'people'} in the scene."
+
+    sentences = [first_sentence]
+
+    if visible_people:
+        people_text = "; ".join(visible_people[:3])
+        sentences.append(f"Visible people include {people_text}.")
+
+    if major_objects:
+        objects_text = ", ".join(major_objects[:4])
+        sentences.append(f"Major visible objects include {objects_text}.")
+
+    if ppe_visible:
+        sentences.append(f"Visible PPE includes {', '.join(ppe_visible[:4])}.")
+    else:
+        sentences.append("No PPE is visible.")
+
+    return " ".join(sentences).strip()
+
+
 def _caption_needs_expansion(caption: str) -> bool:
     """Heuristic to trigger a richer-caption retry when output is too short/generic."""
     if not caption:
@@ -874,8 +970,50 @@ def caption_image_llava(image_path, prompt=None):
 
     print(f"Image loaded: {Path(image_path).name}")
 
-    # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
-    default_prompt = """You are a workplace visual analyst. Write one factual caption from this image only.
+    strict_local_profile = (
+        str(os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+        and str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower() == 'local'
+    )
+
+    # Local Gemma/Ollama reacts better to a shorter, stricter grounding prompt
+    # than to the longer shared cloud prompt.
+    if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
+        structured_prompt = """Return strict JSON only with keys scene, people_count, visible_people, major_objects, ppe_visible.
+
+Rules:
+- Use only visible evidence from the image.
+- scene must be a short factual setting phrase such as outdoor street scene, indoor room, office area, warehouse interior, or construction area.
+- people_count must count only clearly visible people.
+- visible_people must be a list of short phrases, one person per item, and each item must start with "person" and mention position or clothing, for example "person on the left wearing a light jacket and jeans".
+- major_objects must be a list of specific visible objects or structures using full noun phrases, for example "blue EMT Madrid bus" or "building facade with balconies".
+- If a large vehicle is clearly visible, include it in major_objects.
+- ppe_visible must be an empty list when no PPE is clearly visible.
+- Do not guess jobs, hazards, or hidden objects.
+"""
+        default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 4-6 complete sentences.
+
+Requirements:
+- Start with whether the scene is indoor or outdoor and the total visible people count, including partially visible people at the image edges.
+- Mention the main people, clothing, eyewear, vehicles, buildings, trees, posts, tools, or machinery only when clearly visible.
+- Mention PPE only when clearly visible; if none is visible, explicitly say no PPE is visible.
+
+Strict grounding rules:
+- Do not use intro phrases like "Here is a description" or "Based on the image".
+- Do not guess hidden actions, occupations, hazards, traffic context, worksite context, or unseen objects.
+- If something is unclear, say it is unclear instead of inventing detail.
+"""
+        expansion_prompt = """Rewrite the caption with slightly richer factual detail from the image only.
+
+Requirements:
+- Keep one paragraph with 4-6 complete sentences.
+- Start with indoor/outdoor and total visible people count, including edge-cropped people.
+- Describe the most visible people, then major visible background objects such as vehicles or buildings.
+- End by stating whether any PPE is visible.
+- No intro phrase, no bullet points, no guessing.
+"""
+    else:
+        # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
+        default_prompt = """You are a workplace visual analyst. Write one factual caption from this image only.
 
 Output requirements:
 - Single paragraph, 5-7 complete factual sentences.
@@ -891,6 +1029,17 @@ Strict grounding rules:
 - If visibility is unclear, say it is unclear instead of guessing.
 - Natural professional English, no bullet points, no markdown, no preamble.
 """
+        expansion_prompt = """The previous caption was too short or generic. Rewrite it with richer factual detail from the image only.
+
+Requirements:
+- Single paragraph, 5-7 complete sentences.
+- Do not answer with only one sentence.
+- State environment type and people count first.
+- For each visible person: visible body region, posture, gaze direction, clothing, and context near objects.
+- Mention nearby objects or hazards only if visible.
+- Mention PPE only when clearly visible; if not visible, state not visible.
+- No bullet points, no markdown, no meta commentary, no "Here is a description" preamble.
+"""
     caption_prompt = str(prompt or '').strip() or default_prompt
 
     # Encode image to base64
@@ -903,6 +1052,22 @@ Strict grounding rules:
     # Generate caption using provider routing
     try:
         print("Generating caption...")
+        if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER and not str(prompt or '').strip():
+            structured_caption = _generate_vision_response(
+                prompt=structured_prompt,
+                image_base64=image_base64,
+                temperature=0.05,
+                max_tokens=260
+            )
+            if structured_caption and not structured_caption.startswith('ALERT_'):
+                parsed_structured_caption = _try_parse_local_caption_json(structured_caption)
+                rendered_structured_caption = _render_local_caption_from_json(parsed_structured_caption or {})
+                if rendered_structured_caption:
+                    print("Caption generation complete!")
+                    return rendered_structured_caption
+            elif structured_caption:
+                return structured_caption
+
         caption = _generate_vision_response(
             prompt=caption_prompt,
             image_base64=image_base64,
@@ -913,18 +1078,11 @@ Strict grounding rules:
         if caption:
             caption = _normalize_caption_text(caption)
 
-            if _caption_needs_expansion(caption) and not caption.startswith('ALERT_'):
-                expansion_prompt = """The previous caption was too short or generic. Rewrite it with richer factual detail from the image only.
+            should_expand = _caption_needs_expansion(caption) and not caption.startswith('ALERT_')
+            if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
+                should_expand = False
 
-Requirements:
-- Single paragraph, 5-7 complete sentences.
-- Do not answer with only one sentence.
-- State environment type and people count first.
-- For each visible person: visible body region, posture, gaze direction, clothing, and context near objects.
-- Mention nearby objects or hazards only if visible.
-- Mention PPE only when clearly visible; if not visible, state not visible.
-- No bullet points, no markdown, no meta commentary, no "Here is a description" preamble.
-"""
+            if should_expand:
                 expanded = _generate_vision_response(
                     prompt=expansion_prompt,
                     image_base64=image_base64,

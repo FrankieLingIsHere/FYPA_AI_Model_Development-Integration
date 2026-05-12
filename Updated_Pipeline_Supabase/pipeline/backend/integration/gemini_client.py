@@ -26,6 +26,12 @@ from typing import Dict, Any, Optional, Union, List
 
 logger = logging.getLogger(__name__)
 GEMINI_REQUIRED_BY_DEFAULT = str(os.getenv('GEMINI_REQUIRED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
+DEFAULT_GEMINI_MODEL_CANDIDATES = (
+    "gemini-2.5-flash,"
+    "gemini-2.5-flash-lite,"
+    "gemini-flash-latest,"
+    "gemini-flash-lite-latest"
+)
 
 # Try to import the Google GenAI SDK
 GEMINI_AVAILABLE = False
@@ -105,7 +111,7 @@ class GeminiClient:
         candidate_text = str(
             gemini_config.get(
                 'model_candidates',
-                os.getenv('GEMINI_MODEL_CANDIDATES', f"{self.model_name},gemini-2.5-flash,gemini-2.5-flash-lite,gemini-1.5-flash")
+                os.getenv('GEMINI_MODEL_CANDIDATES', f"{self.model_name},{DEFAULT_GEMINI_MODEL_CANDIDATES}")
             )
         )
         parsed_candidates = [item.strip() for item in candidate_text.split(',') if item.strip()]
@@ -218,13 +224,14 @@ class GeminiClient:
             time.sleep(wait)
         self._last_call_time = time.time()
 
-    def _try_switch_to_next_model(self, reason: str) -> bool:
-        """Switch to next configured Gemini model candidate when current one is exhausted."""
+    def _try_switch_to_next_model(self, reason: str, *, target: str = 'report') -> bool:
+        """Switch to next configured Gemini model candidate for report or vision generation."""
         if not self.model_candidates:
             return False
 
+        current_model = self.vision_model_name if target == 'vision' else self.model_name
         try:
-            current_index = self.model_candidates.index(self.model_name)
+            current_index = self.model_candidates.index(current_model)
         except ValueError:
             current_index = -1
 
@@ -232,10 +239,14 @@ class GeminiClient:
         if next_index >= len(self.model_candidates):
             return False
 
-        previous = self.model_name
-        self.model_name = self.model_candidates[next_index]
+        previous = current_model
+        next_model = self.model_candidates[next_index]
+        if target == 'vision':
+            self.vision_model_name = next_model
+        else:
+            self.model_name = next_model
         self.last_model_switch_reason = reason
-        logger.warning(f"Switching Gemini model from {previous} to {self.model_name} due to: {reason}")
+        logger.warning(f"Switching Gemini {target} model from {previous} to {next_model} due to: {reason}")
         return True
 
     def _load_image_as_part(self, image_path: str) -> Optional[Any]:
@@ -703,7 +714,7 @@ class GeminiClient:
                     )
                     if self._switch_to_next_api_key(reason):
                         continue
-                    if self._try_switch_to_next_model(reason):
+                    if self._try_switch_to_next_model(reason, target='vision'):
                         continue
                 if attempt < self.max_retries - 1:
                     wait = 2 ** (attempt + 1)
@@ -872,7 +883,7 @@ class GeminiClient:
                     switched_key = self._switch_to_next_api_key(reason)
                     if switched_key:
                         continue
-                    switched = self._try_switch_to_next_model(reason)
+                    switched = self._try_switch_to_next_model(reason, target='report')
                     if switched:
                         continue
                     if quota_or_exhausted:

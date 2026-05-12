@@ -142,6 +142,26 @@ def test_caption_generator_image_path_does_not_shadow_os_module():
     _assert("Image captioning not available" in caption, "Expected graceful caption backend unavailable response")
 
 
+def test_caption_generator_status_uses_active_gemini_vision_model():
+    class _FakeGeminiClient:
+        def get_status(self):
+            return {
+                "vision_model": "gemini-flash-lite-latest",
+                "model": "gemini-2.5-flash",
+            }
+
+    subject = CaptionGenerator.__new__(CaptionGenerator)
+    subject.config = {"GEMINI_CONFIG": {"enabled": True}}
+    subject.backend = "gemini"
+    subject.model_loaded = True
+    subject._gemini_client = _FakeGeminiClient()
+
+    status = subject.get_status()
+
+    _assert(status["model"] == "gemini-flash-lite-latest", status)
+    _assert(status["gemini_status"]["vision_model"] == "gemini-flash-lite-latest", status)
+
+
 def test_caption_cleanup_removes_model_preamble_without_forcing_expansion():
     raw = (
         "Here's a descriptive paragraph based on the image, adhering to your requirements: "
@@ -165,6 +185,7 @@ def main():
         test_casm_caption_quality_replaces_provider_failure_only,
         test_report_generator_keeps_non_placeholder_caption,
         test_caption_generator_image_path_does_not_shadow_os_module,
+        test_caption_generator_status_uses_active_gemini_vision_model,
         test_caption_cleanup_removes_model_preamble_without_forcing_expansion,
     ]
     failures = []

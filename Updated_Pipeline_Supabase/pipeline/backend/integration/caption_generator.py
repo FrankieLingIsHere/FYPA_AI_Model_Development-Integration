@@ -241,6 +241,7 @@ class CaptionGenerator:
 
     def get_status(self) -> dict:
         """Get caption generator status."""
+        gemini_runtime_status = self._gemini_client.get_status() if self._gemini_client else {}
         status = {
             'available': self.backend != 'none',
             'model_loaded': self.model_loaded,
@@ -248,7 +249,11 @@ class CaptionGenerator:
         }
 
         if self.backend == 'gemini':
-            status['model'] = 'Gemini 2.0 Flash (Google AI)'
+            status['model'] = (
+                gemini_runtime_status.get('vision_model')
+                or gemini_runtime_status.get('model')
+                or 'Google Gemini API'
+            )
         elif self.backend == 'legacy':
             status['model'] = os.getenv('OLLAMA_VISION_MODEL', os.getenv('OLLAMA_MODEL', 'gemma3:4b'))
         else:
@@ -258,7 +263,7 @@ class CaptionGenerator:
             status['legacy_error'] = CAPTION_ERROR
 
         if self._gemini_client:
-            status['gemini_status'] = self._gemini_client.get_status()
+            status['gemini_status'] = gemini_runtime_status
 
         return status
 

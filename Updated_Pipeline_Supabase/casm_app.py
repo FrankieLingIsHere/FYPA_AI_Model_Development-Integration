@@ -18,6 +18,8 @@ Usage:
     Then open browser to: http://localhost:5000
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import logging
@@ -6653,8 +6655,113 @@ def api_report_status(report_id):
 
         return jsonify(local_payload)
 
+    def _normalize_status_source_scope(scope: Any) -> str:
+        normalized = str(scope or '').strip().lower()
+        if normalized in ('local', 'cloud', 'shared', 'synced_local'):
+            return normalized
+        if normalized == 'local_synced':
+            return 'synced_local'
+        return ''
+
+    def _status_source_label(scope: str) -> str:
+        if scope == 'local':
+            return 'Local'
+        if scope == 'synced_local':
+            return 'Local Synced'
+        if scope == 'shared':
+            return 'Shared'
+        return 'Cloud'
+
+    def _parse_status_detection_data(violation_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        detection_payload = (violation_row or {}).get('detection_data')
+        if isinstance(detection_payload, str):
+            try:
+                detection_payload = json.loads(detection_payload)
+            except Exception:
+                detection_payload = None
+        return detection_payload if isinstance(detection_payload, dict) else {}
+
+    def _infer_status_source_scope(
+        *,
+        event_row: Optional[Dict[str, Any]],
+        violation_row: Optional[Dict[str, Any]],
+        local_status: Optional[Dict[str, Any]],
+    ) -> str:
+        detection_payload = _parse_status_detection_data(violation_row)
+        device_id = (
+            (event_row or {}).get('device_id')
+            or detection_payload.get('device_id')
+            or (violation_row or {}).get('device_id')
+        )
+        sync_source = str(
+            detection_payload.get('sync_source')
+            or detection_payload.get('source')
+            or detection_payload.get('origin')
+            or ''
+        ).strip().lower()
+        explicit_scope = _normalize_status_source_scope(
+            detection_payload.get('source_scope')
+            or detection_payload.get('report_scope')
+            or detection_payload.get('scope')
+        )
+        has_cloud_artifacts = bool(
+            (violation_row or {}).get('original_image_key')
+            or (violation_row or {}).get('annotated_image_key')
+            or (violation_row or {}).get('report_html_key')
+        )
+        has_local_artifacts = bool(
+            local_status
+            and (
+                local_status.get('has_original')
+                or local_status.get('has_annotated')
+                or local_status.get('has_report')
+            )
+        )
+        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        device_key = str(device_id or '').strip().lower()
+        local_device = (
+            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
+            or device_key.startswith('local_')
+            or device_key.startswith('offline_')
+        )
+        local_sync_marker = _is_local_cache_sync_job_marker(
+            sync_source=sync_source,
+            device_id=device_key,
+        )
+
+        if explicit_scope:
+            if (
+                explicit_scope == 'synced_local'
+                and active_profile != 'local'
+                and not local_device
+                and not local_sync_marker
+                and has_cloud_artifacts
+            ):
+                return 'cloud'
+            return explicit_scope
+
+        if local_sync_marker:
+            return 'synced_local' if has_cloud_artifacts else 'local'
+
+        if _is_local_pipeline_origin_marker(
+            source_scope='',
+            sync_source=sync_source,
+            device_id=device_key,
+        ):
+            return 'local'
+
+        if has_cloud_artifacts:
+            return 'synced_local' if local_device else 'cloud'
+        if active_profile == 'cloud':
+            return 'cloud'
+        if has_local_artifacts or local_device:
+            return 'local'
+        return 'cloud'
+
     # Use Supabase
     try:
+        event = None
+        violation = None
         if hasattr(db_manager, 'get_status'):
             status_info = db_manager.get_status(report_id)
         else:
@@ -6700,6 +6807,13 @@ def api_report_status(report_id):
                     'long_running_notice': False,
                     'alert_message': None,
                 }
+                source_scope = _infer_status_source_scope(
+                    event_row=event,
+                    violation_row=violation,
+                    local_status=local_payload,
+                )
+                status_info['source_scope'] = source_scope
+                status_info['source_label'] = _status_source_label(source_scope)
 
                 # If generation is stale with no report output, surface a real failure reason.
                 if status_info['status'] == 'generating' and not status_info['has_report']:
@@ -6768,6 +6882,15 @@ def api_report_status(report_id):
                 'message': 'Report not found'
             })
 
+        if not status_info.get('source_scope'):
+            source_scope = _infer_status_source_scope(
+                event_row=event,
+                violation_row=violation,
+                local_status=local_payload,
+            )
+            status_info['source_scope'] = source_scope
+            status_info['source_label'] = _status_source_label(source_scope)
+
         if local_payload:
             local_status = str(local_payload.get('status') or '').strip().lower()
             status_info['has_report'] = bool(status_info.get('has_report')) or bool(local_payload.get('has_report'))
@@ -6794,6 +6917,8 @@ def api_report_status(report_id):
                 'source_scope',
                 'source_label',
             ):
+                if key in ('source_scope', 'source_label') and status_info.get('source_scope') != 'local':
+                    continue
                 if key in local_payload:
                     status_info[key] = local_payload.get(key)
 

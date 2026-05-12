@@ -434,10 +434,24 @@ const ReportsPage = {
         const existing = existingIndex >= 0 ? this.violations[existingIndex] : {};
         const sourceRecord = sourceHint && typeof sourceHint === 'object' ? sourceHint : {};
         const nowIso = new Date().toISOString();
-        const sourceScope = this.normalizeSourceScope(patch.source_scope)
+        const sourceScopeCandidate = this.normalizeSourceScope(patch.source_scope)
             || this.inferSourceScope(sourceRecord)
             || this.inferSourceScope(existing)
             || 'cloud';
+        const sourceScope = this.resolveStableRuntimeSourceScope(
+            existing,
+            sourceRecord,
+            patch,
+            sourceScopeCandidate
+        );
+        const patchLabel = sourceScope === sourceScopeCandidate
+            ? String(patch.source_label || '').trim()
+            : '';
+        const inheritedLabel = [
+            existing.source_label,
+            sourceRecord.source_label
+        ].map((label) => String(label || '').trim())
+            .find((label) => this.sourceLabelMatchesScope(label, sourceScope)) || '';
         const next = {
             ...sourceRecord,
             ...existing,
@@ -452,7 +466,9 @@ const ReportsPage = {
                 ? !!patch.has_report
                 : !!(existing.has_report || sourceRecord.has_report),
             source_scope: sourceScope,
-            source_label: String(patch.source_label || '').trim() || this.sourceLabelForScope(sourceScope),
+            source_label: patchLabel
+                || inheritedLabel
+                || this.sourceLabelForScope(sourceScope),
             updated_at: patch.updated_at || nowIso
         };
 
@@ -539,9 +555,9 @@ const ReportsPage = {
 
                 let mergedScope = existingScope || pendingScope || 'cloud';
                 if (existingScope === 'synced_local' && pendingScope === 'cloud') {
-                    mergedScope = this.inferSourceScope(item) === 'cloud' && this.isPendingLikeStatus(pendingStatus)
-                        ? 'cloud'
-                        : 'synced_local';
+                    mergedScope = this.hasSyncedLocalEvidence(existing) ? 'synced_local' : 'cloud';
+                } else if (existingScope === 'local' && pendingScope === 'cloud' && this.hasLocalScopeEvidence(existing)) {
+                    mergedScope = 'local';
                 } else if (pendingScope === 'synced_local') {
                     mergedScope = 'synced_local';
                 } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
@@ -945,6 +961,183 @@ const ReportsPage = {
         if (scope === 'synced_local') return 'Local Synced';
         if (scope === 'shared') return 'Shared';
         return 'Cloud';
+    },
+
+    sourceLabelMatchesScope(label, scope) {
+        const normalized = String(label || '').trim().toLowerCase();
+        if (!normalized) return false;
+        if (scope === 'local') return normalized === 'local';
+        if (scope === 'synced_local') return normalized.includes('local synced');
+        if (scope === 'shared') return normalized.includes('shared');
+        return normalized.includes('cloud');
+    },
+
+    hasLocalScopeEvidence(record = {}) {
+        const explicit = this.normalizeSourceScope(record && record.source_scope);
+        if (explicit === 'local') return true;
+
+        const sourceMarker = String(
+            (record && (record.origin || record.sync_source || record.source || record.source_reason)) || ''
+        ).trim().toLowerCase();
+        if (
+            sourceMarker === 'local'
+            || sourceMarker === 'local_pipeline'
+            || sourceMarker === 'local_pending_recovery'
+            || sourceMarker === 'offline_local'
+            || sourceMarker === 'offline_local_cache'
+            || sourceMarker === 'browser_local_draft'
+            || sourceMarker.startsWith('local_')
+            || sourceMarker.startsWith('offline_')
+            || sourceMarker.startsWith('browser_local')
+        ) {
+            return true;
+        }
+
+        const deviceId = String((record && record.device_id) || '').trim().toLowerCase();
+        if (
+            deviceId === 'local_cache'
+            || deviceId === 'offline_local_cache'
+            || deviceId === 'browser_local_draft'
+            || deviceId.startsWith('local_')
+            || deviceId.startsWith('offline_')
+            || deviceId.startsWith('browser_local')
+        ) {
+            return true;
+        }
+
+        return !!(
+            record
+            && (
+                record.local_image_url
+                || record.local_report_url
+                || record.has_local_artifacts
+                || record.has_local_report
+                || record.local_report_available
+                || record.local_cache_available
+            )
+        );
+    },
+
+    hasSyncedLocalEvidence(record = {}) {
+        const sourceMarker = String(
+            (record && (record.origin || record.sync_source || record.source || record.source_reason)) || ''
+        ).trim().toLowerCase();
+        if (
+            sourceMarker === 'local_synced'
+            || sourceMarker === 'sync_local_cache'
+            || sourceMarker === 'local_cache_sync'
+            || sourceMarker === 'offline_local_cache_sync'
+            || sourceMarker === 'sync_local_cache_partial'
+            || sourceMarker === 'browser_local_draft_handoff'
+        ) {
+            return true;
+        }
+
+        const deviceId = String((record && record.device_id) || '').trim().toLowerCase();
+        if (
+            deviceId === 'local_cache'
+            || deviceId === 'offline_local_cache'
+            || deviceId === 'local_cache_sync'
+            || deviceId.startsWith('local_')
+            || deviceId.startsWith('offline_')
+        ) {
+            return true;
+        }
+
+        return false;
+    },
+
+    resolveStableRuntimeSourceScope(existing = {}, sourceRecord = {}, patch = {}, candidateScope = '') {
+        const normalizedCandidate = this.normalizeSourceScope(candidateScope) || 'cloud';
+        const existingExplicit = this.normalizeSourceScope(existing && existing.source_scope);
+        const sourceExplicit = this.normalizeSourceScope(sourceRecord && sourceRecord.source_scope);
+        const anchoredScope = existingExplicit || sourceExplicit;
+
+        if (
+            normalizedCandidate === 'cloud'
+            && anchoredScope === 'local'
+            && (this.hasLocalScopeEvidence(existing) || this.hasLocalScopeEvidence(sourceRecord))
+            && !this.hasSyncedLocalEvidence(patch)
+        ) {
+            return 'local';
+        }
+
+        if (
+            normalizedCandidate === 'cloud'
+            && anchoredScope === 'synced_local'
+            && (
+                this.hasSyncedLocalEvidence(existing)
+                || this.hasSyncedLocalEvidence(sourceRecord)
+                || this.hasSyncedLocalEvidence(patch)
+            )
+        ) {
+            return 'synced_local';
+        }
+
+        if (normalizedCandidate !== 'local') {
+            return normalizedCandidate;
+        }
+
+        if (
+            anchoredScope === 'synced_local'
+            && (
+                this.hasSyncedLocalEvidence(existing)
+                || this.hasSyncedLocalEvidence(sourceRecord)
+                || this.hasSyncedLocalEvidence(patch)
+            )
+        ) {
+            return 'synced_local';
+        }
+        if (anchoredScope === 'shared') {
+            return 'shared';
+        }
+
+        const existingLabel = String((existing && existing.source_label) || '').trim().toLowerCase();
+        const sourceLabel = String((sourceRecord && sourceRecord.source_label) || '').trim().toLowerCase();
+        const cloudAnchored = anchoredScope === 'cloud'
+            || existingLabel.includes('cloud')
+            || sourceLabel.includes('cloud')
+            || !!(existing && existing.has_cloud_artifacts)
+            || !!(sourceRecord && sourceRecord.has_cloud_artifacts);
+        if (!cloudAnchored) {
+            return normalizedCandidate;
+        }
+
+        const mergedForMarker = { ...sourceRecord, ...existing, ...patch };
+        const deviceId = String((mergedForMarker && mergedForMarker.device_id) || '').trim().toLowerCase();
+        const localDevice = deviceId === 'local_cache'
+            || deviceId === 'offline_local_cache'
+            || deviceId === 'local_cache_sync'
+            || deviceId.startsWith('local_')
+            || deviceId.startsWith('offline_');
+        const sourceMarker = String(
+            (mergedForMarker && (
+                mergedForMarker.origin
+                || mergedForMarker.sync_source
+                || mergedForMarker.source
+                || mergedForMarker.source_reason
+            )) || ''
+        ).trim().toLowerCase();
+        const localOrigin = localDevice
+            || sourceMarker === 'local_synced'
+            || sourceMarker === 'sync_local_cache'
+            || sourceMarker === 'local_cache_sync'
+            || sourceMarker === 'offline_local_cache_sync'
+            || sourceMarker === 'sync_local_cache_partial'
+            || sourceMarker === 'browser_local_draft_handoff';
+        if (localOrigin) {
+            return normalizedCandidate;
+        }
+
+        const status = this.normalizeStatusValue(
+            patch.status || existing.status || sourceRecord.status,
+            !!(Object.prototype.hasOwnProperty.call(patch, 'has_report') ? patch.has_report : (existing.has_report || sourceRecord.has_report))
+        );
+        if (status === 'pending' || status === 'queued' || status === 'generating' || status === 'processing') {
+            return 'cloud';
+        }
+
+        return normalizedCandidate;
     },
 
     notify(message, type = 'info') {

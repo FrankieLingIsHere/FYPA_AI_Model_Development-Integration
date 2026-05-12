@@ -872,28 +872,9 @@ class ReportGenerator:
     # ENVIRONMENT DETECTION FROM CAPTION (Root cause fix for "Unknown" issue)
     # =========================================================================
 
-    def _extract_environment_from_caption(self, caption: str) -> str:
-        """
-        Extract environment type from VLM caption using keyword matching.
-        This is more reliable than depending on NLP to extract it.
-
-        Args:
-            caption: VLM-generated image caption
-
-        Returns:
-            One of the standard environment types
-        """
-        caption_lower = caption.lower()
-
-        # =====================================================================
-        # Industry-standard environment categories aligned with:
-        #   - DOSH Malaysia (Dept. of Occupational Safety & Health)
-        #   - JKR (Jabatan Kerja Raya) classifications
-        #   - OSHA 29 CFR 1926 (construction) / 1910 (general industry)
-        #   - ISO 45001 hazard identification categories
-        # Order: most specific  least specific (first match wins)
-        # =====================================================================
-        ENVIRONMENT_KEYWORDS = {
+    def _environment_keyword_map(self) -> Dict[str, List[str]]:
+        """Return environment keyword rules in priority order."""
+        return {
             # --- High-specificity outdoor work zones ---
             'Roadside Work Zone': [
                 'roadside', 'road construction', 'roadwork', 'road work',
@@ -953,10 +934,163 @@ class ReportGenerator:
             ]
         }
 
+    def _normalize_environment_type(self, value: Any) -> str:
+        """Normalize known environment labels while preserving useful custom labels."""
+        text = re.sub(r'\s+', ' ', str(value or '')).strip()
+        if not text:
+            return ''
+
+        alias_map = {
+            'general': 'General Workspace',
+            'general work': 'General Workspace',
+            'general workplace': 'General Workspace',
+            'general workspace': 'General Workspace',
+            'construction': 'Construction Site',
+            'construction site': 'Construction Site',
+            'roadside': 'Roadside Work Zone',
+            'roadside work zone': 'Roadside Work Zone',
+            'work at height': 'Work at Height',
+            'working at height': 'Work at Height',
+            'excavation': 'Excavation / Trenching',
+            'excavation / trenching': 'Excavation / Trenching',
+            'excavation/trenching': 'Excavation / Trenching',
+            'trenching': 'Excavation / Trenching',
+            'confined space': 'Confined Space',
+            'warehouse': 'Industrial / Warehouse',
+            'industrial': 'Industrial / Warehouse',
+            'industrial / warehouse': 'Industrial / Warehouse',
+            'industrial/warehouse': 'Industrial / Warehouse',
+            'residential': 'Residential',
+            'indoor': 'Indoor / Office',
+            'office': 'Indoor / Office',
+            'indoor / office': 'Indoor / Office',
+            'indoor/office': 'Indoor / Office',
+            'public area': 'Public Area',
+        }
+
+        lowered = text.lower()
+        if lowered in alias_map:
+            return alias_map[lowered]
+
+        for canonical in [*self._environment_keyword_map().keys(), 'General Workspace']:
+            if lowered == canonical.lower():
+                return canonical
+
+        return text
+
+    def _has_positive_environment_keyword(self, text: str, keyword: str) -> bool:
+        """Return True when a keyword appears as positive scene evidence."""
+        source = str(text or '').lower()
+        needle = str(keyword or '').strip().lower()
+        if not source or not needle:
+            return False
+
+        pattern = re.compile(r'\b' + re.escape(needle).replace(r'\ ', r'\s+') + r'\b')
+        for match in pattern.finditer(source):
+            prefix = source[max(0, match.start() - 70):match.start()]
+            clause = re.split(r'[.;:!?]', prefix)[-1]
+            negation = re.search(r'\b(no|not|without|neither|nor)\b', clause)
+            if negation:
+                between = clause[negation.end():]
+                # "No PPE is visible in a roadside work zone" is still positive
+                # roadside evidence; "no road, traffic cones, or roadside controls"
+                # is not.
+                if not re.search(r'\b(ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|harness)\b', between):
+                    continue
+            return True
+        return False
+
+    def _environment_evidence_score(
+        self,
+        environment_type: Any,
+        caption: str,
+        detections: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        """Score how much visual evidence supports an environment label."""
+        env = self._normalize_environment_type(environment_type)
+        if not env or env == 'General Workspace':
+            return 0
+
+        caption_lower = str(caption or '').lower()
+        detections_text = ' '.join(
+            str((det or {}).get('class_name') or (det or {}).get('class') or '').lower()
+            for det in (detections or [])
+            if isinstance(det, dict)
+        )
+        evidence_text = f"{caption_lower} {detections_text}"
+
+        keywords = list(self._environment_keyword_map().get(env, []))
+        custom_keywords = {
+            'Roadside Bakau Piling Zone': ['roadside', 'road', 'traffic', 'lorry', 'truck', 'pile', 'piling', 'timber', 'bakau'],
+            'Material Handling Area': ['material', 'handling', 'pile', 'piling', 'timber', 'bakau', 'load', 'storage'],
+        }
+        keywords.extend(custom_keywords.get(env, []))
+
+        return sum(1 for keyword in keywords if self._has_positive_environment_keyword(evidence_text, keyword))
+
+    def _resolve_stable_environment_type(
+        self,
+        caption: str,
+        detections: Optional[List[Dict[str, Any]]] = None,
+        model_environment: Any = '',
+    ) -> str:
+        """
+        Pick one environment label for the whole report generation pass.
+
+        The caption-derived label acts as the stable anchor. The model may refine
+        it only when the caption/detections contain direct evidence for that
+        refined label; otherwise we keep the anchored label to avoid environment
+        drift between prompt output, HTML, and Supabase metadata.
+        """
+        caption_environment = self._normalize_environment_type(
+            self._extract_environment_from_caption(caption)
+        ) or 'General Workspace'
+        model_environment = self._normalize_environment_type(model_environment)
+
+        if not model_environment:
+            return caption_environment
+        if model_environment == caption_environment:
+            return model_environment
+
+        model_score = self._environment_evidence_score(model_environment, caption, detections)
+        caption_score = self._environment_evidence_score(caption_environment, caption, detections)
+
+        if caption_environment == 'General Workspace':
+            return model_environment if model_score > 0 else caption_environment
+
+        if model_environment == 'General Workspace':
+            return caption_environment
+
+        if model_score > 0 and model_score >= caption_score:
+            return model_environment
+
+        return caption_environment
+
+    def _extract_environment_from_caption(self, caption: str) -> str:
+        """
+        Extract environment type from VLM caption using keyword matching.
+        This is more reliable than depending on NLP to extract it.
+
+        Args:
+            caption: VLM-generated image caption
+
+        Returns:
+            One of the standard environment types
+        """
+        caption_lower = caption.lower()
+
+        # =====================================================================
+        # Industry-standard environment categories aligned with:
+        #   - DOSH Malaysia (Dept. of Occupational Safety & Health)
+        #   - JKR (Jabatan Kerja Raya) classifications
+        #   - OSHA 29 CFR 1926 (construction) / 1910 (general industry)
+        #   - ISO 45001 hazard identification categories
+        # Order: most specific  least specific (first match wins)
+        # =====================================================================
         # Check for environment keywords (first match wins  order above matters)
-        for env_type, keywords in ENVIRONMENT_KEYWORDS.items():
+        for env_type, keywords in self._environment_keyword_map().items():
             for keyword in keywords:
-                if keyword in caption_lower:
+                if self._has_positive_environment_keyword(caption_lower, keyword):
                     logger.info(f"Environment detected from caption: '{env_type}' (matched keyword: '{keyword}')")
                     return env_type
 
@@ -2286,6 +2420,23 @@ Required JSON object:
         nlp_analysis = self._sanitize_nlp_analysis(nlp_analysis)
 
         caption_for_quality = str(report_data.get('caption', '') or '').strip()
+        detections_for_quality = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
+        stable_environment = self._resolve_stable_environment_type(
+            caption_for_quality,
+            detections_for_quality,
+            nlp_analysis.get('environment_type'),
+        )
+        current_environment = str(nlp_analysis.get('environment_type') or '').strip()
+        environment_changed = bool(stable_environment and stable_environment != current_environment)
+        if environment_changed:
+            logger.info(
+                "Stabilized report environment for %s: %r -> %r",
+                report_data.get('report_id'),
+                current_environment or '(empty)',
+                stable_environment,
+            )
+            nlp_analysis['environment_type'] = stable_environment
+
         visual_evidence = str(nlp_analysis.get('visual_evidence', '') or '').strip()
         generic_markers = (
             'person is visible',
@@ -2294,7 +2445,8 @@ Required JSON object:
             'outdoor environment',
         )
         should_rebuild_visual_evidence = (
-            not visual_evidence
+            environment_changed
+            or not visual_evidence
             or len(visual_evidence) < 120
             or any(marker in visual_evidence.lower() for marker in generic_markers)
         )
@@ -2312,7 +2464,6 @@ Required JSON object:
             if rebuilt and len(rebuilt) > len(visual_evidence):
                 nlp_analysis['visual_evidence'] = rebuilt
 
-        detections_for_quality = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
         has_ppe_gap = any(
             str((det or {}).get('class_name') or '').startswith('NO-')
             for det in detections_for_quality

@@ -333,18 +333,24 @@ class SupabaseReportGenerator(ReportGenerator):
             nlp_analysis = result.get('nlp_analysis')
             detection_data = report_data.get('detections')
 
-            # FORCE Environment Override based on Caption Keywords (Fixes "Roadside" hallucination)
-            detected_env = self._extract_environment_from_caption(caption)
-
-            # Trust VLM keywords over NLP for specific environments
-            if isinstance(nlp_analysis, dict) and detected_env != 'General Workspace':
-                logger.info(f"Overriding NLP environment '{nlp_analysis.get('environment_type')}' with VLM-detected '{detected_env}'")
-                nlp_analysis['environment_type'] = detected_env
-
-                # Rebuild visual_evidence using professional scene description
-                nlp_analysis['visual_evidence'] = self._build_scene_description(
-                    caption, detected_env, report_data.get('detections', [])
+            # Keep persisted metadata aligned with the already-rendered HTML.
+            # The parent generator stabilizes environment_type before HTML render;
+            # this guard only catches unexpected legacy paths.
+            if isinstance(nlp_analysis, dict):
+                stable_env = self._resolve_stable_environment_type(
+                    caption,
+                    report_data.get('detections', []),
+                    nlp_analysis.get('environment_type')
                 )
+                current_env = str(nlp_analysis.get('environment_type') or '').strip()
+                if stable_env and stable_env != current_env:
+                    logger.info(
+                        f"Stabilizing persisted environment '{current_env}' -> '{stable_env}'"
+                    )
+                    nlp_analysis['environment_type'] = stable_env
+                    nlp_analysis['visual_evidence'] = self._build_scene_description(
+                        caption, stable_env, report_data.get('detections', [])
+                    )
 
             # Add validation data to metadata
             metadata = {

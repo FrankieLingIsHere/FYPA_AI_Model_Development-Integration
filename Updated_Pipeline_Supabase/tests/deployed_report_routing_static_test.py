@@ -68,10 +68,14 @@ class ReportRoutingStaticTest(unittest.TestCase):
 
     def test_synced_local_tag_survives_cloud_mode_repair(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+        reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
 
         self.assertIn('is_local_sync_marker_for_repair', casm_app)
         self.assertIn("source_scope_marker = 'synced_local'", casm_app)
         self.assertIn("'browser_local_draft_handoff'", casm_app)
+        self.assertIn('resolveStableRuntimeSourceScope', reports_js)
+        self.assertIn('hasSyncedLocalEvidence(existing)', reports_js)
+        self.assertIn("status_info.get('source_scope') != 'local'", casm_app)
 
     def test_local_sync_and_generation_quality_guards(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')

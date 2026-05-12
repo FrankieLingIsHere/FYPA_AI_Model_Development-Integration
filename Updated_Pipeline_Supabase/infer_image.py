@@ -27,7 +27,6 @@ python infer_image.py path/to/image.jpg
 from typing import Tuple, List, Union
 import cv2
 import numpy as np
-from ultralytics import YOLO
 import os
 from pathlib import Path
 
@@ -37,6 +36,25 @@ DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt'
 # Cache the model to avoid reloading
 _cached_model = None
 _cached_model_path = None
+_cached_yolo_class = None
+
+
+def _get_yolo_class():
+    """Import YOLO lazily so lightweight tests can import this module without torch startup."""
+    global _cached_yolo_class
+    if _cached_yolo_class is not None:
+        return _cached_yolo_class
+
+    try:
+        from ultralytics import YOLO as _YOLO
+    except Exception as exc:
+        raise RuntimeError(
+            "Ultralytics YOLO is unavailable. Install runtime vision dependencies "
+            "or avoid calling predict_image in lightweight fallback/status tests."
+        ) from exc
+
+    _cached_yolo_class = _YOLO
+    return _cached_yolo_class
 
 
 def resolve_model_path(model_path: str = None) -> str:
@@ -127,7 +145,8 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
 
     # Use cached model if same path, otherwise load new one
     if _cached_model is None or _cached_model_path != resolved_model_path:
-        _cached_model = YOLO(resolved_model_path)
+        yolo_class = _get_yolo_class()
+        _cached_model = yolo_class(resolved_model_path)
         _cached_model_path = resolved_model_path
 
     model = _cached_model

@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -38,6 +39,29 @@ class BackoffDB:
 
     def get_violation(self, report_id):
         raise ConnectionError("Database reconnect backoff active")
+
+
+class CloudDB:
+    def get_detection_event(self, report_id):
+        return {
+            "report_id": report_id,
+            "status": "generating",
+            "device_id": "webcam_0",
+            "timestamp": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    def get_violation(self, report_id):
+        return {
+            "report_id": report_id,
+            "original_image_key": f"violations/{report_id}/original.jpg",
+            "annotated_image_key": None,
+            "report_html_key": None,
+            "detection_data": {
+                "source_scope": "cloud",
+                "source": "cloud_live",
+            },
+        }
 
 
 def _assert(condition, message):
@@ -79,8 +103,47 @@ def test_status_endpoint_uses_local_artifacts_during_db_backoff():
             casm_app.reset_report_progress()
 
 
+def test_cloud_status_keeps_cloud_source_while_local_staging_files_exist():
+    report_id = "20260511_164211"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"cloud-job-staged-original")
+        (report_dir / "caption.txt").write_text("caption exists while cloud report is generating", encoding="utf-8")
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = CloudDB()
+
+            with casm_app.app.test_client() as client:
+                response = client.get(f"/api/report/{report_id}/status")
+                payload = response.get_json() or {}
+
+            _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            _assert(payload.get("status") == "generating", f"Unexpected payload status: {payload}")
+            _assert(payload.get("has_original") is True, "Cloud original image was not surfaced")
+            _assert(payload.get("source_scope") == "cloud", f"Cloud source scope drifted: {payload}")
+            _assert(payload.get("source_label") == "Cloud", f"Cloud source label drifted: {payload}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
 def main():
-    tests = [test_status_endpoint_uses_local_artifacts_during_db_backoff]
+    tests = [
+        test_status_endpoint_uses_local_artifacts_during_db_backoff,
+        test_cloud_status_keeps_cloud_source_while_local_staging_files_exist,
+    ]
     failures = []
     for test_fn in tests:
         try:

@@ -61,7 +61,7 @@ LOCAL_ENV_PATH = APP_DIR / '.env'
 LOCAL_ENV_EXAMPLE_PATH = APP_DIR / '.env.example'
 
 # Import project modules
-from infer_image import predict_image, resolve_model_path
+from infer_image import predict_image, resolve_model_path, warmup_model, is_model_ready
 from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
 
 # Global progress tracking for report generation
@@ -111,6 +111,7 @@ startup_auto_provision_thread = None
 local_mode_auto_provision_lock = Lock()
 local_mode_heartbeat_thread_lock = Lock()
 local_mode_heartbeat_thread = None
+live_runtime_prepare_lock = Lock()
 
 # In-memory cache for rendered report HTML source payloads to reduce repeated
 # storage fetch latency when the same report is opened multiple times.
@@ -2144,6 +2145,122 @@ def _startup_gate_response():
         'startup': snapshot
     }), status_code
 
+
+def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool]:
+    """Best-effort refresh of cloud caption/NLP clients without doing provider work."""
+    refreshed = {'caption': False, 'report': False}
+    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    if active_profile != 'cloud':
+        return refreshed
+
+    if caption_generator is not None and hasattr(caption_generator, '_ensure_gemini_client'):
+        try:
+            refreshed['caption'] = bool(caption_generator._ensure_gemini_client())
+        except Exception as caption_refresh_error:
+            logger.debug(
+                "Cloud caption client refresh skipped (%s): %s",
+                reason,
+                caption_refresh_error,
+            )
+
+    if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+        try:
+            report_gemini_client = getattr(report_generator, 'gemini_client', None)
+            report_gemini_ready = bool(
+                getattr(report_generator, 'use_gemini', False)
+                and report_gemini_client is not None
+                and getattr(report_gemini_client, 'is_available', False)
+            )
+            if not report_gemini_ready:
+                _sync_report_generator_provider_runtime(
+                    routing_profile=active_profile,
+                    model_api_enabled=bool(MODEL_API_CONFIG.get('enabled', False)),
+                    gemini_enabled=bool(GEMINI_CONFIG.get('enabled', True)),
+                    nlp_provider_order=list(MODEL_API_CONFIG.get('nlp_provider_order', ['gemini'])),
+                    embedding_provider_order=list(MODEL_API_CONFIG.get('embedding_provider_order', ['model_api'])),
+                    reason=f'cloud-client-refresh:{reason}',
+                )
+                report_gemini_client = getattr(report_generator, 'gemini_client', None)
+                report_gemini_ready = bool(
+                    getattr(report_generator, 'use_gemini', False)
+                    and report_gemini_client is not None
+                    and getattr(report_gemini_client, 'is_available', False)
+                )
+            refreshed['report'] = report_gemini_ready
+        except Exception as report_refresh_error:
+            logger.debug(
+                "Cloud report client refresh skipped (%s): %s",
+                reason,
+                report_refresh_error,
+            )
+
+    return refreshed
+
+
+def _prepare_live_runtime(
+    reason: str = 'live-runtime',
+    *,
+    warmup_yolo_runtime: bool = True,
+    refresh_cloud_clients: bool = False,
+) -> Dict[str, Any]:
+    """Prime the live/report path so first-use cloud mode does less work on the hot path."""
+    started_at = time.perf_counter()
+    result: Dict[str, Any] = {
+        'success': False,
+        'pipeline_ready': False,
+        'queue_worker_ready': False,
+        'yolo_ready': False,
+        'cloud_clients': {'caption': False, 'report': False},
+        'timings_ms': {},
+        'error': None,
+    }
+
+    with live_runtime_prepare_lock:
+        try:
+            pipeline_started = time.perf_counter()
+            if FULL_PIPELINE_AVAILABLE:
+                needs_component_init = any(
+                    component is None
+                    for component in (violation_detector, caption_generator, report_generator)
+                ) or violation_queue is None
+                if needs_component_init:
+                    result['pipeline_ready'] = bool(initialize_pipeline_components())
+                else:
+                    result['pipeline_ready'] = True
+            result['timings_ms']['pipeline'] = round((time.perf_counter() - pipeline_started) * 1000.0, 1)
+
+            queue_started = time.perf_counter()
+            result['queue_worker_ready'] = bool(
+                ensure_queue_worker_running() if FULL_PIPELINE_AVAILABLE else False
+            )
+            result['timings_ms']['queue_worker'] = round((time.perf_counter() - queue_started) * 1000.0, 1)
+
+            if refresh_cloud_clients:
+                cloud_started = time.perf_counter()
+                result['cloud_clients'] = _refresh_cloud_generation_clients(reason=reason)
+                result['timings_ms']['cloud_clients'] = round(
+                    (time.perf_counter() - cloud_started) * 1000.0,
+                    1,
+                )
+
+            yolo_started = time.perf_counter()
+            if warmup_yolo_runtime:
+                warmup_model(conf=0.25, imgsz=640)
+            result['yolo_ready'] = bool(is_model_ready())
+            result['timings_ms']['yolo'] = round((time.perf_counter() - yolo_started) * 1000.0, 1)
+
+            result['success'] = bool(
+                result['pipeline_ready']
+                and result['queue_worker_ready']
+                and (result['yolo_ready'] if warmup_yolo_runtime else True)
+            )
+        except Exception as prepare_error:
+            result['error'] = str(prepare_error)
+            logger.warning(f"Live runtime preparation warning ({reason}): {prepare_error}")
+
+    result['elapsed_ms'] = round((time.perf_counter() - started_at) * 1000.0, 1)
+    return result
+
 def format_violation_type(class_name: str) -> str:
     """
     Format violation class name for display.
@@ -3516,7 +3633,12 @@ def queue_worker_loop():
     logger.info("Queue worker loop stopped")
 
 
-def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source: str = 'live') -> Optional[str]:
+def enqueue_violation(
+    frame: np.ndarray,
+    detections: List[Dict],
+    trigger_source: str = 'live',
+    annotated_frame: Optional[np.ndarray] = None,
+) -> Optional[str]:
     """
     Capture a violation and add it to the processing queue.
     This is a FAST operation that saves images immediately and queues for report generation.
@@ -3587,6 +3709,16 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
         logger.info(f" Saved original image: {original_path}")
 
         annotated_path = violation_dir / 'annotated.jpg'
+        annotated_saved = False
+        if isinstance(annotated_frame, np.ndarray) and annotated_frame.size > 0:
+            try:
+                annotated_saved = bool(cv2.imwrite(str(annotated_path), annotated_frame))
+                if annotated_saved:
+                    logger.info(f" Saved annotated image at capture time: {annotated_path}")
+            except Exception as annotated_write_error:
+                logger.warning(
+                    f"Could not persist annotated capture frame for {report_id}: {annotated_write_error}"
+                )
 
         missing_ppe_metadata: List[str] = []
         ppe_tags_metadata: List[str] = []
@@ -3631,7 +3763,7 @@ def enqueue_violation(frame: np.ndarray, detections: List[Dict], trigger_source:
             'source_label': 'Local' if local_runtime_active else 'Cloud',
             'sync_source': 'local_pipeline' if local_runtime_active else 'live_capture',
             'has_original': True,
-            'has_annotated': False,
+            'has_annotated': annotated_saved,
             'has_caption': False,
             'has_report': False,
         }
@@ -4798,47 +4930,92 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 30,
                 int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '300') or 300)
             )
-            _gen_executor = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'report-gen-{report_id}')
-            try:
-                _gen_future = _gen_executor.submit(report_generator.generate_report, report_data)
+            active_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+            cloud_retry_allowed = bool(
+                active_routing_profile == 'cloud'
+                and not force_local_artifact_pipeline
+                and not force_reprocess_requested
+            )
+            max_report_attempts = 2 if cloud_retry_allowed else 1
+
+            for report_attempt in range(1, max_report_attempts + 1):
+                result = None
+                attempt_failure_reason = None
+
+                if report_attempt > 1:
+                    logger.warning(
+                        f"Retrying cloud report generation for {report_id} after initial failure"
+                    )
+                    _prepare_live_runtime(
+                        reason=f'queued-report-retry:{report_id}',
+                        warmup_yolo_runtime=False,
+                        refresh_cloud_clients=True,
+                    )
+                    time.sleep(1.0)
+
+                _gen_executor = _cf.ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix=f'report-gen-{report_id}-a{report_attempt}',
+                )
                 try:
-                    result = _gen_future.result(timeout=_report_gen_timeout_seconds)
-                except _cf.TimeoutError:
-                    logger.error(
-                        f" Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
-                        "abandoning the call and proceeding to fallback to keep the queue moving"
+                    _gen_future = _gen_executor.submit(report_generator.generate_report, report_data)
+                    try:
+                        result = _gen_future.result(timeout=_report_gen_timeout_seconds)
+                    except _cf.TimeoutError:
+                        logger.error(
+                            f" Report generation timed out after {_report_gen_timeout_seconds}s for {report_id}; "
+                            "abandoning the call and proceeding to fallback to keep the queue moving"
+                        )
+                        attempt_failure_reason = (
+                            f"Report generation exceeded {_report_gen_timeout_seconds}s wall-clock timeout"
+                        )
+                        result = None
+                    except Exception as report_attempt_error:
+                        attempt_failure_reason = (
+                            f"{type(report_attempt_error).__name__}: {report_attempt_error}"
+                        )
+                        logger.error(
+                            f" Report generation attempt {report_attempt} failed for {report_id}: "
+                            f"{report_attempt_error}"
+                        )
+                        result = None
+                finally:
+                    # Don't block the queue worker waiting for the leaked thread to finish.
+                    _gen_executor.shutdown(wait=False)
+
+                if isinstance(result, dict):
+                    cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
+                    if isinstance(result.get('storage_keys'), dict):
+                        result_storage_keys = result.get('storage_keys') or {}
+
+                if result and result.get('html'):
+                    target_html = violation_dir / 'report.html'
+                    if target_html.exists():
+                        logger.info(f" Report generated: {target_html}")
+                        report_created = True
+
+                        # Update status to completed
+                        if db_manager:
+                            try:
+                                db_manager.update_detection_status(report_id, 'completed')
+                                logger.info(f" Status updated to COMPLETED: {report_id}")
+                            except Exception as e:
+                                _activate_local_offline_runtime('process_queued_violation.status_completed', e)
+                                logger.warning(f"Could not update status: {e}")
+                        break
+
+                    attempt_failure_reason = (
+                        "report.html was not found in violation directory after generation"
                     )
-                    failure_reason = (
-                        f"Report generation exceeded {_report_gen_timeout_seconds}s wall-clock timeout"
-                    )
-                    result = None
-            finally:
-                # Don't block the queue worker waiting for the leaked thread to finish.
-                _gen_executor.shutdown(wait=False)
-
-            if isinstance(result, dict):
-                cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
-                if isinstance(result.get('storage_keys'), dict):
-                    result_storage_keys = result.get('storage_keys') or {}
-
-            if result and result.get('html'):
-                target_html = violation_dir / 'report.html'
-                if target_html.exists():
-                    logger.info(f" Report generated: {target_html}")
-                    report_created = True
-
-                    # Update status to completed
-                    if db_manager:
-                        try:
-                            db_manager.update_detection_status(report_id, 'completed')
-                            logger.info(f" Status updated to COMPLETED: {report_id}")
-                        except Exception as e:
-                            _activate_local_offline_runtime('process_queued_violation.status_completed', e)
-                            logger.warning(f"Could not update status: {e}")
                 else:
-                    failure_reason = "report.html was not found in violation directory after generation"
-            else:
-                failure_reason = "Report generator returned empty or missing HTML output"
+                    attempt_failure_reason = "Report generator returned empty or missing HTML output"
+
+                failure_reason = attempt_failure_reason
+                if report_attempt < max_report_attempts:
+                    logger.warning(
+                        f"Cloud report generation attempt {report_attempt} failed for {report_id}: "
+                        f"{attempt_failure_reason}"
+                    )
 
         except Exception as e:
             logger.error(f" Report generation failed: {e}")
@@ -13799,10 +13976,14 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
     logger.info(f"FULL_PIPELINE_AVAILABLE: {FULL_PIPELINE_AVAILABLE}")
     logger.info("=" * 80)
 
-    # Initialize pipeline components if available
+    # Keep the hot stream path lean: only repair missing runtime pieces here.
     if FULL_PIPELINE_AVAILABLE:
-        init_success = initialize_pipeline_components()
-        logger.info(f"Pipeline initialization result: {init_success}")
+        prepare_result = _prepare_live_runtime(
+            reason='generate-frames',
+            warmup_yolo_runtime=not is_model_ready(),
+            refresh_cloud_clients=False,
+        )
+        logger.info(f"Live runtime prepare result: {prepare_result.get('success')}")
         logger.info(f"Caption generator: {caption_generator}")
         logger.info(f"Report generator: {report_generator}")
     else:
@@ -13875,7 +14056,12 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                         frame_copy = frame.copy()
                         detections_copy = detections.copy()
 
-                        report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
+                        report_id = enqueue_violation(
+                            frame_copy,
+                            detections_copy,
+                            trigger_source='live',
+                            annotated_frame=annotated.copy(),
+                        )
                         if report_id:
                             logger.info(f" Violation {report_id} queued for processing")
                         else:
@@ -13936,12 +14122,41 @@ def live_stream():
     )
 
 
+@app.route('/api/live/prepare', methods=['POST'])
+def live_prepare():
+    """Warm the live/report runtime so first-use cloud sessions feel responsive."""
+    startup_gate = _startup_gate_response()
+    if startup_gate is not None:
+        return startup_gate
+
+    payload = request.get_json(silent=True) or {}
+    reason = str(payload.get('reason') or 'live-prepare').strip() or 'live-prepare'
+    refresh_cloud_clients = str(payload.get('refresh_cloud_clients', 'true')).strip().lower() in (
+        '1', 'true', 'yes', 'on'
+    )
+    prepare_result = _prepare_live_runtime(
+        reason=reason,
+        warmup_yolo_runtime=not is_model_ready(),
+        refresh_cloud_clients=refresh_cloud_clients,
+    )
+    return jsonify({
+        'success': bool(prepare_result.get('success')),
+        'prepared': prepare_result,
+    }), (200 if prepare_result.get('success') else 202)
+
+
 @app.route('/api/live/start', methods=['POST'])
 def start_live():
     """Start live monitoring."""
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
         return startup_gate
+
+    prepare_result = _prepare_live_runtime(
+        reason='live-start',
+        warmup_yolo_runtime=not is_model_ready(),
+        refresh_cloud_clients=True,
+    )
 
     payload = request.get_json(silent=True) or {}
     requested_source = str(payload.get('source', _get_default_live_source()))
@@ -13963,7 +14178,8 @@ def start_live():
         'source': result.get('source', 'webcam'),
         'camera_index': result.get('camera_index'),
         'fallback_to_webcam': bool(result.get('fallback_to_webcam')),
-        'message': result.get('message', 'Live monitoring started')
+        'message': result.get('message', 'Live monitoring started'),
+        'runtime_prepared': prepare_result,
     }
 
     state_payload = _build_live_state_payload()
@@ -14119,6 +14335,13 @@ def upload_inference():
     if startup_gate is not None:
         return startup_gate
 
+    if not is_model_ready():
+        _prepare_live_runtime(
+            reason='upload-inference',
+            warmup_yolo_runtime=True,
+            refresh_cloud_clients=False,
+        )
+
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
 
@@ -14155,7 +14378,12 @@ def upload_inference():
             # Use queue system for processing (same as live camera)
             frame_copy = frame.copy()
             detections_copy = detections.copy()
-            queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='upload')
+            queued_report_id = enqueue_violation(
+                frame_copy,
+                detections_copy,
+                trigger_source='upload',
+                annotated_frame=annotated.copy(),
+            )
             report_queued = queued_report_id is not None
             if report_queued:
                 logger.info(f" Violation queued for processing: {queued_report_id}")
@@ -14193,6 +14421,13 @@ def live_frame_inference():
     if startup_gate is not None:
         return startup_gate
 
+    if not is_model_ready():
+        _prepare_live_runtime(
+            reason='live-frame-inference',
+            warmup_yolo_runtime=True,
+            refresh_cloud_clients=False,
+        )
+
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
 
@@ -14220,7 +14455,12 @@ def live_frame_inference():
             frame_copy = frame.copy()
             detections_copy = detections.copy()
             # Treat browser-submitted live frames as live source so dedup logic applies.
-            queued_report_id = enqueue_violation(frame_copy, detections_copy, trigger_source='live')
+            queued_report_id = enqueue_violation(
+                frame_copy,
+                detections_copy,
+                trigger_source='live',
+                annotated_frame=_annotated.copy(),
+            )
             report_queued = queued_report_id is not None
             # NOTE: when enqueue_violation returns None it is almost always because
             # the live cooldown / dedup window suppressed a redundant frame from a

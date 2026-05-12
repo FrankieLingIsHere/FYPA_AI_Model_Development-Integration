@@ -317,6 +317,8 @@ const LivePage = {
             conf: 0.08,
             jpegQuality: 0.68
         };
+        let liveRuntimePrepared = false;
+        let liveRuntimePreparePromise = null;
         let phoneInferenceRunId = 0;
         const LIVE_PROFILE_STORAGE_KEY = 'live_performance_profile_v1';
         const LIVE_PERFORMANCE_PROFILES = {
@@ -687,11 +689,60 @@ const LivePage = {
             return !!(window && window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK === true);
         };
 
+        const prepareLiveRuntime = async (reason = 'live-page') => {
+            if (liveRuntimePrepared) {
+                return { success: true, prepared: { cached: true } };
+            }
+            if (liveRuntimePreparePromise) {
+                return liveRuntimePreparePromise;
+            }
+
+            liveRuntimePreparePromise = (async () => {
+                try {
+                    const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_PREPARE}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            reason,
+                            refresh_cloud_clients: true
+                        })
+                    });
+
+                    let payload = null;
+                    try {
+                        payload = await response.json();
+                    } catch (parseError) {
+                        payload = null;
+                    }
+
+                    const prepared = payload && payload.prepared;
+                    if (response.ok && prepared && prepared.success) {
+                        liveRuntimePrepared = true;
+                    }
+
+                    return payload || { success: false };
+                } catch (error) {
+                    console.debug('Live runtime prepare skipped:', error);
+                    return { success: false, error: String((error && error.message) || error || '') };
+                } finally {
+                    if (!liveRuntimePrepared) {
+                        liveRuntimePreparePromise = null;
+                    }
+                }
+            })();
+
+            return liveRuntimePreparePromise;
+        };
+
         const startBrowserCaptureSession = async (usingPhoneSource, noticePrefix = '') => {
             if (APP_STATE.liveStreamActive) {
                 startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
                 return;
             }
+
+            await prepareLiveRuntime(usingPhoneSource ? 'browser-phone-start' : 'browser-webcam-start');
 
             if (usingPhoneSource) {
                 phonePermissionState = 'prompt';
@@ -1451,6 +1502,8 @@ const LivePage = {
                     return;
                 }
 
+                await prepareLiveRuntime('backend-live-start');
+
                 // Start monitoring on backend
                 // Ensure no stale backend camera session is holding the device.
                 try {
@@ -1732,6 +1785,7 @@ const LivePage = {
 
         await refreshBrowserCameraOptions();
         renderSourceToggle();
+        void prepareLiveRuntime('live-page-mount');
 
         // ---- Violation Cooldown Control ----
         const cooldownInput = document.getElementById('cooldownInput');

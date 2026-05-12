@@ -99,6 +99,25 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("'missing_ppe': missing_ppe_values", casm_app)
         self.assertIn("for detail_key in ('missing_ppe', 'ppe_tags')", casm_app)
 
+    def test_live_prepare_and_first_run_capture_guards_exist(self):
+        casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+        live_js = (ROOT / 'frontend' / 'js' / 'pages' / 'live.js').read_text(encoding='utf-8')
+        config_js = (ROOT / 'frontend' / 'js' / 'config.js').read_text(encoding='utf-8')
+        infer_image = (ROOT / 'infer_image.py').read_text(encoding='utf-8')
+
+        self.assertIn("@app.route('/api/live/prepare', methods=['POST'])", casm_app)
+        self.assertIn("_prepare_live_runtime(", casm_app)
+        self.assertIn("annotated_frame: Optional[np.ndarray] = None", casm_app)
+        self.assertIn("Saved annotated image at capture time", casm_app)
+        self.assertIn("warmup_model(conf=0.25, imgsz=640)", casm_app)
+        self.assertIn("max_report_attempts = 2 if cloud_retry_allowed else 1", casm_app)
+        self.assertIn("Retrying cloud report generation for", casm_app)
+        self.assertIn("prepareLiveRuntime(", live_js)
+        self.assertIn("void prepareLiveRuntime('live-page-mount');", live_js)
+        self.assertIn("LIVE_PREPARE: '/api/live/prepare'", config_js)
+        self.assertIn("def warmup_model(", infer_image)
+        self.assertIn("def is_model_ready(", infer_image)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

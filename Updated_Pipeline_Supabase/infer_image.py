@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
+from threading import Lock
 
 # Default model path used in the project
 DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt')
@@ -37,6 +38,8 @@ DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt'
 _cached_model = None
 _cached_model_path = None
 _cached_yolo_class = None
+_cached_model_lock = Lock()
+_cached_model_warm_paths = set()
 
 
 def _get_yolo_class():
@@ -55,6 +58,20 @@ def _get_yolo_class():
 
     _cached_yolo_class = _YOLO
     return _cached_yolo_class
+
+
+def _ensure_model_loaded(resolved_model_path: str):
+    """Load and cache the YOLO model once per resolved weights path."""
+    global _cached_model, _cached_model_path
+
+    with _cached_model_lock:
+        if _cached_model is None or _cached_model_path != resolved_model_path:
+            yolo_class = _get_yolo_class()
+            _cached_model = yolo_class(resolved_model_path)
+            _cached_model_path = resolved_model_path
+            _cached_model_warm_paths.discard(resolved_model_path)
+
+        return _cached_model
 
 
 def resolve_model_path(model_path: str = None) -> str:
@@ -122,6 +139,39 @@ def _read_image(input_image: Union[str, bytes, np.ndarray]):
     raise ValueError("input_image must be path (str), bytes, or numpy.ndarray")
 
 
+def is_model_ready(model_path: str = None) -> bool:
+    """Return whether the requested YOLO weights are already loaded in memory."""
+    global _cached_model, _cached_model_path
+
+    if _cached_model is None or _cached_model_path is None:
+        return False
+
+    resolved_model_path = resolve_model_path(model_path)
+    return str(_cached_model_path) == str(resolved_model_path)
+
+
+def warmup_model(
+    model_path: str = None,
+    conf: float = 0.25,
+    imgsz: int = 640,
+) -> str:
+    """Load the YOLO weights and run a tiny dummy inference once."""
+    resolved_model_path = resolve_model_path(model_path)
+
+    with _cached_model_lock:
+        if resolved_model_path in _cached_model_warm_paths:
+            return resolved_model_path
+
+    model = _ensure_model_loaded(resolved_model_path)
+    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    model.predict(dummy, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
+
+    with _cached_model_lock:
+        _cached_model_warm_paths.add(resolved_model_path)
+
+    return resolved_model_path
+
+
 def predict_image(input_image: Union[str, bytes, np.ndarray],
                   model_path: str = None,
                   conf: float = 0.25,
@@ -137,19 +187,10 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
     - Raises ValueError for unreadable inputs.
     - If no detections, returns an empty list and the original image.
     """
-    global _cached_model, _cached_model_path
-    
     img = _read_image(input_image)
 
     resolved_model_path = resolve_model_path(model_path)
-
-    # Use cached model if same path, otherwise load new one
-    if _cached_model is None or _cached_model_path != resolved_model_path:
-        yolo_class = _get_yolo_class()
-        _cached_model = yolo_class(resolved_model_path)
-        _cached_model_path = resolved_model_path
-
-    model = _cached_model
+    model = _ensure_model_loaded(resolved_model_path)
 
     # Ensure image is in uint8 format (not float)
     if img.dtype != np.uint8:

@@ -53,6 +53,7 @@ const API_CONFIG = {
         IMAGE: (id, filename) => `/image/${id}/${filename}`,
         STATS: '/api/stats',
         LIVE_STREAM: '/api/live/stream',
+        LIVE_PREPARE: '/api/live/prepare',
         LIVE_START: '/api/live/start',
         LIVE_STOP: '/api/live/stop',
         LIVE_STATUS: '/api/live/status',

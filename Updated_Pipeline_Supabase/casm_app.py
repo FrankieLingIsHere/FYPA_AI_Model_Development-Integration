@@ -17153,6 +17153,11 @@ def notify_admin(machine_id, status='pending', token=None):
 DEVICE_AUDIT_LOG_FILE = APP_DIR / 'device_audit_log.json'
 DEVICE_AUDIT_LOG_LOCK = Lock()
 DEVICE_AUDIT_LOG_MAX_ENTRIES = 5000
+ASSISTANT_SESSION_LOG_FILE = APP_DIR / 'assistant_session_records.json'
+ASSISTANT_SESSION_LOG_LOCK = Lock()
+ASSISTANT_SESSION_MAX_CLIENTS = 500
+ASSISTANT_SESSION_MAX_SESSIONS = 20
+ASSISTANT_SESSION_MAX_MESSAGES = 100
 
 
 def _load_device_audit_log() -> list:
@@ -17221,6 +17226,170 @@ def _capture_request_metadata() -> Dict[str, Any]:
         }
     except Exception:
         return {}
+
+
+def _load_assistant_session_records() -> Dict[str, Any]:
+    with ASSISTANT_SESSION_LOG_LOCK:
+        if not ASSISTANT_SESSION_LOG_FILE.exists():
+            return {}
+        try:
+            with open(ASSISTANT_SESSION_LOG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to load assistant session log: {e}")
+        return {}
+
+
+def _assistant_sync_secret_hash(secret: str) -> str:
+    return hashlib.sha256(str(secret or '').encode('utf-8')).hexdigest()
+
+
+def _sanitize_assistant_message_entry(message: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(message, dict):
+        return None
+    role = str(message.get('role') or 'assistant').strip().lower()
+    if role not in ('assistant', 'user'):
+        role = 'assistant'
+    text = str(message.get('text') or '').strip()
+    if not text:
+        return None
+    message_id = str(message.get('id') or '')[:120]
+    try:
+        created_at = int(message.get('created_at') or time.time() * 1000)
+    except (TypeError, ValueError):
+        created_at = int(time.time() * 1000)
+    return {
+        'id': message_id,
+        'role': role,
+        'text': text[:1600],
+        'created_at': created_at,
+    }
+
+
+def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(session, dict):
+        return None
+    session_id = str(session.get('id') or '').strip()[:120]
+    if not session_id:
+        return None
+    try:
+        created_at = int(session.get('created_at') or time.time() * 1000)
+    except (TypeError, ValueError):
+        created_at = int(time.time() * 1000)
+    try:
+        updated_at = int(session.get('updated_at') or created_at)
+    except (TypeError, ValueError):
+        updated_at = created_at
+
+    context = session.get('context') if isinstance(session.get('context'), dict) else {}
+    try:
+        tutorial_index = max(0, min(int(context.get('tutorial_index') or 0), 99))
+    except (TypeError, ValueError):
+        tutorial_index = 0
+    sanitized_context = {
+        'tutorial_flow': str(context.get('tutorial_flow') or 'cloud')[:16],
+        'tutorial_index': tutorial_index,
+        'recent_pages': [
+            str(page)[:32]
+            for page in (context.get('recent_pages') if isinstance(context.get('recent_pages'), list) else [])
+            if str(page).strip()
+        ][:8],
+        'last_docs_query': str(context.get('last_docs_query') or '')[:200],
+        'last_export_kind': str(context.get('last_export_kind') or '')[:40],
+    }
+
+    messages = []
+    for message in (session.get('messages') if isinstance(session.get('messages'), list) else []):
+        sanitized = _sanitize_assistant_message_entry(message)
+        if sanitized:
+            messages.append(sanitized)
+        if len(messages) >= ASSISTANT_SESSION_MAX_MESSAGES:
+            break
+
+    return {
+        'id': session_id,
+        'title': str(session.get('title') or 'Assistant session').strip()[:120] or 'Assistant session',
+        'created_at': created_at,
+        'updated_at': updated_at,
+        'context': sanitized_context,
+        'messages': messages,
+    }
+
+
+def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    client_id = str(payload.get('client_id') or '').strip()[:120]
+    sync_secret = str(payload.get('sync_secret') or '').strip()
+    if len(client_id) < 6 or len(sync_secret) < 16:
+        raise ValueError('Invalid assistant identity payload')
+
+    machine_id = str(payload.get('machine_id') or '').strip()[:120]
+    browser_label = str(payload.get('browser_label') or '').strip()[:256]
+    active_session_id = str(payload.get('active_session_id') or '').strip()[:120]
+    current_page = str(payload.get('current_page') or '').strip()[:40]
+
+    sanitized_sessions = []
+    for session in (payload.get('sessions') if isinstance(payload.get('sessions'), list) else []):
+        sanitized = _sanitize_assistant_session_entry(session)
+        if sanitized:
+            sanitized_sessions.append(sanitized)
+        if len(sanitized_sessions) >= ASSISTANT_SESSION_MAX_SESSIONS:
+            break
+
+    with ASSISTANT_SESSION_LOG_LOCK:
+        records = {}
+        if ASSISTANT_SESSION_LOG_FILE.exists():
+            try:
+                with open(ASSISTANT_SESSION_LOG_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    records = loaded
+            except Exception:
+                records = {}
+        existing = records.get(client_id) if isinstance(records, dict) else None
+        hashed_secret = _assistant_sync_secret_hash(sync_secret)
+        if existing and str(existing.get('sync_secret_hash') or '') != hashed_secret:
+            raise PermissionError('Assistant sync secret mismatch')
+
+        record = {
+            'client_id': client_id,
+            'machine_id': machine_id,
+            'browser_label': browser_label,
+            'active_session_id': active_session_id,
+            'current_page': current_page,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+            'session_count': len(sanitized_sessions),
+            'sessions': sanitized_sessions,
+            'sync_secret_hash': hashed_secret,
+        }
+        if request_meta and isinstance(request_meta, dict):
+            safe_meta = {}
+            for key in ('ip', 'user_agent'):
+                value = request_meta.get(key)
+                if value:
+                    safe_meta[key] = str(value)[:256]
+            if safe_meta:
+                record['request_meta'] = safe_meta
+
+        if existing and existing.get('created_at'):
+            record['created_at'] = existing.get('created_at')
+        else:
+            record['created_at'] = datetime.now(timezone.utc).isoformat()
+
+        if not isinstance(records, dict):
+            records = {}
+        records[client_id] = record
+        if len(records) > ASSISTANT_SESSION_MAX_CLIENTS:
+            ordered = sorted(
+                records.items(),
+                key=lambda item: str((item[1] or {}).get('updated_at') or ''),
+                reverse=True,
+            )[:ASSISTANT_SESSION_MAX_CLIENTS]
+            records = {key: value for key, value in ordered}
+
+        _atomic_write_json(ASSISTANT_SESSION_LOG_FILE, records)
+        return record
 
 
 @app.route('/api/provision/request', methods=['POST'])
@@ -17770,6 +17939,28 @@ def download_bootstrap_installer():
     return response
 
 
+@app.route('/api/assistant/sessions/sync', methods=['POST'])
+def sync_assistant_sessions():
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+        record = _upsert_assistant_session_record(payload, request_meta=_capture_request_metadata())
+        return jsonify({
+            'success': True,
+            'client_id': record.get('client_id'),
+            'session_count': int(record.get('session_count') or 0),
+            'updated_at': record.get('updated_at'),
+        })
+    except PermissionError:
+        return jsonify({'success': False, 'error': 'Assistant sync secret mismatch'}), 403
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception as exc:
+        logger.warning(f'Assistant session sync failed: {exc}')
+        return jsonify({'success': False, 'error': 'Assistant sync failed'}), 500
+
+
 @app.route('/admin/devices', methods=['GET', 'POST'])
 def admin_devices():
     if not ADMIN_PASSWORD:
@@ -17970,6 +18161,7 @@ def admin_devices():
                             onclick="return confirm('Reset ALL provisioning records and one-time bootstrap tokens? This affects cloud-side admin records.')"
                         >Reset All Provisioning Records</button>
                         <a href="/admin/devices/audit-log" class="btn btn-secondary" style="text-decoration:none;">View Audit Log</a>
+                        <a href="/admin/assistant-sessions" class="btn btn-secondary" style="text-decoration:none;">View Assistant Sessions</a>
                     </form>
                     {% if reset_all %}
                         <div class="reset-notice">
@@ -18122,6 +18314,114 @@ def admin_devices_audit_log():
     </div></body></html>
     """
     return render_template_string(html, entries=entries, count=len(entries))
+
+
+@app.route('/admin/assistant-sessions', methods=['GET'])
+def admin_assistant_sessions():
+    if not ADMIN_PASSWORD:
+        return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
+    auth = request.authorization
+    if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
+        return Response(
+            'Unauthorized',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'},
+        )
+
+    client_filter = (request.args.get('client_id') or '').strip()
+    machine_filter = (request.args.get('machine_id') or '').strip()
+    records = _load_assistant_session_records()
+    entries = list(records.values()) if isinstance(records, dict) else []
+    entries = sorted(entries, key=lambda entry: str(entry.get('updated_at') or ''), reverse=True)
+    if client_filter:
+        entries = [entry for entry in entries if str(entry.get('client_id') or '') == client_filter]
+    if machine_filter:
+        entries = [entry for entry in entries if str(entry.get('machine_id') or '') == machine_filter]
+
+    if request.args.get('format') == 'json':
+        safe_entries = []
+        for entry in entries:
+            safe = dict(entry)
+            safe.pop('sync_secret_hash', None)
+            safe_entries.append(safe)
+        return jsonify({'count': len(safe_entries), 'entries': safe_entries})
+
+    from flask import render_template_string
+    html = """
+    <!DOCTYPE html><html lang="en"><head>
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>CASM Admin - Assistant Sessions</title>
+      <link rel="stylesheet" href="/static/css/style.css">
+      <style>
+        body{background:#f1f3f7;padding:1.5rem;}
+        .assistant-admin-shell{max-width:1280px;margin:0 auto;}
+        .assistant-admin-list{display:grid;gap:1rem;}
+        .assistant-admin-card{background:#fff;border-radius:14px;padding:1rem 1.05rem;box-shadow:0 1px 2px rgba(17,24,39,.06),0 4px 12px -6px rgba(17,24,39,.1);}
+        .assistant-admin-topline{display:flex;justify-content:space-between;gap:.75rem;align-items:flex-start;flex-wrap:wrap;}
+        .assistant-admin-meta{display:grid;gap:.25rem;color:#475569;font-size:.88rem;margin-top:.8rem;}
+        .assistant-admin-session-list{display:grid;gap:.65rem;margin-top:.95rem;}
+        .assistant-admin-session{border:1px solid #e2e8f0;border-radius:12px;padding:.75rem .8rem;background:#f8fafc;}
+        .assistant-admin-message{font-size:.84rem;color:#334155;padding:.42rem .55rem;border-radius:10px;background:#fff;border:1px solid #e2e8f0;margin-top:.45rem;}
+        .assistant-admin-message[data-role='assistant']{background:#fff7ed;border-color:#fed7aa;}
+        .assistant-admin-empty{background:#fff;border-radius:14px;padding:1.3rem;text-align:center;color:#64748b;}
+        code{background:#eef2f7;padding:.12rem .34rem;border-radius:6px;}
+      </style>
+    </head><body>
+      <main class="assistant-admin-shell">
+        <section class="card" style="margin-bottom:1rem;">
+          <div class="card-header"><span>CASM Admin - Assistant Sessions</span><span class="badge badge-info">Admin Only</span></div>
+          <div class="card-content">
+            <p>Assistant sessions are synced per browser client with a private sync token. End users cannot read other clients' sessions from the app.</p>
+            <div style="display:flex;gap:.7rem;flex-wrap:wrap;">
+              <a class="btn btn-secondary" href="/admin/devices">Back to devices</a>
+              <a class="btn btn-secondary" href="/admin/assistant-sessions?format=json">Download JSON</a>
+            </div>
+          </div>
+        </section>
+        {% if entries %}
+          <section class="assistant-admin-list">
+            {% for entry in entries %}
+              <article class="assistant-admin-card">
+                <div class="assistant-admin-topline">
+                  <div>
+                    <h3 style="margin:0 0 .35rem;color:#0f172a;">Client {{ entry.client_id }}</h3>
+                    <div style="color:#64748b;font-size:.85rem;">Machine: <code>{{ entry.machine_id or 'unavailable' }}</code></div>
+                  </div>
+                  <div class="badge badge-secondary">{{ entry.session_count or 0 }} sessions</div>
+                </div>
+                <div class="assistant-admin-meta">
+                  <div><strong>Updated:</strong> {{ entry.updated_at }}</div>
+                  <div><strong>Current page:</strong> {{ entry.current_page or 'unknown' }}</div>
+                  <div><strong>Active session:</strong> {{ entry.active_session_id or 'unknown' }}</div>
+                  {% if entry.request_meta %}
+                    <div><strong>Last IP:</strong> {{ entry.request_meta.ip or 'unknown' }}</div>
+                  {% endif %}
+                </div>
+                <div class="assistant-admin-session-list">
+                  {% for session in entry.sessions %}
+                    <details class="assistant-admin-session">
+                      <summary><strong>{{ session.title }}</strong> · {{ session.messages|length }} messages</summary>
+                      <div style="margin-top:.55rem;color:#64748b;font-size:.82rem;">
+                        Tutorial flow: {{ session.context.tutorial_flow or 'cloud' }} · Last export: {{ session.context.last_export_kind or 'n/a' }}
+                      </div>
+                      {% for message in session.messages[-6:] %}
+                        <div class="assistant-admin-message" data-role="{{ message.role }}">
+                          <strong>{{ message.role }}</strong>: {{ message.text }}
+                        </div>
+                      {% endfor %}
+                    </details>
+                  {% endfor %}
+                </div>
+              </article>
+            {% endfor %}
+          </section>
+        {% else %}
+          <section class="assistant-admin-empty">No assistant session records have been synced yet.</section>
+        {% endif %}
+      </main>
+    </body></html>
+    """
+    return render_template_string(html, entries=entries)
 
 
 @app.route('/admin/devices/quick-approve', methods=['GET'])

@@ -1903,6 +1903,105 @@ function setupResponsiveMobileUX() {
 // even if any other script throws). This block intentionally left empty to
 // avoid double-binding (which previously caused open + immediate close).
 
+const CASM_TUTORIAL_FLOWS = {
+    cloud: [
+        {
+            tag: 'Preparation',
+            title: 'Open Live Monitoring in cloud mode',
+            summary: 'Use the cloud path when you want the fastest remote caption and report turnaround with Supabase-backed report access.',
+            caution: 'Confirm the provider mode badge says Cloud before you start, especially after coming back from a local session.',
+            bullets: [
+                'Open Settings and verify Provider Mode is Cloud.',
+                'Check the network badge is healthy before starting a new run.',
+                'Choose the camera source and wait for the preview to appear.'
+            ]
+        },
+        {
+            tag: 'Monitoring',
+            title: 'Wait for boxes before ending the session',
+            summary: 'The first session after a cold start needs visible YOLO detections so the captured evidence is strong enough for report generation.',
+            caution: 'If you stop before the first bounding box appears, the first report may be slow or fail because the evidence packet is incomplete.',
+            bullets: [
+                'Click Start and keep workers inside the frame for a few seconds.',
+                'Watch for bounding boxes and alert activity before pressing Stop.',
+                'Keep the camera steady during the first cloud run.'
+            ]
+        },
+        {
+            tag: 'Generation',
+            title: 'Let the remote report queue finish cleanly',
+            summary: 'Cloud reports should keep the Cloud tag while the queue moves from queued to generating to ready.',
+            caution: 'Do not switch into Local mode while the same report is still generating unless you intentionally want to start a different local run.',
+            bullets: [
+                'After Stop, open Reports and watch the source badge stay on Cloud.',
+                'Wait for the report status to reach Ready before reprocessing.',
+                'Use Open Report only after the ready badge appears.'
+            ]
+        },
+        {
+            tag: 'Review',
+            title: 'Check tag, caption, and recovery path',
+            summary: 'A healthy cloud run keeps the Cloud tag, produces the Gemini caption, and remains re-openable from the report list.',
+            caution: 'If the report fails on the first try, use Reprocess once after the worker settles rather than switching modes mid-run.',
+            bullets: [
+                'Open the report and review caption detail, evidence image, and PPE summary.',
+                'Confirm the report badge still reads Cloud in the list view.',
+                'Use manual reprocess only after the prior generation attempt has stopped.'
+            ]
+        }
+    ],
+    local: [
+        {
+            tag: 'Preparation',
+            title: 'Run the local readiness check first',
+            summary: 'Local mode is smooth when the machine, camera, Ollama runtime, and the selected Gemma model are already warm before the session begins.',
+            caution: 'Do not flip into Local mode on an unprepared machine. First-run model pull and warmup will feel much slower than a warmed session.',
+            bullets: [
+                'Open Settings and run Local Mode Checkup.',
+                'Confirm the device is approved and the local model is ready.',
+                'Switch Provider Mode to Local only after the checkup is green.'
+            ]
+        },
+        {
+            tag: 'Monitoring',
+            title: 'Capture locally with a stable preview',
+            summary: 'Once the local path is ready, start monitoring and keep the preview stable until detections are visible.',
+            caution: 'Avoid camera switching or browser tab sleep during the first local pass, because local inference needs a stable warm frame sequence.',
+            bullets: [
+                'Start the camera and wait for the first detection overlays.',
+                'Keep the host PC awake during local generation.',
+                'Stop only after at least one usable detection frame has landed.'
+            ]
+        },
+        {
+            tag: 'Generation',
+            title: 'Expect the first local caption to take longer',
+            summary: 'The local report path stays off Supabase egress for captioning, but the very first local caption on a cold model can take noticeably longer than the warm path.',
+            caution: 'Let the first local report finish without mode switching. Warm repeats are much faster once the model is loaded.',
+            bullets: [
+                'Watch the report badge remain Local during generation.',
+                'Wait for the ready state before pressing Reprocess.',
+                'If Wi-Fi is absent, local artifacts can still complete and sync later.'
+            ]
+        },
+        {
+            tag: 'Recovery',
+            title: 'Switch back to cloud only after sync settles',
+            summary: 'When a local-origin report later uploads, it should present as Local Synced rather than bouncing between Local and Cloud.',
+            caution: 'If you switch back to Cloud too early, wait for sync completion before judging the final source tag.',
+            bullets: [
+                'Reconnect the machine and allow local sync to finish.',
+                'Check Reports for the Local Synced badge after upload.',
+                'Re-enter Cloud mode only after the local queue is idle.'
+            ]
+        }
+    ]
+};
+
+if (typeof window !== 'undefined') {
+    window.CASM_TUTORIAL_FLOWS = CASM_TUTORIAL_FLOWS;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('handbookModal');
     const openBtn = document.getElementById('openHandbook');
@@ -1911,6 +2010,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!modal || !openBtn || !closeBtn) return;
 
     let stopTutorialAutoPlay = () => {};
+    let startTutorialAutoPlay = () => {};
+    let renderTutorial = () => {};
+    let tutorialState = null;
 
     const openHandbook = () => {
         modal.classList.remove('hidden');
@@ -2036,102 +2138,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const tutorialSceneCaution = tutorialRoot.querySelector('#tutorialSceneCaution');
         const tutorialStepList = tutorialRoot.querySelector('#tutorialStepList');
 
-        const tutorialFlows = {
-            cloud: [
-                {
-                    tag: 'Preparation',
-                    title: 'Open Live Monitoring in cloud mode',
-                    summary: 'Use the cloud path when you want the fastest remote caption and report turnaround with Supabase-backed report access.',
-                    caution: 'Confirm the provider mode badge says Cloud before you start, especially after coming back from a local session.',
-                    bullets: [
-                        'Open Settings and verify Provider Mode is Cloud.',
-                        'Check the network badge is healthy before starting a new run.',
-                        'Choose the camera source and wait for the preview to appear.'
-                    ]
-                },
-                {
-                    tag: 'Monitoring',
-                    title: 'Wait for boxes before ending the session',
-                    summary: 'The first session after a cold start needs visible YOLO detections so the captured evidence is strong enough for report generation.',
-                    caution: 'If you stop before the first bounding box appears, the first report may be slow or fail because the evidence packet is incomplete.',
-                    bullets: [
-                        'Click Start and keep workers inside the frame for a few seconds.',
-                        'Watch for bounding boxes and alert activity before pressing Stop.',
-                        'Keep the camera steady during the first cloud run.'
-                    ]
-                },
-                {
-                    tag: 'Generation',
-                    title: 'Let the remote report queue finish cleanly',
-                    summary: 'Cloud reports should keep the Cloud tag while the queue moves from queued to generating to ready.',
-                    caution: 'Do not switch into Local mode while the same report is still generating unless you intentionally want to start a different local run.',
-                    bullets: [
-                        'After Stop, open Reports and watch the source badge stay on Cloud.',
-                        'Wait for the report status to reach Ready before reprocessing.',
-                        'Use Open Report only after the ready badge appears.'
-                    ]
-                },
-                {
-                    tag: 'Review',
-                    title: 'Check tag, caption, and recovery path',
-                    summary: 'A healthy cloud run keeps the Cloud tag, produces the Gemini caption, and remains re-openable from the report list.',
-                    caution: 'If the report fails on the first try, use Reprocess once after the worker settles rather than switching modes mid-run.',
-                    bullets: [
-                        'Open the report and review caption detail, evidence image, and PPE summary.',
-                        'Confirm the report badge still reads Cloud in the list view.',
-                        'Use manual reprocess only after the prior generation attempt has stopped.'
-                    ]
-                }
-            ],
-            local: [
-                {
-                    tag: 'Preparation',
-                    title: 'Run the local readiness check first',
-                    summary: 'Local mode is smooth when the machine, camera, Ollama runtime, and the selected Gemma model are already warm before the session begins.',
-                    caution: 'Do not flip into Local mode on an unprepared machine. First-run model pull and warmup will feel much slower than a warmed session.',
-                    bullets: [
-                        'Open Settings and run Local Mode Checkup.',
-                        'Confirm the device is approved and the local model is ready.',
-                        'Switch Provider Mode to Local only after the checkup is green.'
-                    ]
-                },
-                {
-                    tag: 'Monitoring',
-                    title: 'Capture locally with a stable preview',
-                    summary: 'Once the local path is ready, start monitoring and keep the preview stable until detections are visible.',
-                    caution: 'Avoid camera switching or browser tab sleep during the first local pass, because local inference needs a stable warm frame sequence.',
-                    bullets: [
-                        'Start the camera and wait for the first detection overlays.',
-                        'Keep the host PC awake during local generation.',
-                        'Stop only after at least one usable detection frame has landed.'
-                    ]
-                },
-                {
-                    tag: 'Generation',
-                    title: 'Expect the first local caption to take longer',
-                    summary: 'The local report path stays off Supabase egress for captioning, but the very first local caption on a cold model can take noticeably longer than the warm path.',
-                    caution: 'Let the first local report finish without mode switching. Warm repeats are much faster once the model is loaded.',
-                    bullets: [
-                        'Watch the report badge remain Local during generation.',
-                        'Wait for the ready state before pressing Reprocess.',
-                        'If Wi-Fi is absent, local artifacts can still complete and sync later.'
-                    ]
-                },
-                {
-                    tag: 'Recovery',
-                    title: 'Switch back to cloud only after sync settles',
-                    summary: 'When a local-origin report later uploads, it should present as Local Synced rather than bouncing between Local and Cloud.',
-                    caution: 'If you switch back to Cloud too early, wait for sync completion before judging the final source tag.',
-                    bullets: [
-                        'Reconnect the machine and allow local sync to finish.',
-                        'Check Reports for the Local Synced badge after upload.',
-                        'Re-enter Cloud mode only after the local queue is idle.'
-                    ]
-                }
-            ]
-        };
+        const tutorialFlows = CASM_TUTORIAL_FLOWS;
 
-        const tutorialState = {
+        tutorialState = {
             flow: 'cloud',
             view: 'steps',
             index: 0,
@@ -2166,7 +2175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             syncTutorialControls();
         };
 
-        const startTutorialAutoPlay = () => {
+        startTutorialAutoPlay = () => {
             stopTutorialAutoPlay();
             tutorialState.playing = true;
             tutorialState.view = 'autoplay';
@@ -2178,7 +2187,7 @@ document.addEventListener('DOMContentLoaded', () => {
             syncTutorialControls();
         };
 
-        const renderTutorial = () => {
+        renderTutorial = () => {
             const steps = tutorialStepsForFlow();
             if (!steps.length) return;
 
@@ -2276,6 +2285,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
         renderTutorial();
     }
+
+    window.CASMHandbook = {
+        open(pageKey = 'intro', options = {}) {
+            openHandbook();
+            activateHandbookPage(pageKey);
+            if (options.stage) {
+                activateUsageStage(options.stage);
+            }
+            if (tutorialRoot && pageKey === 'workflow') {
+                const flow = options.tutorialFlow === 'local' ? 'local' : 'cloud';
+                const steps = CASM_TUTORIAL_FLOWS[flow] || CASM_TUTORIAL_FLOWS.cloud;
+                if (steps.length) {
+                    tutorialState.flow = flow;
+                    tutorialState.index = Math.max(0, Math.min(Number(options.tutorialStep || 0), steps.length - 1));
+                    tutorialState.view = options.tutorialView === 'autoplay' ? 'autoplay' : 'steps';
+                    if (tutorialState.view === 'autoplay') {
+                        startTutorialAutoPlay();
+                    } else {
+                        stopTutorialAutoPlay();
+                    }
+                    renderTutorial();
+                }
+            }
+        },
+        close: closeHandbook,
+        activatePage: activateHandbookPage,
+        activateUsageStage,
+        getTutorialState() {
+            if (!tutorialState) {
+                return {
+                    flow: 'cloud',
+                    index: 0,
+                    view: 'steps',
+                    playing: false
+                };
+            }
+            return {
+                flow: tutorialState.flow,
+                index: tutorialState.index,
+                view: tutorialState.view,
+                playing: tutorialState.playing
+            };
+        }
+    };
 
     const initialActive = handbookLinks.find((link) => link.classList.contains('active'));
     activateHandbookPage((initialActive && initialActive.dataset.page) || (handbookLinks[0] && handbookLinks[0].dataset.page));

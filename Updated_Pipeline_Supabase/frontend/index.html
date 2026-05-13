@@ -345,6 +345,62 @@
         </div>
     </main>
 
+    <div id="assistantDock" class="assistant-dock" aria-live="polite">
+        <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Open CASM assistant" aria-expanded="false" aria-controls="assistantPanel" title="Open CASM assistant">
+            <i class="fas fa-comments" aria-hidden="true"></i>
+        </button>
+        <section id="assistantPanel" class="assistant-panel hidden" role="dialog" aria-modal="false" aria-labelledby="assistantTitle">
+            <div class="assistant-panel-shell">
+                <header class="assistant-header">
+                    <div class="assistant-header-copy">
+                        <span class="assistant-kicker">Smart guide</span>
+                        <h2 id="assistantTitle">CASM Assistant</h2>
+                    </div>
+                    <div class="assistant-header-actions">
+                        <button id="assistantSessionsToggle" class="assistant-header-btn" type="button" aria-expanded="false" aria-controls="assistantSessionRail">
+                            <i class="fas fa-clock-rotate-left" aria-hidden="true"></i>
+                            <span>Sessions</span>
+                        </button>
+                        <button id="assistantNewSession" class="assistant-header-btn" type="button">
+                            <i class="fas fa-plus" aria-hidden="true"></i>
+                            <span>New</span>
+                        </button>
+                        <button id="assistantClose" class="assistant-header-btn assistant-close-btn" type="button" aria-label="Close assistant">
+                            <i class="fas fa-xmark" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </header>
+
+                <div class="assistant-layout">
+                    <aside id="assistantSessionRail" class="assistant-session-rail" aria-label="Assistant sessions">
+                        <div class="assistant-rail-heading">
+                            <span>Recent sessions</span>
+                        </div>
+                        <div id="assistantSessionList" class="assistant-session-list"></div>
+                    </aside>
+
+                    <div class="assistant-main">
+                        <div id="assistantShortcutStrip" class="assistant-shortcut-strip" aria-label="Assistant shortcuts"></div>
+                        <div id="assistantPromptDeck" class="assistant-prompt-deck" aria-label="Recommended prompts"></div>
+                        <div id="assistantMessages" class="assistant-messages" role="log" aria-live="polite"></div>
+
+                        <form id="assistantComposer" class="assistant-composer">
+                            <div class="assistant-composer-guide">
+                                <strong>Type here</strong>
+                                <span>Ask for tutorials, explanations, page shortcuts, CSV exports, or handbook help.</span>
+                            </div>
+                            <label class="sr-only" for="assistantInput">Ask the CASM assistant</label>
+                            <textarea id="assistantInput" class="assistant-input" rows="1" placeholder="Type a question or request, like “show local tutorial” or “export cloud reports csv”"></textarea>
+                            <button id="assistantSend" class="assistant-send" type="submit" aria-label="Send message">
+                                <i class="fas fa-paper-plane" aria-hidden="true"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
     <!-- Mobile Bottom Navigation (visible on phones only) -->
     <nav class="mobile-bottom-nav" role="navigation" aria-label="Primary">
         <a href="#home" class="mobile-bottom-nav-link sidebar-link active" data-page="home">
@@ -397,6 +453,7 @@
     <script src="/static/js/pages/analytics.js"></script>
     <script src="/static/js/pages/about.js"></script>
     <script src="/static/js/app.js"></script>
+    <script src="/static/js/assistant.js"></script>
     <script src="/static/js/ui-animations.js"></script>
 
     <!-- Manual Handbook Modal -->

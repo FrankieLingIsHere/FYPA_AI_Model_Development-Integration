@@ -17,6 +17,22 @@ const Router = {
         this.routes[path] = component;
     },
 
+    emitRouteChange(path, detail = {}) {
+        const normalizedPath = path === 'settings-checkup' ? 'settings' : this.normalizePath(path);
+        try {
+            window.dispatchEvent(new CustomEvent('ppe-route:changed', {
+                detail: {
+                    page: normalizedPath,
+                    hash: `#${normalizedPath}`,
+                    measuredAt: Date.now(),
+                    ...detail
+                }
+            }));
+        } catch (_) {
+            // Ignore CustomEvent issues during non-browser checks.
+        }
+    },
+
     // Navigate to a route
     navigate(path, options = {}) {
         const { updateHash = true } = options;
@@ -45,6 +61,10 @@ const Router = {
             window.dispatchEvent(new CustomEvent('ppe-global-settings:open', { detail }));
 
             this.updateActiveNav('settings');
+            this.emitRouteChange('settings', {
+                overlay: true,
+                focusLocalCheckup: normalizedPath === 'settings-checkup'
+            });
 
             // Keep user on current page while opening a global settings popup.
             if (updateHash && APP_STATE.currentPage && window.location.hash !== `#${APP_STATE.currentPage}`) {
@@ -58,6 +78,7 @@ const Router = {
         if (component) {
             if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
                 this.updateActiveNav(normalizedPath);
+                this.emitRouteChange(normalizedPath, { reused: true });
                 if (updateHash && window.location.hash !== `#${normalizedPath}`) {
                     window.location.hash = normalizedPath;
                 }
@@ -67,6 +88,7 @@ const Router = {
             APP_STATE.currentPage = normalizedPath;
             this.render(component);
             this.updateActiveNav(normalizedPath);
+            this.emitRouteChange(normalizedPath);
 
             // Update URL hash
             if (updateHash && window.location.hash !== `#${normalizedPath}`) {

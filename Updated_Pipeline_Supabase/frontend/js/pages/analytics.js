@@ -27,7 +27,7 @@ const AnalyticsPage = {
                         <span><i class="fas fa-chart-line"></i> Safety Analytics Dashboard</span>
                     </div>
                     <div class="card-content">
-                        <div id="analytics-stats" class="grid grid-4 mb-4">
+                        <div id="analytics-stats" class="analytics-stats-grid mb-4">
                             <div class="spinner"></div>
                         </div>
                         <div id="analytics-insights" class="analytics-insights-grid">
@@ -42,7 +42,7 @@ const AnalyticsPage = {
                         <span><i class="fas fa-chart-bar"></i> Violation Trends</span>
                     </div>
                     <div class="card-content">
-                        <div style="height: 300px; position: relative;">
+                        <div class="analytics-chart-shell">
                             <canvas id="trendChart"></canvas>
                         </div>
                     </div>
@@ -76,20 +76,20 @@ const AnalyticsPage = {
                         <span><i class="fas fa-trophy"></i> Safety Compliance Score</span>
                     </div>
                     <div class="card-content">
-                        <div style="text-align: center; padding: 2rem;">
-                            <div id="safety-score" style="font-size: 4rem; font-weight: 700; color: var(--success-color); margin-bottom: 1rem;">
+                        <div class="analytics-score-shell">
+                            <div id="safety-score" class="analytics-score-value">
                                 --
                             </div>
-                            <p style="font-size: 1.2rem; color: var(--text-color); margin-bottom: 1rem;">
+                            <p class="analytics-score-caption">
                                 Overall Safety Compliance
                             </p>
-                            <div style="max-width: 600px; height: 20px; background: var(--background-color); border-radius: 10px; margin: 0 auto; overflow: hidden;">
-                                <div id="safety-bar" style="height: 100%; background: linear-gradient(90deg, var(--success-color), var(--secondary-color)); transition: width 0.5s ease; width: 0%;"></div>
+                            <div class="analytics-score-meter">
+                                <div id="safety-bar" class="analytics-score-meter-fill"></div>
                             </div>
-                            <p style="color: #7f8c8d; margin-top: 1rem; font-size: 0.9rem;">
+                            <p class="analytics-score-subnote">
                                 Based on violation frequency and severity
                             </p>
-                            <p id="analytics-safety-benchmark-note" style="color:#6b7280; margin-top: 0.35rem; font-size: 0.82rem;"></p>
+                            <p id="analytics-safety-benchmark-note" class="analytics-score-benchmark"></p>
                         </div>
                     </div>
                 </div>
@@ -203,6 +203,106 @@ const AnalyticsPage = {
         };
     },
 
+    normalizeSourceScope(record) {
+        const explicit = String(record?.source_scope || record?.report_scope || record?.scope || '').trim().toLowerCase();
+        if (explicit === 'synced-local') return 'synced_local';
+        if (explicit) return explicit;
+
+        const label = String(record?.source_label || '').trim().toLowerCase();
+        if (label === 'local synced') return 'synced_local';
+        if (label === 'local') return 'local';
+        if (label === 'shared') return 'shared';
+        if (label === 'cloud') return 'cloud';
+        return 'unknown';
+    },
+
+    buildDerivedMetrics(stats = {}, violations = []) {
+        const list = Array.isArray(violations) ? violations : [];
+        const total = Math.max(0, Number(stats.total) || list.length || 0);
+        const reportsReady = Math.max(0, Number(stats.reportsGenerated) || 0);
+        const pending = Math.max(0, Number(stats.pending) || 0);
+        const high = Math.max(0, Number(stats.severity?.high) || 0);
+        const readyRate = total > 0 ? Math.round((reportsReady / total) * 100) : 0;
+        const highShare = total > 0 ? Math.round((high / total) * 100) : 0;
+
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        const recentWeekCount = list.filter((item) => {
+            const ts = Date.parse(item?.timestamp || '');
+            return Number.isFinite(ts) && ts >= sevenDaysAgo;
+        }).length;
+        const dailyAverage = recentWeekCount > 0 ? (recentWeekCount / 7) : 0;
+
+        const sourceMix = {
+            local: 0,
+            synced_local: 0,
+            cloud: 0,
+            shared: 0,
+            unknown: 0
+        };
+        const timeDistribution = {
+            'Morning (6AM-12PM)': 0,
+            'Afternoon (12PM-6PM)': 0,
+            'Evening (6PM-12AM)': 0,
+            'Night (12AM-6AM)': 0
+        };
+
+        list.forEach((item) => {
+            const scope = this.normalizeSourceScope(item);
+            if (Object.prototype.hasOwnProperty.call(sourceMix, scope)) {
+                sourceMix[scope] += 1;
+            } else {
+                sourceMix.unknown += 1;
+            }
+
+            const date = new Date(item?.timestamp || 0);
+            const hour = date.getHours();
+            if (!Number.isNaN(hour)) {
+                if (hour >= 6 && hour < 12) timeDistribution['Morning (6AM-12PM)'] += 1;
+                else if (hour >= 12 && hour < 18) timeDistribution['Afternoon (12PM-6PM)'] += 1;
+                else if (hour >= 18 && hour < 24) timeDistribution['Evening (6PM-12AM)'] += 1;
+                else timeDistribution['Night (12AM-6AM)'] += 1;
+            }
+        });
+
+        const sourceEntries = Object.entries(sourceMix).sort((a, b) => Number(b[1]) - Number(a[1]));
+        const dominantSourceEntry = sourceEntries.find((entry) => Number(entry[1]) > 0) || ['unknown', 0];
+        const localOriginCount = sourceMix.local + sourceMix.synced_local;
+        const cloudOriginCount = sourceMix.cloud + sourceMix.shared;
+
+        const peakWindowEntry = Object.entries(timeDistribution).sort((a, b) => Number(b[1]) - Number(a[1]))[0] || ['No data', 0];
+        const topTypeEntry = Object.entries(stats.breakdown || {}).sort((a, b) => Number(b[1]) - Number(a[1]))[0] || null;
+
+        const lastViolation = list
+            .map((item) => new Date(item?.timestamp || 0))
+            .filter((date) => !Number.isNaN(date.getTime()))
+            .sort((a, b) => b.getTime() - a.getTime())[0];
+
+        const lastViolationDisplay = lastViolation
+            ? (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function'
+                ? TimezoneManager.formatDateTime(lastViolation.toISOString())
+                : lastViolation.toLocaleString())
+            : 'No data';
+
+        return {
+            total,
+            reportsReady,
+            pending,
+            readyRate,
+            highShare,
+            dailyAverage,
+            recentWeekCount,
+            localOriginCount,
+            cloudOriginCount,
+            peakWindow: peakWindowEntry[0],
+            peakWindowCount: Number(peakWindowEntry[1]) || 0,
+            topType: topTypeEntry ? `${topTypeEntry[0]} (${topTypeEntry[1]})` : 'No violations yet',
+            dominantSource: dominantSourceEntry[0],
+            dominantSourceCount: Number(dominantSourceEntry[1]) || 0,
+            sourceMix,
+            lastViolationDisplay
+        };
+    },
+
     async refreshData() {
         try {
             const [stats, violations] = await Promise.all([
@@ -210,9 +310,10 @@ const AnalyticsPage = {
                 API.getViolations()
             ]);
             const normalizedStats = this.normalizeStats(stats, violations);
+            const derivedMetrics = this.buildDerivedMetrics(normalizedStats, violations);
 
-            this.renderStats(normalizedStats);
-            this.renderInsights(normalizedStats, violations);
+            this.renderStats(normalizedStats, derivedMetrics);
+            this.renderInsights(derivedMetrics);
             this.renderTrendsChart(violations);
             this.renderViolationTypes(normalizedStats);
             this.renderTimeDistribution(violations);
@@ -226,64 +327,98 @@ const AnalyticsPage = {
         }
     },
 
-    renderStats(stats) {
+    renderStats(stats, derivedMetrics) {
         const container = document.getElementById('analytics-stats');
         if (!container) return;
-        container.innerHTML = `
-            <div class="stat-card">
-                <h3>${stats.total}</h3>
-                <p>Total Violations</p>
-            </div>
-            <div class="stat-card success">
-                <h3>${stats.reportsGenerated}</h3>
-                <p>Reports Generated</p>
-            </div>
-            <div class="stat-card danger">
-                <h3>${stats.severity.high}</h3>
-                <p>High Severity</p>
-            </div>
-            <div class="stat-card warning">
-                <h3>${stats.severity.medium}</h3>
-                <p>Medium Severity</p>
-            </div>
-            <div class="stat-card success">
-                <h3>${stats.severity.low}</h3>
-                <p>Low Severity</p>
-            </div>
-        `;
+        const cards = [
+            {
+                kicker: 'Volume',
+                value: stats.total,
+                label: 'Total Violations',
+                note: `${stats.today || 0} logged today`,
+                tone: 'is-neutral'
+            },
+            {
+                kicker: 'Output',
+                value: stats.reportsGenerated,
+                label: 'Reports Ready',
+                note: `${derivedMetrics.pending} still queued or generating`,
+                tone: 'is-good'
+            },
+            {
+                kicker: 'Flow',
+                value: `${derivedMetrics.readyRate}%`,
+                label: 'Ready Rate',
+                note: 'Share of report rows already openable',
+                tone: derivedMetrics.readyRate >= 80 ? 'is-good' : 'is-warning'
+            },
+            {
+                kicker: 'Risk',
+                value: `${derivedMetrics.highShare}%`,
+                label: 'High Severity Share',
+                note: `${stats.severity.high} high-severity detections`,
+                tone: derivedMetrics.highShare >= 40 ? 'is-danger' : 'is-warning'
+            },
+            {
+                kicker: 'Local',
+                value: derivedMetrics.localOriginCount,
+                label: 'Local-Origin Runs',
+                note: `${derivedMetrics.sourceMix.synced_local} synced back to cloud`,
+                tone: 'is-neutral'
+            },
+            {
+                kicker: 'Cloud',
+                value: derivedMetrics.cloudOriginCount,
+                label: 'Cloud-Origin Runs',
+                note: `${derivedMetrics.sourceMix.shared} shared records included`,
+                tone: 'is-neutral'
+            },
+            {
+                kicker: 'Cadence',
+                value: derivedMetrics.dailyAverage.toFixed(1),
+                label: '7-Day Daily Avg',
+                note: `${derivedMetrics.recentWeekCount} violations over the last week`,
+                tone: 'is-neutral'
+            },
+            {
+                kicker: 'Queue',
+                value: stats.pending || 0,
+                label: 'Pending Reports',
+                note: 'Queued, pending, or generating right now',
+                tone: (stats.pending || 0) > 0 ? 'is-warning' : 'is-good'
+            }
+        ];
+
+        container.innerHTML = cards.map((card) => `
+            <article class="analytics-metric-card ${card.tone}">
+                <span class="metric-kicker">${card.kicker}</span>
+                <h3>${card.value}</h3>
+                <p>${card.label}</p>
+                <span class="metric-note">${card.note}</span>
+            </article>
+        `).join('');
     },
 
-    renderInsights(stats, violations) {
+    renderInsights(derivedMetrics) {
         const container = document.getElementById('analytics-insights');
         if (!container) return;
-
-        const breakdown = stats.breakdown || {};
-        const sorted = Object.entries(breakdown).sort((a, b) => Number(b[1]) - Number(a[1]));
-        const topType = sorted.length > 0 ? `${sorted[0][0]} (${sorted[0][1]})` : 'No violations yet';
-
-        const lastViolation = (violations || [])
-            .map((v) => new Date(v.timestamp || 0))
-            .filter((d) => !Number.isNaN(d.getTime()))
-            .sort((a, b) => b.getTime() - a.getTime())[0];
-
-        const lastViolationDisplay = lastViolation
-            ? (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function'
-                ? TimezoneManager.formatDateTime(lastViolation.toISOString())
-                : lastViolation.toLocaleString())
-            : 'No data';
 
         container.innerHTML = `
             <div class="analytics-insight-card">
                 <div class="label">Top Violation Type</div>
-                <div class="value">${topType}</div>
+                <div class="value">${derivedMetrics.topType}</div>
             </div>
             <div class="analytics-insight-card">
-                <div class="label">Pending Reports</div>
-                <div class="value">${stats.pending || 0}</div>
+                <div class="label">Peak Monitoring Window</div>
+                <div class="value">${derivedMetrics.peakWindow} (${derivedMetrics.peakWindowCount})</div>
             </div>
             <div class="analytics-insight-card">
                 <div class="label">Last Violation Seen</div>
-                <div class="value">${lastViolationDisplay}</div>
+                <div class="value">${derivedMetrics.lastViolationDisplay}</div>
+            </div>
+            <div class="analytics-insight-card">
+                <div class="label">Dominant Source Mix</div>
+                <div class="value">${String(derivedMetrics.dominantSource || 'unknown').replace(/_/g, ' ')} (${derivedMetrics.dominantSourceCount})</div>
             </div>
         `;
     },

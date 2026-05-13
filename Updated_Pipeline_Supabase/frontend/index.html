@@ -284,20 +284,20 @@
             <div class="sidebar-link nav-timezone" style="border-left-color: transparent; cursor: default;">
                 <i class="fas fa-clock"></i>
                 <select id="timezone-selector" class="timezone-select">
-                    <option value="Asia/Kuala_Lumpur" data-legacy-offset="8">Malaysia (Asia/Kuala_Lumpur)</option>
-                    <option value="Asia/Singapore" data-legacy-offset="8">Singapore (Asia/Singapore)</option>
-                    <option value="Asia/Shanghai" data-legacy-offset="8">China (Asia/Shanghai)</option>
-                    <option value="Asia/Tokyo" data-legacy-offset="9">Japan (Asia/Tokyo)</option>
-                    <option value="Asia/Kolkata" data-legacy-offset="5.5">India (Asia/Kolkata)</option>
-                    <option value="Asia/Bangkok" data-legacy-offset="7">Thailand (Asia/Bangkok)</option>
-                    <option value="Asia/Dubai" data-legacy-offset="4">Dubai (Asia/Dubai)</option>
-                    <option value="Europe/London" data-legacy-offset="0">UK (Europe/London)</option>
-                    <option value="Europe/Paris" data-legacy-offset="1">France (Europe/Paris)</option>
-                    <option value="America/New_York" data-legacy-offset="-5">US Eastern (America/New_York)</option>
-                    <option value="America/Chicago" data-legacy-offset="-6">US Central (America/Chicago)</option>
-                    <option value="America/Denver" data-legacy-offset="-7">US Mountain (America/Denver)</option>
-                    <option value="America/Los_Angeles" data-legacy-offset="-8">US Pacific (America/Los_Angeles)</option>
-                    <option value="Australia/Sydney" data-legacy-offset="10">Sydney (Australia/Sydney)</option>
+                    <option value="Asia/Kuala_Lumpur" data-legacy-offset="8">Malaysia</option>
+                    <option value="Asia/Singapore" data-legacy-offset="8">Singapore</option>
+                    <option value="Asia/Shanghai" data-legacy-offset="8">China</option>
+                    <option value="Asia/Tokyo" data-legacy-offset="9">Japan</option>
+                    <option value="Asia/Kolkata" data-legacy-offset="5.5">India</option>
+                    <option value="Asia/Bangkok" data-legacy-offset="7">Thailand</option>
+                    <option value="Asia/Dubai" data-legacy-offset="4">Dubai</option>
+                    <option value="Europe/London" data-legacy-offset="0">London</option>
+                    <option value="Europe/Paris" data-legacy-offset="1">Paris</option>
+                    <option value="America/New_York" data-legacy-offset="-5">US East</option>
+                    <option value="America/Chicago" data-legacy-offset="-6">US Central</option>
+                    <option value="America/Denver" data-legacy-offset="-7">US Mountain</option>
+                    <option value="America/Los_Angeles" data-legacy-offset="-8">US West</option>
+                    <option value="Australia/Sydney" data-legacy-offset="10">Sydney</option>
                     <option value="UTC" data-legacy-offset="0">UTC</option>
                 </select>
             </div>
@@ -355,7 +355,7 @@
         </a>
         <a href="#analytics" class="mobile-bottom-nav-link sidebar-link" data-page="analytics">
             <i class="fas fa-chart-line" aria-hidden="true"></i>
-            <span>Analytics</span>
+            <span>Stats</span>
         </a>
         <a href="#about" class="mobile-bottom-nav-link sidebar-link" data-page="about">
             <i class="fas fa-info-circle" aria-hidden="true"></i>
@@ -481,6 +481,69 @@
                                     <li>After approval, download or re-issue the installer BAT only from the approved machine.</li>
                                     <li>When Wi-Fi drops, CASM can continue locally; when Wi-Fi returns, synced-local reports queue back to Supabase automatically.</li>
                                 </ol>
+                            </div>
+                        </div>
+
+                        <div class="tutorial-shell" id="handbookLiveTutorial">
+                            <div class="tutorial-header-row">
+                                <div>
+                                    <h4>Interactive Walkthrough</h4>
+                                    <p>Use the guided rehearsal below to practice cloud mode, local mode, safe switching, and the checks that keep report tags and evidence stable.</p>
+                                </div>
+                                <div class="tutorial-pill-strip" aria-label="Tutorial play style">
+                                    <button class="tutorial-mode-btn active" type="button" data-tutorial-view="steps">Step-by-Step</button>
+                                    <button class="tutorial-mode-btn" type="button" data-tutorial-view="autoplay">Autoplay Demo</button>
+                                </div>
+                            </div>
+
+                            <div class="tutorial-stage">
+                                <div class="tutorial-screen">
+                                    <div class="tutorial-screen-topline">
+                                        <span class="tutorial-mode-badge" id="tutorialModeBadge">Cloud Pipeline</span>
+                                        <span class="tutorial-step-counter" id="tutorialStepCounter">Step 1 of 4</span>
+                                    </div>
+                                    <div class="tutorial-progress-track" aria-hidden="true">
+                                        <span id="tutorialProgressBar"></span>
+                                    </div>
+                                    <div class="tutorial-scene" id="tutorialScene">
+                                        <div class="tutorial-scene-tag" id="tutorialSceneTag">Preparation</div>
+                                        <h4 id="tutorialSceneTitle">Open Live Monitoring in cloud mode</h4>
+                                        <p id="tutorialSceneSummary">Start in cloud mode when you need the fastest remote caption and report turnaround for a monitored session.</p>
+                                        <ul id="tutorialSceneChecklist" class="tutorial-checklist"></ul>
+                                    </div>
+                                </div>
+
+                                <div class="tutorial-sidepanel">
+                                    <div class="tutorial-pill-strip" aria-label="Tutorial pipeline">
+                                        <button class="tutorial-flow-btn active" type="button" data-tutorial-flow="cloud">Cloud Mode</button>
+                                        <button class="tutorial-flow-btn" type="button" data-tutorial-flow="local">Local Mode</button>
+                                    </div>
+
+                                    <div class="tutorial-warning-card">
+                                        <span class="tutorial-warning-label">Take care</span>
+                                        <p id="tutorialSceneCaution">Confirm bounding boxes appear before ending the session so the first report has valid evidence to work with.</p>
+                                    </div>
+
+                                    <div class="tutorial-controls" role="group" aria-label="Tutorial controls">
+                                        <button id="tutorialPrevBtn" class="btn btn-secondary" type="button">
+                                            <i class="fas fa-arrow-left"></i>
+                                            <span>Back</span>
+                                        </button>
+                                        <button id="tutorialPlayBtn" class="btn btn-danger" type="button">
+                                            <i class="fas fa-play"></i>
+                                            <span>Play Demo</span>
+                                        </button>
+                                        <button id="tutorialNextBtn" class="btn btn-secondary" type="button">
+                                            <span>Next</span>
+                                            <i class="fas fa-arrow-right"></i>
+                                        </button>
+                                    </div>
+
+                                    <div class="tutorial-step-list-shell">
+                                        <div class="tutorial-step-list-label">Current checklist</div>
+                                        <ol id="tutorialStepList" class="tutorial-step-list"></ol>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

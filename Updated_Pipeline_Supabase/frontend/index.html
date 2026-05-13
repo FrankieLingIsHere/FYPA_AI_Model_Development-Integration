@@ -310,13 +310,19 @@
                 <span>Settings</span>
             </a>
             <div class="sidebar-voice-group">
-                <button id="enableVoice" class="btn btn-danger sidebar-voice-btn" type="button">
-                    <i class="fas fa-volume-up"></i>
-                    <span>Voice Alerts OFF</span>
+                <button id="enableVoice" class="btn btn-danger sidebar-voice-btn" type="button" data-voice-role="toggle" data-voice-state="disabled" aria-pressed="false" title="Enable voice alerts">
+                    <i class="fas fa-volume-mute" aria-hidden="true"></i>
+                    <span class="voice-btn-copy">
+                        <span class="voice-btn-label">Voice Alerts</span>
+                        <span class="voice-btn-state">OFF</span>
+                    </span>
                 </button>
-                <button id="testVoice" class="btn btn-secondary sidebar-voice-btn" type="button">
-                    <i class="fas fa-bullhorn"></i>
-                    <span>Test Voice</span>
+                <button id="testVoice" class="btn btn-secondary sidebar-voice-btn" type="button" data-voice-role="test" title="Play a voice alert preview">
+                    <i class="fas fa-bullhorn" aria-hidden="true"></i>
+                    <span class="voice-btn-copy">
+                        <span class="voice-btn-label">Test Voice</span>
+                        <span class="voice-btn-state">Preview</span>
+                    </span>
                 </button>
             </div>
         </div>

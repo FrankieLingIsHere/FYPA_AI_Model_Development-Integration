@@ -65,20 +65,55 @@ const AudioAlert = (function () {
         try { localStorage.setItem(STORAGE_KEY_PLAYED, JSON.stringify([...playedReports])); } catch (e) {}
     }
 
+    function _buildButtonMarkup({ iconClass, label, state }) {
+        return `
+            <i class="fas ${iconClass}" aria-hidden="true"></i>
+            <span class="voice-btn-copy">
+                <span class="voice-btn-label">${label}</span>
+                <span class="voice-btn-state">${state}</span>
+            </span>
+        `;
+    }
+
+    function _decorateTestButton(testBtn) {
+        if (!testBtn) return;
+        testBtn.dataset.voiceRole = 'test';
+        testBtn.removeAttribute('data-voice-state');
+        testBtn.setAttribute('title', 'Play a voice alert preview');
+        testBtn.innerHTML = _buildButtonMarkup({
+            iconClass: 'fa-bullhorn',
+            label: 'Test Voice',
+            state: 'Preview'
+        });
+    }
+
     function _updateButtonVisual() {
         if (!button) return;
+        button.dataset.voiceRole = 'toggle';
+        button.style.background = '';
+        button.style.borderColor = '';
         if (enabled) {
             button.classList.remove('btn-danger');
             button.classList.add('btn-success');
-            button.style.background = '#27ae60';
-            button.style.borderColor = '#1e8449';
-            button.innerHTML = '<span>Voice Alerts ON</span>';
+            button.dataset.voiceState = 'enabled';
+            button.setAttribute('aria-pressed', 'true');
+            button.setAttribute('title', 'Disable voice alerts');
+            button.innerHTML = _buildButtonMarkup({
+                iconClass: 'fa-volume-up',
+                label: 'Voice Alerts',
+                state: 'ON'
+            });
         } else {
             button.classList.remove('btn-success');
             button.classList.add('btn-danger');
-            button.style.background = '#e74c3c';
-            button.style.borderColor = '#c0392b';
-            button.innerHTML = '<span>Voice Alerts OFF</span>';
+            button.dataset.voiceState = 'disabled';
+            button.setAttribute('aria-pressed', 'false');
+            button.setAttribute('title', 'Enable voice alerts');
+            button.innerHTML = _buildButtonMarkup({
+                iconClass: 'fa-volume-mute',
+                label: 'Voice Alerts',
+                state: 'OFF'
+            });
         }
     }
 
@@ -366,10 +401,10 @@ const AudioAlert = (function () {
                 testBtn = document.createElement('button');
                 testBtn.id = 'testVoice';
                 testBtn.className = 'btn btn-secondary sidebar-voice-btn';
-                testBtn.innerHTML = '<span>Test Voice</span>';
                 if (sidebarBottom) sidebarBottom.appendChild(testBtn);
                 else document.body.appendChild(testBtn);
             }
+            _decorateTestButton(testBtn);
 
             testBtn.addEventListener('click', (e) => {
                 e.preventDefault();

@@ -5822,6 +5822,40 @@ def api_violations():
         # mistags from the historical local-cache sync sweep when the
         # deployment is actually a cloud-mode runtime.
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        device_key = str(device_id or '').strip().lower()
+        local_device_markers = {'local_cache', 'offline_local_cache', 'local_cache_sync', 'sync_local_cache'}
+        is_local_device = (
+            device_key in local_device_markers
+            or device_key.startswith('local_')
+            or device_key.startswith('offline_')
+        )
+        source_marker = str(
+            detection_data.get('origin')
+            or detection_data.get('source')
+            or detection_data.get('sync_source')
+            or ''
+        ).strip().lower()
+        local_sync_marker = _is_local_cache_sync_job_marker(
+            sync_source=source_marker,
+            device_id=device_key,
+        )
+        local_origin_marker = _is_local_pipeline_origin_marker(
+            source_scope='',
+            sync_source=source_marker,
+            device_id=device_key,
+        )
+        sync_state = str(
+            detection_data.get('sync_state')
+            or detection_data.get('cloud_sync_state')
+            or ''
+        ).strip().lower()
+        sync_state_confirmed = (
+            sync_state in {'synced', 'cloud_completed', 'completed_synced'}
+            or sync_state.startswith('cloud_sync_')
+            or sync_state.startswith('sync_')
+        )
+        local_origin = local_sync_marker or local_origin_marker or is_local_device
+        confirmed_synced_local = local_sync_marker or (local_origin and (has_cloud_artifacts or sync_state_confirmed))
 
         explicit_scope = _normalize_source_scope(
             detection_data.get('source_scope')
@@ -5829,60 +5863,17 @@ def api_violations():
             or detection_data.get('scope')
         )
         if explicit_scope:
-            # Repair: a previous build's local-cache sync sweep stamped
-            # cloud-mode reports with detection_data.source_scope='synced_local'
-            # (and a non-local device_id, often null). When we are running in
-            # cloud mode and the device is not a local marker, ignore the
-            # historical synced_local tag so the badge displays as "Cloud"
-            # again. Genuine local/synced_local rows from a local-mode
-            # runtime are preserved (their device_id starts with local_*
-            # / offline_*).
-            device_key_for_repair = str(device_id or '').strip().lower()
-            is_local_device_for_repair = (
-                device_key_for_repair in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
-                or device_key_for_repair.startswith('local_')
-                or device_key_for_repair.startswith('offline_')
-            )
-            source_marker_for_repair = str(
-                detection_data.get('origin')
-                or detection_data.get('source')
-                or detection_data.get('sync_source')
-                or ''
-            ).strip().lower()
-            is_local_sync_marker_for_repair = source_marker_for_repair in {
-                'local_synced',
-                'sync_local_cache',
-                'local_cache_sync',
-                'offline_local_cache_sync',
-                'sync_local_cache_partial',
-                'browser_local_draft_handoff',
-            }
-            if (
-                explicit_scope == 'synced_local'
-                and active_profile != 'local'
-                and not is_local_device_for_repair
-                and not is_local_sync_marker_for_repair
-                and has_cloud_artifacts
-            ):
-                return 'cloud', 'repaired_synced_local_in_cloud_mode'
+            if explicit_scope == 'synced_local':
+                if confirmed_synced_local:
+                    return 'synced_local', 'confirmed_synced_local'
+                if local_origin or has_local_artifacts:
+                    return 'local', 'repaired_unsynced_local_scope'
+                if active_profile != 'local' and has_cloud_artifacts:
+                    return 'cloud', 'repaired_synced_local_in_cloud_mode'
             return explicit_scope, 'detection_data.scope'
 
-        source_marker = str(
-            detection_data.get('origin')
-            or detection_data.get('source')
-            or detection_data.get('sync_source')
-            or ''
-        ).strip().lower()
-        if source_marker in ('local_synced', 'sync_local_cache', 'local_cache', 'local_cache_sync'):
-            return ('synced_local', source_marker) if has_cloud_artifacts else ('local', source_marker)
-
-        device_key = str(device_id or '').strip().lower()
-        local_device_markers = {'local_cache', 'offline_local_cache', 'local_cache_sync'}
-        is_local_device = (
-            device_key in local_device_markers
-            or device_key.startswith('local_')
-            or device_key.startswith('offline_')
-        )
+        if confirmed_synced_local:
+            return 'synced_local', source_marker or 'confirmed_synced_local'
 
         # Honour the deployment routing profile: in cloud mode the queue worker
         # ALWAYS writes original.jpg / annotated.jpg to the local violations
@@ -5891,18 +5882,16 @@ def api_violations():
         # "Local" report. (active_profile already captured at the top of this
         # function.)
 
-        if has_cloud_artifacts and is_local_device:
-            return 'synced_local', 'cloud_record_local_device'
         if has_cloud_artifacts and has_local_artifacts:
             return 'cloud', 'cloud_artifacts_with_local_cache'
         if has_cloud_artifacts:
             return 'cloud', 'cloud_artifacts'
-        if has_local_artifacts or is_local_device:
+        if has_local_artifacts or local_origin:
             # Cloud-mode in-flight report: cloud upload hasn't finished yet,
             # but the device is a normal cloud device (e.g. webcam_0). Treat
             # it as cloud so the badge doesn't flicker to "Local" between
             # "Generating..." and "Ready".
-            if active_profile == 'cloud' and not is_local_device:
+            if active_profile == 'cloud' and not local_origin:
                 return 'cloud', 'cloud_profile_inflight'
             return 'local', 'local_artifacts'
         return 'cloud', 'default_cloud'
@@ -6276,12 +6265,7 @@ def api_violations():
                 )
 
                 if existing_scope == 'cloud':
-                    if existing_local_device:
-                        existing.update(_build_source_payload('synced_local', 'cloud_record_local_device'))
-                        existing['origin'] = 'local_synced'
-                        existing['sync_source'] = existing.get('sync_source') or 'sync_local_cache'
-                    else:
-                        existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
+                    existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
                     existing.update(_build_source_payload('local', 'local_cache_row'))
                     existing['origin'] = existing.get('origin') or 'local'
@@ -6644,7 +6628,7 @@ def api_stats():
                 existing['timestamp'] = timestamp_value
 
             if existing.get('source_scope') == 'cloud':
-                existing['source_scope'] = 'synced_local'
+                existing['source_scope'] = 'cloud'
 
         stats = _build_stats_payload(list(by_report.values()))
         _set_cached_dashboard_snapshot(
@@ -6764,7 +6748,7 @@ def api_stats_merge_cache():
                 'timestamp': current.get('timestamp') or _parse_dt(row.get('timestamp') or row.get('created_at'), report_id),
                 'severity': str(current.get('severity') or row.get('severity') or 'MEDIUM').strip().upper(),
                 'status': 'completed' if local_status == 'completed' else str(current.get('status') or local_status or 'pending'),
-                'source_scope': 'synced_local' if current.get('source_scope') == 'cloud' else _scope(row, current.get('source_scope') or 'local'),
+                'source_scope': 'cloud' if current.get('source_scope') == 'cloud' else _scope(row, current.get('source_scope') or 'local'),
             }
 
         rows = list(by_report.values())
@@ -7123,7 +7107,7 @@ def api_report_status(report_id):
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(device_id or '').strip().lower()
         local_device = (
-            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
+            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'sync_local_cache'}
             or device_key.startswith('local_')
             or device_key.startswith('offline_')
         )
@@ -7131,33 +7115,43 @@ def api_report_status(report_id):
             sync_source=sync_source,
             device_id=device_key,
         )
-
-        if explicit_scope:
-            if (
-                explicit_scope == 'synced_local'
-                and active_profile != 'local'
-                and not local_device
-                and not local_sync_marker
-                and has_cloud_artifacts
-            ):
-                return 'cloud'
-            return explicit_scope
-
-        if local_sync_marker:
-            return 'synced_local' if has_cloud_artifacts else 'local'
-
-        if _is_local_pipeline_origin_marker(
+        local_origin_marker = _is_local_pipeline_origin_marker(
             source_scope='',
             sync_source=sync_source,
             device_id=device_key,
-        ):
-            return 'local'
+        )
+        sync_state = str(
+            (event_row or {}).get('sync_state')
+            or detection_payload.get('sync_state')
+            or detection_payload.get('cloud_sync_state')
+            or ''
+        ).strip().lower()
+        sync_state_confirmed = (
+            sync_state in {'synced', 'cloud_completed', 'completed_synced'}
+            or sync_state.startswith('cloud_sync_')
+            or sync_state.startswith('sync_')
+        )
+        local_origin = local_sync_marker or local_origin_marker or local_device
+        confirmed_synced_local = local_sync_marker or (local_origin and (has_cloud_artifacts or sync_state_confirmed))
+
+        if explicit_scope:
+            if explicit_scope == 'synced_local':
+                if confirmed_synced_local:
+                    return 'synced_local'
+                if local_origin or has_local_artifacts:
+                    return 'local'
+                if active_profile != 'local' and has_cloud_artifacts:
+                    return 'cloud'
+            return explicit_scope
+
+        if confirmed_synced_local:
+            return 'synced_local'
 
         if has_cloud_artifacts:
-            return 'synced_local' if local_device else 'cloud'
+            return 'cloud'
         if active_profile == 'cloud':
             return 'cloud'
-        if has_local_artifacts or local_device:
+        if has_local_artifacts or local_origin:
             return 'local'
         return 'cloud'
 

@@ -260,10 +260,20 @@ const ReportsPage = {
 
         const idSet = new Set(reportIds);
         let changed = false;
+        let changedCount = 0;
+        const changedReportIds = [];
         this.violations = this.violations.map((violation) => {
             const reportId = String((violation && violation.report_id) || '').trim();
             if (!idSet.has(reportId)) return violation;
+            const sourceScope = this.inferSourceScope(violation);
+            const cloudAnchored = sourceScope === 'cloud'
+                || this.sourceLabelMatchesScope(violation && violation.source_label, 'cloud');
+            if (cloudAnchored || !this.hasLocalOriginEvidence(violation)) {
+                return violation;
+            }
             changed = true;
+            changedCount += 1;
+            changedReportIds.push(reportId);
             return {
                 ...violation,
                 source_scope: 'synced_local',
@@ -278,13 +288,13 @@ const ReportsPage = {
 
         if (changed) {
             this.renderReports();
-            this.notify(`${reportIds.length} local report${reportIds.length === 1 ? '' : 's'} queued for cloud sync.`, 'success', {
-                dedupeKey: `local-sync-${reportIds.join('-')}`,
+            this.notify(`${changedCount} local report${changedCount === 1 ? '' : 's'} queued for cloud sync.`, 'success', {
+                dedupeKey: `local-sync-${changedReportIds.join('-')}`,
                 dedupeTtlMs: 12000
             });
         }
 
-        reportIds.slice(0, 8).forEach((reportId, index) => {
+        changedReportIds.slice(0, 8).forEach((reportId, index) => {
             const warmCache = async (attempt = 1) => {
                 if (typeof API !== 'undefined' && typeof API.cacheReportHtml === 'function') {
                     const cached = await API.cacheReportHtml(reportId, {
@@ -573,8 +583,10 @@ const ReportsPage = {
                     existing.source_label = 'Local Synced';
                 } else if (mergedScope === pendingScope && pendingLabel) {
                     existing.source_label = pendingLabel;
+                } else if (this.sourceLabelMatchesScope(existing.source_label, mergedScope)) {
+                    existing.source_label = String(existing.source_label || '').trim();
                 } else {
-                    existing.source_label = String(existing.source_label || '').trim() || this.sourceLabelForScope(mergedScope);
+                    existing.source_label = this.sourceLabelForScope(mergedScope);
                 }
                 return;
             }
@@ -935,25 +947,32 @@ const ReportsPage = {
 
     inferSourceScope(violation) {
         const explicit = this.normalizeSourceScope(violation && violation.source_scope);
+        if (explicit === 'synced_local') {
+            if (this.hasSyncedLocalEvidence(violation)) {
+                return 'synced_local';
+            }
+            return this.hasLocalOriginEvidence(violation) ? 'local' : 'cloud';
+        }
         if (explicit) return explicit;
 
-        const sourceMarker = String(
-            (violation && (violation.origin || violation.sync_source || violation.source || violation.source_reason)) || ''
-        ).trim().toLowerCase();
-        if (sourceMarker === 'local_synced' || sourceMarker === 'sync_local_cache' || sourceMarker === 'local_cache_sync') {
+        const sourceMarker = this.getSourceMarker(violation);
+        if (
+            sourceMarker === 'local_synced'
+            || sourceMarker === 'sync_local_cache'
+            || sourceMarker === 'local_cache_sync'
+            || sourceMarker === 'offline_local_cache_sync'
+            || sourceMarker === 'sync_local_cache_partial'
+            || sourceMarker === 'browser_local_draft_handoff'
+        ) {
             return 'synced_local';
         }
 
-        const deviceId = String((violation && violation.device_id) || '').trim().toLowerCase();
+        const deviceId = this.getDeviceKey(violation);
         if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') {
             return 'synced_local';
         }
 
-        const localByDevice = deviceId === 'local_cache'
-            || deviceId === 'offline_local_cache'
-            || deviceId.startsWith('local_')
-            || deviceId.startsWith('offline_');
-        return localByDevice ? 'local' : 'cloud';
+        return this.hasLocalOriginEvidence(violation) ? 'local' : 'cloud';
     },
 
     sourceLabelForScope(scope) {
@@ -972,13 +991,38 @@ const ReportsPage = {
         return normalized.includes('cloud');
     },
 
-    hasLocalScopeEvidence(record = {}) {
-        const explicit = this.normalizeSourceScope(record && record.source_scope);
-        if (explicit === 'local') return true;
-
-        const sourceMarker = String(
+    getSourceMarker(record = {}) {
+        return String(
             (record && (record.origin || record.sync_source || record.source || record.source_reason)) || ''
         ).trim().toLowerCase();
+    },
+
+    getDeviceKey(record = {}) {
+        return String((record && record.device_id) || '').trim().toLowerCase();
+    },
+
+    getSyncState(record = {}) {
+        return String(
+            (record && (record.sync_state || record.syncState || record.cloud_sync_state || record.cloudSyncState)) || ''
+        ).trim().toLowerCase();
+    },
+
+    hasCloudArtifactEvidence(record = {}) {
+        return !!(
+            record
+            && (
+                record.has_cloud_artifacts
+                || record.original_image_key
+                || record.annotated_image_key
+                || record.report_html_key
+                || record.cloud_report_url
+                || record.cloud_image_url
+            )
+        );
+    },
+
+    hasLocalOriginMarkerEvidence(record = {}) {
+        const sourceMarker = this.getSourceMarker(record);
         if (
             sourceMarker === 'local'
             || sourceMarker === 'local_pipeline'
@@ -986,6 +1030,13 @@ const ReportsPage = {
             || sourceMarker === 'offline_local'
             || sourceMarker === 'offline_local_cache'
             || sourceMarker === 'browser_local_draft'
+            || sourceMarker === 'browser_local_draft_handoff'
+            || sourceMarker === 'sync_local_cache'
+            || sourceMarker === 'sync_local_cache_partial'
+            || sourceMarker === 'local_cache'
+            || sourceMarker === 'local_cache_sync'
+            || sourceMarker === 'offline_local_cache_sync'
+            || sourceMarker === 'local_synced'
             || sourceMarker.startsWith('local_')
             || sourceMarker.startsWith('offline_')
             || sourceMarker.startsWith('browser_local')
@@ -993,10 +1044,12 @@ const ReportsPage = {
             return true;
         }
 
-        const deviceId = String((record && record.device_id) || '').trim().toLowerCase();
+        const deviceId = this.getDeviceKey(record);
         if (
             deviceId === 'local_cache'
             || deviceId === 'offline_local_cache'
+            || deviceId === 'local_cache_sync'
+            || deviceId === 'sync_local_cache'
             || deviceId === 'browser_local_draft'
             || deviceId.startsWith('local_')
             || deviceId.startsWith('offline_')
@@ -1005,46 +1058,54 @@ const ReportsPage = {
             return true;
         }
 
-        return !!(
-            record
-            && (
-                record.local_image_url
-                || record.local_report_url
-                || record.has_local_artifacts
-                || record.has_local_report
-                || record.local_report_available
-                || record.local_cache_available
-            )
-        );
+        const reportId = String((record && (record.report_id || record.id)) || '').trim().toLowerCase();
+        return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(reportId);
+    },
+
+    hasLocalOriginEvidence(record = {}) {
+        const explicit = this.normalizeSourceScope(record && record.source_scope);
+        if (explicit === 'local') return true;
+        return this.hasLocalOriginMarkerEvidence(record);
+    },
+
+    hasLocalScopeEvidence(record = {}) {
+        const explicit = this.normalizeSourceScope(record && record.source_scope);
+        if (explicit === 'local') return true;
+        return this.hasLocalOriginMarkerEvidence(record) && !this.hasSyncedLocalEvidence(record);
     },
 
     hasSyncedLocalEvidence(record = {}) {
-        const sourceMarker = String(
-            (record && (record.origin || record.sync_source || record.source || record.source_reason)) || ''
-        ).trim().toLowerCase();
-        if (
+        const explicit = this.normalizeSourceScope(record && record.source_scope);
+        const sourceMarker = this.getSourceMarker(record);
+        const deviceId = this.getDeviceKey(record);
+        const syncState = this.getSyncState(record);
+        const localOrigin = this.hasLocalOriginMarkerEvidence(record);
+        const syncMarker = (
             sourceMarker === 'local_synced'
             || sourceMarker === 'sync_local_cache'
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
             || sourceMarker === 'sync_local_cache_partial'
             || sourceMarker === 'browser_local_draft_handoff'
-        ) {
-            return true;
-        }
-
-        const deviceId = String((record && record.device_id) || '').trim().toLowerCase();
-        if (
-            deviceId === 'local_cache'
-            || deviceId === 'offline_local_cache'
             || deviceId === 'local_cache_sync'
-            || deviceId.startsWith('local_')
-            || deviceId.startsWith('offline_')
-        ) {
+            || deviceId === 'sync_local_cache'
+        );
+        if (syncMarker) {
             return true;
         }
 
-        return false;
+        const syncStateConfirmed = (
+            syncState === 'synced'
+            || syncState === 'cloud_completed'
+            || syncState === 'completed_synced'
+            || syncState.startsWith('cloud_sync_')
+            || syncState.startsWith('sync_')
+        );
+        if (syncStateConfirmed && (explicit === 'synced_local' || localOrigin)) {
+            return true;
+        }
+
+        return localOrigin && this.hasCloudArtifactEvidence(record);
     },
 
     resolveStableRuntimeSourceScope(existing = {}, sourceRecord = {}, patch = {}, candidateScope = '') {
@@ -1097,34 +1158,14 @@ const ReportsPage = {
         const cloudAnchored = anchoredScope === 'cloud'
             || existingLabel.includes('cloud')
             || sourceLabel.includes('cloud')
-            || !!(existing && existing.has_cloud_artifacts)
-            || !!(sourceRecord && sourceRecord.has_cloud_artifacts);
+            || this.hasCloudArtifactEvidence(existing)
+            || this.hasCloudArtifactEvidence(sourceRecord);
         if (!cloudAnchored) {
             return normalizedCandidate;
         }
 
         const mergedForMarker = { ...sourceRecord, ...existing, ...patch };
-        const deviceId = String((mergedForMarker && mergedForMarker.device_id) || '').trim().toLowerCase();
-        const localDevice = deviceId === 'local_cache'
-            || deviceId === 'offline_local_cache'
-            || deviceId === 'local_cache_sync'
-            || deviceId.startsWith('local_')
-            || deviceId.startsWith('offline_');
-        const sourceMarker = String(
-            (mergedForMarker && (
-                mergedForMarker.origin
-                || mergedForMarker.sync_source
-                || mergedForMarker.source
-                || mergedForMarker.source_reason
-            )) || ''
-        ).trim().toLowerCase();
-        const localOrigin = localDevice
-            || sourceMarker === 'local_synced'
-            || sourceMarker === 'sync_local_cache'
-            || sourceMarker === 'local_cache_sync'
-            || sourceMarker === 'offline_local_cache_sync'
-            || sourceMarker === 'sync_local_cache_partial'
-            || sourceMarker === 'browser_local_draft_handoff';
+        const localOrigin = this.hasLocalOriginMarkerEvidence(mergedForMarker);
         if (localOrigin) {
             return normalizedCandidate;
         }

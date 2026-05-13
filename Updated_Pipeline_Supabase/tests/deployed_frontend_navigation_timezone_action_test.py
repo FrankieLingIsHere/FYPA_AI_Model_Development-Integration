@@ -352,6 +352,90 @@ def check_local_draft_persistence_contract(page):
     return persisted_result
 
 
+def _read_desktop_sidebar_state(page):
+    return page.evaluate(
+        """
+        () => {
+            const sidebar = document.querySelector('.sidebar');
+            const title = document.querySelector('.sidebar-title');
+            const navLabel = document.querySelector(".sidebar-link[data-page='reports'] span");
+            const voiceCopy = document.querySelector('#enableVoice .voice-btn-copy');
+            const timezone = document.querySelector('#timezone-selector');
+
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return (
+                    style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || '1') > 0.05
+                    && rect.width > 6
+                    && rect.height > 6
+                );
+            };
+
+            return {
+                width: sidebar ? Number.parseFloat(window.getComputedStyle(sidebar).width || '0') : 0,
+                titleVisible: isVisible(title),
+                navLabelVisible: isVisible(navLabel),
+                voiceCopyVisible: isVisible(voiceCopy),
+                timezoneVisible: isVisible(timezone),
+            };
+        }
+        """
+    )
+
+
+def check_desktop_sidebar_contract(page):
+    page.evaluate(
+        """
+        () => {
+            if (document.activeElement && typeof document.activeElement.blur === 'function') {
+                document.activeElement.blur();
+            }
+        }
+        """
+    )
+    page.mouse.move(1280, 140)
+    page.wait_for_timeout(280)
+    collapsed = _read_desktop_sidebar_state(page)
+
+    sidebar = page.locator(".sidebar")
+    if sidebar.count() == 0:
+        raise RuntimeError("Sidebar missing from UI")
+    sidebar.hover(force=True)
+    page.wait_for_timeout(320)
+    expanded = _read_desktop_sidebar_state(page)
+
+    page.mouse.move(1280, 140)
+    page.wait_for_timeout(320)
+    collapsed_again = _read_desktop_sidebar_state(page)
+
+    width_delta = float(expanded.get("width", 0)) - float(collapsed.get("width", 0))
+    if width_delta < 120:
+        raise RuntimeError(
+            f"Sidebar did not expand enough on hover: collapsed={collapsed}, expanded={expanded}"
+        )
+    if collapsed.get("navLabelVisible") or collapsed.get("voiceCopyVisible") or collapsed.get("timezoneVisible"):
+        raise RuntimeError(f"Sidebar stayed expanded while idle: collapsed={collapsed}")
+    if not expanded.get("navLabelVisible") or not expanded.get("voiceCopyVisible") or not expanded.get("timezoneVisible"):
+        raise RuntimeError(f"Sidebar hover state did not expose controls cleanly: expanded={expanded}")
+    if abs(float(collapsed_again.get("width", 0)) - float(collapsed.get("width", 0))) > 6:
+        raise RuntimeError(
+            f"Sidebar failed to shrink back after hover: collapsed={collapsed}, collapsed_again={collapsed_again}"
+        )
+    if collapsed_again.get("navLabelVisible") or collapsed_again.get("voiceCopyVisible") or collapsed_again.get("timezoneVisible"):
+        raise RuntimeError(f"Sidebar controls remained visible after hover left: collapsed_again={collapsed_again}")
+
+    return {
+        "collapsed": collapsed,
+        "expanded": expanded,
+        "collapsed_again": collapsed_again,
+        "width_delta": width_delta,
+    }
+
+
 def main() -> int:
     try:
         with sync_playwright() as p:
@@ -374,6 +458,8 @@ def main() -> int:
             print(f"PASS: local draft persistence contract {draft_contract}")
 
             install_metrics_hooks(page)
+            sidebar_contract = check_desktop_sidebar_contract(page)
+            print(f"PASS: desktop sidebar collapse contract {sidebar_contract}")
 
             # Navigation action sequence used to detect duplicate remount/render behavior.
             sequence = [

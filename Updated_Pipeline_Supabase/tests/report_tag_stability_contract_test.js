@@ -109,6 +109,29 @@ function testMergeMatrix() {
       expectedScope: 'cloud',
       expectedLabel: 'Cloud',
     },
+    {
+      name: 'unsynced local report repairs back to local when bad synced-local scope has no sync proof',
+      base: [{
+        report_id: 'tag-unsynced-local-001',
+        timestamp: now,
+        status: 'pending',
+        has_report: false,
+        source_scope: 'synced_local',
+        source_label: 'Local Synced',
+        device_id: 'offline_local_cache',
+        source: 'offline_local_cache',
+      }],
+      pending: [{
+        report_id: 'tag-unsynced-local-001',
+        timestamp: now,
+        status: 'generating',
+        has_report: false,
+        source_scope: 'cloud',
+        source_label: 'Cloud',
+      }],
+      expectedScope: 'local',
+      expectedLabel: 'Local',
+    },
   ];
 
   cases.forEach((entry) => {
@@ -138,6 +161,8 @@ function testRuntimePatchMatrix() {
         status: 'generating',
         has_report: false,
         has_original: true,
+        has_local_artifacts: true,
+        local_image_url: 'blob:staged-preview',
         source_scope: 'local',
         source_label: 'Local',
       },
@@ -159,6 +184,46 @@ function testRuntimePatchMatrix() {
         has_report: false,
         source_scope: 'cloud',
         source_label: 'Cloud',
+      },
+      expectedScope: 'local',
+      expectedLabel: 'Local',
+    },
+    {
+      name: 'local report becomes local synced only after explicit reconnect sync evidence appears',
+      existing: {
+        report_id: 'tag-local-sync-transition-001',
+        status: 'pending',
+        has_report: false,
+        source_scope: 'local',
+        source_label: 'Local',
+        device_id: 'offline_local_cache',
+        source: 'offline_local_cache',
+      },
+      patch: {
+        status: 'generating',
+        has_report: false,
+        source_scope: 'synced_local',
+        source_label: 'Local Synced',
+        sync_source: 'sync_local_cache',
+        sync_state: 'cloud_sync_queued',
+      },
+      expectedScope: 'synced_local',
+      expectedLabel: 'Local Synced',
+    },
+    {
+      name: 'bad synced-local runtime patch with only local-origin hints repairs to local',
+      existing: {
+        report_id: 'tag-runtime-unsynced-local-001',
+        status: 'pending',
+        has_report: false,
+        source_scope: 'synced_local',
+        source_label: 'Local Synced',
+        device_id: 'offline_local_cache',
+        source: 'offline_local_cache',
+      },
+      patch: {
+        status: 'generating',
+        has_report: false,
       },
       expectedScope: 'local',
       expectedLabel: 'Local',
@@ -214,10 +279,55 @@ function testRuntimePatchMatrix() {
   });
 }
 
+function testLocalSyncEventMatrix() {
+  const ReportsPage = loadReportsPage();
+  const now = new Date().toISOString();
+
+  ReportsPage.violations = [
+    {
+      report_id: 'tag-cloud-sync-event-001',
+      timestamp: now,
+      status: 'completed',
+      has_report: true,
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+      device_id: 'webcam_0',
+    },
+    {
+      report_id: 'tag-local-sync-event-001',
+      timestamp: now,
+      status: 'pending',
+      has_report: false,
+      source_scope: 'local',
+      source_label: 'Local',
+      device_id: 'offline_local_cache',
+      source: 'offline_local_cache',
+    }
+  ];
+
+  ReportsPage.renderReports = () => {};
+  ReportsPage.notify = () => {};
+  ReportsPage.loadReports = async () => {};
+
+  ReportsPage.applyLocalSyncUpdate({
+    success: true,
+    report_ids: ['tag-cloud-sync-event-001', 'tag-local-sync-event-001'],
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_sync_queued',
+  });
+
+  const cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
+  const localRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-local-sync-event-001');
+
+  assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores local sync event');
+  assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts local sync event');
+}
+
 function main() {
   const tests = [
     testMergeMatrix,
     testRuntimePatchMatrix,
+    testLocalSyncEventMatrix,
   ];
   const failures = [];
   tests.forEach((testFn) => {

@@ -287,6 +287,12 @@ Copy YOLOv8 weights from the original Updated_Pipeline:
 cp -r ../Updated_Pipeline/Results ./
 ```
 
+Training and experiment notebooks that produced or evaluated detector weights live under:
+
+```bash
+Updated_Pipeline_Supabase/training/notebooks/
+```
+
 ### 4. Verify Setup
 
 Run the validation tests:

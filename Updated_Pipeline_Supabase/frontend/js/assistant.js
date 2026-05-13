@@ -1,4 +1,7 @@
 const CASMAssistant = {
+    ASSISTANT_NAME: 'Mira',
+    ASSISTANT_ROLE: 'CASM Safety Copilot',
+    ASSISTANT_SUBTITLE: 'Chat for tutorials, exports, report tags, and system questions.',
     STORAGE_KEY: 'casm.assistant.sessions.v1',
     PANEL_STATE_KEY: 'casm.assistant.panelState.v1',
     CLIENT_ID_KEY: 'casm.assistant.clientId.v1',
@@ -19,11 +22,13 @@ const CASMAssistant = {
     init() {
         this.cacheDom();
         if (!this.ui.launcher || !this.ui.panel) return;
+        this.applyBranding();
         if (this.ui.input) {
             this.ui.input.setAttribute(
                 'placeholder',
-                'Type a question or request, like "show local tutorial" or "export cloud reports csv"'
+                `Ask ${this.ASSISTANT_NAME} something like "show local tutorial" or "export cloud reports csv"`
             );
+            this.ui.input.setAttribute('aria-label', `Ask ${this.ASSISTANT_NAME}`);
         }
         this.clientIdentity = this.ensureClientIdentity();
         this.docsIndex = this.buildDocsIndex();
@@ -52,8 +57,28 @@ const CASMAssistant = {
             promptDeck: document.getElementById('assistantPromptDeck'),
             messages: document.getElementById('assistantMessages'),
             composer: document.getElementById('assistantComposer'),
-            input: document.getElementById('assistantInput')
+            input: document.getElementById('assistantInput'),
+            title: document.getElementById('assistantTitle'),
+            kicker: document.getElementById('assistantKicker'),
+            subtitle: document.getElementById('assistantSubtitle')
         };
+    },
+
+    applyBranding() {
+        if (this.ui.launcher) {
+            const label = `Open ${this.ASSISTANT_NAME} chat`;
+            this.ui.launcher.setAttribute('aria-label', label);
+            this.ui.launcher.setAttribute('title', label);
+        }
+        if (this.ui.title) {
+            this.ui.title.textContent = this.ASSISTANT_NAME;
+        }
+        if (this.ui.kicker) {
+            this.ui.kicker.textContent = this.ASSISTANT_ROLE;
+        }
+        if (this.ui.subtitle) {
+            this.ui.subtitle.textContent = this.ASSISTANT_SUBTITLE;
+        }
     },
 
     bindEvents() {
@@ -77,6 +102,7 @@ const CASMAssistant = {
         if (this.ui.promptDeck) {
             this.ui.promptDeck.addEventListener('click', (event) => this.handleActionClick(event));
         }
+        this.ui.panel.addEventListener('wheel', (event) => this.handlePanelWheel(event), { passive: false });
         this.ui.sessionList.addEventListener('click', (event) => this.handleSessionRailClick(event));
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && this.panelOpen) {
@@ -98,6 +124,26 @@ const CASMAssistant = {
         }
         this.syncPanelState(false);
         this.autosizeInput();
+    },
+
+    handlePanelWheel(event) {
+        if (!this.panelOpen || !this.ui.messages) return;
+        if (window.innerWidth <= 900) return;
+        const messages = this.ui.messages;
+        if (messages.scrollHeight <= messages.clientHeight + 8) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (
+            target.closest('#assistantMessages') ||
+            target.closest('#assistantInput') ||
+            target.closest('.assistant-session-list') ||
+            target.closest('.assistant-shortcut-strip') ||
+            target.closest('.assistant-prompt-chip-row')
+        ) {
+            return;
+        }
+        messages.scrollTop += event.deltaY;
+        event.preventDefault();
     },
 
     loadState() {
@@ -224,7 +270,7 @@ const CASMAssistant = {
             session.messages.push({
                 id: `msg-${Date.now()}-welcome`,
                 role: 'assistant',
-                text: 'Hi, I can guide tutorials, explain the system, open pages or handbook sections, and export filtered CSV files from natural-language requests.',
+                text: `Hi, I'm ${this.ASSISTANT_NAME}. I can guide tutorials, explain the system, open pages or handbook sections, and export filtered CSV files from natural-language requests.`,
                 createdAt: Date.now(),
                 bullets: [
                     'Explain report tags, local mode checkup, cloud/local behavior, and caption flow.',
@@ -602,15 +648,24 @@ const CASMAssistant = {
             `).join('')}</div>`
             : '';
 
+        const speakerName = message.role === 'assistant' ? this.ASSISTANT_NAME : 'You';
+        const speakerIcon = message.role === 'assistant' ? 'fa-sparkles' : 'fa-user';
+
         return `
             <article class="assistant-message assistant-message-${message.role}">
-                <div class="assistant-bubble">
-                    <p>${this.escapeHtml(message.text)}</p>
-                    ${tutorialHtml}
-                    ${metricsHtml}
-                    ${bulletsHtml}
-                    ${docsHtml}
-                    ${actionsHtml}
+                <div class="assistant-avatar" aria-hidden="true">
+                    <i class="fas ${speakerIcon}"></i>
+                </div>
+                <div class="assistant-message-stack">
+                    <div class="assistant-message-meta">${this.escapeHtml(speakerName)}</div>
+                    <div class="assistant-bubble">
+                        <p>${this.escapeHtml(message.text)}</p>
+                        ${tutorialHtml}
+                        ${metricsHtml}
+                        ${bulletsHtml}
+                        ${docsHtml}
+                        ${actionsHtml}
+                    </div>
                 </div>
             </article>
         `;

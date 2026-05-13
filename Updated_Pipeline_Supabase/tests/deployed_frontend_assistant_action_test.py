@@ -112,7 +112,7 @@ def main() -> int:
             browser = p.chromium.launch(headless=True)
             export_prompt, export_expectations, _source_rows = choose_reports_export_case()
 
-            desktop = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 960})
+            desktop = browser.new_context(accept_downloads=True, viewport={"width": 1366, "height": 768})
             desktop_page = desktop.new_page()
             desktop_page.on("dialog", lambda dialog: dialog.accept())
             wait_until_ready(desktop_page)
@@ -130,6 +130,9 @@ def main() -> int:
             launcher.click()
             assistant_panel.wait_for(state="visible", timeout=15000)
             desktop_page.wait_for_timeout(400)
+            assistant_title = desktop_page.locator("#assistantTitle").inner_text()
+            if "Mira" not in assistant_title:
+                raise RuntimeError(f"Assistant title did not update to the chatbot name: {assistant_title}")
             if not desktop_page.locator("#assistantInput").is_visible():
                 raise RuntimeError("Assistant input is not visible after opening the panel")
             if not desktop_page.locator("#assistantPromptDeck").is_visible():
@@ -174,6 +177,45 @@ def main() -> int:
             desktop_page.locator(".assistant-action-btn", has_text="Next step").last.click()
             desktop_page.wait_for_selector("text=Step 2 of 4", timeout=15000)
             print("PASS: tutorial step controls advance in chat")
+
+            for prompt in ("what does local synced mean", "system overview", "show cloud tutorial"):
+                assistant_input.fill(prompt)
+                assistant_input.press("Enter")
+                desktop_page.wait_for_timeout(450)
+
+            scroll_metrics = desktop_page.evaluate(
+                """
+                () => {
+                    const panel = document.querySelector('#assistantPanel');
+                    const shell = document.querySelector('.assistant-panel-shell');
+                    const messages = document.querySelector('#assistantMessages');
+                    return {
+                        panelHeight: panel ? panel.clientHeight : 0,
+                        shellHeight: shell ? shell.clientHeight : 0,
+                        messagesClientHeight: messages ? messages.clientHeight : 0,
+                        messagesScrollHeight: messages ? messages.scrollHeight : 0,
+                        messagesScrollTop: messages ? messages.scrollTop : 0,
+                    };
+                }
+                """
+            )
+            if scroll_metrics["messagesScrollHeight"] <= scroll_metrics["messagesClientHeight"]:
+                raise RuntimeError("Assistant conversation did not create a real scrollable message region on laptop viewport")
+            if abs(scroll_metrics["shellHeight"] - scroll_metrics["panelHeight"]) > 8:
+                raise RuntimeError("Assistant panel shell no longer fits inside the visible panel height")
+            desktop_page.evaluate("() => { const messages = document.querySelector('#assistantMessages'); if (messages) messages.scrollTop = 0; }")
+            prompt_box = desktop_page.locator("#assistantPromptDeck").bounding_box()
+            if not prompt_box:
+                raise RuntimeError("Missing prompt deck box for scroll relay test")
+            desktop_page.mouse.move(prompt_box["x"] + 24, prompt_box["y"] + 18)
+            desktop_page.mouse.wheel(0, 1200)
+            desktop_page.wait_for_timeout(350)
+            scrolled_after_wheel = desktop_page.evaluate(
+                "() => { const messages = document.querySelector('#assistantMessages'); return messages ? messages.scrollTop : 0; }"
+            )
+            if scrolled_after_wheel <= 0:
+                raise RuntimeError("Assistant conversation did not scroll when wheeling over the panel")
+            print("PASS: assistant behaves like a scrollable chat on laptop viewport")
 
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)

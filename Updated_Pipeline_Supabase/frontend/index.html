@@ -346,15 +346,16 @@
     </main>
 
     <div id="assistantDock" class="assistant-dock" aria-live="polite">
-        <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Open CASM assistant" aria-expanded="false" aria-controls="assistantPanel" title="Open CASM assistant">
+        <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Open Mira chat" aria-expanded="false" aria-controls="assistantPanel" title="Open Mira chat">
             <i class="fas fa-comments" aria-hidden="true"></i>
         </button>
         <section id="assistantPanel" class="assistant-panel hidden" role="dialog" aria-modal="false" aria-labelledby="assistantTitle">
             <div class="assistant-panel-shell">
                 <header class="assistant-header">
                     <div class="assistant-header-copy">
-                        <span class="assistant-kicker">Smart guide</span>
-                        <h2 id="assistantTitle">CASM Assistant</h2>
+                        <span id="assistantKicker" class="assistant-kicker">CASM Safety Copilot</span>
+                        <h2 id="assistantTitle">Mira</h2>
+                        <p id="assistantSubtitle" class="assistant-subtitle">Chat for tutorials, exports, report tags, and system questions.</p>
                     </div>
                     <div class="assistant-header-actions">
                         <button id="assistantSessionsToggle" class="assistant-header-btn" type="button" aria-expanded="false" aria-controls="assistantSessionRail">
@@ -386,11 +387,11 @@
 
                         <form id="assistantComposer" class="assistant-composer">
                             <div class="assistant-composer-guide">
-                                <strong>Type here</strong>
+                                <strong>Chat with Mira</strong>
                                 <span>Ask for tutorials, explanations, page shortcuts, CSV exports, or handbook help.</span>
                             </div>
-                            <label class="sr-only" for="assistantInput">Ask the CASM assistant</label>
-                            <textarea id="assistantInput" class="assistant-input" rows="1" placeholder="Type a question or request, like “show local tutorial” or “export cloud reports csv”"></textarea>
+                            <label class="sr-only" for="assistantInput">Ask Mira</label>
+                            <textarea id="assistantInput" class="assistant-input" rows="1" placeholder='Ask Mira something like "show local tutorial" or "export cloud reports csv"'></textarea>
                             <button id="assistantSend" class="assistant-send" type="submit" aria-label="Send message">
                                 <i class="fas fa-paper-plane" aria-hidden="true"></i>
                             </button>

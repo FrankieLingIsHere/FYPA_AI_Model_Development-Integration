@@ -106,11 +106,28 @@ def choose_reports_export_case():
     raise RuntimeError("Could not find a real assistant export filter case from the live violations API")
 
 
+def build_analytics_prompt(export_expectations):
+    source_scope = str(export_expectations.get("source_scope") or "").strip().lower()
+    severity = str(export_expectations.get("severity") or "").strip().lower()
+    parts = ["show analytics"]
+    if severity:
+        parts.append(f"for {severity}")
+    else:
+        parts.append("for")
+    if source_scope == "synced_local":
+        parts.append("local synced")
+    elif source_scope:
+        parts.append(source_scope.replace("_", " "))
+    parts.append("this month")
+    return " ".join(part for part in parts if part).replace("for this", "for this")
+
+
 def main() -> int:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             export_prompt, export_expectations, _source_rows = choose_reports_export_case()
+            analytics_prompt = build_analytics_prompt(export_expectations)
 
             desktop = browser.new_context(accept_downloads=True, viewport={"width": 1366, "height": 768})
             desktop_page = desktop.new_page()
@@ -133,6 +150,9 @@ def main() -> int:
             assistant_title = desktop_page.locator("#assistantTitle").inner_text()
             if "Mira" not in assistant_title:
                 raise RuntimeError(f"Assistant title did not update to the chatbot name: {assistant_title}")
+            panel_box = assistant_panel.bounding_box()
+            if not panel_box or panel_box["width"] > 850 or panel_box["height"] > 730:
+                raise RuntimeError(f"Assistant panel feels oversized on laptop viewport: {panel_box}")
             if not desktop_page.locator("#assistantInput").is_visible():
                 raise RuntimeError("Assistant input is not visible after opening the panel")
             if not desktop_page.locator("#assistantPromptDeck").is_visible():
@@ -141,9 +161,18 @@ def main() -> int:
                 raise RuntimeError("Assistant composer guide is not visible")
             starter_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
             starter_text = desktop_page.locator("#assistantPromptDeck").inner_text()
-            if starter_mode != "starter" or "Show local tutorial" not in starter_text:
+            if starter_mode != "starter" or "I'm new here" not in starter_text or "Open camera" not in starter_text or "Check image" not in starter_text:
                 raise RuntimeError("Assistant did not render the expected starter prompt deck")
             print("PASS: assistant input and starter prompts are visible")
+
+            assistant_input.fill("i dont know what should i do first")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=If you are new here", timeout=20000)
+            onboarding_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
+            onboarding_text = desktop_page.locator("#assistantPromptDeck").inner_text()
+            if onboarding_mode != "onboarding" or "Start live monitoring" not in onboarding_text or "Recommend settings" not in onboarding_text:
+                raise RuntimeError("Adaptive prompt deck did not switch into the onboarding guidance mode")
+            print("PASS: onboarding prompt deck helps first-time users")
 
             desktop_page.evaluate(
                 """
@@ -168,6 +197,9 @@ def main() -> int:
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=Local tutorial loaded.", timeout=20000)
             desktop_page.wait_for_selector("text=Local Pipeline", timeout=20000)
+            tutorial_cards_before = desktop_page.locator(".assistant-tutorial-card").count()
+            if tutorial_cards_before != 1:
+                raise RuntimeError(f"Expected one slideshow tutorial card, found {tutorial_cards_before}")
             tutorial_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
             tutorial_text = desktop_page.locator("#assistantPromptDeck").inner_text()
             if tutorial_mode != "tutorial-local" or "Next tutorial step" not in tutorial_text:
@@ -176,7 +208,81 @@ def main() -> int:
 
             desktop_page.locator(".assistant-action-btn", has_text="Next step").last.click()
             desktop_page.wait_for_selector("text=Step 2 of 4", timeout=15000)
-            print("PASS: tutorial step controls advance in chat")
+            tutorial_cards_after = desktop_page.locator(".assistant-tutorial-card").count()
+            if tutorial_cards_after != 1:
+                raise RuntimeError("Tutorial slideshow started stacking extra cards instead of updating in place")
+            print("PASS: tutorial step controls advance in a single slideshow card")
+
+            assistant_input.fill("help me start live monitoring")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector(".assistant-action-btn:has-text('Open Live Monitor')", timeout=15000)
+            desktop_page.locator(".assistant-action-btn", has_text="Open Live Monitor").last.click()
+            desktop_page.wait_for_selector("#startLiveBtn", timeout=15000)
+            desktop_page.wait_for_timeout(450)
+            if assistant_panel.is_visible():
+                raise RuntimeError("Assistant should collapse after opening live monitoring so the controls stay usable")
+            live_mode_active = desktop_page.locator("#liveModeBtn.active").count() > 0
+            if not live_mode_active:
+                raise RuntimeError("Live Monitor did not land in camera stream mode from the assistant handoff")
+            active_element = desktop_page.evaluate("() => document.activeElement && document.activeElement.id ? document.activeElement.id : ''")
+            if active_element != "startLiveBtn":
+                raise RuntimeError(f"Live Monitor handoff did not focus the Start control; got {active_element}")
+            launcher.click()
+            assistant_panel.wait_for(state="visible", timeout=15000)
+            if desktop_page.locator("text=Open Live Monitor").count() == 0:
+                raise RuntimeError("Assistant did not preserve the live-monitor guidance message after reopening")
+            print("PASS: live monitoring handoff routes correctly and preserves the chat session")
+
+            assistant_input.fill("can you check if this image has violations")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector(".assistant-action-btn:has-text('Open Image Analysis')", timeout=15000)
+            desktop_page.locator(".assistant-action-btn", has_text="Open Image Analysis").last.click()
+            desktop_page.wait_for_timeout(500)
+            if assistant_panel.is_visible():
+                raise RuntimeError("Assistant should collapse after opening image analysis so the upload flow stays usable")
+            upload_mode_active = desktop_page.locator("#uploadModeBtn.active").count() > 0
+            upload_container_visible = desktop_page.evaluate(
+                "() => { const el = document.querySelector('#uploadContainer'); return !!(el && getComputedStyle(el).display !== 'none'); }"
+            )
+            if not upload_mode_active or not upload_container_visible:
+                raise RuntimeError("Assistant did not switch Live Monitor into Analyze Image mode")
+            launcher.click()
+            assistant_panel.wait_for(state="visible", timeout=15000)
+            print("PASS: image-analysis handoff routes to the upload workflow")
+
+            assistant_input.fill("recommend settings")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector(".assistant-action-btn:has-text('Use recommended settings')", timeout=15000)
+            desktop_page.locator(".assistant-action-btn", has_text="Use recommended settings").last.click()
+            desktop_page.wait_for_selector("text=I applied the recommended settings.", timeout=45000)
+            print("PASS: assistant can recommend and apply the balanced settings profile")
+
+            assistant_input.fill(analytics_prompt)
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=Here is the live analytics snapshot", timeout=20000)
+            if desktop_page.locator(".assistant-metric-card").count() < 4:
+                raise RuntimeError("Analytics question did not render metrics directly inside the assistant")
+            desktop_page.locator(".assistant-action-btn", has_text="Open filtered analytics").last.click()
+            desktop_page.wait_for_timeout(600)
+            if assistant_panel.is_visible():
+                raise RuntimeError("Assistant should collapse after opening the filtered analytics page")
+            desktop_page.wait_for_selector("#analyticsAssistantFilterBanner", timeout=15000)
+            banner_visible = desktop_page.evaluate(
+                "() => { const el = document.querySelector('#analyticsAssistantFilterBanner'); return !!(el && getComputedStyle(el).display !== 'none'); }"
+            )
+            if not banner_visible:
+                raise RuntimeError("Analytics page did not show the assistant-applied filter banner")
+            launcher.click()
+            assistant_panel.wait_for(state="visible", timeout=15000)
+            print("PASS: analytics question renders in chat and opens the filtered analytics page")
+
+            assistant_input.fill("!!!")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=I did not get a usable request from that yet.", timeout=15000)
+            assistant_input.fill("write a poem about bananas")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=outside the monitoring assistant scope", timeout=15000)
+            print("PASS: low-signal and off-topic prompts get clear fallback handling")
 
             for prompt in ("what does local synced mean", "system overview", "show cloud tutorial"):
                 assistant_input.fill(prompt)
@@ -279,10 +385,14 @@ def main() -> int:
             active_workflow = desktop_page.locator("#handbook-workflow.active")
             if active_workflow.count() == 0:
                 raise RuntimeError("Expected workflow handbook page to activate from assistant docs result")
+            if assistant_panel.is_visible():
+                raise RuntimeError("Assistant should collapse when handing the user into the handbook")
             print("PASS: assistant docs results open the handbook section")
 
             desktop_page.click("#closeHandbook")
             desktop_page.wait_for_timeout(300)
+            launcher.click()
+            assistant_panel.wait_for(state="visible", timeout=15000)
             session_chips_before = desktop_page.locator(".assistant-session-chip").count()
             desktop_page.click("#assistantNewSession")
             desktop_page.wait_for_timeout(500)

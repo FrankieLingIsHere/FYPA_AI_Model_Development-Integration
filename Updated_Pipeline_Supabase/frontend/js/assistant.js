@@ -1,7 +1,7 @@
 const CASMAssistant = {
     ASSISTANT_NAME: 'Mira',
     ASSISTANT_ROLE: 'CASM Safety Copilot',
-    ASSISTANT_SUBTITLE: 'Chat for tutorials, exports, report tags, and system questions.',
+    ASSISTANT_SUBTITLE: 'Chat for tutorials, camera help, image checks, exports, settings, and system questions.',
     STORAGE_KEY: 'casm.assistant.sessions.v1',
     PANEL_STATE_KEY: 'casm.assistant.panelState.v1',
     CLIENT_ID_KEY: 'casm.assistant.clientId.v1',
@@ -274,16 +274,16 @@ const CASMAssistant = {
                 createdAt: Date.now(),
                 bullets: [
                     'Explain report tags, local mode checkup, cloud/local behavior, and caption flow.',
-                    'Show cloud or local tutorial steps directly in chat and jump into the handbook.',
-                    'Open pages like Live, Reports, Analytics, Settings, or a specific handbook section.',
+                    'Show cloud or local tutorial steps in one guided card and jump into the handbook.',
+                    'Open Camera Stream or Image Analysis, then collapse so the page stays usable.',
                     'Export analytics or report CSV files from prompts like "export cloud reports csv month".',
                     'Session memory stays on this browser, and only admins can review synced copies.'
                 ],
                 actions: [
                     { type: 'tutorial', label: 'Cloud tutorial', flow: 'cloud', stepIndex: 0 },
                     { type: 'tutorial', label: 'Local tutorial', flow: 'local', stepIndex: 0 },
-                    { type: 'overview', label: 'System overview' },
-                    { type: 'export', label: 'Export reports CSV', exportKind: 'reports' }
+                    { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'settings-profile', label: 'Use recommended settings', profile: 'recommended' }
                 ]
             });
         }
@@ -360,10 +360,11 @@ const CASMAssistant = {
     renderShortcutStrip() {
         const actions = [
             { type: 'route', label: 'Home', icon: 'fa-home', page: 'home' },
-            { type: 'route', label: 'Live', icon: 'fa-video', page: 'live' },
+            { type: 'route', label: 'Camera', icon: 'fa-video', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+            { type: 'route', label: 'Image Check', icon: 'fa-image', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
             { type: 'route', label: 'Reports', icon: 'fa-file-alt', page: 'reports' },
             { type: 'route', label: 'Analytics', icon: 'fa-chart-line', page: 'analytics' },
-            { type: 'handbook', label: 'Manual', icon: 'fa-book-open', pageKey: 'intro' },
+            { type: 'route', label: 'Settings', icon: 'fa-sliders-h', page: 'settings', collapsePanel: true },
             { type: 'tutorial', label: 'Cloud demo', icon: 'fa-cloud', flow: 'cloud', stepIndex: 0 },
             { type: 'tutorial', label: 'Local demo', icon: 'fa-laptop-code', flow: 'local', stepIndex: 0 },
             { type: 'export', label: 'Reports CSV', icon: 'fa-file-csv', exportKind: 'reports' },
@@ -409,11 +410,25 @@ const CASMAssistant = {
 
         if (!userMessages.length) {
             promptModel.actions = [
-                this.buildPromptSuggestion('Show local tutorial', 'show local tutorial'),
-                this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean'),
-                this.buildPromptSuggestion('Find sync docs', 'find docs about wifi reconnect local sync'),
-                this.buildPromptSuggestion('Export cloud CSV', 'export cloud reports csv month'),
-                this.buildPromptSuggestion('Open checkup', 'open settings checkup')
+                this.buildPromptSuggestion("I'm new here", 'i dont know what should i do first'),
+                this.buildPromptSuggestion('Open camera', 'help me start live monitoring'),
+                this.buildPromptSuggestion('Check image', 'can you check if this image has violations'),
+                this.buildPromptSuggestion('Recommend settings', 'recommend settings'),
+                this.buildPromptSuggestion('Show analytics', 'show analytics overview')
+            ];
+            return promptModel;
+        }
+
+        if (this.isOnboardingIntent(lastUserPrompt)) {
+            promptModel.headline = 'Start here';
+            promptModel.subline = 'If the system is new to you, these prompts walk through the safest first actions without assuming prior context.';
+            promptModel.mode = 'onboarding';
+            promptModel.actions = [
+                this.buildPromptSuggestion('Start live monitoring', 'help me start live monitoring'),
+                this.buildPromptSuggestion('Check one image', 'can you check if this image has violations'),
+                this.buildPromptSuggestion('Show analytics', 'show analytics overview'),
+                this.buildPromptSuggestion('Recommend settings', 'recommend settings'),
+                this.buildPromptSuggestion('Open handbook', 'open handbook')
             ];
             return promptModel;
         }
@@ -536,10 +551,10 @@ const CASMAssistant = {
             promptModel.subline = 'These prompts help after a monitoring run or before closing a live session.';
             promptModel.mode = 'live';
             promptModel.actions = [
+                this.buildPromptSuggestion('Open camera', 'help me start live monitoring'),
+                this.buildPromptSuggestion('Check image', 'can you check if this image has violations'),
+                this.buildPromptSuggestion('Recommend settings', 'recommend settings'),
                 this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial'),
-                this.buildPromptSuggestion('Show local tutorial', 'show local tutorial'),
-                this.buildPromptSuggestion('Open reports', 'open reports'),
-                this.buildPromptSuggestion('Explain caption flow', 'how does caption flow work'),
                 this.buildPromptSuggestion('Open checkup', 'open settings checkup')
             ];
             return promptModel;
@@ -630,10 +645,16 @@ const CASMAssistant = {
                         <span class="assistant-flow-badge">${this.escapeHtml(message.tutorial.flowLabel || '')}</span>
                         <span class="assistant-step-badge">Step ${Number(message.tutorial.stepNumber || 1)} of ${Number(message.tutorial.totalSteps || 1)}</span>
                     </div>
+                    <div class="assistant-tutorial-progress" aria-hidden="true">
+                        <div class="assistant-tutorial-progress-track">
+                            <span class="assistant-tutorial-progress-fill" style="width: ${Math.max(8, Math.min(100, Math.round((Number(message.tutorial.stepNumber || 1) / Math.max(1, Number(message.tutorial.totalSteps || 1))) * 100)))}%;"></span>
+                        </div>
+                    </div>
                     <h4>${this.escapeHtml(message.tutorial.title || '')}</h4>
                     <p>${this.escapeHtml(message.tutorial.summary || '')}</p>
                     <ul class="assistant-bullet-list">${(message.tutorial.bullets || []).map((item) => `<li>${this.escapeHtml(item)}</li>`).join('')}</ul>
                     <div class="assistant-caution">${this.escapeHtml(message.tutorial.caution || '')}</div>
+                    <div class="assistant-tutorial-footnote">Use Previous step and Next step to move this guide without stacking extra tutorial cards.</div>
                 </div>
             `
             : '';
@@ -727,6 +748,29 @@ const CASMAssistant = {
             return;
         }
 
+        if (this.isOnboardingIntent(query)) {
+            this.handleOnboardingIntent();
+            return;
+        }
+
+        const workflowIntent = this.resolveWorkflowIntent(query);
+        if (workflowIntent) {
+            this.handleWorkflowIntent(workflowIntent);
+            return;
+        }
+
+        const settingsIntent = this.resolveSettingsIntent(query);
+        if (settingsIntent) {
+            await this.handleSettingsIntent(settingsIntent);
+            return;
+        }
+
+        const analyticsIntent = this.resolveAnalyticsIntent(raw, query);
+        if (analyticsIntent) {
+            await this.handleAnalyticsIntent(analyticsIntent);
+            return;
+        }
+
         const destination = this.resolveDestination(query);
         if (destination) {
             this.handleDestination(destination);
@@ -743,7 +787,7 @@ const CASMAssistant = {
             return;
         }
 
-        this.handleDocsSearch(raw);
+        this.handleUnknownPrompt(raw, query);
     },
 
     isDocsIntent(query) {
@@ -810,8 +854,32 @@ const CASMAssistant = {
         return /\b(overview|summary|metrics|status|health|analytics snapshot)\b/.test(query);
     },
 
+    isOnboardingIntent(query) {
+        return /\b(i m new|new here|where do i start|what should i do|dont know|do not know|not sure|what can you do|how do i use this|how do i start|first time|help me understand)\b/.test(query);
+    },
+
     isTutorialIntent(query) {
         return /\b(tutorial|walkthrough|demo|guide|next step|previous step|prev step|continue tutorial|cloud mode|local mode)\b/.test(query);
+    },
+
+    handleOnboardingIntent() {
+        this.pushMessage({
+            role: 'assistant',
+            text: 'No problem. If you are new here, I can guide you through the easiest starting paths instead of expecting you to know the system already.',
+            bullets: [
+                'Start live monitoring if you want a real-time camera session with report generation.',
+                'Use image analysis if you only want to check one still image for violations.',
+                'Open analytics if you want a quick operational snapshot before doing anything else.',
+                'Use recommended settings if you want the balanced default profile first.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                { type: 'route', label: 'Open image analysis', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                { type: 'settings-profile', label: 'Use recommended settings', profile: 'recommended' },
+                { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 }
+            ]
+        });
     },
 
     async handleExportIntent(raw, query) {
@@ -906,9 +974,34 @@ const CASMAssistant = {
 
         session.context.tutorialFlow = flow;
         session.context.tutorialIndex = index;
-        const step = steps[index];
+        this.upsertTutorialMessage(flow, index, steps);
+    },
 
-        this.pushMessage({
+    buildTutorialActions(flow, index, steps) {
+        const actions = [
+            { type: 'tutorial', label: 'Previous step', flow, stepIndex: Math.max(0, index - 1) },
+            { type: 'tutorial', label: 'Next step', flow, stepIndex: Math.min(steps.length - 1, index + 1) }
+        ];
+
+        if (flow === 'local' && index === 0) {
+            actions.push({ type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true });
+        } else if (flow === 'local' && (index === 1 || index === 2)) {
+            actions.push({ type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true });
+        } else if (flow === 'local' && index >= steps.length - 1) {
+            actions.push({ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true });
+        } else if (flow === 'cloud' && index <= 1) {
+            actions.push({ type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true });
+        } else if (flow === 'cloud' && index >= steps.length - 2) {
+            actions.push({ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true });
+        }
+
+        actions.push({ type: 'handbook', label: 'Open in handbook', pageKey: 'workflow', tutorialFlow: flow, tutorialStep: index, collapsePanel: true });
+        return actions;
+    },
+
+    buildTutorialMessage(flow, index, steps) {
+        const step = steps[index] || {};
+        return {
             role: 'assistant',
             text: `${flow === 'local' ? 'Local' : 'Cloud'} tutorial loaded.`,
             tutorial: {
@@ -920,10 +1013,301 @@ const CASMAssistant = {
                 bullets: step.bullets || [],
                 caution: step.caution
             },
+            actions: this.buildTutorialActions(flow, index, steps)
+        };
+    },
+
+    getLatestTutorialMessageIndex(session) {
+        if (!session || !Array.isArray(session.messages)) return -1;
+        for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+            const message = session.messages[index];
+            if (message && message.role === 'assistant' && message.tutorial) {
+                return index;
+            }
+        }
+        return -1;
+    },
+
+    refreshSessionUi() {
+        this.renderMessages();
+        this.renderSessionRail();
+        this.saveState();
+    },
+
+    upsertTutorialMessage(flow, index, steps) {
+        const session = this.getActiveSession();
+        if (!session) return;
+        const tutorialMessage = this.buildTutorialMessage(flow, index, steps);
+        const existingIndex = this.getLatestTutorialMessageIndex(session);
+        if (existingIndex >= 0) {
+            const existing = session.messages[existingIndex];
+            session.messages[existingIndex] = this.normalizeMessage({
+                ...existing,
+                ...tutorialMessage,
+                id: existing.id,
+                createdAt: existing.createdAt
+            });
+            session.updatedAt = Date.now();
+            this.refreshSessionUi();
+            return;
+        }
+        this.pushMessage(tutorialMessage);
+    },
+
+    resolveWorkflowIntent(query) {
+        const intents = [
+            {
+                match: /\b(start live|start monitoring|start camera|open camera|open live|live monitoring|use camera stream)\b/,
+                text: 'For live monitoring, use the Live Monitor page in Camera Stream mode. I can take you there and collapse the chat so the controls stay usable.',
+                bullets: [
+                    'I will place you on Live Monitor with the camera stream workflow ready.',
+                    'Use Start after the preview area is visible and the camera source looks right.',
+                    'Reopen Mira anytime from the launcher; this same session stays here.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open Live Monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 },
+                    { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+                ]
+            },
+            {
+                match: /\b(upload image|analy[sz]e image|check (if )?(this )?image|see if (this )?image|inspect image|review image|image .*violat)\b/,
+                text: 'For a single-image check, use Live Monitor in Analyze Image mode. I can open that view and land you right on the upload area.',
+                bullets: [
+                    'This path is best when you want one still image reviewed instead of a full live session.',
+                    'Use the upload area, then run Analyze for PPE Violations.',
+                    'Mira will remember this conversation when you reopen the panel.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open Image Analysis', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                    { type: 'handbook', label: 'Open upload guide', pageKey: 'workflow', stageKey: 'capture', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
+                ]
+            }
+        ];
+        return intents.find((intent) => intent.match.test(query)) || null;
+    },
+
+    handleWorkflowIntent(intent) {
+        this.pushMessage({
+            role: 'assistant',
+            text: intent.text,
+            bullets: intent.bullets || [],
+            actions: intent.actions || []
+        });
+    },
+
+    resolveSettingsIntent(query) {
+        const intents = [
+            { match: /\b(recommend(ed)? settings|best settings|which settings should i use)\b/, type: 'recommendation' },
+            { match: /\b(apply recommended settings|use recommended settings)\b/, type: 'apply-recommended' },
+            { match: /\b(switch to api mode|switch to cloud mode|apply api mode|apply cloud profile|cloud profile)\b/, type: 'apply-api' },
+            { match: /\b(switch to local mode|apply local profile|local profile)\b/, type: 'apply-local' }
+        ];
+        return intents.find((intent) => intent.match.test(query)) || null;
+    },
+
+    async handleSettingsIntent(intent) {
+        if (!intent) return;
+        if (intent.type === 'recommendation') {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I can recommend or apply the main operating profiles for you. Recommended settings are the safest balanced default, API mode favors hosted cloud smoothness, and Local profile prepares the approved host path.',
+                bullets: [
+                    'Recommended settings keep the general deployment balanced for everyday use.',
+                    'API mode is the best pick when you want the smoothest hosted cloud workflow.',
+                    'Local profile is for approved host machines that need the local pipeline.'
+                ],
+                actions: [
+                    { type: 'settings-profile', label: 'Use recommended settings', profile: 'recommended' },
+                    { type: 'settings-profile', label: 'Switch to API mode', profile: 'api' },
+                    { type: 'settings-profile', label: 'Apply local profile', profile: 'local' },
+                    { type: 'route', label: 'Open settings', page: 'settings', collapsePanel: true }
+                ]
+            });
+            return;
+        }
+
+        const profile = intent.type === 'apply-api'
+            ? 'api'
+            : intent.type === 'apply-local'
+                ? 'local'
+                : 'recommended';
+        await this.applySettingsProfile(profile);
+    },
+
+    resolveAnalyticsIntent(raw, query) {
+        if (!query) return null;
+        const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
+        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation)\b/.test(query);
+        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|week|month)\b/.test(query);
+        const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|tell me|what is|how many)\b/.test(query);
+        if (directOpen && !filterMatch) {
+            return null;
+        }
+        if (!analyticsMatch && !(filterMatch && queryMatch)) {
+            return null;
+        }
+        const filters = this.buildAnalyticsFilters(raw);
+        return {
+            raw,
+            query,
+            filters,
+            filterSummary: this.describeAnalyticsFilters(filters)
+        };
+    },
+
+    buildAnalyticsFilters(rawQuery = '') {
+        const base = this.buildReportFilters(rawQuery);
+        const query = this.normalizeText(rawQuery);
+        base.searchTokens = this.tokenize(query)
+            .filter((token) => ![
+                'analytics', 'analytic', 'metric', 'metrics', 'dashboard', 'stats', 'snapshot',
+                'show', 'give', 'tell', 'summary', 'summarize', 'compare', 'what', 'how', 'many',
+                'violations', 'violation', 'count', 'ready', 'rate', 'high', 'medium', 'low',
+                'today', 'week', 'month', 'cloud', 'local', 'synced'
+            ].includes(token));
+        return base;
+    },
+
+    describeAnalyticsFilters(filters = {}) {
+        const parts = [];
+        if (filters.source === 'cloud') parts.push('cloud rows');
+        if (filters.source === 'local') parts.push('local rows');
+        if (filters.source === 'synced_local') parts.push('local-synced rows');
+        if (filters.severity) parts.push(`${filters.severity} severity`);
+        if (filters.dateRange === 'today') parts.push('today');
+        if (filters.dateRange === 'week') parts.push('this week');
+        if (filters.dateRange === 'month') parts.push('this month');
+        if (Array.isArray(filters.searchTokens) && filters.searchTokens.length) {
+            parts.push(`matching ${filters.searchTokens.join(', ')}`);
+        }
+        return parts.join(', ');
+    },
+
+    async fetchAnalyticsSnapshot(rawQuery = '') {
+        try {
+            const filters = this.buildAnalyticsFilters(rawQuery);
+            const [stats, violations] = await Promise.all([
+                API.getStats(),
+                API.getViolations({ limit: 1000 })
+            ]);
+            const allRows = Array.isArray(violations) ? violations : [];
+            const filteredRows = allRows.filter((row) => this.matchesReportFilters(row, filters));
+            if (!filteredRows.length) {
+                return {
+                    success: false,
+                    filters,
+                    filterSummary: this.describeAnalyticsFilters(filters),
+                    message: 'No analytics rows matched that filter.'
+                };
+            }
+
+            const baseStats = this.describeAnalyticsFilters(filters)
+                ? AnalyticsPage.buildStatsFromViolations(filteredRows)
+                : stats;
+            const normalizedStats = AnalyticsPage.normalizeStats(baseStats, filteredRows);
+            const derived = AnalyticsPage.buildDerivedMetrics(normalizedStats, filteredRows);
+            return {
+                success: true,
+                filters,
+                filterSummary: this.describeAnalyticsFilters(filters),
+                stats: normalizedStats,
+                derived,
+                rowCount: filteredRows.length,
+                metrics: [
+                    { label: 'Rows', value: String(filteredRows.length), note: 'Matched analytics rows' },
+                    { label: 'Ready rate', value: `${derived.readyRate}%`, note: `${normalizedStats.reportsGenerated} reports ready` },
+                    { label: 'Pending', value: String(derived.pending), note: 'Queued or generating' },
+                    { label: 'High severity', value: `${derived.highShare}%`, note: `${normalizedStats.severity.high} high-severity rows` },
+                    { label: 'Peak window', value: derived.peakWindow, note: `${derived.peakWindowCount} matching rows` },
+                    { label: 'Last violation', value: derived.lastViolationDisplay, note: derived.topType }
+                ],
+                bullets: [
+                    `Dominant source mix: ${String(derived.dominantSource || 'unknown').replace(/_/g, ' ')} (${derived.dominantSourceCount})`,
+                    `Local-origin rows: ${derived.localOriginCount}; cloud-origin rows: ${derived.cloudOriginCount}`,
+                    `7-day average within this slice: ${derived.dailyAverage.toFixed(1)}`
+                ]
+            };
+        } catch (error) {
+            console.error('Assistant analytics snapshot failed:', error);
+            return {
+                success: false,
+                filters: this.buildAnalyticsFilters(rawQuery),
+                filterSummary: this.describeAnalyticsFilters(this.buildAnalyticsFilters(rawQuery)),
+                message: 'I could not fetch the analytics snapshot right now.'
+            };
+        }
+    },
+
+    async handleAnalyticsIntent(intent) {
+        const outcome = await this.fetchAnalyticsSnapshot(intent.raw || intent.query || '');
+        const filterSummary = outcome.filterSummary || intent.filterSummary || '';
+        const label = filterSummary ? ` for ${filterSummary}` : '';
+        if (!outcome.success) {
+            this.pushMessage({
+                role: 'assistant',
+                text: `${outcome.message || 'I could not fetch analytics right now.'}${label ? ` (${label.trim()})` : ''}`,
+                actions: [
+                    { type: 'route', label: 'Open analytics page', page: 'analytics', analyticsFilters: intent.filters || outcome.filters || {}, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true },
+                    { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' }
+                ]
+            });
+            return;
+        }
+
+        this.pushMessage({
+            role: 'assistant',
+            text: `Here is the live analytics snapshot${label}.`,
+            metrics: outcome.metrics || [],
+            bullets: outcome.bullets || [],
             actions: [
-                { type: 'tutorial', label: 'Previous step', flow, stepIndex: Math.max(0, index - 1) },
-                { type: 'tutorial', label: 'Next step', flow, stepIndex: Math.min(steps.length - 1, index + 1) },
-                { type: 'handbook', label: 'Open in handbook', pageKey: 'workflow', tutorialFlow: flow, tutorialStep: index }
+                { type: 'route', label: 'Open filtered analytics', page: 'analytics', analyticsFilters: outcome.filters || {}, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true },
+                { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' },
+                { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
+            ]
+        });
+    },
+
+    isLowSignalPrompt(raw, query) {
+        const compactRaw = String(raw || '').trim();
+        if (!compactRaw) return true;
+        if (/^[^a-zA-Z0-9]+$/.test(compactRaw)) return true;
+        const queryNoSpace = String(query || '').replace(/\s+/g, '');
+        if (queryNoSpace.length > 0 && /^([a-z0-9])\1{2,}$/i.test(queryNoSpace)) return true;
+        const tokens = this.tokenize(query);
+        return tokens.length === 0;
+    },
+
+    handleUnknownPrompt(raw, query) {
+        if (this.isLowSignalPrompt(raw, query)) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I did not get a usable request from that yet.',
+                bullets: [
+                    'Try a concrete ask like "show analytics for cloud this week".',
+                    'You can also ask me to open camera, check an image, explain report tags, or run a tutorial.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+                ]
+            });
+            return;
+        }
+
+        this.pushMessage({
+            role: 'assistant',
+            text: 'That sounds outside the monitoring assistant scope I handle right now.',
+            bullets: [
+                'I stay focused on live monitoring, image checks, reports, analytics, settings, exports, and handbook guidance.',
+                'If you want, rephrase it as an action or question inside those areas and I will handle it directly.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                { type: 'settings-profile', label: 'Recommend settings', profile: 'recommended' }
             ]
         });
     },
@@ -945,28 +1329,29 @@ const CASMAssistant = {
     },
 
     handleDestination(destination) {
-        if (destination.type === 'route') {
-            const targetPage = destination.focusLocalCheckup ? 'settings-checkup' : destination.page;
-            Router.navigate(targetPage);
-        } else if (destination.type === 'handbook' && window.CASMHandbook && typeof window.CASMHandbook.open === 'function') {
-            window.CASMHandbook.open(destination.pageKey || 'intro', {
-                stage: destination.stageKey || '',
+        const destinationAction = destination.type === 'route'
+            ? {
+                type: 'route',
+                label: `Go to ${destination.label}`,
+                page: destination.page,
+                focusLocalCheckup: !!destination.focusLocalCheckup,
+                collapsePanel: true
+            }
+            : {
+                type: 'handbook',
+                label: 'Open handbook',
+                pageKey: destination.pageKey || 'intro',
+                stageKey: destination.stageKey || '',
                 tutorialFlow: destination.tutorialFlow || '',
-                tutorialStep: Number(destination.tutorialStep || 0)
-            });
-        }
+                tutorialStep: Number(destination.tutorialStep || 0),
+                collapsePanel: true
+            };
         this.pushMessage({
             role: 'assistant',
-            text: `${destination.label} is open now.`,
-            actions: destination.type === 'route'
-                ? [{
-                    type: 'route',
-                    label: `Go to ${destination.label}`,
-                    page: destination.page,
-                    focusLocalCheckup: !!destination.focusLocalCheckup
-                }]
-                : [{ type: 'handbook', label: 'Open handbook', pageKey: destination.pageKey || 'intro' }]
+            text: `${destination.label} is ready. I will collapse after opening it so you can use the workspace, and reopening Mira brings you back to this same chat.`,
+            actions: [destinationAction]
         });
+        void this.performAction(destinationAction);
     },
 
     resolveExplanation(query) {
@@ -1015,22 +1400,117 @@ const CASMAssistant = {
         return explanations.find((item) => item.match.test(query)) || null;
     },
 
+    queueLiveIntent(detail = {}) {
+        const payload = {
+            mode: detail.mode === 'upload' ? 'upload' : 'live',
+            focus: String(detail.focus || '').trim(),
+            requestedAt: Date.now()
+        };
+        window.__CASM_LIVE_ASSISTANT_INTENT = payload;
+        window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('casm-live:intent', { detail: payload }));
+        }, APP_STATE.currentPage === 'live' ? 40 : 220);
+    },
+
+    queueAnalyticsIntent(detail = {}) {
+        const payload = {
+            filters: detail && typeof detail.filters === 'object' ? detail.filters : {},
+            summary: String(detail.summary || 'Filtered analytics view').trim() || 'Filtered analytics view',
+            requestedAt: Date.now()
+        };
+        window.__CASM_ANALYTICS_ASSISTANT_INTENT = payload;
+        window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('casm-analytics:intent', { detail: payload }));
+        }, APP_STATE.currentPage === 'analytics' ? 40 : 220);
+    },
+
+    collapseAssistantForWorkspaceAction(delayMs = 140) {
+        window.setTimeout(() => this.togglePanel(false), delayMs);
+    },
+
+    performRouteNavigation(action) {
+        if (!action) return;
+        const page = action.focusLocalCheckup ? 'settings-checkup' : action.page;
+        if (action.page === 'live' && (action.liveMode || action.liveFocus)) {
+            this.queueLiveIntent({
+                mode: action.liveMode || 'live',
+                focus: action.liveFocus || ''
+            });
+        }
+        if (action.page === 'analytics' && action.analyticsFilters) {
+            this.queueAnalyticsIntent({
+                filters: action.analyticsFilters,
+                summary: action.analyticsSummary || 'Filtered analytics view'
+            });
+        }
+        Router.navigate(page || 'home');
+        if (action.collapsePanel !== false) {
+            this.collapseAssistantForWorkspaceAction();
+        }
+    },
+
+    performHandbookNavigation(action) {
+        if (window.CASMHandbook && typeof window.CASMHandbook.open === 'function') {
+            window.CASMHandbook.open(action.pageKey || 'intro', {
+                stage: action.stageKey || '',
+                tutorialFlow: action.tutorialFlow || '',
+                tutorialStep: Number(action.tutorialStep || 0)
+            });
+        }
+        if (action.collapsePanel !== false) {
+            this.collapseAssistantForWorkspaceAction();
+        }
+    },
+
+    async applySettingsProfile(profile) {
+        const modal = window.PPEGlobalSettingsModal;
+        if (!modal) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I could not reach the settings controller right now.',
+                actions: [{ type: 'route', label: 'Open settings', page: 'settings', collapsePanel: true }]
+            });
+            return;
+        }
+
+        let outcome = null;
+        let successText = 'I applied the requested settings.';
+        let failureText = 'I could not apply that settings profile.';
+
+        if (profile === 'api') {
+            outcome = await modal.applyApiModeProfile();
+            successText = 'I switched the system to API mode for the smoother hosted cloud workflow.';
+            failureText = 'I could not switch the system to API mode.';
+        } else if (profile === 'local') {
+            outcome = await modal.applyProviderRoutingLocalProfile();
+            successText = 'I applied the local profile. Use it only on an approved host with the local pipeline ready.';
+            failureText = 'I could not apply the local profile.';
+        } else {
+            outcome = await modal.applyRecommendedSettings();
+            successText = 'I applied the recommended settings. That keeps the system in the balanced everyday profile.';
+            failureText = 'I could not apply the recommended settings.';
+        }
+
+        const success = !!(outcome && outcome.success);
+        this.pushMessage({
+            role: 'assistant',
+            text: success ? successText : `${failureText}${outcome && outcome.message ? ` ${outcome.message}` : ''}`,
+            actions: [
+                { type: 'route', label: 'Open settings', page: 'settings', collapsePanel: true },
+                { type: 'route', label: 'Open checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+            ]
+        });
+    },
+
     async performAction(action) {
         if (!action || !action.type) return;
         switch (action.type) {
             case 'route': {
-                const page = action.focusLocalCheckup ? 'settings-checkup' : action.page;
-                Router.navigate(page || 'home');
+                this.performRouteNavigation(action);
                 return;
             }
             case 'handbook': {
-                if (window.CASMHandbook && typeof window.CASMHandbook.open === 'function') {
-                    window.CASMHandbook.open(action.pageKey || 'intro', {
-                        stage: action.stageKey || '',
-                        tutorialFlow: action.tutorialFlow || '',
-                        tutorialStep: Number(action.tutorialStep || 0)
-                    });
-                }
+                this.performHandbookNavigation(action);
                 return;
             }
             case 'tutorial': {
@@ -1055,14 +1535,12 @@ const CASMAssistant = {
                 await this.handleOverviewIntent();
                 return;
             }
+            case 'settings-profile': {
+                await this.applySettingsProfile(String(action.profile || 'recommended').trim().toLowerCase());
+                return;
+            }
             case 'doc-result': {
-                if (window.CASMHandbook && typeof window.CASMHandbook.open === 'function') {
-                    window.CASMHandbook.open(action.pageKey || 'intro', {
-                        stage: action.stageKey || '',
-                        tutorialFlow: action.tutorialFlow || '',
-                        tutorialStep: Number(action.tutorialStep || 0)
-                    });
-                }
+                this.performHandbookNavigation(action);
                 return;
             }
             default:
@@ -1125,9 +1603,7 @@ const CASMAssistant = {
         session.messages.push(normalized);
         session.messages = session.messages.slice(-this.MAX_MESSAGES);
         session.updatedAt = Date.now();
-        this.renderMessages();
-        this.renderSessionRail();
-        this.saveState();
+        this.refreshSessionUi();
     },
 
     buildDocsIndex() {
@@ -1207,9 +1683,26 @@ const CASMAssistant = {
                 id: 'glossary-assistant',
                 label: 'Assistant',
                 title: 'Assistant shortcuts and exports',
-                text: 'The assistant can open app pages, jump into handbook sections, guide tutorial steps in chat, export reports CSV, export analytics CSV, and remember previous sessions locally in the browser.',
+                text: 'The assistant can open app pages, switch Live Monitor into camera or image-analysis mode, guide tutorial steps in a slideshow-style card, apply recommended settings profiles, export CSV files, and remember previous sessions locally in the browser.',
                 pageKey: 'intro',
-                keywords: ['assistant', 'export', 'csv', 'session', 'shortcut']
+                keywords: ['assistant', 'export', 'csv', 'session', 'shortcut', 'camera', 'upload', 'settings']
+            },
+            {
+                id: 'glossary-live-workflows',
+                label: 'Glossary',
+                title: 'Live monitor workflows',
+                text: 'Camera Stream is for live monitoring and report capture. Analyze Image is for a still image upload where the user wants one-off PPE detection and an annotated result.',
+                pageKey: 'workflow',
+                stageKey: 'capture',
+                keywords: ['live monitor', 'camera', 'upload image', 'analyze image', 'image violations']
+            },
+            {
+                id: 'glossary-settings-profiles',
+                label: 'Glossary',
+                title: 'Settings profiles',
+                text: 'Recommended settings keep the system balanced. API mode favors the smooth hosted cloud workflow. Local profile is for approved machines using the local pipeline and local mode checkup.',
+                pageKey: 'admin',
+                keywords: ['recommended settings', 'api mode', 'cloud mode', 'local profile', 'settings']
             }
         ];
 
@@ -1248,7 +1741,10 @@ const CASMAssistant = {
             report: ['reports', 'badge', 'tag'],
             caption: ['gemini', 'gemma'],
             tutorial: ['guide', 'walkthrough', 'demo'],
-            export: ['csv', 'download']
+            export: ['csv', 'download'],
+            camera: ['live', 'monitor', 'stream'],
+            image: ['upload', 'photo', 'snapshot'],
+            settings: ['profile', 'recommended', 'checkup']
         };
         const expanded = new Set(tokens);
         tokens.forEach((token) => {

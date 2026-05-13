@@ -1562,7 +1562,9 @@ const GlobalSettingsModal = {
 
     async applyProviderRoutingLocalProfile() {
         const applyBtn = this.getEl('globalApplyProviderRoutingBtn');
-        if (!applyBtn) return;
+        if (!applyBtn) {
+            return { success: false, message: 'Local profile button is unavailable.' };
+        }
 
         try {
             applyBtn.disabled = true;
@@ -1597,10 +1599,12 @@ const GlobalSettingsModal = {
                     console.warn('GlobalSettingsModal: backend URL resolution after local profile apply failed', resolveErr);
                 }
             }
+            return { success: true, profile: 'local', message: 'Local provider profile applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply local profile failed', error);
             this.setProviderStatus(error.message || 'Failed applying local provider profile', 'error');
             this.showNotification(error.message || 'Failed applying local provider profile', 'error');
+            return { success: false, profile: 'local', message: error.message || 'Failed applying local provider profile' };
         } finally {
             applyBtn.disabled = false;
             applyBtn.innerHTML = '<i class="fas fa-save"></i> Apply Local Profile';
@@ -1609,7 +1613,9 @@ const GlobalSettingsModal = {
 
     async applyApiModeProfile() {
         const btn = this.getEl('globalApplyApiModeBtn');
-        if (!btn) return;
+        if (!btn) {
+            return { success: false, message: 'API mode button is unavailable.' };
+        }
 
         try {
             btn.disabled = true;
@@ -1626,10 +1632,12 @@ const GlobalSettingsModal = {
             this.setProviderStatus('API mode profile applied', 'success');
             this.showNotification('Switched to API mode', 'success');
             await this.loadProviderRoutingSettings();
+            return { success: true, profile: 'api', message: 'API mode profile applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply API mode failed', error);
             this.setProviderStatus(error.message || 'Failed to switch to API mode', 'error');
             this.showNotification(error.message || 'Failed to switch to API mode', 'error');
+            return { success: false, profile: 'api', message: error.message || 'Failed to switch to API mode' };
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-cloud"></i> Switch to API Mode';
@@ -1638,7 +1646,9 @@ const GlobalSettingsModal = {
 
     async applyRecommendedSettings() {
         const btn = this.getEl('globalSettingsRecommendedBtn');
-        if (!btn) return;
+        if (!btn) {
+            return { success: false, message: 'Recommended settings button is unavailable.' };
+        }
 
         try {
             btn.disabled = true;
@@ -1658,10 +1668,12 @@ const GlobalSettingsModal = {
             await this.loadProviderRoutingSettings();
             this.setProviderStatus('Recommended settings applied', 'success');
             this.showNotification('Recommended settings applied', 'success');
+            return { success: true, profile: 'recommended', message: 'Recommended settings applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply recommended failed', error);
             this.setProviderStatus(error.message || 'Failed applying recommended settings', 'error');
             this.showNotification(error.message || 'Failed applying recommended settings', 'error');
+            return { success: false, profile: 'recommended', message: error.message || 'Failed applying recommended settings' };
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-magic"></i> Use Recommended Settings';

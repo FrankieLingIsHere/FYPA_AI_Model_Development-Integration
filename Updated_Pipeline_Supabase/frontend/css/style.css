@@ -8044,9 +8044,9 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
 }
 
 .assistant-panel {
-    width: min(920px, calc(100vw - 2.4rem));
-    height: min(78vh, 760px);
-    max-height: min(78vh, 760px);
+    width: min(840px, calc(100vw - 2.4rem));
+    height: min(74vh, 720px);
+    max-height: min(74vh, 720px);
     border-radius: 24px;
     overflow: hidden;
     box-shadow: 0 26px 70px rgba(15, 23, 42, 0.22);
@@ -8379,12 +8379,12 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     flex-direction: column;
     gap: 0.32rem;
     min-width: 0;
-    max-width: min(100%, 660px);
+    max-width: min(100%, 620px);
 }
 
 .assistant-message-user .assistant-message-stack {
     align-items: flex-end;
-    max-width: min(84%, 560px);
+    max-width: min(82%, 520px);
 }
 
 .assistant-message-meta {
@@ -8470,6 +8470,12 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     padding: 0.85rem 0.9rem;
 }
 
+.assistant-tutorial-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
 .assistant-doc-kicker,
 .assistant-metric-label {
     display: inline-block;
@@ -8532,6 +8538,26 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     color: #334155;
 }
 
+.assistant-tutorial-progress {
+    display: flex;
+    align-items: center;
+}
+
+.assistant-tutorial-progress-track {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(251, 191, 36, 0.16);
+    overflow: hidden;
+}
+
+.assistant-tutorial-progress-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%);
+}
+
 .assistant-caution {
     margin-top: 0.7rem;
     padding: 0.72rem 0.78rem;
@@ -8539,6 +8565,12 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     background: #fff7ed;
     color: #9a3412;
     font-weight: 700;
+}
+
+.assistant-tutorial-footnote {
+    font-size: 0.73rem;
+    color: #64748b;
+    line-height: 1.45;
 }
 
 .assistant-metric-card strong {
@@ -8662,8 +8694,8 @@ body.assistant-open #notification-container {
 
     .assistant-panel {
         width: 100%;
-        height: min(72vh, 720px);
-        max-height: min(72vh, 720px);
+        height: min(70vh, 680px);
+        max-height: min(70vh, 680px);
         border-radius: 22px;
     }
 

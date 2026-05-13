@@ -2,6 +2,7 @@
 const LivePage = {
     depthStatusInterval: null,
     providerRuntimeInterval: null,
+    assistantIntentHandler: null,
     phoneCameraStream: null,
     phoneInferenceBusy: false,
     phoneLastViolationNoticeAt: 0,
@@ -1266,6 +1267,55 @@ const LivePage = {
         liveModeBtn.addEventListener('click', switchToLiveMode);
         uploadModeBtn.addEventListener('click', switchToUploadMode);
 
+        const focusWorkflowTarget = (element) => {
+            if (!element) return;
+            try {
+                if (typeof element.setAttribute === 'function' && !element.hasAttribute('tabindex')) {
+                    element.setAttribute('tabindex', '-1');
+                }
+                if (typeof element.scrollIntoView === 'function') {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                if (typeof element.focus === 'function') {
+                    element.focus({ preventScroll: true });
+                }
+            } catch (_) {
+                // Best-effort guidance focus only.
+            }
+        };
+
+        const applyAssistantIntent = (detail = {}) => {
+            const mode = String(detail.mode || '').trim().toLowerCase() === 'upload' ? 'upload' : 'live';
+            if (mode === 'upload') {
+                switchToUploadMode();
+            } else {
+                switchToLiveMode();
+            }
+
+            window.setTimeout(() => {
+                if (mode === 'upload') {
+                    const uploadLabel = uploadContainer ? uploadContainer.querySelector('label[for="imageUpload"]') : null;
+                    focusWorkflowTarget(uploadLabel || uploadContainer || imageUpload);
+                    return;
+                }
+                focusWorkflowTarget(startBtn || liveStreamContainer);
+            }, 140);
+        };
+
+        this.assistantIntentHandler = (event) => {
+            applyAssistantIntent((event && event.detail) || {});
+        };
+        window.addEventListener('casm-live:intent', this.assistantIntentHandler);
+        window.CASMLiveAssistantBridge = {
+            focusWorkflow: (detail = {}) => applyAssistantIntent(detail)
+        };
+
+        if (window.__CASM_LIVE_ASSISTANT_INTENT) {
+            const pendingIntent = window.__CASM_LIVE_ASSISTANT_INTENT;
+            delete window.__CASM_LIVE_ASSISTANT_INTENT;
+            window.setTimeout(() => applyAssistantIntent(pendingIntent), 160);
+        }
+
         sourceToggleBtn.addEventListener('click', () => {
             if (APP_STATE.liveStreamActive) {
                 showNotification('Stop monitoring before switching camera source.', 'warning');
@@ -1857,6 +1907,15 @@ const LivePage = {
         if (this.phoneCameraStream) {
             this.phoneCameraStream.getTracks().forEach((track) => track.stop());
             this.phoneCameraStream = null;
+        }
+
+        if (this.assistantIntentHandler) {
+            window.removeEventListener('casm-live:intent', this.assistantIntentHandler);
+            this.assistantIntentHandler = null;
+        }
+
+        if (window.CASMLiveAssistantBridge) {
+            delete window.CASMLiveAssistantBridge;
         }
 
     }

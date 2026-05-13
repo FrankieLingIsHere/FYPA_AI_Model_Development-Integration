@@ -5,6 +5,8 @@ const AnalyticsPage = {
     _timezoneChangeHandler: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
+    _assistantIntentHandler: null,
+    assistantFilterState: null,
 
     render() {
         return `
@@ -21,6 +23,19 @@ const AnalyticsPage = {
                         <span><i class="fas fa-route"></i> Trend</span>
                     </div>
                 </section>
+
+                <div id="analyticsAssistantFilterBanner" class="card mb-4" style="display: none;">
+                    <div class="card-content" style="display:flex;align-items:center;justify-content:space-between;gap:0.85rem;flex-wrap:wrap;">
+                        <div style="display:flex;flex-direction:column;gap:0.25rem;">
+                            <span style="font-size:0.72rem;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#b45309;">Assistant filter active</span>
+                            <strong id="analyticsAssistantFilterSummary" style="color:#0f172a;">Filtered analytics view</strong>
+                            <span id="analyticsAssistantFilterHint" style="font-size:0.82rem;color:#64748b;">Mira opened this analytics slice from chat.</span>
+                        </div>
+                        <button id="analyticsClearAssistantFilterBtn" class="btn btn-secondary" type="button">
+                            <i class="fas fa-rotate-left"></i> Clear filter
+                        </button>
+                    </div>
+                </div>
 
                 <div class="card mb-4">
                     <div class="card-header">
@@ -114,6 +129,15 @@ const AnalyticsPage = {
 
         this._timezoneChangeHandler = () => this.refreshData();
         window.addEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
+        this._assistantIntentHandler = (event) => this.applyAssistantIntent((event && event.detail) || {});
+        window.addEventListener('casm-analytics:intent', this._assistantIntentHandler);
+        this.bindAssistantBanner();
+        if (window.__CASM_ANALYTICS_ASSISTANT_INTENT) {
+            this.applyAssistantIntent(window.__CASM_ANALYTICS_ASSISTANT_INTENT);
+            delete window.__CASM_ANALYTICS_ASSISTANT_INTENT;
+        } else {
+            this.renderAssistantBanner();
+        }
         this.syncFallbackPolling();
     },
 
@@ -134,6 +158,10 @@ const AnalyticsPage = {
             window.removeEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
             this._timezoneChangeHandler = null;
         }
+        if (this._assistantIntentHandler) {
+            window.removeEventListener('casm-analytics:intent', this._assistantIntentHandler);
+            this._assistantIntentHandler = null;
+        }
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);
             this._fallbackInterval = null;
@@ -150,6 +178,41 @@ const AnalyticsPage = {
             window.timePieChart.destroy();
             window.timePieChart = null;
         }
+    },
+
+    bindAssistantBanner() {
+        const clearBtn = document.getElementById('analyticsClearAssistantFilterBtn');
+        if (clearBtn) {
+            clearBtn.onclick = () => {
+                this.assistantFilterState = null;
+                this.renderAssistantBanner();
+                this.refreshData();
+            };
+        }
+    },
+
+    applyAssistantIntent(detail = {}) {
+        const filters = detail && typeof detail.filters === 'object' ? detail.filters : {};
+        this.assistantFilterState = {
+            filters,
+            summary: String(detail.summary || 'Filtered analytics view').trim() || 'Filtered analytics view'
+        };
+        this.renderAssistantBanner();
+        this.refreshData();
+    },
+
+    renderAssistantBanner() {
+        const banner = document.getElementById('analyticsAssistantFilterBanner');
+        const summary = document.getElementById('analyticsAssistantFilterSummary');
+        const hint = document.getElementById('analyticsAssistantFilterHint');
+        if (!banner || !summary || !hint) return;
+        if (!this.assistantFilterState) {
+            banner.style.display = 'none';
+            return;
+        }
+        banner.style.display = 'block';
+        summary.textContent = this.assistantFilterState.summary || 'Filtered analytics view';
+        hint.textContent = 'Mira opened this analytics slice from chat. Clear filter to return to the full dashboard.';
     },
 
     syncFallbackPolling() {
@@ -214,6 +277,110 @@ const AnalyticsPage = {
         if (label === 'shared') return 'shared';
         if (label === 'cloud') return 'cloud';
         return 'unknown';
+    },
+
+    buildStatsFromViolations(violations = []) {
+        const list = Array.isArray(violations) ? violations : [];
+        const severity = { high: 0, medium: 0, low: 0 };
+        const breakdown = {};
+        const todayFloor = new Date();
+        todayFloor.setHours(0, 0, 0, 0);
+        let today = 0;
+        let reportsGenerated = 0;
+        let pending = 0;
+
+        list.forEach((item) => {
+            const severityKey = String(item?.severity || '').trim().toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(severity, severityKey)) {
+                severity[severityKey] += 1;
+            }
+
+            const breakdownSource = item?.breakdown && typeof item.breakdown === 'object'
+                ? item.breakdown
+                : null;
+            if (breakdownSource) {
+                Object.entries(breakdownSource).forEach(([key, value]) => {
+                    breakdown[key] = (Number(breakdown[key]) || 0) + (Number(value) || 0);
+                });
+            } else if (Array.isArray(item?.missing_ppe)) {
+                item.missing_ppe.forEach((label) => {
+                    if (!label) return;
+                    breakdown[label] = (Number(breakdown[label]) || 0) + 1;
+                });
+            }
+
+            const status = String(item?.status || (item?.has_report ? 'completed' : 'pending')).trim().toLowerCase();
+            if (status === 'completed' || status === 'ready') {
+                reportsGenerated += 1;
+            }
+            if (status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating') {
+                pending += 1;
+            }
+
+            const timestamp = new Date(item?.timestamp || 0);
+            if (!Number.isNaN(timestamp.getTime()) && timestamp >= todayFloor) {
+                today += 1;
+            }
+        });
+
+        return {
+            total: list.length,
+            today,
+            pending,
+            reportsGenerated,
+            completed: reportsGenerated,
+            severity,
+            breakdown
+        };
+    },
+
+    matchesAssistantFilters(row, filters = {}) {
+        if (!filters || typeof filters !== 'object') return true;
+        if (filters.source) {
+            const scope = this.normalizeSourceScope(row);
+            if (scope !== String(filters.source || '').trim().toLowerCase()) return false;
+        }
+
+        if (filters.severity) {
+            const severity = String(row?.severity || '').trim().toLowerCase();
+            if (severity !== String(filters.severity || '').trim().toLowerCase()) return false;
+        }
+
+        if (filters.dateRange) {
+            const rowDate = new Date(row?.timestamp || 0);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            if (filters.dateRange === 'today' && rowDate < today) return false;
+            if (filters.dateRange === 'week') {
+                const weekAgo = new Date(today);
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                if (rowDate < weekAgo) return false;
+            }
+            if (filters.dateRange === 'month') {
+                const monthAgo = new Date(today);
+                monthAgo.setMonth(monthAgo.getMonth() - 1);
+                if (rowDate < monthAgo) return false;
+            }
+        }
+
+        if (Array.isArray(filters.searchTokens) && filters.searchTokens.length) {
+            const haystack = String([
+                row?.report_id,
+                row?.device_id,
+                row?.timestamp,
+                row?.violation_summary,
+                Array.isArray(row?.missing_ppe) ? row.missing_ppe.join(' ') : ''
+            ].join(' ')).toLowerCase();
+            if (!filters.searchTokens.every((token) => haystack.includes(String(token || '').toLowerCase()))) return false;
+        }
+
+        return true;
+    },
+
+    filterViolations(violations = [], filters = {}) {
+        const list = Array.isArray(violations) ? violations : [];
+        if (!filters || typeof filters !== 'object') return list;
+        return list.filter((row) => this.matchesAssistantFilters(row, filters));
     },
 
     buildDerivedMetrics(stats = {}, violations = []) {
@@ -309,14 +476,21 @@ const AnalyticsPage = {
                 API.getStats(),
                 API.getViolations()
             ]);
-            const normalizedStats = this.normalizeStats(stats, violations);
-            const derivedMetrics = this.buildDerivedMetrics(normalizedStats, violations);
+            const filteredViolations = this.assistantFilterState
+                ? this.filterViolations(violations, this.assistantFilterState.filters || {})
+                : (Array.isArray(violations) ? violations : []);
+            const baseStats = this.assistantFilterState
+                ? this.buildStatsFromViolations(filteredViolations)
+                : stats;
+            const normalizedStats = this.normalizeStats(baseStats, filteredViolations);
+            const derivedMetrics = this.buildDerivedMetrics(normalizedStats, filteredViolations);
 
+            this.renderAssistantBanner();
             this.renderStats(normalizedStats, derivedMetrics);
             this.renderInsights(derivedMetrics);
-            this.renderTrendsChart(violations);
+            this.renderTrendsChart(filteredViolations);
             this.renderViolationTypes(normalizedStats);
-            this.renderTimeDistribution(violations);
+            this.renderTimeDistribution(filteredViolations);
             this.calculateSafetyScore(normalizedStats);
         } catch (e) {
             console.error('Error loading analytics:', e);

@@ -7,6 +7,7 @@ const AnalyticsPage = {
     _fallbackInterval: null,
     _assistantIntentHandler: null,
     assistantFilterState: null,
+    _overviewMode: 'risk',
 
     render() {
         return `
@@ -42,6 +43,9 @@ const AnalyticsPage = {
                         <span><i class="fas fa-chart-line"></i> Safety Analytics Dashboard</span>
                     </div>
                     <div class="card-content">
+                        <div id="analytics-overview-control" class="analytics-overview-control">
+                            <div class="spinner"></div>
+                        </div>
                         <div id="analytics-stats" class="analytics-stats-grid mb-4">
                             <div class="spinner"></div>
                         </div>
@@ -192,7 +196,13 @@ const AnalyticsPage = {
     },
 
     applyAssistantIntent(detail = {}) {
-        const filters = detail && typeof detail.filters === 'object' ? detail.filters : {};
+        const filters = this.sanitizeAssistantFilters(detail && typeof detail.filters === 'object' ? detail.filters : {});
+        if (!this.hasActiveAssistantFilters(filters)) {
+            this.assistantFilterState = null;
+            this.renderAssistantBanner();
+            this.refreshData();
+            return;
+        }
         this.assistantFilterState = {
             filters,
             summary: String(detail.summary || 'Filtered analytics view').trim() || 'Filtered analytics view'
@@ -215,6 +225,73 @@ const AnalyticsPage = {
         hint.textContent = 'Mira opened this analytics slice from chat. Clear filter to return to the full dashboard.';
     },
 
+    sanitizeAssistantFilters(filters = {}) {
+        const cleaned = {};
+        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
+        if (['cloud', 'local', 'synced_local'].includes(source)) {
+            cleaned.source = source;
+        }
+
+        const severity = String(filters.severity || '').trim().toLowerCase();
+        if (['high', 'medium', 'low'].includes(severity)) {
+            cleaned.severity = severity;
+        }
+
+        const dateRange = String(filters.dateRange || '').trim().toLowerCase();
+        if (['today', 'week', 'month'].includes(dateRange)) {
+            cleaned.dateRange = dateRange;
+        }
+
+        const validPpe = new Set([
+            'NO-Hardhat',
+            'NO-Safety Vest',
+            'NO-Gloves',
+            'NO-Mask',
+            'NO-Goggles',
+            'NO-Safety Shoes'
+        ]);
+        const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
+        const normalizedPpe = Array.from(new Set(
+            ppeTypes
+                .map((label) => this.normalizePpeFilterLabel(label))
+                .filter((label) => validPpe.has(label))
+        ));
+        if (normalizedPpe.length) {
+            cleaned.ppeTypes = normalizedPpe;
+        }
+
+        return cleaned;
+    },
+
+    hasActiveAssistantFilters(filters = {}) {
+        return !!(
+            filters
+            && typeof filters === 'object'
+            && (
+                filters.source
+                || filters.severity
+                || filters.dateRange
+                || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length > 0)
+            )
+        );
+    },
+
+    normalizePpeFilterLabel(label) {
+        const normalized = String(label || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, ' ')
+            .replace(/-/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (/\b(no )?(hardhat|hard hat|helmet|helmets)\b/.test(normalized)) return 'NO-Hardhat';
+        if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
+        if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
+        if (/\b(no )?(mask|masks|respirator|respirators)\b/.test(normalized)) return 'NO-Mask';
+        if (/\b(no )?(goggles?|eye protection|eyewear)\b/.test(normalized)) return 'NO-Goggles';
+        if (/\b(no )?(safety )?(shoe|shoes|boot|boots)\b/.test(normalized)) return 'NO-Safety Shoes';
+        return String(label || '').trim();
+    },
+
     syncFallbackPolling() {
         const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
         if (connected) {
@@ -235,6 +312,17 @@ const AnalyticsPage = {
         const severity = stats.severity && typeof stats.severity === 'object'
             ? stats.severity
             : {};
+        const derivedFromList = this.buildStatsFromViolations(list);
+        const severityFromStats = {
+            high: Number(severity.high) || 0,
+            medium: Number(severity.medium) || 0,
+            low: Number(severity.low) || 0
+        };
+        const severityHasData = (severityFromStats.high + severityFromStats.medium + severityFromStats.low) > 0;
+        const breakdownFromStats = stats.breakdown && typeof stats.breakdown === 'object'
+            ? stats.breakdown
+            : {};
+        const breakdownHasData = Object.values(breakdownFromStats).some((value) => Number(value) > 0);
         const completedFromList = list.filter((v) => {
             const status = String((v && (v.status || (v.has_report ? 'completed' : ''))) || '').toLowerCase();
             return status === 'completed' || status === 'ready';
@@ -255,14 +343,12 @@ const AnalyticsPage = {
         return {
             ...stats,
             total: Number(stats.total) || list.length || 0,
-            pending: Number(stats.pending) || pendingFromList || 0,
+            today: Number(stats.today) || derivedFromList.today || 0,
+            pending: Number(stats.pending) || pendingFromList || derivedFromList.pending || 0,
             completed: Number(stats.completed) || reportsGenerated || 0,
             reportsGenerated,
-            severity: {
-                high: Number(severity.high) || 0,
-                medium: Number(severity.medium) || 0,
-                low: Number(severity.low) || 0
-            }
+            severity: severityHasData ? severityFromStats : derivedFromList.severity,
+            breakdown: breakdownHasData ? breakdownFromStats : derivedFromList.breakdown
         };
     },
 
@@ -335,43 +421,44 @@ const AnalyticsPage = {
     },
 
     matchesAssistantFilters(row, filters = {}) {
-        if (!filters || typeof filters !== 'object') return true;
-        if (filters.source) {
+        const safeFilters = this.sanitizeAssistantFilters(filters);
+        if (!this.hasActiveAssistantFilters(safeFilters)) return true;
+        if (safeFilters.source) {
             const scope = this.normalizeSourceScope(row);
-            if (scope !== String(filters.source || '').trim().toLowerCase()) return false;
+            if (scope !== String(safeFilters.source || '').trim().toLowerCase()) return false;
         }
 
-        if (filters.severity) {
+        if (safeFilters.severity) {
             const severity = String(row?.severity || '').trim().toLowerCase();
-            if (severity !== String(filters.severity || '').trim().toLowerCase()) return false;
+            if (severity !== String(safeFilters.severity || '').trim().toLowerCase()) return false;
         }
 
-        if (filters.dateRange) {
+        if (safeFilters.dateRange) {
             const rowDate = new Date(row?.timestamp || 0);
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            if (filters.dateRange === 'today' && rowDate < today) return false;
-            if (filters.dateRange === 'week') {
+            if (safeFilters.dateRange === 'today' && rowDate < today) return false;
+            if (safeFilters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
                 if (rowDate < weekAgo) return false;
             }
-            if (filters.dateRange === 'month') {
+            if (safeFilters.dateRange === 'month') {
                 const monthAgo = new Date(today);
                 monthAgo.setMonth(monthAgo.getMonth() - 1);
                 if (rowDate < monthAgo) return false;
             }
         }
 
-        if (Array.isArray(filters.searchTokens) && filters.searchTokens.length) {
-            const haystack = String([
-                row?.report_id,
-                row?.device_id,
-                row?.timestamp,
-                row?.violation_summary,
-                Array.isArray(row?.missing_ppe) ? row.missing_ppe.join(' ') : ''
-            ].join(' ')).toLowerCase();
-            if (!filters.searchTokens.every((token) => haystack.includes(String(token || '').toLowerCase()))) return false;
+        if (Array.isArray(safeFilters.ppeTypes) && safeFilters.ppeTypes.length) {
+            const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
+            const breakdownLabels = row?.breakdown && typeof row.breakdown === 'object'
+                ? Object.entries(row.breakdown)
+                    .filter(([, value]) => Number(value) > 0)
+                    .map(([label]) => label)
+                : [];
+            const normalizedLabels = new Set([...missing, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            if (!safeFilters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
         return true;
@@ -379,8 +466,9 @@ const AnalyticsPage = {
 
     filterViolations(violations = [], filters = {}) {
         const list = Array.isArray(violations) ? violations : [];
-        if (!filters || typeof filters !== 'object') return list;
-        return list.filter((row) => this.matchesAssistantFilters(row, filters));
+        const safeFilters = this.sanitizeAssistantFilters(filters);
+        if (!this.hasActiveAssistantFilters(safeFilters)) return list;
+        return list.filter((row) => this.matchesAssistantFilters(row, safeFilters));
     },
 
     buildDerivedMetrics(stats = {}, violations = []) {
@@ -466,8 +554,187 @@ const AnalyticsPage = {
             dominantSource: dominantSourceEntry[0],
             dominantSourceCount: Number(dominantSourceEntry[1]) || 0,
             sourceMix,
+            timeDistribution,
             lastViolationDisplay
         };
+    },
+
+    renderOverviewControl(stats = {}, derivedMetrics = {}, violations = []) {
+        const container = document.getElementById('analytics-overview-control');
+        if (!container) return;
+
+        const mode = ['risk', 'source', 'queue', 'timing'].includes(this._overviewMode) ? this._overviewMode : 'risk';
+        const severity = stats.severity && typeof stats.severity === 'object' ? stats.severity : {};
+        const high = Math.max(0, Number(severity.high) || 0);
+        const medium = Math.max(0, Number(severity.medium) || 0);
+        const low = Math.max(0, Number(severity.low) || 0);
+        const severityTotal = Math.max(1, high + medium + low);
+        const sourceMix = derivedMetrics.sourceMix || {};
+        const timeDistribution = derivedMetrics.timeDistribution || {};
+        const timeEntries = Object.entries(timeDistribution);
+        const timeMax = Math.max(1, ...timeEntries.map(([, value]) => Number(value) || 0));
+        const sourceTotal = Math.max(1,
+            Number(sourceMix.local || 0)
+            + Number(sourceMix.synced_local || 0)
+            + Number(sourceMix.cloud || 0)
+            + Number(sourceMix.shared || 0)
+            + Number(sourceMix.unknown || 0)
+        );
+        const rowCount = Array.isArray(violations) ? violations.length : 0;
+        const riskTone = derivedMetrics.highShare >= 40 ? 'danger' : derivedMetrics.highShare >= 18 ? 'warning' : 'stable';
+        const readyTone = derivedMetrics.readyRate >= 80 ? 'stable' : derivedMetrics.readyRate >= 50 ? 'warning' : 'danger';
+        const safePercent = (value, total) => Math.max(0, Math.min(100, (Number(value) || 0) / Math.max(1, Number(total) || 1) * 100));
+        const modeModels = {
+            risk: {
+                kicker: 'Risk Focus',
+                title: `${derivedMetrics.highShare || 0}%`,
+                label: 'high-severity share',
+                tone: riskTone,
+                insight: high > 0
+                    ? `${high} high-severity detections are in this analytics slice. Prioritize complete PPE report review.`
+                    : 'No high-severity detections in this analytics slice.',
+                primaryAction: 'Review reports',
+                primaryRoute: 'reports'
+            },
+            source: {
+                kicker: 'Source Mix',
+                title: String(derivedMetrics.dominantSource || 'unknown').replace(/_/g, ' '),
+                label: `${derivedMetrics.dominantSourceCount || 0} rows leading`,
+                tone: 'source',
+                insight: `Local-origin rows: ${derivedMetrics.localOriginCount || 0}. Cloud-origin rows: ${derivedMetrics.cloudOriginCount || 0}.`,
+                primaryAction: 'Open reports',
+                primaryRoute: 'reports'
+            },
+            queue: {
+                kicker: 'Report Flow',
+                title: `${derivedMetrics.readyRate || 0}%`,
+                label: 'ready rate',
+                tone: readyTone,
+                insight: `${stats.reportsGenerated || 0} reports are ready and ${derivedMetrics.pending || 0} are queued or generating.`,
+                primaryAction: 'Open reports',
+                primaryRoute: 'reports'
+            },
+            timing: {
+                kicker: 'Timing Pattern',
+                title: derivedMetrics.peakWindow || 'No data',
+                label: `${derivedMetrics.peakWindowCount || 0} rows at peak`,
+                tone: 'timing',
+                insight: `${derivedMetrics.recentWeekCount || 0} detections appeared in the last 7 days, averaging ${(derivedMetrics.dailyAverage || 0).toFixed(1)} per day.`,
+                primaryAction: 'Open live monitor',
+                primaryRoute: 'live'
+            }
+        };
+        const model = modeModels[mode] || modeModels.risk;
+        const sourceSegments = [
+            { label: 'local', value: Number(sourceMix.local || 0), className: 'local' },
+            { label: 'synced local', value: Number(sourceMix.synced_local || 0), className: 'synced' },
+            { label: 'cloud', value: Number(sourceMix.cloud || 0), className: 'cloud' },
+            { label: 'shared', value: Number(sourceMix.shared || 0), className: 'shared' },
+            { label: 'unknown', value: Number(sourceMix.unknown || 0), className: 'unknown' }
+        ];
+
+        container.innerHTML = `
+            <div class="analytics-overview-hero tone-${model.tone}">
+                <div class="analytics-overview-main">
+                    <div class="analytics-overview-tabs" role="tablist" aria-label="Analytics overview focus">
+                        ${[
+                            { key: 'risk', icon: 'fa-triangle-exclamation', label: 'Risk' },
+                            { key: 'source', icon: 'fa-diagram-project', label: 'Source' },
+                            { key: 'queue', icon: 'fa-file-circle-check', label: 'Queue' },
+                            { key: 'timing', icon: 'fa-clock', label: 'Timing' }
+                        ].map((tab) => `
+                            <button class="analytics-overview-tab ${mode === tab.key ? 'active' : ''}" type="button" role="tab" aria-selected="${mode === tab.key ? 'true' : 'false'}" data-analytics-overview-mode="${tab.key}">
+                                <i class="fas ${tab.icon}" aria-hidden="true"></i>
+                                <span>${tab.label}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <div class="analytics-overview-readout">
+                        <span>${model.kicker}</span>
+                        <strong>${model.title}</strong>
+                        <em>${model.label}</em>
+                        <p>${model.insight}</p>
+                    </div>
+
+                    <div class="analytics-overview-actions">
+                        <button class="btn btn-primary" type="button" data-analytics-route="${model.primaryRoute}">
+                            ${model.primaryAction}
+                        </button>
+                        <button class="btn btn-secondary" type="button" data-analytics-export="analytics">
+                            <i class="fas fa-file-csv"></i> Export CSV
+                        </button>
+                    </div>
+                </div>
+
+                <div class="analytics-overview-visual">
+                    <div class="analytics-overview-ring" style="--score:${Math.max(0, Math.min(100, Number(derivedMetrics.readyRate || 0)))};">
+                        <span>${derivedMetrics.readyRate || 0}%</span>
+                        <small>Ready</small>
+                    </div>
+
+                    <div class="analytics-severity-mix" aria-label="Severity mix">
+                        <div class="analytics-severity-strip">
+                            <span class="severity-high" style="width:${safePercent(high, severityTotal)}%"></span>
+                            <span class="severity-medium" style="width:${safePercent(medium, severityTotal)}%"></span>
+                            <span class="severity-low" style="width:${safePercent(low, severityTotal)}%"></span>
+                        </div>
+                        <div class="analytics-overview-legend">
+                            <span><i class="legend-dot high"></i>${high} high</span>
+                            <span><i class="legend-dot medium"></i>${medium} medium</span>
+                            <span><i class="legend-dot low"></i>${low} low</span>
+                        </div>
+                    </div>
+
+                    <div class="analytics-source-stack" aria-label="Source mix">
+                        ${sourceSegments.map((item) => `
+                            <span class="${item.className}" style="width:${safePercent(item.value, sourceTotal)}%" title="${item.label}: ${item.value}"></span>
+                        `).join('')}
+                    </div>
+
+                    <div class="analytics-time-bars" aria-label="Time distribution">
+                        ${timeEntries.map(([label, value]) => `
+                            <div>
+                                <span style="height:${Math.max(12, Math.round(((Number(value) || 0) / timeMax) * 58))}px"></span>
+                                <strong>${Number(value) || 0}</strong>
+                                <em>${String(label).split(' ')[0]}</em>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div class="analytics-overview-mini-grid">
+                        <span><strong>${rowCount}</strong><em>Rows</em></span>
+                        <span><strong>${derivedMetrics.recentWeekCount || 0}</strong><em>7 days</em></span>
+                        <span><strong>${derivedMetrics.pending || 0}</strong><em>Pending</em></span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        container.querySelectorAll('[data-analytics-overview-mode]').forEach((button) => {
+            button.addEventListener('click', () => {
+                this._overviewMode = String(button.dataset.analyticsOverviewMode || 'risk');
+                this.renderOverviewControl(stats, derivedMetrics, violations);
+            });
+        });
+
+        container.querySelectorAll('[data-analytics-route]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const route = button.dataset.analyticsRoute || 'reports';
+                if (typeof Router !== 'undefined' && Router && typeof Router.navigate === 'function') {
+                    Router.navigate(route);
+                }
+            });
+        });
+
+        const exportBtn = container.querySelector('[data-analytics-export]');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', async () => {
+                if (window.CASMAssistant && typeof window.CASMAssistant.exportAnalyticsCsv === 'function') {
+                    await window.CASMAssistant.exportAnalyticsCsv();
+                }
+            });
+        }
     },
 
     async refreshData() {
@@ -486,6 +753,7 @@ const AnalyticsPage = {
             const derivedMetrics = this.buildDerivedMetrics(normalizedStats, filteredViolations);
 
             this.renderAssistantBanner();
+            this.renderOverviewControl(normalizedStats, derivedMetrics, filteredViolations);
             this.renderStats(normalizedStats, derivedMetrics);
             this.renderInsights(derivedMetrics);
             this.renderTrendsChart(filteredViolations);

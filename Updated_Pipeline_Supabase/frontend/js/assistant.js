@@ -6,8 +6,10 @@ const CASMAssistant = {
     PANEL_STATE_KEY: 'casm.assistant.panelState.v1',
     CLIENT_ID_KEY: 'casm.assistant.clientId.v1',
     SYNC_SECRET_KEY: 'casm.assistant.syncSecret.v1',
+    UNMATCHED_PROMPTS_KEY: 'casm.assistant.unmatchedPrompts.v1',
     MAX_SESSIONS: 14,
     MAX_MESSAGES: 80,
+    MAX_UNMATCHED_PROMPTS: 60,
     sessions: [],
     activeSessionId: '',
     docsIndex: [],
@@ -17,6 +19,8 @@ const CASMAssistant = {
     syncTimer: null,
     syncInFlight: false,
     syncQueued: false,
+    isResponding: false,
+    responseFeedbackText: 'Thinking...',
     ui: {},
 
     init() {
@@ -58,6 +62,7 @@ const CASMAssistant = {
             messages: document.getElementById('assistantMessages'),
             composer: document.getElementById('assistantComposer'),
             input: document.getElementById('assistantInput'),
+            send: document.getElementById('assistantSend'),
             title: document.getElementById('assistantTitle'),
             kicker: document.getElementById('assistantKicker'),
             subtitle: document.getElementById('assistantSubtitle')
@@ -78,6 +83,12 @@ const CASMAssistant = {
         }
         if (this.ui.subtitle) {
             this.ui.subtitle.textContent = this.ASSISTANT_SUBTITLE;
+        }
+        if (this.ui.sessionsToggle) {
+            this.ui.sessionsToggle.setAttribute('aria-label', 'Toggle assistant sessions');
+        }
+        if (this.ui.newSession) {
+            this.ui.newSession.setAttribute('aria-label', 'Start a new assistant session');
         }
     },
 
@@ -608,8 +619,29 @@ const CASMAssistant = {
         const session = this.getActiveSession();
         if (!session) return;
         this.renderPromptDeck();
-        this.ui.messages.innerHTML = session.messages.map((message) => this.renderMessage(message)).join('');
+        const messageHtml = session.messages.map((message) => this.renderMessage(message)).join('');
+        const feedbackHtml = this.isResponding ? this.renderResponseFeedback() : '';
+        this.ui.messages.innerHTML = `${messageHtml}${feedbackHtml}`;
         this.scrollMessagesToBottom();
+    },
+
+    renderResponseFeedback() {
+        return `
+            <article class="assistant-message assistant-message-assistant assistant-message-thinking">
+                <div class="assistant-avatar" aria-hidden="true">
+                    <i class="fas fa-sparkles"></i>
+                </div>
+                <div class="assistant-message-stack">
+                    <div class="assistant-message-meta">${this.escapeHtml(this.ASSISTANT_NAME)}</div>
+                    <div class="assistant-bubble assistant-thinking-bubble" role="status" aria-live="polite">
+                        <span class="assistant-thinking-dots" aria-hidden="true">
+                            <span></span><span></span><span></span>
+                        </span>
+                        <p>${this.escapeHtml(this.responseFeedbackText || 'Thinking...')}</p>
+                    </div>
+                </div>
+            </article>
+        `;
     },
 
     renderMessage(message) {
@@ -694,7 +726,7 @@ const CASMAssistant = {
 
     async handleSubmit() {
         const raw = String(this.ui.input.value || '').trim();
-        if (!raw) return;
+        if (!raw || this.isResponding) return;
         this.ui.input.value = '';
         this.autosizeInput();
         this.pushMessage({
@@ -710,15 +742,66 @@ const CASMAssistant = {
         }
         this.renderSessionRail();
         this.saveState();
-        await this.answer(raw);
+        this.setResponseFeedback(true, this.pickResponseFeedback(raw));
+        try {
+            await this.waitForFeedbackFrame();
+            await this.answer(raw);
+        } finally {
+            this.setResponseFeedback(false);
+        }
+    },
+
+    pickResponseFeedback(raw) {
+        const query = this.normalizeText(raw);
+        if (/\b(export|download|csv)\b/.test(query)) return 'Preparing the export...';
+        if (/\b(analytics|metric|metrics|trend|filter|severity|week|month|today)\b/.test(query)) return 'Checking the analytics view...';
+        if (/\b(camera|live|monitor|monitoring|supervision|supervise|image|upload)\b/.test(query)) return 'Mapping that to the right workflow...';
+        if (/\b(tutorial|guide|handbook|manual|docs)\b/.test(query)) return 'Looking through the guide...';
+        return 'Thinking...';
+    },
+
+    waitForFeedbackFrame() {
+        return new Promise((resolve) => {
+            const finish = () => window.setTimeout(resolve, 140);
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(finish);
+            } else {
+                finish();
+            }
+        });
+    },
+
+    setResponseFeedback(active, label = '') {
+        const next = !!active;
+        this.isResponding = next;
+        if (label) {
+            this.responseFeedbackText = label;
+        }
+        this.syncResponseControls();
+        this.renderMessages();
+    },
+
+    syncResponseControls() {
+        if (this.ui.composer) {
+            this.ui.composer.classList.toggle('is-responding', this.isResponding);
+        }
+        if (this.ui.input) {
+            this.ui.input.disabled = this.isResponding;
+            this.ui.input.setAttribute('aria-busy', this.isResponding ? 'true' : 'false');
+        }
+        if (this.ui.send) {
+            this.ui.send.disabled = this.isResponding;
+            this.ui.send.setAttribute('aria-busy', this.isResponding ? 'true' : 'false');
+        }
     },
 
     async answer(raw) {
         const query = this.normalizeText(raw);
         const session = this.getActiveSession();
         if (!session) return;
-        const exportIntent = this.isExportIntent(query);
-        const docsIntent = this.isDocsIntent(query);
+        const localIntent = this.resolveLocalIntent(raw);
+        const exportIntent = this.isExportIntent(query) || (localIntent && /^export-/.test(localIntent.id));
+        const docsIntent = this.isDocsIntent(query) || (localIntent && localIntent.id === 'docs-search' && localIntent.confidence >= 0.64);
 
         if (!docsIntent) {
             session.context.lastDocsQuery = '';
@@ -726,6 +809,11 @@ const CASMAssistant = {
         }
         if (!exportIntent) {
             session.context.lastExportKind = '';
+        }
+
+        if (localIntent && localIntent.confidence >= localIntent.directThreshold) {
+            const handled = await this.handleLocalIntent(localIntent, raw, query);
+            if (handled) return;
         }
 
         if (exportIntent) {
@@ -738,11 +826,6 @@ const CASMAssistant = {
             return;
         }
 
-        if (this.isTutorialIntent(query)) {
-            this.handleTutorialIntent(query);
-            return;
-        }
-
         if (docsIntent) {
             this.handleDocsSearch(raw);
             return;
@@ -750,6 +833,21 @@ const CASMAssistant = {
 
         if (this.isOnboardingIntent(query)) {
             this.handleOnboardingIntent();
+            return;
+        }
+
+        const explanation = this.resolveExplanation(query);
+        if (this.isExplanationQuestion(query) && explanation) {
+            this.pushMessage({
+                role: 'assistant',
+                text: explanation.text,
+                actions: explanation.actions || []
+            });
+            return;
+        }
+
+        if (this.isTutorialIntent(query)) {
+            this.handleTutorialIntent(query);
             return;
         }
 
@@ -777,7 +875,6 @@ const CASMAssistant = {
             return;
         }
 
-        const explanation = this.resolveExplanation(query);
         if (explanation) {
             this.pushMessage({
                 role: 'assistant',
@@ -787,7 +884,512 @@ const CASMAssistant = {
             return;
         }
 
+        if (localIntent && localIntent.confidence >= localIntent.clarifyThreshold) {
+            this.handleIntentClarification(raw, localIntent);
+            return;
+        }
+
+        this.recordUnmatchedPrompt(raw, query, localIntent);
         this.handleUnknownPrompt(raw, query);
+    },
+
+    getLocalIntentModels() {
+        return [
+            {
+                id: 'start-live',
+                label: 'start live monitoring',
+                directThreshold: 0.58,
+                clarifyThreshold: 0.38,
+                examples: [
+                    'start live monitoring',
+                    'start supervision',
+                    'begin site supervision',
+                    'monitor the workers',
+                    'watch the construction site',
+                    'start camera stream',
+                    'open live camera',
+                    'begin safety monitoring',
+                    'run real time PPE detection'
+                ],
+                keywords: ['start', 'begin', 'open', 'live', 'monitor', 'camera', 'stream', 'supervision', 'site', 'worker', 'watch', 'real time', 'ppe']
+            },
+            {
+                id: 'image-analysis',
+                label: 'check an image',
+                directThreshold: 0.6,
+                clarifyThreshold: 0.4,
+                examples: [
+                    'check this image',
+                    'analyze image',
+                    'inspect photo for PPE',
+                    'scan picture for violations',
+                    'review uploaded image',
+                    'detect violations in this snapshot',
+                    'upload image for checking'
+                ],
+                keywords: ['image', 'photo', 'picture', 'snapshot', 'upload', 'analyze', 'analyse', 'inspect', 'scan', 'check', 'violation']
+            },
+            {
+                id: 'analytics-snapshot',
+                label: 'show analytics',
+                directThreshold: 0.55,
+                clarifyThreshold: 0.4,
+                examples: [
+                    'show analytics',
+                    'show me safety metrics',
+                    'what are the violation trends',
+                    'how many violations happened',
+                    'show dashboard stats',
+                    'summarize risk this week',
+                    'give me compliance score'
+                ],
+                keywords: ['analytics', 'metric', 'stats', 'trend', 'dashboard', 'summary', 'violation', 'risk', 'score', 'compliance', 'how many', 'issue', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'boot', 'shoe', 'today', 'week', 'month', 'high', 'medium', 'low']
+            },
+            {
+                id: 'open-analytics',
+                label: 'open analytics',
+                directThreshold: 0.66,
+                clarifyThreshold: 0.42,
+                examples: ['open analytics page', 'go to analytics', 'take me to stats', 'show dashboard page'],
+                keywords: ['open', 'go', 'analytics', 'stats', 'dashboard']
+            },
+            {
+                id: 'open-reports',
+                label: 'open reports',
+                directThreshold: 0.66,
+                clarifyThreshold: 0.42,
+                examples: ['open reports', 'review reports', 'show generated reports', 'go to report history'],
+                keywords: ['open', 'review', 'report', 'reports', 'history', 'generated']
+            },
+            {
+                id: 'export-analytics',
+                label: 'export analytics CSV',
+                directThreshold: 0.58,
+                clarifyThreshold: 0.38,
+                examples: ['export analytics csv', 'download metrics csv', 'save dashboard stats', 'download analytics'],
+                keywords: ['export', 'download', 'csv', 'analytics', 'metrics', 'stats']
+            },
+            {
+                id: 'export-reports',
+                label: 'export reports CSV',
+                directThreshold: 0.58,
+                clarifyThreshold: 0.38,
+                examples: ['export reports csv', 'download report rows', 'save violations csv', 'download reports'],
+                keywords: ['export', 'download', 'csv', 'report', 'reports', 'violations']
+            },
+            {
+                id: 'tutorial',
+                label: 'show tutorial',
+                directThreshold: 0.64,
+                clarifyThreshold: 0.42,
+                examples: ['show tutorial', 'guide me through this', 'walk me through local mode', 'show cloud walkthrough', 'next tutorial step'],
+                keywords: ['tutorial', 'guide', 'walkthrough', 'demo', 'step', 'teach', 'show me how', 'cloud', 'local']
+            },
+            {
+                id: 'settings-recommend',
+                label: 'recommend settings',
+                directThreshold: 0.62,
+                clarifyThreshold: 0.42,
+                examples: ['recommend settings', 'best settings', 'what settings should I use', 'use safe default settings'],
+                keywords: ['recommend', 'best', 'settings', 'default', 'safe', 'profile']
+            },
+            {
+                id: 'settings-local',
+                label: 'apply local profile',
+                directThreshold: 0.54,
+                clarifyThreshold: 0.44,
+                examples: ['switch to local mode', 'apply local profile', 'use local pipeline', 'prepare offline mode'],
+                keywords: ['switch', 'apply', 'local', 'profile', 'pipeline', 'offline']
+            },
+            {
+                id: 'settings-cloud',
+                label: 'apply cloud/API profile',
+                directThreshold: 0.58,
+                clarifyThreshold: 0.44,
+                examples: ['switch to cloud mode', 'apply api mode', 'use hosted mode', 'cloud profile'],
+                keywords: ['switch', 'apply', 'cloud', 'api', 'hosted', 'profile']
+            },
+            {
+                id: 'docs-search',
+                label: 'search handbook',
+                directThreshold: 0.68,
+                clarifyThreshold: 0.44,
+                examples: ['search handbook', 'open manual', 'find documentation', 'show FAQ', 'explain in guide'],
+                keywords: ['handbook', 'manual', 'documentation', 'docs', 'faq', 'guide', 'find', 'search']
+            },
+            {
+                id: 'onboarding',
+                label: 'help me start',
+                directThreshold: 0.6,
+                clarifyThreshold: 0.38,
+                examples: ['I am new here', 'what should I do first', 'I do not know how to start', 'help me use this system', 'first time using this'],
+                keywords: ['new', 'start', 'first', 'help', 'not sure', 'do not know', 'dont know', 'how']
+            }
+        ];
+    },
+
+    resolveLocalIntent(raw) {
+        const normalized = this.normalizeForNlu(raw);
+        const tokens = this.tokenizeForIntent(normalized);
+        if (!tokens.length) return null;
+        const entities = this.extractLocalIntentEntities(raw, normalized);
+        const scored = this.getLocalIntentModels()
+            .map((model) => this.scoreLocalIntentModel(model, normalized, tokens, entities))
+            .sort((a, b) => b.confidence - a.confidence);
+        const best = scored[0] || null;
+        if (!best || best.confidence <= 0.12) return null;
+        return {
+            ...best,
+            entities,
+            alternatives: scored.slice(1, 4)
+        };
+    },
+
+    scoreLocalIntentModel(model, normalized, tokens, entities = {}) {
+        const tokenSet = new Set(tokens);
+        const expandedTokenSet = new Set(this.expandIntentTokens(tokens));
+        const exampleScores = (model.examples || []).map((example) => {
+            const exampleTokens = this.tokenizeForIntent(this.normalizeForNlu(example));
+            if (!exampleTokens.length) return 0;
+            const exampleSet = new Set(this.expandIntentTokens(exampleTokens));
+            const overlap = Array.from(exampleSet).filter((token) => expandedTokenSet.has(token)).length;
+            const coverage = overlap / Math.max(1, Math.min(expandedTokenSet.size, exampleSet.size));
+            const jaccard = overlap / Math.max(1, new Set([...expandedTokenSet, ...exampleSet]).size);
+            const phrase = normalized.includes(this.normalizeForNlu(example)) ? 0.22 : 0;
+            return Math.min(1, (coverage * 0.68) + (jaccard * 0.32) + phrase);
+        });
+        const exampleScore = Math.max(0, ...exampleScores);
+        const keywordTokens = (model.keywords || []).flatMap((keyword) => this.tokenizeForIntent(this.normalizeForNlu(keyword)));
+        const keywordMatches = keywordTokens.filter((token) => expandedTokenSet.has(token) || tokenSet.has(token));
+        const keywordScore = keywordTokens.length
+            ? Math.min(1, keywordMatches.length / Math.min(keywordTokens.length, 5))
+            : 0;
+        const entityBoost = this.getIntentEntityBoost(model.id, entities, normalized);
+        const actionBoost = /\b(open|go|start|begin|show|check|analy[sz]e|export|download|recommend|switch|apply|help)\b/.test(normalized) ? 0.06 : 0;
+        let confidence = Math.min(0.99, (exampleScore * 0.58) + (keywordScore * 0.28) + entityBoost + actionBoost);
+        const actionfulSettings = /\b(switch|apply|use|set|prepare|change|enable|turn on|move to)\b/.test(normalized);
+        const explanatoryQuestion = this.isExplanationQuestion(normalized);
+        if ((model.id === 'settings-local' || model.id === 'settings-cloud') && !actionfulSettings) {
+            confidence *= 0.56;
+        }
+        if ((model.id === 'settings-local' || model.id === 'settings-cloud') && explanatoryQuestion) {
+            confidence *= 0.45;
+        }
+        return {
+            ...model,
+            confidence: Number(confidence.toFixed(3)),
+            evidence: {
+                exampleScore: Number(exampleScore.toFixed(3)),
+                keywordScore: Number(keywordScore.toFixed(3)),
+                entityBoost: Number(entityBoost.toFixed(3))
+            }
+        };
+    },
+
+    getIntentEntityBoost(intentId, entities = {}, normalized = '') {
+        const hasFilters = entities.analyticsFilters && this.hasActiveAnalyticsFilters(entities.analyticsFilters);
+        const exportMention = entities.exportKind || /\b(export|download|csv)\b/.test(normalized);
+        if (intentId === 'analytics-snapshot' && (hasFilters || entities.analyticsMention)) return hasFilters ? 0.24 : 0.1;
+        if (intentId === 'open-analytics' && entities.page === 'analytics') return 0.16;
+        if (intentId === 'open-reports' && entities.page === 'reports') return 0.16;
+        if (intentId === 'start-live' && entities.liveMode === 'live') return 0.16;
+        if (intentId === 'image-analysis' && entities.liveMode === 'upload') return 0.16;
+        if (intentId === 'export-analytics' && exportMention && (entities.exportKind === 'analytics' || entities.analyticsMention)) return 0.2;
+        if (intentId === 'export-reports' && exportMention && (entities.exportKind === 'reports' || entities.reportMention)) return 0.18;
+        if (intentId === 'tutorial' && entities.tutorialMention) return 0.14;
+        if (intentId === 'settings-recommend' && entities.settingsProfile === 'recommended') return 0.16;
+        if (intentId === 'settings-local' && entities.settingsProfile === 'local') return 0.16;
+        if (intentId === 'settings-cloud' && entities.settingsProfile === 'api') return 0.16;
+        if (intentId === 'docs-search' && entities.docsMention) return 0.15;
+        return 0;
+    },
+
+    extractLocalIntentEntities(raw, normalized = '') {
+        const query = normalized || this.normalizeForNlu(raw);
+        const analyticsFilters = this.buildAnalyticsFilters(raw);
+        const page = /\b(analytics|metric|stats|dashboard)\b/.test(query)
+            ? 'analytics'
+            : /\b(reports?|history|report list)\b/.test(query)
+                ? 'reports'
+                : /\b(live|camera|monitor|stream|supervision|supervise|watch)\b/.test(query)
+                    ? 'live'
+                    : /\b(settings?|checkup|profile|provision)\b/.test(query)
+                        ? 'settings'
+                        : '';
+        const liveMode = /\b(image|photo|picture|snapshot|upload)\b/.test(query)
+            ? 'upload'
+            : /\b(live|camera|monitor|stream|supervision|supervise|watch)\b/.test(query)
+                ? 'live'
+                : '';
+        const actionfulSettings = /\b(switch|apply|use|set|prepare|change|enable|turn on|move to)\b/.test(query);
+        const settingsProfile = /\b(recommend|recommended|best|default)\b/.test(query)
+            ? 'recommended'
+            : actionfulSettings && /\b(local|offline)\b/.test(query) && /\b(profile|mode|settings|pipeline|switch|apply|use|prepare|enable)\b/.test(query)
+                ? 'local'
+                : actionfulSettings && /\b(api|cloud|hosted)\b/.test(query) && /\b(profile|mode|settings|switch|apply|use|enable)\b/.test(query)
+                    ? 'api'
+                    : '';
+        const exportKind = /\b(export|download|csv)\b/.test(query)
+            ? (/\b(analytics|metric|stats|dashboard)\b/.test(query)
+                ? 'analytics'
+                : /\b(docs|manual|handbook|documentation|faq)\b/.test(query)
+                    ? 'docs'
+                    : 'reports')
+            : '';
+        return {
+            analyticsFilters,
+            page,
+            liveMode,
+            settingsProfile,
+            exportKind,
+            tutorialFlow: /\blocal\b/.test(query) ? 'local' : /\bcloud\b/.test(query) ? 'cloud' : '',
+            analyticsMention: /\b(analytics|metric|metrics|stats|trend|dashboard|score|risk|violation)\b/.test(query),
+            reportMention: /\breports?\b/.test(query),
+            docsMention: /\b(docs|manual|handbook|documentation|faq|guide)\b/.test(query),
+            tutorialMention: /\b(tutorial|guide|walkthrough|demo|step)\b/.test(query)
+        };
+    },
+
+    async handleLocalIntent(intent, raw, query) {
+        switch (intent.id) {
+            case 'start-live':
+                this.handleWorkflowIntent(this.buildLiveMonitoringIntent());
+                return true;
+            case 'image-analysis':
+                this.handleWorkflowIntent(this.buildImageAnalysisIntent());
+                return true;
+            case 'analytics-snapshot':
+                await this.handleAnalyticsIntent({
+                    raw,
+                    query,
+                    filters: intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw),
+                    filterSummary: this.describeAnalyticsFilters(intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw))
+                });
+                return true;
+            case 'open-analytics': {
+                const filters = intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw);
+                if (this.hasActiveAnalyticsFilters(filters)) {
+                    await this.handleAnalyticsIntent({
+                        raw,
+                        query,
+                        filters,
+                        filterSummary: this.describeAnalyticsFilters(filters)
+                    });
+                } else {
+                    this.handleDestination({ type: 'route', page: 'analytics', label: 'Analytics' });
+                }
+                return true;
+            }
+            case 'open-reports':
+                this.handleDestination({ type: 'route', page: 'reports', label: 'Reports' });
+                return true;
+            case 'export-analytics':
+                await this.handleExportIntent(`${raw} analytics csv`, `${query} analytics csv`);
+                return true;
+            case 'export-reports':
+                await this.handleExportIntent(`${raw} reports csv`, `${query} reports csv`);
+                return true;
+            case 'tutorial':
+                this.handleTutorialIntent(`${intent.entities.tutorialFlow || ''} ${query} tutorial`);
+                return true;
+            case 'settings-recommend':
+                await this.handleSettingsIntent({ type: 'recommendation' });
+                return true;
+            case 'settings-local':
+                await this.handleSettingsIntent({ type: 'apply-local' });
+                return true;
+            case 'settings-cloud':
+                await this.handleSettingsIntent({ type: 'apply-api' });
+                return true;
+            case 'docs-search':
+                this.handleDocsSearch(raw);
+                return true;
+            case 'onboarding':
+                this.handleOnboardingIntent();
+                return true;
+            default:
+                return false;
+        }
+    },
+
+    buildLiveMonitoringIntent() {
+        return {
+            text: 'I read that as starting site supervision, so the Live Monitor workflow is the right place. I can take you there and collapse the chat so the camera controls stay usable.',
+            bullets: [
+                'I will place you on Live Monitor with the camera stream workflow ready.',
+                'Use Start after the preview area is visible and the camera source looks right.',
+                'Reopen Mira anytime from the launcher; this same session stays here.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open Live Monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 },
+                { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+            ]
+        };
+    },
+
+    buildImageAnalysisIntent() {
+        return {
+            text: 'For a single-image check, use Live Monitor in Analyze Image mode. I can open that view and land you right on the upload area.',
+            bullets: [
+                'This path is best when you want one still image reviewed instead of a full live session.',
+                'Use the upload area, then run Analyze for PPE Violations.',
+                'Mira will remember this conversation when you reopen the panel.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open Image Analysis', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                { type: 'handbook', label: 'Open upload guide', pageKey: 'workflow', stageKey: 'capture', collapsePanel: true },
+                { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
+            ]
+        };
+    },
+
+    handleIntentClarification(raw, intent) {
+        this.recordUnmatchedPrompt(raw, this.normalizeText(raw), intent);
+        const candidates = [intent, ...(intent.alternatives || [])]
+            .filter((item) => item && item.confidence >= 0.24)
+            .slice(0, 3);
+        const actions = candidates
+            .map((item) => this.buildActionForIntentCandidate(item, raw))
+            .filter(Boolean);
+        this.pushMessage({
+            role: 'assistant',
+            text: `I have a partial read on that. I think you may mean "${intent.label}", but I want to avoid taking the wrong action.`,
+            bullets: [
+                `Best match confidence: ${Math.round(intent.confidence * 100)}%.`,
+                'Pick one action below, or rephrase with the page/action you want.'
+            ],
+            actions: actions.length ? actions : [
+                { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+            ]
+        });
+    },
+
+    buildActionForIntentCandidate(intent, raw) {
+        if (!intent || !intent.id) return null;
+        const filters = intent.entities?.analyticsFilters || this.buildAnalyticsFilters(raw);
+        switch (intent.id) {
+            case 'start-live':
+                return { type: 'route', label: 'Start live monitoring', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true };
+            case 'image-analysis':
+                return { type: 'route', label: 'Check image', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true };
+            case 'analytics-snapshot':
+            case 'open-analytics':
+                return this.hasActiveAnalyticsFilters(filters)
+                    ? { type: 'route', label: 'Open filtered analytics', page: 'analytics', analyticsFilters: filters, analyticsSummary: this.describeAnalyticsFilters(filters) || 'Filtered analytics view', collapsePanel: true }
+                    : { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true };
+            case 'open-reports':
+                return { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true };
+            case 'export-analytics':
+                return { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' };
+            case 'export-reports':
+                return { type: 'export', label: 'Export reports CSV', exportKind: 'reports' };
+            case 'tutorial':
+                return { type: 'tutorial', label: 'Show tutorial', flow: intent.entities?.tutorialFlow || 'cloud', stepIndex: 0 };
+            case 'settings-recommend':
+                return { type: 'settings-profile', label: 'Recommend settings', profile: 'recommended' };
+            case 'settings-local':
+                return { type: 'settings-profile', label: 'Apply local profile', profile: 'local' };
+            case 'settings-cloud':
+                return { type: 'settings-profile', label: 'Apply API mode', profile: 'api' };
+            case 'docs-search':
+                return { type: 'handbook', label: 'Open handbook', pageKey: 'intro' };
+            case 'onboarding':
+                return { type: 'tutorial', label: 'Start guided tutorial', flow: 'cloud', stepIndex: 0 };
+            default:
+                return null;
+        }
+    },
+
+    recordUnmatchedPrompt(raw, query, intent = null) {
+        const text = String(raw || '').trim();
+        if (!text) return;
+        try {
+            const current = JSON.parse(localStorage.getItem(this.UNMATCHED_PROMPTS_KEY) || '[]');
+            const rows = Array.isArray(current) ? current : [];
+            rows.unshift({
+                text: text.slice(0, 280),
+                normalized: String(query || '').slice(0, 280),
+                page: String((APP_STATE && APP_STATE.currentPage) || 'home'),
+                bestIntent: intent ? {
+                    id: intent.id,
+                    label: intent.label,
+                    confidence: intent.confidence,
+                    alternatives: (intent.alternatives || []).slice(0, 3).map((item) => ({
+                        id: item.id,
+                        label: item.label,
+                        confidence: item.confidence
+                    }))
+                } : null,
+                createdAt: Date.now()
+            });
+            localStorage.setItem(this.UNMATCHED_PROMPTS_KEY, JSON.stringify(rows.slice(0, this.MAX_UNMATCHED_PROMPTS)));
+        } catch (_) {
+            // Ignore local review-log failures.
+        }
+    },
+
+    normalizeForNlu(value) {
+        let text = this.normalizeText(value);
+        const replacements = [
+            [/\bwanna\b/g, 'want to'],
+            [/\bgonna\b/g, 'going to'],
+            [/\bpls\b|\bplz\b/g, 'please'],
+            [/\bstatistic(s)?\b|\bstats\b/g, 'analytics'],
+            [/\banalysis dashboard\b/g, 'analytics'],
+            [/\bsupervise\b|\bsupervision\b|\bsurveillance\b|\bpatrol\b|\bwatching\b/g, 'monitor'],
+            [/\bphoto\b|\bpicture\b|\bsnapshot\b|\bscreenshot\b/g, 'image'],
+            [/\brealtime\b/g, 'real time'],
+            [/\bppe check\b/g, 'ppe detection'],
+            [/\btake me to\b|\bgo to\b|\bbring me to\b/g, 'open'],
+            [/\badvise\b|\bsuggest\b/g, 'recommend']
+        ];
+        replacements.forEach(([pattern, replacement]) => {
+            text = text.replace(pattern, replacement);
+        });
+        return text.replace(/\s+/g, ' ').trim();
+    },
+
+    tokenizeForIntent(value) {
+        const stopWords = new Set([
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'what', 'when', 'where',
+            'which', 'please', 'can', 'could', 'would', 'should', 'you', 'me', 'my', 'i', 'am',
+            'is', 'are', 'to', 'a', 'an', 'of', 'in', 'on', 'it'
+        ]);
+        return this.normalizeText(value)
+            .split(' ')
+            .map((token) => token.trim())
+            .filter((token) => token.length > 1 && !stopWords.has(token));
+    },
+
+    expandIntentTokens(tokens = []) {
+        const synonyms = {
+            monitor: ['supervision', 'supervise', 'watch', 'surveillance', 'stream', 'live'],
+            live: ['monitor', 'camera', 'stream', 'realtime'],
+            camera: ['live', 'stream', 'monitor'],
+            image: ['photo', 'picture', 'snapshot', 'upload'],
+            analytics: ['stats', 'metrics', 'dashboard', 'trend', 'summary'],
+            report: ['reports', 'history', 'violation'],
+            reports: ['report', 'history', 'violations'],
+            export: ['download', 'csv', 'save'],
+            download: ['export', 'csv', 'save'],
+            settings: ['profile', 'configuration', 'config'],
+            recommend: ['suggest', 'advise', 'best'],
+            docs: ['manual', 'handbook', 'documentation', 'faq'],
+            tutorial: ['guide', 'walkthrough', 'demo'],
+            start: ['begin', 'run', 'open'],
+            open: ['go', 'show', 'launch'],
+            hardhat: ['helmet'],
+            helmet: ['hardhat'],
+            boots: ['shoes'],
+            shoes: ['boots']
+        };
+        const expanded = new Set(tokens);
+        tokens.forEach((token) => {
+            (synonyms[token] || []).forEach((value) => expanded.add(value));
+        });
+        return Array.from(expanded);
     },
 
     isDocsIntent(query) {
@@ -860,6 +1462,10 @@ const CASMAssistant = {
 
     isTutorialIntent(query) {
         return /\b(tutorial|walkthrough|demo|guide|next step|previous step|prev step|continue tutorial|cloud mode|local mode)\b/.test(query);
+    },
+
+    isExplanationQuestion(query) {
+        return /\b(what is|what does|explain|meaning|mean|how does|why does|tell me about|describe)\b/.test(query);
     },
 
     handleOnboardingIntent() {
@@ -1057,8 +1663,8 @@ const CASMAssistant = {
     resolveWorkflowIntent(query) {
         const intents = [
             {
-                match: /\b(start live|start monitoring|start camera|open camera|open live|live monitoring|use camera stream)\b/,
-                text: 'For live monitoring, use the Live Monitor page in Camera Stream mode. I can take you there and collapse the chat so the controls stay usable.',
+                match: /\b(start live|start monitoring|start camera|open camera|open live|live monitoring|use camera stream|start supervision|begin supervision|site supervision|supervise site|start supervise|begin monitoring|start site watch|watch the site)\b/,
+                text: 'I read that as starting site supervision, so the Live Monitor workflow is the right place. I can take you there and collapse the chat so the camera controls stay usable.',
                 bullets: [
                     'I will place you on Live Monitor with the camera stream workflow ready.',
                     'Use Start after the preview area is visible and the camera source looks right.',
@@ -1139,8 +1745,8 @@ const CASMAssistant = {
     resolveAnalyticsIntent(raw, query) {
         if (!query) return null;
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
-        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation)\b/.test(query);
-        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|week|month)\b/.test(query);
+        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe)\b/.test(query);
+        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|week|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
         const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|tell me|what is|how many)\b/.test(query);
         if (directOpen && !filterMatch) {
             return null;
@@ -1158,16 +1764,89 @@ const CASMAssistant = {
     },
 
     buildAnalyticsFilters(rawQuery = '') {
-        const base = this.buildReportFilters(rawQuery);
+        const base = this.sanitizeAnalyticsFilters(this.buildReportFilters(rawQuery));
+        const ppeTypes = this.extractAnalyticsPpeTypes(rawQuery);
+        return this.sanitizeAnalyticsFilters({
+            ...base,
+            ppeTypes
+        });
+    },
+
+    sanitizeAnalyticsFilters(filters = {}) {
+        const cleaned = {};
+        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
+        if (['cloud', 'local', 'synced_local'].includes(source)) {
+            cleaned.source = source;
+        }
+
+        const severity = String(filters.severity || '').trim().toLowerCase();
+        if (['high', 'medium', 'low'].includes(severity)) {
+            cleaned.severity = severity;
+        }
+
+        const dateRange = String(filters.dateRange || '').trim().toLowerCase();
+        if (['today', 'week', 'month'].includes(dateRange)) {
+            cleaned.dateRange = dateRange;
+        }
+
+        const validPpe = new Set([
+            'NO-Hardhat',
+            'NO-Safety Vest',
+            'NO-Gloves',
+            'NO-Mask',
+            'NO-Goggles',
+            'NO-Safety Shoes'
+        ]);
+        const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
+        const normalizedPpe = Array.from(new Set(
+            ppeTypes
+                .map((label) => this.normalizePpeFilterLabel(label))
+                .filter((label) => validPpe.has(label))
+        ));
+        if (normalizedPpe.length) {
+            cleaned.ppeTypes = normalizedPpe;
+        }
+
+        return cleaned;
+    },
+
+    hasActiveAnalyticsFilters(filters = {}) {
+        return !!(
+            filters
+            && typeof filters === 'object'
+            && (
+                filters.source
+                || filters.severity
+                || filters.dateRange
+                || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length > 0)
+            )
+        );
+    },
+
+    normalizePpeFilterLabel(label) {
+        const normalized = this.normalizeText(label).replace(/-/g, ' ');
+        if (/\b(no )?(hardhat|hard hat|helmet|helmets)\b/.test(normalized)) return 'NO-Hardhat';
+        if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
+        if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
+        if (/\b(no )?(mask|masks|respirator|respirators)\b/.test(normalized)) return 'NO-Mask';
+        if (/\b(no )?(goggles?|eye protection|eyewear)\b/.test(normalized)) return 'NO-Goggles';
+        if (/\b(no )?(safety )?(shoe|shoes|boot|boots)\b/.test(normalized)) return 'NO-Safety Shoes';
+        return String(label || '').trim();
+    },
+
+    extractAnalyticsPpeTypes(rawQuery = '') {
         const query = this.normalizeText(rawQuery);
-        base.searchTokens = this.tokenize(query)
-            .filter((token) => ![
-                'analytics', 'analytic', 'metric', 'metrics', 'dashboard', 'stats', 'snapshot',
-                'show', 'give', 'tell', 'summary', 'summarize', 'compare', 'what', 'how', 'many',
-                'violations', 'violation', 'count', 'ready', 'rate', 'high', 'medium', 'low',
-                'today', 'week', 'month', 'cloud', 'local', 'synced'
-            ].includes(token));
-        return base;
+        const labels = [];
+        const add = (label) => {
+            if (!labels.includes(label)) labels.push(label);
+        };
+        if (/\b(hardhat|hard hat|helmet|helmets)\b/.test(query)) add('NO-Hardhat');
+        if (/\b(safety vest|vest|vests)\b/.test(query)) add('NO-Safety Vest');
+        if (/\b(glove|gloves)\b/.test(query)) add('NO-Gloves');
+        if (/\b(mask|masks|respirator|respirators)\b/.test(query)) add('NO-Mask');
+        if (/\b(goggle|goggles|eye protection|eyewear)\b/.test(query)) add('NO-Goggles');
+        if (/\b(safety shoe|safety shoes|shoe|shoes|boot|boots)\b/.test(query)) add('NO-Safety Shoes');
+        return labels;
     },
 
     describeAnalyticsFilters(filters = {}) {
@@ -1179,8 +1858,12 @@ const CASMAssistant = {
         if (filters.dateRange === 'today') parts.push('today');
         if (filters.dateRange === 'week') parts.push('this week');
         if (filters.dateRange === 'month') parts.push('this month');
-        if (Array.isArray(filters.searchTokens) && filters.searchTokens.length) {
-            parts.push(`matching ${filters.searchTokens.join(', ')}`);
+        if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
+            const labels = filters.ppeTypes.map((label) => String(label || '')
+                .replace(/^NO-/, '')
+                .replace(/Safety /g, 'safety ')
+                .toLowerCase());
+            parts.push(`missing ${labels.join(', ')}`);
         }
         return parts.join(', ');
     },
@@ -1192,18 +1875,24 @@ const CASMAssistant = {
                 API.getStats(),
                 API.getViolations({ limit: 1000 })
             ]);
+            const hasFilters = this.hasActiveAnalyticsFilters(filters);
             const allRows = Array.isArray(violations) ? violations : [];
-            const filteredRows = allRows.filter((row) => this.matchesReportFilters(row, filters));
+            const filteredRows = hasFilters
+                ? allRows.filter((row) => this.matchesReportFilters(row, filters))
+                : allRows;
             if (!filteredRows.length) {
                 return {
                     success: false,
                     filters,
+                    hasFilters,
                     filterSummary: this.describeAnalyticsFilters(filters),
-                    message: 'No analytics rows matched that filter.'
+                    message: hasFilters
+                        ? 'No analytics rows matched the valid filters I found, so I will not open an empty filtered dashboard automatically.'
+                        : 'No analytics rows are available yet.'
                 };
             }
 
-            const baseStats = this.describeAnalyticsFilters(filters)
+            const baseStats = hasFilters
                 ? AnalyticsPage.buildStatsFromViolations(filteredRows)
                 : stats;
             const normalizedStats = AnalyticsPage.normalizeStats(baseStats, filteredRows);
@@ -1211,6 +1900,7 @@ const CASMAssistant = {
             return {
                 success: true,
                 filters,
+                hasFilters,
                 filterSummary: this.describeAnalyticsFilters(filters),
                 stats: normalizedStats,
                 derived,
@@ -1234,6 +1924,7 @@ const CASMAssistant = {
             return {
                 success: false,
                 filters: this.buildAnalyticsFilters(rawQuery),
+                hasFilters: this.hasActiveAnalyticsFilters(this.buildAnalyticsFilters(rawQuery)),
                 filterSummary: this.describeAnalyticsFilters(this.buildAnalyticsFilters(rawQuery)),
                 message: 'I could not fetch the analytics snapshot right now.'
             };
@@ -1249,12 +1940,16 @@ const CASMAssistant = {
                 role: 'assistant',
                 text: `${outcome.message || 'I could not fetch analytics right now.'}${label ? ` (${label.trim()})` : ''}`,
                 actions: [
-                    { type: 'route', label: 'Open analytics page', page: 'analytics', analyticsFilters: intent.filters || outcome.filters || {}, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true },
+                    { type: 'route', label: 'Open full analytics', page: 'analytics', collapsePanel: true },
                     { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' }
                 ]
             });
             return;
         }
+
+        const analyticsRoute = this.hasActiveAnalyticsFilters(outcome.filters)
+            ? { type: 'route', label: 'Open filtered analytics', page: 'analytics', analyticsFilters: outcome.filters || {}, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true }
+            : { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true };
 
         this.pushMessage({
             role: 'assistant',
@@ -1262,7 +1957,7 @@ const CASMAssistant = {
             metrics: outcome.metrics || [],
             bullets: outcome.bullets || [],
             actions: [
-                { type: 'route', label: 'Open filtered analytics', page: 'analytics', analyticsFilters: outcome.filters || {}, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true },
+                analyticsRoute,
                 { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' },
                 { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
             ]
@@ -1299,10 +1994,10 @@ const CASMAssistant = {
 
         this.pushMessage({
             role: 'assistant',
-            text: 'That sounds outside the monitoring assistant scope I handle right now.',
+            text: 'I could not confidently map that wording to one workflow yet, but I can still help you get to the main safety actions quickly.',
             bullets: [
                 'I stay focused on live monitoring, image checks, reports, analytics, settings, exports, and handbook guidance.',
-                'If you want, rephrase it as an action or question inside those areas and I will handle it directly.'
+                'Short phrases like "start supervision", "check image", or "show analytics this week" are enough.'
             ],
             actions: [
                 { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
@@ -1413,8 +2108,10 @@ const CASMAssistant = {
     },
 
     queueAnalyticsIntent(detail = {}) {
+        const filters = this.sanitizeAnalyticsFilters(detail && typeof detail.filters === 'object' ? detail.filters : {});
+        if (!this.hasActiveAnalyticsFilters(filters)) return;
         const payload = {
-            filters: detail && typeof detail.filters === 'object' ? detail.filters : {},
+            filters,
             summary: String(detail.summary || 'Filtered analytics view').trim() || 'Filtered analytics view',
             requestedAt: Date.now()
         };
@@ -1438,10 +2135,13 @@ const CASMAssistant = {
             });
         }
         if (action.page === 'analytics' && action.analyticsFilters) {
-            this.queueAnalyticsIntent({
-                filters: action.analyticsFilters,
-                summary: action.analyticsSummary || 'Filtered analytics view'
-            });
+            const filters = this.sanitizeAnalyticsFilters(action.analyticsFilters);
+            if (this.hasActiveAnalyticsFilters(filters)) {
+                this.queueAnalyticsIntent({
+                    filters,
+                    summary: action.analyticsSummary || 'Filtered analytics view'
+                });
+            }
         }
         Router.navigate(page || 'home');
         if (action.collapsePanel !== false) {
@@ -1600,6 +2300,11 @@ const CASMAssistant = {
             id: message.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             createdAt: message.createdAt || Date.now()
         });
+        if (!normalized) return;
+        if (normalized.role === 'assistant' && this.isResponding) {
+            this.isResponding = false;
+            this.syncResponseControls();
+        }
         session.messages.push(normalized);
         session.messages = session.messages.slice(-this.MAX_MESSAGES);
         session.updatedAt = Date.now();
@@ -1924,6 +2629,17 @@ const CASMAssistant = {
             if (!filters.searchTokens.every((token) => haystack.includes(token))) return false;
         }
 
+        if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
+            const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
+            const breakdownLabels = row?.breakdown && typeof row.breakdown === 'object'
+                ? Object.entries(row.breakdown)
+                    .filter(([, value]) => Number(value) > 0)
+                    .map(([label]) => label)
+                : [];
+            const normalizedLabels = new Set([...missing, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            if (!filters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
+        }
+
         return true;
     },
 
@@ -2179,6 +2895,8 @@ const CASMAssistant = {
     normalizeText(value) {
         return String(value || '')
             .toLowerCase()
+            .replace(/\banlytics\b/g, 'analytics')
+            .replace(/\banalitic(s)?\b/g, 'analytics')
             .replace(/[^a-z0-9\s-]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();

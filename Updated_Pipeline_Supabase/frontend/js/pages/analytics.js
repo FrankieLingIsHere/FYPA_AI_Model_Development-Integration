@@ -238,7 +238,7 @@ const AnalyticsPage = {
         }
 
         const dateRange = String(filters.dateRange || '').trim().toLowerCase();
-        if (['today', 'week', 'month'].includes(dateRange)) {
+        if (['today', 'yesterday', 'week', 'month'].includes(dateRange)) {
             cleaned.dateRange = dateRange;
         }
 
@@ -438,6 +438,11 @@ const AnalyticsPage = {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             if (safeFilters.dateRange === 'today' && rowDate < today) return false;
+            if (safeFilters.dateRange === 'yesterday') {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (rowDate < yesterday || rowDate >= today) return false;
+            }
             if (safeFilters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);

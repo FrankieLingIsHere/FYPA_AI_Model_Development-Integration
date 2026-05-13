@@ -802,6 +802,7 @@ const CASMAssistant = {
         const localIntent = this.resolveLocalIntent(raw);
         const exportIntent = this.isExportIntent(query) || (localIntent && /^export-/.test(localIntent.id));
         const docsIntent = this.isDocsIntent(query) || (localIntent && localIntent.id === 'docs-search' && localIntent.confidence >= 0.64);
+        const safetyGuardrail = this.resolveSafetyGuardrail(raw, query);
 
         if (!docsIntent) {
             session.context.lastDocsQuery = '';
@@ -809,6 +810,17 @@ const CASMAssistant = {
         }
         if (!exportIntent) {
             session.context.lastExportKind = '';
+        }
+
+        if (safetyGuardrail) {
+            this.handleSafetyGuardrail(safetyGuardrail);
+            return;
+        }
+
+        const compoundIntent = !exportIntent ? this.resolveCompoundIntent(raw, query, localIntent) : null;
+        if (compoundIntent) {
+            this.handleCompoundIntent(compoundIntent);
+            return;
         }
 
         if (localIntent && localIntent.confidence >= localIntent.directThreshold) {
@@ -821,7 +833,7 @@ const CASMAssistant = {
             return;
         }
 
-        if (this.isOverviewIntent(query)) {
+        if (this.isOverviewIntent(query) && !this.isTargetedStatusIntent(query)) {
             await this.handleOverviewIntent();
             return;
         }
@@ -833,6 +845,11 @@ const CASMAssistant = {
 
         if (this.isOnboardingIntent(query)) {
             this.handleOnboardingIntent();
+            return;
+        }
+
+        if (this.isCapabilityIntent(query)) {
+            this.handleCapabilityIntent();
             return;
         }
 
@@ -939,11 +956,14 @@ const CASMAssistant = {
                     'show me safety metrics',
                     'what are the violation trends',
                     'how many violations happened',
+                    'any safety issues right now',
+                    'did anything unsafe happen yesterday',
+                    'show me the bad stuff',
                     'show dashboard stats',
                     'summarize risk this week',
                     'give me compliance score'
                 ],
-                keywords: ['analytics', 'metric', 'stats', 'trend', 'dashboard', 'summary', 'violation', 'risk', 'score', 'compliance', 'how many', 'issue', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'boot', 'shoe', 'today', 'week', 'month', 'high', 'medium', 'low']
+                keywords: ['analytics', 'metric', 'stats', 'trend', 'dashboard', 'summary', 'violation', 'incident', 'alert', 'unsafe', 'safety', 'risk', 'score', 'compliance', 'how many', 'issue', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'boot', 'shoe', 'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low']
             },
             {
                 id: 'open-analytics',
@@ -1107,18 +1127,18 @@ const CASMAssistant = {
     extractLocalIntentEntities(raw, normalized = '') {
         const query = normalized || this.normalizeForNlu(raw);
         const analyticsFilters = this.buildAnalyticsFilters(raw);
-        const page = /\b(analytics|metric|stats|dashboard)\b/.test(query)
+        const page = /\b(analytics|metric|stats|dashboard|chart|graph)\b/.test(query)
             ? 'analytics'
             : /\b(reports?|history|report list)\b/.test(query)
                 ? 'reports'
-                : /\b(live|camera|monitor|stream|supervision|supervise|watch)\b/.test(query)
+                : /\b(live|camera|monitor|stream|supervision|supervise|watch|feed)\b/.test(query)
                     ? 'live'
                     : /\b(settings?|checkup|profile|provision)\b/.test(query)
                         ? 'settings'
                         : '';
         const liveMode = /\b(image|photo|picture|snapshot|upload)\b/.test(query)
             ? 'upload'
-            : /\b(live|camera|monitor|stream|supervision|supervise|watch)\b/.test(query)
+            : /\b(live|camera|monitor|stream|supervision|supervise|watch|feed)\b/.test(query)
                 ? 'live'
                 : '';
         const actionfulSettings = /\b(switch|apply|use|set|prepare|change|enable|turn on|move to)\b/.test(query);
@@ -1143,8 +1163,8 @@ const CASMAssistant = {
             settingsProfile,
             exportKind,
             tutorialFlow: /\blocal\b/.test(query) ? 'local' : /\bcloud\b/.test(query) ? 'cloud' : '',
-            analyticsMention: /\b(analytics|metric|metrics|stats|trend|dashboard|score|risk|violation)\b/.test(query),
-            reportMention: /\breports?\b/.test(query),
+            analyticsMention: /\b(analytics|metric|metrics|stats|trend|dashboard|score|risk|violation|incident|alert|safety|unsafe|compliance|chart|graph)\b/.test(query),
+            reportMention: /\b(reports?|history|records?|incident list)\b/.test(query),
             docsMention: /\b(docs|manual|handbook|documentation|faq|guide)\b/.test(query),
             tutorialMention: /\b(tutorial|guide|walkthrough|demo|step)\b/.test(query)
         };
@@ -1230,10 +1250,10 @@ const CASMAssistant = {
 
     buildImageAnalysisIntent() {
         return {
-            text: 'For a single-image check, use Live Monitor in Analyze Image mode. I can open that view and land you right on the upload area.',
+            text: 'For still-image checks, use Live Monitor in Analyze Image mode. I can open that view and land you right on the upload area.',
             bullets: [
-                'This path is best when you want one still image reviewed instead of a full live session.',
-                'Use the upload area, then run Analyze for PPE Violations.',
+                'This path is best when you want one or several still images reviewed instead of a full live session.',
+                'Use the upload area, choose the image files, then run Analyze for PPE Violations.',
                 'Mira will remember this conversation when you reopen the panel.'
             ],
             actions: [
@@ -1302,6 +1322,166 @@ const CASMAssistant = {
         }
     },
 
+    resolveSafetyGuardrail(raw, query = '') {
+        const normalized = query || this.normalizeText(raw);
+        if (!normalized) return null;
+        const secretOrCredential = /\b(password|passcode|api key|secret|sync secret|token|jwt|service role|private key|database url|connection string|env|environment variable|credential|cookie|session id|auth header)\b/.test(normalized);
+        const bypassRequest = /\b(bypass|skip|disable|turn off|override|remove|ignore)\b/.test(normalized)
+            && /\b(auth|authentication|authorization|permission|approval|login|admin|role|security|access control)\b/.test(normalized);
+        const crossUserData = /\b(other user|another user|someone else|all users|user sessions|assistant sessions|chat history|private report|personal data)\b/.test(normalized)
+            && /\b(show|read|open|download|export|give|dump|list|reveal)\b/.test(normalized);
+        const unsafeAdminAction = /\b(make me admin|grant admin|impersonate|login as|approve without|authorize without|delete audit|delete logs|hide audit|erase evidence)\b/.test(normalized);
+        const privacyQuestion = /\b(private|public|sensitive|confidential|personal data|permission|allowed|anonymi[sz]e|redact|hide sensitive|safe version|remove names|what parts.*confidential|data should not be shared|without exposing)\b/.test(normalized);
+
+        if (secretOrCredential || bypassRequest || crossUserData || unsafeAdminAction) {
+            return {
+                type: 'deny-sensitive',
+                reason: secretOrCredential
+                    ? 'credentials'
+                    : bypassRequest || unsafeAdminAction
+                        ? 'authorization'
+                        : 'cross-user-data'
+            };
+        }
+        if (privacyQuestion) {
+            return { type: 'privacy-guidance' };
+        }
+        return null;
+    },
+
+    handleSafetyGuardrail(intent) {
+        if (!intent) return;
+        if (intent.type === 'deny-sensitive') {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I cannot reveal secrets, private session data, or help bypass permissions. I can still help you reach the authorized views and prepare a safe summary.',
+                bullets: [
+                    'Keep passwords, API keys, sync secrets, tokens, and session identifiers out of chat and exports.',
+                    'Admin/device actions should stay behind the app permission flow and audit trail.',
+                    'For sharing, use a redacted summary or CSV that removes personal and credential-like fields.'
+                ],
+                actions: [
+                    { type: 'handbook', label: 'Open privacy guidance', pageKey: 'admin', collapsePanel: true },
+                    { type: 'route', label: 'Open reports safely', page: 'reports', collapsePanel: true },
+                    { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+                ]
+            });
+            return;
+        }
+
+        this.pushMessage({
+            role: 'assistant',
+            text: 'Yes. I can help keep the output permission-aware and safe to share.',
+            bullets: [
+                'Use summaries, counts, dates, camera/location labels, and violation categories when a broad audience only needs the safety picture.',
+                'Redact names, credentials, sync secrets, tokens, private chat/session data, and anything outside the current user role.',
+                'If admin details are needed, open the approved admin/settings area instead of exposing them in a general chat answer.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open analytics summary', page: 'analytics', collapsePanel: true },
+                { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                { type: 'handbook', label: 'Open admin guidance', pageKey: 'admin', collapsePanel: true }
+            ]
+        });
+    },
+
+    resolveCompoundIntent(raw, query = '', localIntent = null) {
+        if (!query) return null;
+        const hasCompoundCue = /\b(and|also|plus|then|after that|both|together|all together|at the same time|first|next|with)\b/.test(query)
+            || /[,;]/.test(String(raw || ''));
+        const longInstruction = String(raw || '').trim().length >= 90;
+        if (!hasCompoundCue && !longInstruction) return null;
+
+        const actions = [];
+        const bullets = [];
+        const addAction = (key, action, bullet = '') => {
+            if (!action || actions.some((item) => item.key === key)) return;
+            actions.push({ key, action });
+            if (bullet && !bullets.includes(bullet)) bullets.push(bullet);
+        };
+
+        const wantsImage = /\b(image|photo|picture|snapshot|upload|still image|scan)\b/.test(query);
+        const wantsLive = /\b(live|camera|feed|stream|monitor|supervision|supervise|watch|front gate|warehouse|entrance|perimeter)\b/.test(query) && !wantsImage;
+        const wantsAnalytics = /\b(analytics|metric|metrics|chart|graph|trend|compliance|score|risk|summary|numbers|how many|violation|violations|incidents?|alerts?|helmet|hardhat|vest|ppe|unsafe|safety issue|bad stuff|top|compare|breakdown)\b/.test(query);
+        const wantsReports = /\b(reports?|history|records?|audit trail|evidence|log|logs|incident list|latest incident|incidents?|raw data|table)\b/.test(query);
+        const wantsAdmin = /\b(device|devices|camera list|ip address|edge|streamer|pending|approval|approve|authorize|provision|admin|offline|heartbeat|health)\b/.test(query);
+        const wantsGuide = /\b(explain|simple|plain english|beginner|walk me|teach|where do i|how do i|guide|tutorial|manual|handbook)\b/.test(query);
+        const wantsSettings = /\b(settings|profile|local mode|cloud mode|api mode|checkup|readiness)\b/.test(query);
+        const filters = this.buildAnalyticsFilters(raw);
+        const filterSummary = this.describeAnalyticsFilters(filters);
+
+        if (wantsLive || localIntent?.id === 'start-live') {
+            addAction(
+                'live',
+                { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                'Open Live Monitor for camera/feed checks and real-time supervision.'
+            );
+        }
+        if (wantsImage || localIntent?.id === 'image-analysis') {
+            addAction(
+                'image',
+                { type: 'route', label: 'Analyze images', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                'Use Analyze Image when the request is about uploaded photos or snapshots.'
+            );
+        }
+        if (wantsAnalytics || localIntent?.id === 'analytics-snapshot') {
+            addAction(
+                'analytics',
+                this.hasActiveAnalyticsFilters(filters)
+                    ? { type: 'route', label: 'Open filtered analytics', page: 'analytics', analyticsFilters: filters, analyticsSummary: filterSummary || 'Filtered analytics view', collapsePanel: true }
+                    : { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                filterSummary ? `Apply the valid analytics filters I found: ${filterSummary}.` : 'Use Analytics for trends, counts, risk, and compliance summaries.'
+            );
+        }
+        if (wantsReports || localIntent?.id === 'open-reports') {
+            addAction(
+                'reports',
+                { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                'Use Reports when you need the underlying incident rows, records, or evidence list.'
+            );
+        }
+        if (wantsAdmin) {
+            addAction(
+                'admin',
+                { type: 'handbook', label: 'Open admin/device guide', pageKey: 'admin', collapsePanel: true },
+                'Device and approval questions stay in the admin/device guidance path.'
+            );
+        }
+        if (wantsSettings || localIntent?.id === 'settings-recommend') {
+            addAction(
+                'settings',
+                { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true },
+                'Use Settings Checkup for local/cloud readiness and operating profile decisions.'
+            );
+        }
+        if (wantsGuide || localIntent?.id === 'tutorial' || localIntent?.id === 'docs-search') {
+            addAction(
+                'guide',
+                { type: 'handbook', label: 'Open handbook', pageKey: 'intro', collapsePanel: true },
+                'Use the handbook path when the request asks for explanation, training, or where to click.'
+            );
+        }
+
+        if (actions.length < 2) return null;
+        return {
+            actions: actions.slice(0, 5).map((item) => item.action),
+            bullets: bullets.slice(0, 4),
+            filterSummary
+        };
+    },
+
+    handleCompoundIntent(intent) {
+        this.pushMessage({
+            role: 'assistant',
+            text: 'I read that as a combined request, so I split it into safe workspace actions instead of forcing only one interpretation.',
+            bullets: [
+                ...(intent.bullets || []),
+                'I will not expose restricted admin, credential, or cross-user details in chat; those stay behind the approved app views.'
+            ].slice(0, 5),
+            actions: intent.actions || []
+        });
+    },
+
     recordUnmatchedPrompt(raw, query, intent = null) {
         const text = String(raw || '').trim();
         if (!text) return;
@@ -1340,6 +1520,9 @@ const CASMAssistant = {
             [/\banalysis dashboard\b/g, 'analytics'],
             [/\bsupervise\b|\bsupervision\b|\bsurveillance\b|\bpatrol\b|\bwatching\b/g, 'monitor'],
             [/\bphoto\b|\bpicture\b|\bsnapshot\b|\bscreenshot\b/g, 'image'],
+            [/\bfront gate\b|\bmain entrance\b|\bnorth gate\b|\bwest gate\b/g, 'camera location'],
+            [/\bbad stuff\b|\bbad news\b|\bno good results\b|\bsafety problems?\b/g, 'violations'],
+            [/\bmissing gear\b|\bforgot (their )?(helmet|hardhat|vest)\b/g, 'ppe violation'],
             [/\brealtime\b/g, 'real time'],
             [/\bppe check\b/g, 'ppe detection'],
             [/\btake me to\b|\bgo to\b|\bbring me to\b/g, 'open'],
@@ -1453,7 +1636,12 @@ const CASMAssistant = {
     },
 
     isOverviewIntent(query) {
-        return /\b(overview|summary|metrics|status|health|analytics snapshot)\b/.test(query);
+        return /\b(overview|summary|metrics|status|health|system running|services online|online|all clear|everything fine|everything okay|site safe|safe right now|current status|analytics snapshot)\b/.test(query);
+    },
+
+    isTargetedStatusIntent(query) {
+        return /\b(camera|device|edge|streamer|admin|pending|approval|warehouse|gate|entrance|zone|area|perimeter)\b/.test(query)
+            && /\b(status|health|online|offline|running|working|active|failing|broken)\b/.test(query);
     },
 
     isOnboardingIntent(query) {
@@ -1466,6 +1654,10 @@ const CASMAssistant = {
 
     isExplanationQuestion(query) {
         return /\b(what is|what does|explain|meaning|mean|how does|why does|tell me about|describe)\b/.test(query);
+    },
+
+    isCapabilityIntent(query) {
+        return /\b(what can you do|what kinds of things|what data do you have access to|explain your limitations|your limitations|do you understand|can you handle|how do you decide|what if i ask|use you for a beginner)\b/.test(query);
     },
 
     handleOnboardingIntent() {
@@ -1484,6 +1676,25 @@ const CASMAssistant = {
                 { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
                 { type: 'settings-profile', label: 'Use recommended settings', profile: 'recommended' },
                 { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 }
+            ]
+        });
+    },
+
+    handleCapabilityIntent() {
+        this.pushMessage({
+            role: 'assistant',
+            text: 'I can help with CASM workflows using local, deterministic intent rules so normal prompts stay quick and low-cost.',
+            bullets: [
+                'I can open Live Monitor, image analysis, reports, analytics, settings, tutorials, and handbook sections.',
+                'I can understand short, messy, code-switched, or combined requests and split them into safe actions.',
+                'I can export CSVs and apply valid analytics/report filters, while ignoring unsupported filters instead of breaking the page.',
+                'I do not reveal credentials, sync secrets, private sessions, or cross-user/admin data in chat.'
+            ],
+            actions: [
+                { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                { type: 'route', label: 'Analyze images', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                { type: 'handbook', label: 'Open handbook', pageKey: 'intro', collapsePanel: true }
             ]
         });
     },
@@ -1745,9 +1956,9 @@ const CASMAssistant = {
     resolveAnalyticsIntent(raw, query) {
         if (!query) return null;
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
-        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe)\b/.test(query);
-        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|week|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
-        const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|tell me|what is|how many)\b/.test(query);
+        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|bad stuff|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe)\b/.test(query);
+        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
+        const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|tell me|what is|how many|count|find|list|filter|only|just|latest)\b/.test(query);
         if (directOpen && !filterMatch) {
             return null;
         }
@@ -1785,7 +1996,7 @@ const CASMAssistant = {
         }
 
         const dateRange = String(filters.dateRange || '').trim().toLowerCase();
-        if (['today', 'week', 'month'].includes(dateRange)) {
+        if (['today', 'yesterday', 'week', 'month'].includes(dateRange)) {
             cleaned.dateRange = dateRange;
         }
 
@@ -1856,6 +2067,7 @@ const CASMAssistant = {
         if (filters.source === 'synced_local') parts.push('local-synced rows');
         if (filters.severity) parts.push(`${filters.severity} severity`);
         if (filters.dateRange === 'today') parts.push('today');
+        if (filters.dateRange === 'yesterday') parts.push('yesterday');
         if (filters.dateRange === 'week') parts.push('this week');
         if (filters.dateRange === 'month') parts.push('this month');
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
@@ -2393,10 +2605,18 @@ const CASMAssistant = {
                 keywords: ['assistant', 'export', 'csv', 'session', 'shortcut', 'camera', 'upload', 'settings']
             },
             {
+                id: 'glossary-privacy-boundaries',
+                label: 'Glossary',
+                title: 'Privacy and permission boundaries',
+                text: 'Safe assistant output should summarize allowed safety data without exposing credentials, sync secrets, private session data, or cross-user admin details. Sensitive admin actions should stay inside approved app views.',
+                pageKey: 'admin',
+                keywords: ['privacy', 'permission', 'sensitive', 'confidential', 'secret', 'token', 'admin', 'safe version', 'anonymize', 'redact']
+            },
+            {
                 id: 'glossary-live-workflows',
                 label: 'Glossary',
                 title: 'Live monitor workflows',
-                text: 'Camera Stream is for live monitoring and report capture. Analyze Image is for a still image upload where the user wants one-off PPE detection and an annotated result.',
+                text: 'Camera Stream is for live monitoring and report capture. Analyze Image is for still image uploads where the user wants one-off PPE detection and annotated results.',
                 pageKey: 'workflow',
                 stageKey: 'capture',
                 keywords: ['live monitor', 'camera', 'upload image', 'analyze image', 'image violations']
@@ -2575,15 +2795,17 @@ const CASMAssistant = {
                         : '',
             dateRange: /\btoday\b/.test(query)
                 ? 'today'
-                : /\bweek\b/.test(query)
-                    ? 'week'
-                    : /\bmonth\b/.test(query)
-                        ? 'month'
-                        : '',
+                : /\byesterday\b|\blast night\b/.test(query)
+                    ? 'yesterday'
+                    : /\bweek\b|\blast seven days\b|\bseven days\b|\b7 days\b|\blast 7 days\b/.test(query)
+                        ? 'week'
+                        : /\bmonth\b|\blast 30 days\b|\b30 days\b/.test(query)
+                            ? 'month'
+                            : '',
             searchTokens: this.tokenize(query)
                 .filter((token) => ![
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
-                    'today', 'week', 'month', 'high', 'medium', 'low'
+                    'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low'
                 ].includes(token))
         };
     },
@@ -2606,6 +2828,11 @@ const CASMAssistant = {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             if (filters.dateRange === 'today' && rowDate < today) return false;
+            if (filters.dateRange === 'yesterday') {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (rowDate < yesterday || rowDate >= today) return false;
+            }
             if (filters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
@@ -2893,13 +3120,31 @@ const CASMAssistant = {
     },
 
     normalizeText(value) {
-        return String(value || '')
+        let text = String(value || '')
             .toLowerCase()
+            .replace(/\bwhat's\b/g, 'what is')
             .replace(/\banlytics\b/g, 'analytics')
             .replace(/\banalitic(s)?\b/g, 'analytics')
+            .replace(/\bwats\b|\bwhats\b/g, 'what is')
+            .replace(/\bstatuse\b|\bstatuz\b/g, 'status')
+            .replace(/\bcamra\b|\bcamras\b|\bcam\b/g, 'camera')
+            .replace(/\bcameras\b/g, 'camera')
+            .replace(/\bviolashuns\b|\bviolashun\b|\bviolashions\b/g, 'violations')
+            .replace(/\bteh\b/g, 'the')
+            .replace(/\bbad stuff\b|\bbad news\b|\bno good results\b/g, 'violations')
+            .replace(/\bmissing gear\b/g, 'ppe violations')
+            .replace(/\bthing is on\b/g, 'system status')
+            .replace(/\bboleh\b/g, 'can')
+            .replace(/\btolong\b/g, 'please')
+            .replace(/\bsaya nak\b|\bnak tengok\b/g, 'i want to see')
+            .replace(/\bhari ini\b/g, 'today')
+            .replace(/\bmasalah\b/g, 'issue')
+            .replace(/\btak faham\b/g, 'do not understand')
+            .replace(/\bcepat\b/g, 'quick')
             .replace(/[^a-z0-9\s-]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+        return text;
     },
 
     compactText(value) {

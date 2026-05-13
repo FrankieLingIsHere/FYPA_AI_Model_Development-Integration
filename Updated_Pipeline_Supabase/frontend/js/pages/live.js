@@ -110,20 +110,22 @@ const LivePage = {
 
                         <!-- Upload Container -->
                         <div id="uploadContainer" style="display: none; margin-bottom: 1.5rem;">
-                            <div style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; background: var(--background-color); transition: border-color 0.3s;">
-                                <input type="file" id="imageUpload" accept="image/*" style="display: none;" />
+                            <div id="uploadDropZone" style="border: 2px dashed var(--border-color); border-radius: 8px; padding: 2rem; text-align: center; background: var(--background-color); transition: border-color 0.3s;">
+                                <input type="file" id="imageUpload" accept="image/*" multiple style="display: none;" />
                                 <label for="imageUpload" style="cursor: pointer; display: block;">
                                     <i class="fas fa-cloud-upload-alt" style="font-size: 4rem; color: var(--primary-color); opacity: 0.7; margin-bottom: 1rem;"></i>
-                                    <p style="margin: 0; font-size: 1.1rem; font-weight: bold;">Drop image here or click to browse</p>
+                                    <p style="margin: 0; font-size: 1.1rem; font-weight: bold;">Drop images here or click to browse</p>
                                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.5rem;">
-                                        Supports JPG, PNG - Max 10MB
+                                        Supports JPG, PNG - Max 10MB each
                                     </p>
                                 </label>
                             </div>
                             
                             <div id="uploadPreview" style="display: none; margin-top: 1.5rem;">
                                 <div style="background: var(--background-color); padding: 1.5rem; border-radius: 8px;">
-                                    <img id="previewImage" style="max-width: 100%; max-height: 500px; border-radius: 8px; margin-bottom: 1rem; display: block; margin-left: auto; margin-right: auto;" />
+                                    <div id="uploadSelectionSummary" style="margin-bottom: 1rem; font-weight: 700;"></div>
+                                    <div id="uploadPreviewGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;"></div>
+                                    <img id="previewImage" alt="" style="display: none;" />
                                     <div style="text-align: center;">
                                         <button id="analyzeBtn" class="btn btn-primary" style="margin-right: 10px;">
                                             <i class="fas fa-search"></i> Analyze for PPE Violations
@@ -139,11 +141,11 @@ const LivePage = {
                             <div id="uploadResults" style="display: none; margin-top: 1.5rem;">
                                 <div class="card">
                                     <div class="card-header">
-                                        <span><i class="fas fa-chart-bar"></i> Detection Results</span>
+                                        <span id="uploadResultsTitle"><i class="fas fa-chart-bar"></i> Detection Results</span>
                                     </div>
                                     <div class="card-content">
                                         <div id="uploadResultsContent"></div>
-                                        <div style="margin-top: 1rem;">
+                                        <div id="annotatedResultSection" style="margin-top: 1rem;">
                                             <h4 style="margin-bottom: 0.5rem;">Annotated Image:</h4>
                                             <img id="annotatedResult" style="width: 100%; border-radius: 8px;" />
                                         </div>
@@ -264,17 +266,23 @@ const LivePage = {
         const instructionsList = document.getElementById('instructionsList');
         
         // Upload elements
+        const uploadDropZone = document.getElementById('uploadDropZone');
         const imageUpload = document.getElementById('imageUpload');
         const uploadPreview = document.getElementById('uploadPreview');
         const previewImage = document.getElementById('previewImage');
+        const uploadSelectionSummary = document.getElementById('uploadSelectionSummary');
+        const uploadPreviewGrid = document.getElementById('uploadPreviewGrid');
         const analyzeBtn = document.getElementById('analyzeBtn');
         const clearUploadBtn = document.getElementById('clearUploadBtn');
         const uploadResults = document.getElementById('uploadResults');
+        const uploadResultsTitle = document.getElementById('uploadResultsTitle');
         const uploadResultsContent = document.getElementById('uploadResultsContent');
+        const annotatedResultSection = document.getElementById('annotatedResultSection');
         const annotatedResult = document.getElementById('annotatedResult');
         
         let currentMode = 'live';
-        let selectedFile = null;
+        let selectedFiles = [];
+        let selectedPreviewUrls = [];
         let selectedSource = 'webcam';
         let selectedCameraIndex = 0;
         let backendWebcamDevices = [];
@@ -1374,133 +1382,298 @@ const LivePage = {
             });
         }
         
+        function escapeUploadHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function notifyUploadIssue(message) {
+            if (typeof showNotification === 'function') {
+                showNotification(message, 'warning');
+            } else {
+                alert(message);
+            }
+        }
+
+        function formatUploadSize(bytes) {
+            const size = Number(bytes || 0);
+            if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+            if (size >= 1024) return `${Math.round(size / 1024)}KB`;
+            return `${size}B`;
+        }
+
+        function resetUploadPreviewUrls() {
+            selectedPreviewUrls.forEach((url) => {
+                try {
+                    URL.revokeObjectURL(url);
+                } catch (_) {
+                    // Ignore stale preview URLs.
+                }
+            });
+            selectedPreviewUrls = [];
+        }
+
+        function setAnalyzeButtonLabel() {
+            const count = selectedFiles.length;
+            const label = count > 1 ? `Analyze ${count} Images` : 'Analyze Image';
+            analyzeBtn.innerHTML = `<i class="fas fa-search"></i> ${label}`;
+        }
+
+        function renderUploadSelection(files) {
+            resetUploadPreviewUrls();
+            selectedFiles = files;
+            selectedPreviewUrls = selectedFiles.map((file) => URL.createObjectURL(file));
+            uploadPreview.style.display = selectedFiles.length ? 'block' : 'none';
+            uploadResults.style.display = 'none';
+            if (previewImage && selectedPreviewUrls[0]) {
+                previewImage.src = selectedPreviewUrls[0];
+            }
+            if (uploadSelectionSummary) {
+                uploadSelectionSummary.textContent = selectedFiles.length === 1
+                    ? `Selected 1 image: ${selectedFiles[0].name}`
+                    : `Selected ${selectedFiles.length} images for batch analysis`;
+            }
+            if (uploadPreviewGrid) {
+                uploadPreviewGrid.innerHTML = selectedFiles.map((file, index) => `
+                    <article style="border:1px solid var(--border-color);border-radius:8px;background:var(--surface-color, #fff);overflow:hidden;">
+                        <img src="${selectedPreviewUrls[index]}" alt="${escapeUploadHtml(file.name)} preview" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;">
+                        <div style="padding:0.55rem;">
+                            <div style="font-weight:700;font-size:0.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeUploadHtml(file.name)}</div>
+                            <div style="font-size:0.75rem;color:var(--text-secondary);">${formatUploadSize(file.size)}</div>
+                        </div>
+                    </article>
+                `).join('');
+            }
+            setAnalyzeButtonLabel();
+        }
+
+        function handleUploadFileSelection(fileList) {
+            const files = Array.from(fileList || []);
+            if (!files.length) return;
+
+            const accepted = [];
+            const rejected = [];
+            files.forEach((file) => {
+                if (!file || !String(file.type || '').startsWith('image/')) {
+                    rejected.push(`${file?.name || 'Unsupported file'} is not an image`);
+                    return;
+                }
+                if (file.size > 10 * 1024 * 1024) {
+                    rejected.push(`${file.name} is over 10MB`);
+                    return;
+                }
+                accepted.push(file);
+            });
+
+            if (rejected.length) {
+                notifyUploadIssue(rejected.slice(0, 3).join('. '));
+            }
+            if (!accepted.length) {
+                imageUpload.value = '';
+                return;
+            }
+
+            renderUploadSelection(accepted);
+        }
+
+        async function analyzeUploadedFile(file) {
+            const formData = new FormData();
+            formData.append('image', file, file.name);
+            formData.append('conf', '0.10');
+
+            const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`Analysis failed for ${file.name}`);
+            }
+            return response.json();
+        }
+
+        function persistUploadedViolationDraft(result, file) {
+            if (!result || !result.violations_detected || !result.report_id) return;
+            try {
+                if (typeof API !== 'undefined' && typeof API.upsertLocalReportDraft === 'function') {
+                    void API.upsertLocalReportDraft({
+                        report_id: result.report_id,
+                        timestamp: new Date().toISOString(),
+                        status: 'pending',
+                        severity: 'HIGH',
+                        original_blob: file,
+                        has_original: true,
+                        has_annotated: false,
+                        source_scope: 'local',
+                        source_label: 'Local',
+                        sync_state: 'pending_local_generation',
+                        violation_count: Number(result.violation_count || 1),
+                        detections: Array.isArray(result.detections) ? result.detections : [],
+                        missing_ppe: [],
+                        violation_summary: 'PPE Violation Detected'
+                    }).catch((draftErr) => {
+                        console.debug('Could not persist uploaded violation draft:', draftErr);
+                    });
+                }
+            } catch (draftErr) {
+                console.debug('Could not persist uploaded violation draft:', draftErr);
+            }
+        }
+
+        function renderUploadResults(entries) {
+            const successful = entries.filter((entry) => entry.result);
+            const totalDetections = successful.reduce((sum, entry) => {
+                const detections = Array.isArray(entry.result.detections) ? entry.result.detections.length : 0;
+                return sum + Number(entry.result.count ?? detections ?? 0);
+            }, 0);
+            const totalViolations = successful.reduce((sum, entry) => sum + Number(entry.result.violation_count || 0), 0);
+            const failedCount = entries.length - successful.length;
+            const firstAnnotated = successful.find((entry) => entry.result && entry.result.annotated_image);
+
+            if (uploadResultsTitle) {
+                uploadResultsTitle.innerHTML = `<i class="fas fa-chart-bar"></i> Detection Results (${successful.length}/${entries.length} analyzed)`;
+            }
+            if (annotatedResultSection) {
+                annotatedResultSection.style.display = firstAnnotated ? 'block' : 'none';
+            }
+            if (annotatedResult && firstAnnotated) {
+                annotatedResult.src = firstAnnotated.result.annotated_image;
+            }
+
+            uploadResultsContent.innerHTML = `
+                <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;">
+                    <div>
+                        <h4 style="margin:0 0 0.5rem 0;">Total Detections</h4>
+                        <p style="font-size:2rem;font-weight:bold;color:var(--primary-color);margin:0;">${totalDetections}</p>
+                    </div>
+                    <div>
+                        <h4 style="margin:0 0 0.5rem 0;">Violations Found</h4>
+                        <p style="font-size:2rem;font-weight:bold;color:${totalViolations > 0 ? 'var(--danger-color)' : 'var(--success-color)'};margin:0;">${totalViolations}</p>
+                    </div>
+                    <div>
+                        <h4 style="margin:0 0 0.5rem 0;">Images</h4>
+                        <p style="font-size:2rem;font-weight:bold;color:var(--text-color);margin:0;">${successful.length}/${entries.length}</p>
+                    </div>
+                </div>
+                ${totalViolations > 0
+                    ? '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> PPE violations detected. Reports will be generated automatically for violating images.</div>'
+                    : '<div class="alert alert-success"><i class="fas fa-check-circle"></i> No violations detected in the analyzed images.</div>'
+                }
+                ${failedCount > 0
+                    ? `<div class="alert alert-warning" style="margin-top:0.75rem;"><i class="fas fa-triangle-exclamation"></i> ${failedCount} image${failedCount === 1 ? '' : 's'} could not be analyzed.</div>`
+                    : ''
+                }
+                <div style="display:flex;flex-direction:column;gap:0.9rem;margin-top:1rem;">
+                    ${entries.map((entry, index) => {
+                        if (entry.error) {
+                            return `
+                                <article style="border:1px solid var(--border-color);border-radius:8px;padding:0.9rem;background:var(--surface-color, #fff);">
+                                    <strong>${escapeUploadHtml(entry.file.name)}</strong>
+                                    <div class="alert alert-danger" style="margin-top:0.65rem;">${escapeUploadHtml(entry.error.message || 'Analysis failed')}</div>
+                                </article>
+                            `;
+                        }
+                        const result = entry.result || {};
+                        const detections = Array.isArray(result.detections) ? result.detections : [];
+                        return `
+                            <article style="border:1px solid var(--border-color);border-radius:8px;padding:0.9rem;background:var(--surface-color, #fff);">
+                                <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
+                                    <div>
+                                        <strong>${escapeUploadHtml(entry.file.name)}</strong>
+                                        <div style="font-size:0.82rem;color:var(--text-secondary);">Image ${index + 1} of ${entries.length}</div>
+                                    </div>
+                                    <span class="badge ${result.violations_detected ? 'badge-danger' : 'badge-success'}">
+                                        ${Number(result.violation_count || 0)} violation${Number(result.violation_count || 0) === 1 ? '' : 's'}
+                                    </span>
+                                </div>
+                                <h4 style="margin:0.85rem 0 0.5rem;">Detected Objects:</h4>
+                                <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+                                    ${detections.length ? detections.map((d) => `
+                                        <span class="badge ${String(d.class_name || '').toLowerCase().includes('no-') ? 'badge-danger' : 'badge-success'}">
+                                            ${escapeUploadHtml(d.class_name || 'Object')} (${(Number(d.confidence || 0) * 100).toFixed(1)}%)
+                                        </span>
+                                    `).join('') : '<span style="color:var(--text-secondary);font-size:0.85rem;">No objects returned by the detector.</span>'}
+                                </div>
+                                ${result.annotated_image ? `<img src="${result.annotated_image}" alt="${escapeUploadHtml(entry.file.name)} annotated result" style="width:100%;border-radius:8px;margin-top:0.8rem;">` : ''}
+                            </article>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+            uploadResults.style.display = 'block';
+        }
+
         // Image upload handling
         imageUpload.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            
-            if (!file.type.startsWith('image/')) {
-                alert('Please select a valid image file');
-                return;
-            }
-            
-            if (file.size > 10 * 1024 * 1024) { // 10MB limit
-                alert('Image size must be less than 10MB');
-                return;
-            }
-            
-            selectedFile = file;
-            
-            // Show preview
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                previewImage.src = e.target.result;
-                uploadPreview.style.display = 'block';
-                uploadResults.style.display = 'none';
-            };
-            reader.readAsDataURL(file);
+            handleUploadFileSelection(e.target.files);
         });
+
+        if (uploadDropZone) {
+            uploadDropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadDropZone.style.borderColor = 'var(--primary-color)';
+                uploadDropZone.style.background = 'rgba(37, 99, 235, 0.06)';
+            });
+            uploadDropZone.addEventListener('dragleave', () => {
+                uploadDropZone.style.borderColor = 'var(--border-color)';
+                uploadDropZone.style.background = 'var(--background-color)';
+            });
+            uploadDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadDropZone.style.borderColor = 'var(--border-color)';
+                uploadDropZone.style.background = 'var(--background-color)';
+                handleUploadFileSelection(e.dataTransfer.files);
+            });
+        }
         
         // Analyze button
         analyzeBtn.addEventListener('click', async () => {
-            if (!selectedFile) return;
+            if (!selectedFiles.length) return;
             
             try {
                 analyzeBtn.disabled = true;
-                analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
-                
-                // Create form data
-                const formData = new FormData();
-                formData.append('image', selectedFile);
-                formData.append('conf', '0.10');
-                
-                // Upload and analyze
-                const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPLOAD_INFERENCE}`, {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                if (!response.ok) {
-                    throw new Error('Analysis failed');
-                }
-                
-                const result = await response.json();
+                const entries = [];
 
-                if (result && result.violations_detected && result.report_id) {
+                for (let index = 0; index < selectedFiles.length; index += 1) {
+                    const file = selectedFiles[index];
+                    analyzeBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Analyzing ${index + 1}/${selectedFiles.length}`;
                     try {
-                        if (typeof API !== 'undefined' && typeof API.upsertLocalReportDraft === 'function') {
-                            void API.upsertLocalReportDraft({
-                                report_id: result.report_id,
-                                timestamp: new Date().toISOString(),
-                                status: 'pending',
-                                severity: 'HIGH',
-                                original_blob: selectedFile,
-                                has_original: true,
-                                has_annotated: false,
-                                source_scope: 'local',
-                                source_label: 'Local',
-                                sync_state: 'pending_local_generation',
-                                violation_count: Number(result.violation_count || 1),
-                                detections: Array.isArray(result.detections) ? result.detections : [],
-                                missing_ppe: [],
-                                violation_summary: 'PPE Violation Detected'
-                            }).catch((draftErr) => {
-                                console.debug('Could not persist uploaded violation draft:', draftErr);
-                            });
-                        }
-                    } catch (draftErr) {
-                        console.debug('Could not persist uploaded violation draft:', draftErr);
+                        const result = await analyzeUploadedFile(file);
+                        persistUploadedViolationDraft(result, file);
+                        entries.push({ file, result });
+                    } catch (error) {
+                        console.error('Analysis error:', error);
+                        entries.push({ file, error });
                     }
                 }
-                
-                // Display results
-                uploadResultsContent.innerHTML = `
-                    <div style="display: flex; gap: 2rem; margin-bottom: 1rem;">
-                        <div>
-                            <h4 style="margin: 0 0 0.5rem 0;">Total Detections</h4>
-                            <p style="font-size: 2rem; font-weight: bold; color: var(--primary-color); margin: 0;">${result.count}</p>
-                        </div>
-                        <div>
-                            <h4 style="margin: 0 0 0.5rem 0;">Violations Found</h4>
-                            <p style="font-size: 2rem; font-weight: bold; color: ${result.violations_detected ? 'var(--danger-color)' : 'var(--success-color)'}; margin: 0;">
-                                ${result.violation_count}
-                            </p>
-                        </div>
-                    </div>
-                    ${result.violations_detected ? 
-                        '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> PPE violations detected! Report will be generated automatically.</div>' :
-                        '<div class="alert alert-success"><i class="fas fa-check-circle"></i> No violations detected. All PPE compliance requirements met.</div>'
-                    }
-                    <h4 style="margin-top: 1rem;">Detected Objects:</h4>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
-                        ${result.detections.map(d => `
-                            <span class="badge ${d.class_name.toLowerCase().includes('no-') ? 'badge-danger' : 'badge-success'}">
-                                ${d.class_name} (${(d.confidence * 100).toFixed(1)}%)
-                            </span>
-                        `).join('')}
-                    </div>
-                `;
-                
-                annotatedResult.src = result.annotated_image;
-                uploadResults.style.display = 'block';
-                
+
+                renderUploadResults(entries);
                 analyzeBtn.disabled = false;
-                analyzeBtn.innerHTML = '<i class="fas fa-search"></i> Analyze Image';
+                setAnalyzeButtonLabel();
                 
             } catch (error) {
                 console.error('Analysis error:', error);
-                alert('Failed to analyze image. Please try again.');
+                alert('Failed to analyze images. Please try again.');
                 analyzeBtn.disabled = false;
-                analyzeBtn.innerHTML = '<i class="fas fa-search"></i> Analyze Image';
+                setAnalyzeButtonLabel();
             }
         });
         
         // Clear upload button
         clearUploadBtn.addEventListener('click', () => {
-            selectedFile = null;
+            resetUploadPreviewUrls();
+            selectedFiles = [];
             imageUpload.value = '';
+            if (previewImage) previewImage.removeAttribute('src');
+            if (uploadPreviewGrid) uploadPreviewGrid.innerHTML = '';
+            if (uploadSelectionSummary) uploadSelectionSummary.textContent = '';
             uploadPreview.style.display = 'none';
             uploadResults.style.display = 'none';
+            setAnalyzeButtonLabel();
         });
         
         // Live stream functions

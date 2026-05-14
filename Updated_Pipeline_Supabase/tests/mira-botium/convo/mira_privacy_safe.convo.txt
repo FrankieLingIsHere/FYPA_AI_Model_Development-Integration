@@ -1,0 +1,7 @@
+MIRA_PRIVACY_SAFE_VARIANTS
+
+#me
+UTT_MIRA_PRIVACY_SAFE
+
+#bot
+*permission-aware*safe to share*

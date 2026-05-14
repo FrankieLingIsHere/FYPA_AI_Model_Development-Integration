@@ -1,0 +1,4 @@
+UTT_MIRA_EXPORT_REPORTS
+Can you find yesterday helmet violations and export them to CSV?
+export yesterday hardhat reports csv
+download report for missing helmet yesterday

@@ -1,0 +1,5 @@
+UTT_MIRA_CAPABILITY_SCOPE
+what data do you have access to?
+Can you explain your limitations?
+What can you help me with?
+Can you handle both short questions and long instructions?

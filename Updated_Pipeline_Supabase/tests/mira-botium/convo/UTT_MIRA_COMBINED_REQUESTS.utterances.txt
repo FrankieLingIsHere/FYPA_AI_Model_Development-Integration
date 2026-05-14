@@ -1,0 +1,4 @@
+UTT_MIRA_COMBINED_REQUESTS
+Can you check the cameras, find any violations, and give me a summary?
+Show me camera status and also the last 10 incidents.
+Open the warehouse camera, check if the system is okay, and tell me if there are alerts.

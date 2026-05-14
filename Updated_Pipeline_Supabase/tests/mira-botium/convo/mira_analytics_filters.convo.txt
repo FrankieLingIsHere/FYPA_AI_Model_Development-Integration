@@ -1,0 +1,7 @@
+MIRA_ANALYTICS_FILTER_VARIANTS
+
+#me
+UTT_MIRA_ANALYTICS_FILTERS
+
+#bot
+*live analytics snapshot*

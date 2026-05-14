@@ -1,0 +1,22 @@
+{
+  "botium": {
+    "Capabilities": {
+      "PROJECTNAME": "Mira Assistant Rule Regression",
+      "CONTAINERMODE": "simplerest",
+      "SIMPLEREST_URL": "http://127.0.0.1:47823/message",
+      "SIMPLEREST_METHOD": "POST",
+      "SIMPLEREST_HEADERS_TEMPLATE": {
+        "Content-Type": "application/json"
+      },
+      "SIMPLEREST_BODY_TEMPLATE": {
+        "text": "{{{msg.messageText}}}",
+        "conversationId": "{{botium.conversationId}}"
+      },
+      "SIMPLEREST_RESPONSE_JSONPATH": "$.text",
+      "SIMPLEREST_CONTEXT_JSONPATH": "$.context",
+      "SIMPLEREST_TIMEOUT": 5000,
+      "SCRIPTING_UTTEXPANSION_MODE": "all",
+      "SCRIPTING_MATCHING_MODE": "wildcardIgnoreCase"
+    }
+  }
+}

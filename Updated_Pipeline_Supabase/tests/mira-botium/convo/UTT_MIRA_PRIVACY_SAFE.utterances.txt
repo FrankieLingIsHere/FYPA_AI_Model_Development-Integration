@@ -1,0 +1,5 @@
+UTT_MIRA_PRIVACY_SAFE
+Show me only the information I am allowed to see.
+Can you hide sensitive details?
+Can you remove names and keep the summary?
+Show me the safe version of the report.

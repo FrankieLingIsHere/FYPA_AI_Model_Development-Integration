@@ -1,0 +1,7 @@
+MIRA_IMAGE_ANALYSIS_VARIANTS
+
+#me
+UTT_MIRA_IMAGE_ANALYSIS
+
+#bot
+*Analyze Image*

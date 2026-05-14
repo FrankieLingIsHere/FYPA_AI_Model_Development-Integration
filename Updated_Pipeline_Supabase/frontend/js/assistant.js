@@ -1657,7 +1657,7 @@ const CASMAssistant = {
     },
 
     isCapabilityIntent(query) {
-        return /\b(what can you do|what kinds of things|what data do you have access to|explain your limitations|your limitations|do you understand|can you handle|how do you decide|what if i ask|use you for a beginner)\b/.test(query);
+        return /\b(what can you do|what can you help me with|what can you help with|what kinds of things|what data do you have access to|explain your limitations|your limitations|do you understand|can you handle|how do you decide|what if i ask|use you for a beginner)\b/.test(query);
     },
 
     handleOnboardingIntent() {
@@ -1955,6 +1955,9 @@ const CASMAssistant = {
 
     resolveAnalyticsIntent(raw, query) {
         if (!query) return null;
+        const offTopicOnly = /\b(weather|pizza|joke|game|capital|bored|banana|universe|homework|recipe|song|movie)\b/.test(query)
+            && !/\b(camera|report|reports|analytics|metric|violation|violations|incident|alert|ppe|helmet|hardhat|vest|site|safety|safe|compliance|dashboard|system)\b/.test(query);
+        if (offTopicOnly) return null;
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
         const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|bad stuff|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe)\b/.test(query);
         const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
@@ -2778,6 +2781,7 @@ const CASMAssistant = {
 
     buildReportFilters(rawQuery = '') {
         const query = this.normalizeText(rawQuery);
+        const ppeTypes = this.extractAnalyticsPpeTypes(rawQuery);
         return {
             source: /\blocal synced\b/.test(query)
                 ? 'synced_local'
@@ -2802,10 +2806,15 @@ const CASMAssistant = {
                         : /\bmonth\b|\blast 30 days\b|\b30 days\b/.test(query)
                             ? 'month'
                             : '',
+            ppeTypes,
             searchTokens: this.tokenize(query)
                 .filter((token) => ![
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
-                    'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low'
+                    'can', 'you', 'find', 'get', 'make', 'create', 'need', 'want', 'wanna', 'them', 'to', 'me', 'all', 'any', 'rows', 'row',
+                    'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low',
+                    'violation', 'violations', 'incident', 'incidents', 'ppe',
+                    'helmet', 'helmets', 'hardhat', 'hardhats', 'hard', 'hat', 'vest', 'vests',
+                    'glove', 'gloves', 'mask', 'masks', 'goggle', 'goggles', 'boot', 'boots', 'shoe', 'shoes'
                 ].includes(token))
         };
     },
@@ -2877,6 +2886,13 @@ const CASMAssistant = {
         if (filters.source === 'synced_local') parts.push('local-synced rows');
         if (filters.severity) parts.push(`${filters.severity} severity`);
         if (filters.dateRange) parts.push(filters.dateRange);
+        if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
+            const labels = filters.ppeTypes.map((label) => String(label || '')
+                .replace(/^NO-/, '')
+                .replace(/Safety /g, 'safety ')
+                .toLowerCase());
+            parts.push(`missing ${labels.join(', ')}`);
+        }
         return parts.join(', ');
     },
 

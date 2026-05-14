@@ -1,0 +1,7 @@
+MIRA_CAPABILITY_SCOPE_VARIANTS
+
+#me
+UTT_MIRA_CAPABILITY_SCOPE
+
+#bot
+*local, deterministic intent rules*

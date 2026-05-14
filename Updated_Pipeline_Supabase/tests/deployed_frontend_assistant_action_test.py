@@ -151,8 +151,10 @@ def main() -> int:
             if "Mira" not in assistant_title:
                 raise RuntimeError(f"Assistant title did not update to the chatbot name: {assistant_title}")
             panel_box = assistant_panel.bounding_box()
-            if not panel_box or panel_box["width"] > 850 or panel_box["height"] > 730:
-                raise RuntimeError(f"Assistant panel feels oversized on laptop viewport: {panel_box}")
+            if not panel_box or panel_box["width"] > 1120 or panel_box["height"] > 760:
+                raise RuntimeError(f"Assistant panel no longer fits the laptop viewport: {panel_box}")
+            if panel_box["width"] < 1000 or panel_box["height"] < 700:
+                raise RuntimeError(f"Assistant panel has become too cramped for tutorial content: {panel_box}")
             if not desktop_page.locator("#assistantInput").is_visible():
                 raise RuntimeError("Assistant input is not visible after opening the panel")
             if not desktop_page.locator("#assistantPromptDeck").is_visible():
@@ -193,17 +195,45 @@ def main() -> int:
             assert_boxes_do_not_overlap(notification_box, panel_box, "notification container", "assistant panel")
             print("PASS: notification stack stays clear of the assistant panel")
 
-            assistant_input.fill("show local tutorial")
+            assistant_input.fill("show cloud tutorial")
             assistant_input.press("Enter")
-            desktop_page.wait_for_selector("text=Local tutorial loaded.", timeout=20000)
-            desktop_page.wait_for_selector("text=Local Pipeline", timeout=20000)
+            desktop_page.wait_for_selector("text=Cloud tutorial loaded.", timeout=20000)
+            desktop_page.wait_for_selector("text=Cloud Pipeline", timeout=20000)
             tutorial_cards_before = desktop_page.locator(".assistant-tutorial-card").count()
             if tutorial_cards_before != 1:
                 raise RuntimeError(f"Expected one slideshow tutorial card, found {tutorial_cards_before}")
             tutorial_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
             tutorial_text = desktop_page.locator("#assistantPromptDeck").inner_text()
-            if tutorial_mode != "tutorial-local" or "Next tutorial step" not in tutorial_text:
-                raise RuntimeError("Prompt deck did not adapt to the local tutorial flow")
+            if tutorial_mode != "tutorial-cloud" or "Next tutorial step" not in tutorial_text:
+                raise RuntimeError("Prompt deck did not adapt to the cloud tutorial flow")
+            desktop_page.wait_for_timeout(350)
+            tutorial_fit = desktop_page.evaluate(
+                """
+                () => {
+                    const panel = document.querySelector('#assistantPanel');
+                    const cards = Array.from(document.querySelectorAll('.assistant-tutorial-card'));
+                    const card = cards[cards.length - 1];
+                    if (!panel || !card) return { ok: false, reason: 'missing panel or tutorial card' };
+                    const panelRect = panel.getBoundingClientRect();
+                    const cardRect = card.getBoundingClientRect();
+                    return {
+                        ok: cardRect.top >= panelRect.top && cardRect.bottom <= panelRect.bottom,
+                        panel: {
+                            top: panelRect.top,
+                            bottom: panelRect.bottom,
+                            height: panelRect.height
+                        },
+                        card: {
+                            top: cardRect.top,
+                            bottom: cardRect.bottom,
+                            height: cardRect.height
+                        }
+                    };
+                }
+                """
+            )
+            if not tutorial_fit.get("ok"):
+                raise RuntimeError(f"Cloud tutorial card is clipped inside the assistant panel: {tutorial_fit}")
             print("PASS: tutorial card appears in chat")
 
             desktop_page.locator(".assistant-action-btn", has_text="Next step").last.click()

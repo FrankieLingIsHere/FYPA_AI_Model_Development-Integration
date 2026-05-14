@@ -3530,7 +3530,14 @@ const CASMAssistant = {
 
     scrollMessagesToBottom() {
         if (!this.ui.messages) return;
-        this.ui.messages.scrollTop = this.ui.messages.scrollHeight;
+        const messages = this.ui.messages;
+        const settle = () => {
+            messages.scrollTop = messages.scrollHeight;
+        };
+        settle();
+        if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(settle);
+        }
     },
 
     buildTimestampToken() {

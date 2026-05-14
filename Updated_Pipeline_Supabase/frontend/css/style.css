@@ -8897,6 +8897,15 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     line-height: 1.45;
 }
 
+@media (min-width: 901px) {
+    .assistant-tutorial-card .assistant-bullet-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 1.15rem;
+        row-gap: 0.35rem;
+    }
+}
+
 .assistant-metric-card strong {
     display: block;
     margin-top: 0.34rem;
@@ -8986,10 +8995,10 @@ body.assistant-open #notification-container {
 @media (min-width: 901px) {
     body.assistant-open #notification-container {
         top: auto !important;
-        left: 96px !important;
+        left: 1rem !important;
         right: auto !important;
         bottom: 22px !important;
-        max-width: min(360px, calc(100vw - 120px)) !important;
+        max-width: min(240px, calc(100vw - 1120px)) !important;
     }
 }
 
@@ -9096,16 +9105,16 @@ body.assistant-open .assistant-launcher {
 }
 
 .assistant-panel {
-    width: min(840px, calc(100vw - 2rem));
-    height: min(84vh, 820px);
-    max-height: calc(100vh - 2rem);
+    width: min(1080px, calc(100vw - 2rem));
+    height: min(96vh, 900px);
+    max-height: calc(100vh - 0.5rem);
     border-radius: 20px;
 }
 
 @supports (height: 100dvh) {
     .assistant-panel {
-        height: min(84dvh, 820px);
-        max-height: calc(100dvh - 2rem);
+        height: min(96dvh, 900px);
+        max-height: calc(100dvh - 0.5rem);
     }
 }
 
@@ -9114,11 +9123,11 @@ body.assistant-open .assistant-launcher {
 }
 
 .assistant-message-stack {
-    max-width: min(100%, 760px);
+    max-width: min(100%, 840px);
 }
 
 .assistant-message-user .assistant-message-stack {
-    max-width: min(78%, 640px);
+    max-width: min(78%, 720px);
 }
 
 .assistant-bubble p,

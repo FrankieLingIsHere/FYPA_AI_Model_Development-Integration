@@ -803,6 +803,8 @@ const CASMAssistant = {
         const exportIntent = this.isExportIntent(query) || (localIntent && /^export-/.test(localIntent.id));
         const docsIntent = this.isDocsIntent(query) || (localIntent && localIntent.id === 'docs-search' && localIntent.confidence >= 0.64);
         const safetyGuardrail = this.resolveSafetyGuardrail(raw, query);
+        const languageGuardrail = this.resolveLanguageGuardrail(raw, query);
+        const negativePreference = this.resolveNegativePreference(raw, query);
 
         if (!docsIntent) {
             session.context.lastDocsQuery = '';
@@ -814,6 +816,16 @@ const CASMAssistant = {
 
         if (safetyGuardrail) {
             this.handleSafetyGuardrail(safetyGuardrail);
+            return;
+        }
+
+        if (languageGuardrail) {
+            this.handleLanguageGuardrail(languageGuardrail);
+            return;
+        }
+
+        if (negativePreference) {
+            this.handleNegativePreference(negativePreference);
             return;
         }
 
@@ -1393,6 +1405,197 @@ const CASMAssistant = {
                 { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
                 { type: 'handbook', label: 'Open admin guidance', pageKey: 'admin', collapsePanel: true }
             ]
+        });
+    },
+
+    getAssistantTopicModels() {
+        return [
+            {
+                id: 'reports',
+                label: 'Reports',
+                pattern: /\b(reports?|report history|incident records?|evidence list)\b/,
+                action: { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
+            },
+            {
+                id: 'analytics',
+                label: 'Analytics',
+                pattern: /\b(analytics|metrics?|statistics|stats|numbers?|trends?|dashboard|risk|count|counts)\b/,
+                action: { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+            },
+            {
+                id: 'live',
+                label: 'Live Monitor',
+                pattern: /\b(live|camera|stream|monitor|supervision|supervise|watch)\b/,
+                action: { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true }
+            },
+            {
+                id: 'image',
+                label: 'Image Analysis',
+                pattern: /\b(image|upload|photo|picture|snapshot|still image)\b/,
+                action: { type: 'route', label: 'Open Image Analysis', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true }
+            },
+            {
+                id: 'settings',
+                label: 'Settings',
+                pattern: /\b(settings|checkup|local mode|cloud mode|profile|readiness)\b/,
+                action: { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+            },
+            {
+                id: 'tutorial',
+                label: 'Tutorial',
+                pattern: /\b(tutorial|guide|walkthrough|teach|steps?)\b/,
+                action: { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
+            },
+            {
+                id: 'handbook',
+                label: 'Handbook',
+                pattern: /\b(handbook|manual|docs|documentation|help article)\b/,
+                action: { type: 'handbook', label: 'Open handbook', pageKey: 'intro', collapsePanel: true }
+            },
+            {
+                id: 'export',
+                label: 'CSV export',
+                pattern: /\b(export|download|csv|spreadsheet)\b/,
+                action: { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+            }
+        ];
+    },
+
+    getTopicLabel(ids = []) {
+        const models = this.getAssistantTopicModels();
+        const labels = ids
+            .map((id) => models.find((model) => model.id === id)?.label)
+            .filter(Boolean);
+        if (!labels.length) return 'that area';
+        if (labels.length === 1) return labels[0];
+        return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+    },
+
+    buildAlternativeActions(avoidIds = [], preferredIds = []) {
+        const avoid = new Set(avoidIds);
+        const seen = new Set();
+        const models = this.getAssistantTopicModels();
+        const orderedIds = [
+            ...preferredIds,
+            'analytics',
+            'live',
+            'image',
+            'settings',
+            'handbook',
+            'tutorial',
+            'reports'
+        ];
+        const actions = [];
+        orderedIds.forEach((id) => {
+            if (avoid.has(id) || seen.has(id)) return;
+            const model = models.find((item) => item.id === id);
+            if (!model) return;
+            seen.add(id);
+            actions.push(model.action);
+        });
+        return actions.slice(0, 3);
+    },
+
+    resolveLanguageGuardrail(raw, query = '') {
+        const rawText = String(raw || '').toLowerCase();
+        const normalized = query || this.normalizeText(raw);
+        const profanityPattern = /\b(f+u+c+k+|fxxk|f[\W_]*u?[\W_]*c[\W_]*k|wtf|sh+i+t+|damn|bitch|asshole|idiot|stupid)\b/i;
+        if (!profanityPattern.test(rawText) && !profanityPattern.test(normalized)) return null;
+        const topicIds = this.getAssistantTopicModels()
+            .filter((model) => model.pattern.test(normalized))
+            .map((model) => model.id);
+        return {
+            type: topicIds.length || this.hasCasmDomainSignal(normalized) ? 'frustrated-task' : 'abusive-only',
+            topicIds
+        };
+    },
+
+    handleLanguageGuardrail(intent) {
+        if (!intent) return;
+        if (intent.type === 'frustrated-task') {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I can tell this is frustrating. I will keep the chat work-focused and help with the CASM task without matching that language.',
+                bullets: [
+                    intent.topicIds.length
+                        ? `I detected the topic as ${this.getTopicLabel(intent.topicIds)}.`
+                        : 'Tell me which CASM area failed: live monitoring, image analysis, reports, analytics, settings, or handbook.',
+                    'Short, concrete wording works best, for example "reports not loading" or "show analytics this week".'
+                ],
+                actions: this.buildAlternativeActions([], intent.topicIds)
+            });
+            return;
+        }
+
+        this.pushMessage({
+            role: 'assistant',
+            text: 'I can help, but I need the wording to stay work-focused.',
+            bullets: [
+                'Ask about CASM monitoring, image checks, reports, analytics, settings, exports, or tutorials.',
+                'If something is broken, describe the page and what you expected to happen.'
+            ],
+            actions: this.buildAlternativeActions([], ['handbook', 'analytics', 'live'])
+        });
+    },
+
+    resolveNegativePreference(raw, query = '') {
+        const normalized = this.normalizeForNlu(raw || query);
+        if (!normalized) return null;
+        const avoidedIds = [];
+        const models = this.getAssistantTopicModels();
+
+        const topicMatches = models
+            .map((model) => {
+                const match = normalized.match(model.pattern);
+                return match && typeof match.index === 'number'
+                    ? { id: model.id, index: match.index }
+                    : null;
+            })
+            .filter(Boolean)
+            .sort((a, b) => a.index - b.index);
+
+        const negativeCuePattern = /\b(?:dont|do not|never)\s+(?:want|need|open|show|see|view|use|export|download|go(?: to)?|look at)\b|\b(?:avoid|skip|hide|without)\b/g;
+        Array.from(normalized.matchAll(negativeCuePattern)).forEach((match) => {
+            const cueIndex = Number(match.index || 0);
+            const nearest = topicMatches.find((topic) => topic.index >= cueIndex && topic.index - cueIndex <= 72);
+            if (nearest) avoidedIds.push(nearest.id);
+        });
+
+        models.forEach((model) => {
+            const source = model.pattern.source;
+            const explicitNo = new RegExp(`\\bno\\s+(?:the\\s+)?${source}`, 'i');
+            const directNot = new RegExp(`\\bnot\\s+(?:the\\s+)?${source}`, 'i');
+            const targetBeforeNegative = new RegExp(`${source}.{0,36}\\b(?:no need|not needed|skip it|avoid it|hide it)\\b`, 'i');
+            if (explicitNo.test(normalized) || directNot.test(normalized) || targetBeforeNegative.test(normalized)) {
+                avoidedIds.push(model.id);
+            }
+        });
+
+        const avoidedUnique = Array.from(new Set(avoidedIds));
+        if (!avoidedUnique.length) return null;
+        const requestedIds = topicMatches
+            .map((topic) => topic.id)
+            .filter((id) => !avoidedUnique.includes(id));
+        return {
+            avoidedIds: avoidedUnique,
+            requestedIds: Array.from(new Set(requestedIds))
+        };
+    },
+
+    handleNegativePreference(intent) {
+        const avoidedLabel = this.getTopicLabel(intent.avoidedIds);
+        const requestedLabel = this.getTopicLabel(intent.requestedIds);
+        const hasPreferredPath = Array.isArray(intent.requestedIds) && intent.requestedIds.length > 0;
+        this.pushMessage({
+            role: 'assistant',
+            text: `Got it. I will not open ${avoidedLabel} for that request.`,
+            bullets: [
+                hasPreferredPath
+                    ? `I read the positive part as ${requestedLabel}, so I am keeping the actions pointed there.`
+                    : 'I read the negative wording as a preference, not as a command to open that page.',
+                'Use "instead" or "just" when you want Mira to choose a different page.'
+            ],
+            actions: this.buildAlternativeActions(intent.avoidedIds, intent.requestedIds)
         });
     },
 
@@ -3555,6 +3758,9 @@ const CASMAssistant = {
     normalizeText(value) {
         let text = String(value || '')
             .toLowerCase()
+            .replace(/\bdon't\b/g, 'dont')
+            .replace(/\bdoesn't\b/g, 'does not')
+            .replace(/\bcan't\b/g, 'cannot')
             .replace(/\bwhat's\b/g, 'what is')
             .replace(/\banlytics\b/g, 'analytics')
             .replace(/\banalitic(s)?\b/g, 'analytics')

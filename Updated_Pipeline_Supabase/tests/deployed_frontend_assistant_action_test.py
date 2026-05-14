@@ -155,6 +155,28 @@ def main() -> int:
                 raise RuntimeError(f"Assistant panel no longer fits the laptop viewport: {panel_box}")
             if panel_box["width"] < 1000 or panel_box["height"] < 700:
                 raise RuntimeError(f"Assistant panel has become too cramped for tutorial content: {panel_box}")
+            placement = desktop_page.evaluate(
+                """
+                () => {
+                    const dock = document.querySelector('#assistantDock');
+                    const panel = document.querySelector('#assistantPanel');
+                    if (!dock || !panel) return { ok: false, reason: 'missing dock or panel' };
+                    const dockRect = dock.getBoundingClientRect();
+                    const panelRect = panel.getBoundingClientRect();
+                    const dockCenter = dockRect.left + (dockRect.width / 2);
+                    const panelCenter = panelRect.left + (panelRect.width / 2);
+                    return {
+                        ok: Math.abs(dockCenter - panelCenter) <= 4,
+                        dockCenter,
+                        panelCenter,
+                        dock: { left: dockRect.left, width: dockRect.width },
+                        panel: { left: panelRect.left, width: panelRect.width }
+                    };
+                }
+                """
+            )
+            if not placement.get("ok"):
+                raise RuntimeError(f"Assistant panel is not centered in the desktop content dock: {placement}")
             if not desktop_page.locator("#assistantInput").is_visible():
                 raise RuntimeError("Assistant input is not visible after opening the panel")
             if not desktop_page.locator("#assistantPromptDeck").is_visible():
@@ -313,6 +335,25 @@ def main() -> int:
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=outside the monitoring assistant scope", timeout=15000)
             print("PASS: low-signal and off-topic prompts get clear fallback handling")
+
+            assistant_input.fill("i dont wanna see reports")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=I will not open Reports", timeout=15000)
+            negative_reply = desktop_page.evaluate(
+                """
+                () => {
+                    const items = Array.from(document.querySelectorAll('#assistantMessages .assistant-message-assistant'));
+                    return items.length ? items[items.length - 1].innerText : '';
+                }
+                """
+            )
+            if "Open reports" in negative_reply or "Open Reports" in negative_reply:
+                raise RuntimeError(f"Negative report preference still offered a reports action: {negative_reply}")
+
+            assistant_input.fill("fxxk this reports page is confusing")
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector("text=work-focused", timeout=15000)
+            print("PASS: negative preferences and sensitive language get guided responses")
 
             for prompt in ("what does local synced mean", "system overview", "show cloud tutorial"):
                 assistant_input.fill(prompt)

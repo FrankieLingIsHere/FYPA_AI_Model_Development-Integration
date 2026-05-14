@@ -9104,6 +9104,27 @@ body.assistant-open .assistant-launcher {
     display: none;
 }
 
+@media (min-width: 901px) {
+    body.assistant-open .assistant-dock {
+        left: 280px;
+        right: 1rem;
+        bottom: 0.25rem;
+        align-items: center;
+        pointer-events: none;
+    }
+
+    body.assistant-open .assistant-panel {
+        width: min(1080px, 100%, calc(100vw - 2rem));
+        pointer-events: auto;
+    }
+}
+
+@media (min-width: 901px) and (max-width: 1200px) {
+    body.assistant-open .assistant-dock {
+        left: 76px;
+    }
+}
+
 .assistant-panel {
     width: min(1080px, calc(100vw - 2rem));
     height: min(96vh, 900px);

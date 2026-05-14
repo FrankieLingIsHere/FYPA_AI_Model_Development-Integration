@@ -1959,9 +1959,9 @@ const CASMAssistant = {
             && !/\b(camera|report|reports|analytics|metric|violation|violations|incident|alert|ppe|helmet|hardhat|vest|site|safety|safe|compliance|dashboard|system)\b/.test(query);
         if (offTopicOnly) return null;
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
-        const analyticsMatch = /\b(analytics|metric|metrics|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|bad stuff|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe)\b/.test(query);
+        const analyticsMatch = /\b(analytics|metric|metrics|data|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|issues?|problems?|bad stuff|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|site|happen|happened|going on|important|main)\b/.test(query);
         const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
-        const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|tell me|what is|how many|count|find|list|filter|only|just|latest)\b/.test(query);
+        const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|compared|comparison|tell me|what is|what happened|what happen|how many|count|find|list|filter|only|just|latest|any|did|have|had|data|highlight|main|important|more|fewer|need|want)\b/.test(query);
         if (directOpen && !filterMatch) {
             return null;
         }

@@ -199,38 +199,58 @@ async function askMira(text) {
   };
 }
 
-const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  if (req.method !== 'POST' || req.url !== '/message') {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'not found' }));
-    return;
-  }
-
-  let body = '';
-  req.on('data', (chunk) => {
-    body += chunk;
-  });
-  req.on('end', async () => {
-    try {
-      const payload = body ? JSON.parse(body) : {};
-      console.log(`[mira-botium] received: ${String(payload.text || payload.messageText || '').slice(0, 120)}`);
-      const output = await askMira(payload.text || payload.messageText || '');
-      console.log(`[mira-botium] replied: ${String(output.text || '').slice(0, 160)}`);
+function createServer() {
+  return http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(output));
-    } catch (error) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ text: `BOTIUM_SERVER_ERROR ${error.message}` }));
+      res.end(JSON.stringify({ ok: true }));
+      return;
     }
-  });
-});
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Mira Botium SimpleRest wrapper listening on http://127.0.0.1:${port}`);
-});
+    if (req.method !== 'POST' || req.url !== '/message') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        console.log(`[mira-botium] received: ${String(payload.text || payload.messageText || '').slice(0, 120)}`);
+        const output = await askMira(payload.text || payload.messageText || '');
+        console.log(`[mira-botium] replied: ${String(output.text || '').slice(0, 160)}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(output));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ text: `BOTIUM_SERVER_ERROR ${error.message}` }));
+      }
+    });
+  });
+}
+
+function startServer() {
+  const server = createServer();
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`Mira Botium SimpleRest wrapper listening on http://127.0.0.1:${port}`);
+  });
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  askMira,
+  buildStats,
+  createSandbox,
+  createServer,
+  fixtureRows,
+  messageToText,
+  startServer
+};

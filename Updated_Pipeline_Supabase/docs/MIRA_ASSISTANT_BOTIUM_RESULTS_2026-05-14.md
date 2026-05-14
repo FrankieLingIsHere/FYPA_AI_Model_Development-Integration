@@ -22,6 +22,8 @@ powershell -ExecutionPolicy Bypass -File Updated_Pipeline_Supabase/tests/mira-bo
 
 The wrapper loads `frontend/js/assistant.js` in a Node VM with stubbed browser APIs, fixture violation rows, and mocked analytics helpers. Botium sends each utterance through `POST /message` and checks the flattened assistant reply with wildcard case-insensitive assertions.
 
+The same harness also exports `askMira()` for a broad Markdown coverage check. `mira_prompt_ideas_coverage.js` extracts every quoted prompt from `assistant_prompt_ideas.md`, runs it through Mira, and fails if a CASM-related prompt falls into an unknown/partial fallback. Pure off-topic or intentionally low-signal prompts are counted as covered when Mira gives the graceful fallback.
+
 ## Coverage
 
 | Area | Variant Count | Assertion |
@@ -45,10 +47,36 @@ Final Botium run:
 38 passing (718ms)
 ```
 
+Assistant prompt-ideas coverage:
+
+```text
+906 prompts checked
+906 passed
+0 failed
+```
+
+Coverage category counts from the final run:
+
+| Category | Count |
+|---|---:|
+| Live monitor / camera routing | 327 |
+| Analytics and data summaries | 278 |
+| Navigation | 130 |
+| Combined multi-action requests | 97 |
+| Handbook / guidance | 31 |
+| Export | 13 |
+| Privacy guidance | 10 |
+| Onboarding | 9 |
+| Capability/scope | 6 |
+| Settings | 2 |
+| Other covered | 2 |
+| Graceful fallback for allowed low-signal/off-topic prompt | 1 |
+
 ## Issues Found And Fixed
 
 - `What can you help me with?` was treated as a weak tutorial/start request. Mira now recognizes this as a capability/scope question and explains its deterministic assistant boundaries.
 - `Can you find yesterday helmet violations and export them to CSV?` returned no rows because conversational filler tokens such as `can`, `you`, `find`, `them`, and `to` leaked into report search filters. Report export now strips these non-filter tokens before matching rows.
+- The full prompt-ideas sweep then exposed five additional everyday analytics phrasings, such as `Any violations today?` and `last week data`, that were landing in clarification. The analytics matcher now treats these natural phrasings as direct analytics/filter requests.
 - Earlier harness setup issues were corrected by using one Botium conversation per `.convo.txt` file and relying on conversation utterance expansion instead of standalone empty-response utterance tests.
 
 ## Remaining Limits

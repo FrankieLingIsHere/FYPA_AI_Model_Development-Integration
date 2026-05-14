@@ -34,6 +34,11 @@ try {
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }
+
+        node .\mira_prompt_ideas_coverage.js
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     } finally {
         Pop-Location
     }

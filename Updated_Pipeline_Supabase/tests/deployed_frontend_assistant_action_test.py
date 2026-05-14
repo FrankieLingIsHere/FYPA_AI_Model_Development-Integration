@@ -328,6 +328,23 @@ def main() -> int:
             assistant_panel.wait_for(state="visible", timeout=15000)
             print("PASS: analytics question renders in chat and opens the filtered analytics page")
 
+            report_review_prompt = export_prompt.replace("export", "show", 1).replace(" csv", " as slideshow")
+            assistant_input.fill(report_review_prompt)
+            assistant_input.press("Enter")
+            desktop_page.wait_for_selector(".assistant-report-card", timeout=20000)
+            report_card_text = desktop_page.locator(".assistant-report-card").last.inner_text()
+            if "Report 1 of" not in report_card_text:
+                raise RuntimeError(f"Assistant report slideshow did not show a report position: {report_card_text}")
+            if not desktop_page.locator(".assistant-action-btn", has_text="Previous report").last.is_visible():
+                raise RuntimeError("Assistant report slideshow did not expose Previous report control")
+            if not desktop_page.locator(".assistant-action-btn", has_text="Next report").last.is_visible():
+                raise RuntimeError("Assistant report slideshow did not expose Next report control")
+            if not desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.is_visible():
+                raise RuntimeError("Assistant report slideshow did not expose Explain this report control")
+            desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
+            desktop_page.wait_for_selector("text=Missing PPE / violation labels", timeout=15000)
+            print(f"PASS: assistant report slideshow supports filtered review via '{report_review_prompt}'")
+
             assistant_input.fill("!!!")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=I did not get a usable request from that yet.", timeout=15000)

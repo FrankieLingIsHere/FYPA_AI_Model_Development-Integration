@@ -159,6 +159,18 @@ function messageToText(message) {
   if (message.tutorial) {
     parts.push(`${message.tutorial.title || ''} ${message.tutorial.summary || ''}`.trim());
   }
+  if (message.reportCarousel) {
+    const report = message.reportCarousel.report || {};
+    parts.push([
+      message.reportCarousel.positionLabel || '',
+      report.reportId || '',
+      report.sourceLabel || report.sourceScope || '',
+      report.status || '',
+      report.severity || '',
+      report.summary || '',
+      Array.isArray(report.missingPpe) ? report.missingPpe.join(' ') : ''
+    ].filter(Boolean).join(' '));
+  }
   if (Array.isArray(message.actions) && message.actions.length) {
     parts.push(`Actions: ${message.actions.map((action) => action.label || action.type || 'action').join(', ')}`);
   }

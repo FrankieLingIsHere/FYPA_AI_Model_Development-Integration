@@ -220,7 +220,15 @@ const CASMAssistant = {
                 lastDocsQuery: String(session?.context?.lastDocsQuery || ''),
                 lastDocsResults: Array.isArray(session?.context?.lastDocsResults) ? session.context.lastDocsResults.slice(0, 6) : [],
                 lastExportKind: String(session?.context?.lastExportKind || ''),
-                lastUserPrompt: String(session?.context?.lastUserPrompt || '')
+                lastUserPrompt: String(session?.context?.lastUserPrompt || ''),
+                reportReview: session?.context?.reportReview && typeof session.context.reportReview === 'object'
+                    ? {
+                        ...session.context.reportReview,
+                        reports: Array.isArray(session.context.reportReview.reports)
+                            ? session.context.reportReview.reports.slice(0, 50)
+                            : []
+                    }
+                    : null
             },
             messages: messages.map((message) => this.normalizeMessage(message)).filter(Boolean)
         };
@@ -237,6 +245,7 @@ const CASMAssistant = {
             actions: Array.isArray(message.actions) ? message.actions.slice(0, 8) : [],
             docs: Array.isArray(message.docs) ? message.docs.slice(0, 4) : [],
             tutorial: message.tutorial && typeof message.tutorial === 'object' ? message.tutorial : null,
+            reportCarousel: message.reportCarousel && typeof message.reportCarousel === 'object' ? message.reportCarousel : null,
             metrics: Array.isArray(message.metrics) ? message.metrics.slice(0, 6) : []
         };
     },
@@ -691,6 +700,10 @@ const CASMAssistant = {
             `
             : '';
 
+        const reportCarouselHtml = message.reportCarousel
+            ? this.renderReportCarousel(message.reportCarousel)
+            : '';
+
         const metricsHtml = Array.isArray(message.metrics) && message.metrics.length
             ? `<div class="assistant-metric-grid">${message.metrics.map((metric) => `
                 <article class="assistant-metric-card">
@@ -714,10 +727,42 @@ const CASMAssistant = {
                     <div class="assistant-bubble">
                         <p>${this.escapeHtml(message.text)}</p>
                         ${tutorialHtml}
+                        ${reportCarouselHtml}
                         ${metricsHtml}
                         ${bulletsHtml}
                         ${docsHtml}
                         ${actionsHtml}
+                    </div>
+                </div>
+            </article>
+        `;
+    },
+
+    renderReportCarousel(carousel = {}) {
+        const report = carousel.report || {};
+        const thumbnailHtml = report.thumbnailUrl
+            ? `<img src="${this.escapeHtml(report.thumbnailUrl)}" alt="Report ${this.escapeHtml(report.reportId || '')} thumbnail" loading="lazy">`
+            : `<div class="assistant-report-thumb-empty"><i class="fas fa-image" aria-hidden="true"></i><span>No thumbnail</span></div>`;
+        const missing = Array.isArray(report.missingPpe) && report.missingPpe.length
+            ? report.missingPpe.join(', ')
+            : 'No PPE labels';
+        return `
+            <article class="assistant-report-card">
+                <div class="assistant-report-card-topline">
+                    <span class="assistant-report-index">${this.escapeHtml(carousel.positionLabel || '')}</span>
+                    <span class="assistant-report-tag">${this.escapeHtml(report.sourceLabel || report.sourceScope || 'Unknown source')}</span>
+                </div>
+                <div class="assistant-report-card-body">
+                    <div class="assistant-report-thumb">${thumbnailHtml}</div>
+                    <div class="assistant-report-copy">
+                        <h4>${this.escapeHtml(report.reportId || 'Unknown report')}</h4>
+                        <div class="assistant-report-meta">
+                            <span>${this.escapeHtml(report.status || 'unknown')}</span>
+                            <span>${this.escapeHtml(report.severity || 'unknown')} severity</span>
+                            <span>${this.escapeHtml(report.timestampLabel || 'time unknown')}</span>
+                        </div>
+                        <p>${this.escapeHtml(report.summary || 'No report summary available yet.')}</p>
+                        <div class="assistant-report-ppe">${this.escapeHtml(missing)}</div>
                     </div>
                 </div>
             </article>
@@ -826,6 +871,12 @@ const CASMAssistant = {
 
         if (negativePreference) {
             this.handleNegativePreference(negativePreference);
+            return;
+        }
+
+        const reportReviewIntent = !exportIntent ? this.resolveReportReviewIntent(raw, query) : null;
+        if (reportReviewIntent) {
+            await this.handleReportReviewIntent(reportReviewIntent);
             return;
         }
 
@@ -2770,6 +2821,312 @@ const CASMAssistant = {
         });
     },
 
+    resolveReportReviewIntent(raw, query = '') {
+        const normalized = this.normalizeText(raw || query);
+        if (!normalized || this.isExportIntent(normalized)) return null;
+        if (/\b(docs|documentation|manual|handbook|guide)\b/.test(normalized)) return null;
+        const session = this.getActiveSession();
+        const hasActiveCarousel = !!(session && session.context && session.context.reportReview);
+        if (hasActiveCarousel && /\b(explain|summari[sz]e|interpret|what does this mean|tell me about)\b.{0,28}\b(this|current|selected|report|it)\b/.test(normalized)) {
+            return { type: 'explain-current' };
+        }
+        if (hasActiveCarousel && /\b(next|previous|prev|back)\s+(report|one|item)?\b/.test(normalized)) {
+            return { type: /\b(previous|prev|back)\b/.test(normalized) ? 'previous' : 'next' };
+        }
+
+        const reportCue = /\b(reports?|report id|report #|incident records?|evidence list|violation records?)\b/.test(normalized);
+        if (!reportCue) return null;
+
+        const filters = this.buildReportFilters(raw);
+        const hasFilters = this.hasActiveReportFilters(filters);
+        const directOpen = /\b(open|go to|take me to)\s+(the\s+)?reports?\b/.test(normalized);
+        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|scan)\b/.test(normalized);
+        if (directOpen && !hasFilters && !/\b(show|review|check|browse|inspect|slide|slideshow|list|find|filter|view)\b/.test(normalized)) {
+            return null;
+        }
+        if (!reviewCue && !hasFilters) return null;
+
+        return {
+            type: 'browse',
+            raw,
+            query: normalized,
+            filters,
+            filterSummary: this.describeReportFilters(filters)
+        };
+    },
+
+    hasActiveReportFilters(filters = {}) {
+        return !!(
+            filters.source
+            || filters.severity
+            || filters.dateRange
+            || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length)
+            || (Array.isArray(filters.searchTokens) && filters.searchTokens.length)
+        );
+    },
+
+    async handleReportReviewIntent(intent) {
+        if (!intent) return;
+        if (intent.type === 'explain-current') {
+            this.explainCurrentReportReview();
+            return;
+        }
+        if (intent.type === 'next' || intent.type === 'previous') {
+            this.moveReportReview(intent.type === 'next' ? 1 : -1);
+            return;
+        }
+
+        try {
+            const rows = await API.getViolations({ limit: 1000 });
+            const filters = intent.filters || this.buildReportFilters(intent.raw || intent.query || '');
+            const filtered = (rows || [])
+                .filter((row) => this.matchesReportFilters(row, filters))
+                .sort((a, b) => new Date(b?.timestamp || 0) - new Date(a?.timestamp || 0));
+            const summary = intent.filterSummary || this.describeReportFilters(filters);
+            if (!filtered.length) {
+                this.pushMessage({
+                    role: 'assistant',
+                    text: `I could not find report rows${summary ? ` for ${summary}` : ''}.`,
+                    bullets: [
+                        'Try fewer filters, for example "show high reports" or "show cloud reports this week".',
+                        'You can still open the Reports page to inspect all rows manually.'
+                    ],
+                    actions: [
+                        { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                        { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+                    ]
+                });
+                return;
+            }
+
+            const reports = filtered.slice(0, 50).map((row) => this.normalizeReportPreview(row));
+            const session = this.getActiveSession();
+            if (session) {
+                session.context.reportReview = {
+                    reports,
+                    index: 0,
+                    filters,
+                    filterSummary: summary,
+                    totalMatched: filtered.length,
+                    createdAt: Date.now()
+                };
+            }
+            this.upsertReportReviewMessage();
+        } catch (error) {
+            console.error('Assistant report review failed:', error);
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I could not fetch the filtered reports right now.',
+                actions: [
+                    { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
+                ]
+            });
+        }
+    },
+
+    normalizeReportPreview(row = {}) {
+        const sourceScope = String(row.source_scope || '').trim().toLowerCase();
+        const sourceLabel = String(row.source_label || '').trim()
+            || (sourceScope === 'synced_local'
+                ? 'Local Synced'
+                : sourceScope === 'local'
+                    ? 'Local'
+                    : 'Cloud');
+        const timestamp = row.timestamp || row.created_at || row.updated_at || '';
+        return {
+            reportId: String(row.report_id || row.id || 'Unknown report').trim(),
+            status: String(row.status || 'unknown').trim(),
+            severity: String(row.severity || 'unknown').trim(),
+            deviceId: String(row.device_id || row.camera_id || '').trim(),
+            violationCount: Number(row.violation_count || 0),
+            missingPpe: Array.isArray(row.missing_ppe) ? row.missing_ppe.map((item) => String(item || '').trim()).filter(Boolean) : [],
+            sourceScope,
+            sourceLabel,
+            timestamp,
+            timestampLabel: this.formatReportTimestamp(timestamp),
+            summary: String(row.violation_summary || row.summary || 'PPE violation report').trim(),
+            thumbnailUrl: this.resolveReportThumbnailUrl(row)
+        };
+    },
+
+    resolveReportThumbnailUrl(row = {}) {
+        if (row.local_image_url) return row.local_image_url;
+        if (row.thumbnail_url) return row.thumbnail_url;
+        if (row.image_url) return row.image_url;
+        const reportId = String(row.report_id || row.id || '').trim();
+        if (!reportId || !window.API || typeof API.getImageUrl !== 'function') return '';
+        const filename = row.has_annotated ? 'annotated.jpg' : row.has_original ? 'original.jpg' : '';
+        if (!filename) return '';
+        try {
+            return API.getImageUrl(reportId, filename, row) || '';
+        } catch (_) {
+            return '';
+        }
+    },
+
+    formatReportTimestamp(value) {
+        if (!value) return 'time unknown';
+        if (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function') {
+            try {
+                return TimezoneManager.formatDateTime(value);
+            } catch (_) {
+                // Fall through to local formatting.
+            }
+        }
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    },
+
+    getReportReviewContext() {
+        const session = this.getActiveSession();
+        const context = session && session.context ? session.context.reportReview : null;
+        if (!context || !Array.isArray(context.reports) || !context.reports.length) return null;
+        context.index = Math.max(0, Math.min(context.reports.length - 1, Number(context.index || 0)));
+        return context;
+    },
+
+    getCurrentReportReview() {
+        const context = this.getReportReviewContext();
+        if (!context) return null;
+        return {
+            context,
+            report: context.reports[context.index],
+            index: context.index
+        };
+    },
+
+    buildReportReviewActions(context, report) {
+        return [
+            { type: 'report-review-prev', label: 'Previous report' },
+            { type: 'report-review-next', label: 'Next report' },
+            { type: 'report-review-explain', label: 'Explain this report' },
+            { type: 'open-report', label: 'Open report', reportId: report.reportId },
+            { type: 'route', label: 'Open reports page', page: 'reports', collapsePanel: true }
+        ];
+    },
+
+    buildReportReviewMessage(context) {
+        const report = context.reports[context.index];
+        const shownTotal = context.reports.length;
+        const matchedTotal = Number(context.totalMatched || shownTotal);
+        const filterText = context.filterSummary ? ` for ${context.filterSummary}` : '';
+        return {
+            role: 'assistant',
+            text: `I found ${matchedTotal} report${matchedTotal === 1 ? '' : 's'}${filterText}. Here is the report slideshow.`,
+            reportCarousel: {
+                report,
+                positionLabel: `Report ${context.index + 1} of ${shownTotal}${matchedTotal > shownTotal ? ` (${matchedTotal} matched)` : ''}`
+            },
+            bullets: [
+                'Use Previous report and Next report to move through the filtered set.',
+                'Select Explain this report when you want Mira to interpret the selected row.'
+            ],
+            actions: this.buildReportReviewActions(context, report)
+        };
+    },
+
+    getLatestReportReviewMessageIndex(session) {
+        if (!session || !Array.isArray(session.messages)) return -1;
+        for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+            const message = session.messages[index];
+            if (message && message.role === 'assistant' && message.reportCarousel) return index;
+        }
+        return -1;
+    },
+
+    upsertReportReviewMessage() {
+        const session = this.getActiveSession();
+        const context = this.getReportReviewContext();
+        if (!session || !context) return;
+        const baseMessage = this.buildReportReviewMessage(context);
+        const existingIndex = this.getLatestReportReviewMessageIndex(session);
+        if (existingIndex >= 0) {
+            const existing = session.messages[existingIndex] || {};
+            session.messages[existingIndex] = {
+                ...existing,
+                ...baseMessage,
+                id: existing.id,
+                createdAt: existing.createdAt,
+                updatedAt: Date.now()
+            };
+            session.updatedAt = Date.now();
+            this.refreshSessionUi();
+            return;
+        }
+        this.pushMessage(baseMessage);
+    },
+
+    moveReportReview(delta) {
+        const session = this.getActiveSession();
+        const context = this.getReportReviewContext();
+        if (!session || !context) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'There is no active report slideshow yet. Ask me to show filtered reports first.',
+                actions: [{ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }]
+            });
+            return;
+        }
+        const total = context.reports.length;
+        context.index = (context.index + delta + total) % total;
+        session.context.reportReview = context;
+        this.upsertReportReviewMessage();
+    },
+
+    explainCurrentReportReview() {
+        const current = this.getCurrentReportReview();
+        if (!current || !current.report) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'There is no selected report to explain yet. Ask me to show filtered reports first.',
+                actions: [{ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }]
+            });
+            return;
+        }
+        const report = current.report;
+        const missing = report.missingPpe.length ? report.missingPpe.join(', ') : 'no PPE labels recorded';
+        this.pushMessage({
+            role: 'assistant',
+            text: `Report ${report.reportId} is a ${report.sourceLabel} row with ${report.severity} severity and status ${report.status}.`,
+            bullets: [
+                `Missing PPE / violation labels: ${missing}.`,
+                `Summary: ${report.summary || 'No summary text was stored for this report.'}`,
+                report.status.toLowerCase() === 'completed' || report.status.toLowerCase() === 'ready'
+                    ? 'This report should be ready for evidence review.'
+                    : 'This report may still be queued, pending, local-only, or waiting for generation/sync.'
+            ],
+            actions: [
+                { type: 'open-report', label: 'Open report', reportId: report.reportId },
+                { type: 'report-review-prev', label: 'Previous report' },
+                { type: 'report-review-next', label: 'Next report' }
+            ]
+        });
+    },
+
+    async openSelectedReport(reportId = '') {
+        const rid = String(reportId || this.getCurrentReportReview()?.report?.reportId || '').trim();
+        if (!rid) return;
+        Router.navigate('reports');
+        this.collapseAssistantForWorkspaceAction();
+        window.setTimeout(async () => {
+            let source = null;
+            try {
+                if (window.ReportsPage && Array.isArray(ReportsPage.violations)) {
+                    source = ReportsPage.violations.find((row) => String(row.report_id || '') === rid) || null;
+                }
+                if (!source && window.API && typeof API.getViolations === 'function') {
+                    const rows = await API.getViolations({ limit: 1000 });
+                    source = (rows || []).find((row) => String(row.report_id || '') === rid) || null;
+                }
+                if (window.ReportsPage && typeof ReportsPage.openReport === 'function') {
+                    ReportsPage.openReport(rid, source);
+                }
+            } catch (error) {
+                console.error('Assistant open report failed:', error);
+            }
+        }, 420);
+    },
+
     isLowSignalPrompt(raw, query) {
         const compactRaw = String(raw || '').trim();
         if (!compactRaw) return true;
@@ -3066,6 +3423,22 @@ const CASMAssistant = {
             }
             case 'doc-result': {
                 this.performHandbookNavigation(action);
+                return;
+            }
+            case 'report-review-prev': {
+                this.moveReportReview(-1);
+                return;
+            }
+            case 'report-review-next': {
+                this.moveReportReview(1);
+                return;
+            }
+            case 'report-review-explain': {
+                this.explainCurrentReportReview();
+                return;
+            }
+            case 'open-report': {
+                await this.openSelectedReport(action.reportId || '');
                 return;
             }
             default:
@@ -3420,6 +3793,11 @@ const CASMAssistant = {
             searchTokens: this.tokenize(query)
                 .filter((token) => ![
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
+                    'show', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
+                    'slide', 'slideshow', 'carousel', 'look', 'through', 'as',
+                    'what', 'why', 'how', 'where', 'when', 'which', 'are', 'is', 'was', 'were', 'do', 'does', 'did',
+                    'mean', 'means', 'meaning', 'purpose', 'used', 'for', 'explain', 'about',
+                    'status', 'statuses', 'tag', 'tags',
                     'can', 'you', 'find', 'get', 'make', 'create', 'need', 'want', 'wanna', 'them', 'to', 'me', 'all', 'any', 'rows', 'row',
                     'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low',
                     'violation', 'violations', 'incident', 'incidents', 'ppe',

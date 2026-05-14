@@ -421,10 +421,10 @@ const CASMAssistant = {
 
         if (!userMessages.length) {
             promptModel.actions = [
+                this.buildPromptSuggestion('What is CASM?', 'what is this system for'),
                 this.buildPromptSuggestion("I'm new here", 'i dont know what should i do first'),
                 this.buildPromptSuggestion('Open camera', 'help me start live monitoring'),
                 this.buildPromptSuggestion('Check image', 'can you check if this image has violations'),
-                this.buildPromptSuggestion('Recommend settings', 'recommend settings'),
                 this.buildPromptSuggestion('Show analytics', 'show analytics overview')
             ];
             return promptModel;
@@ -814,6 +814,17 @@ const CASMAssistant = {
 
         if (safetyGuardrail) {
             this.handleSafetyGuardrail(safetyGuardrail);
+            return;
+        }
+
+        if (docsIntent && !exportIntent) {
+            this.handleDocsSearch(raw);
+            return;
+        }
+
+        const semanticAnswer = this.resolveSemanticAnswer(raw, query);
+        if (semanticAnswer) {
+            this.handleSemanticAnswer(semanticAnswer);
             return;
         }
 
@@ -1385,6 +1396,371 @@ const CASMAssistant = {
         });
     },
 
+    getSemanticAnswerModels() {
+        return [
+            {
+                id: 'system-purpose',
+                label: 'system purpose',
+                examples: [
+                    'what is this system for',
+                    'what does this system do',
+                    'what does casm do',
+                    'what is casm',
+                    'what is ppe safety monitor',
+                    'what is this app used for',
+                    'what is it used for',
+                    'explain this system',
+                    'tell me about the system',
+                    'why do we use this system'
+                ],
+                keywords: ['casm', 'system', 'purpose', 'used', 'ppe', 'safety', 'monitor', 'construction', 'compliance', 'violation'],
+                text: 'CASM is a PPE safety monitoring system for construction or worksite supervision. It helps users watch camera feeds or uploaded images, detect missing PPE, record violations, and turn those detections into reports and analytics.',
+                bullets: [
+                    'Use Live Monitor for real-time camera supervision.',
+                    'Use Image Analysis when you only need to check uploaded photos.',
+                    'Use Reports and Analytics to review evidence, trends, severity, source tags, and compliance progress.',
+                    'Mira can explain workflows and open the right page, without needing an external LLM API for these basic answers.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
+                ]
+            },
+            {
+                id: 'how-it-works',
+                label: 'how the system works',
+                examples: [
+                    'how does this system work',
+                    'how does it work',
+                    'how does the pipeline work',
+                    'what is the process',
+                    'what happens in the workflow',
+                    'explain the detection flow',
+                    'how are reports generated',
+                    'how does casm detect violations',
+                    'how does the app turn camera images into reports',
+                    'how does detection become analytics'
+                ],
+                keywords: ['how', 'work', 'pipeline', 'process', 'flow', 'camera', 'image', 'detect', 'report', 'analytics', 'caption'],
+                text: 'At a high level, CASM takes camera frames or uploaded images, runs PPE detection, stores violation records, then generates reports and analytics so supervisors can review what happened.',
+                bullets: [
+                    'Live mode watches an active camera stream and logs PPE issues as they appear.',
+                    'Image mode checks selected photos as a one-off inspection workflow.',
+                    'Reports preserve incident evidence and status; analytics summarizes trends, severity, sources, and readiness.',
+                    'Cloud and local paths can both exist, but their source tags should stay consistent.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                    { type: 'handbook', label: 'Open workflow guide', pageKey: 'workflow', collapsePanel: true }
+                ]
+            },
+            {
+                id: 'ppe-detection',
+                label: 'PPE detection coverage',
+                examples: [
+                    'what can it detect',
+                    'what ppe can it detect',
+                    'what equipment does it check',
+                    'does it detect helmet and vest',
+                    'what violations are detected',
+                    'what safety gear is checked',
+                    'what missing ppe does it look for',
+                    'can it check uploaded images for missing ppe',
+                    'can this system check whether workers are missing helmets vests gloves masks goggles or safety shoes',
+                    'can image analysis detect missing ppe',
+                    'what ppe can it check from uploaded photos'
+                ],
+                keywords: ['detect', 'check', 'ppe', 'helmet', 'hardhat', 'vest', 'gloves', 'mask', 'goggles', 'boots', 'shoes', 'equipment', 'gear', 'missing', 'worker', 'upload', 'image'],
+                text: 'CASM focuses on PPE compliance. The dashboard and reports track missing hardhat or helmet, safety vest, gloves, mask or respirator, goggles, and safety shoes or boots where those classes are available in the detection result.',
+                bullets: [
+                    'The exact classes shown depend on what the detector reports for a frame or image.',
+                    'Reports keep the missing-PPE labels so the same evidence can be reviewed later.',
+                    'Analytics groups those labels into violation types for trend review.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open Image Analysis', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                    { type: 'handbook', label: 'Open PPE guidelines', pageKey: 'ppe', collapsePanel: true }
+                ]
+            },
+            {
+                id: 'violation-reporting',
+                label: 'violation reports',
+                examples: [
+                    'what happens when a violation is found',
+                    'what happens after detection',
+                    'how are violations reported',
+                    'where do reports go',
+                    'what are reports for',
+                    'how do i read the reports',
+                    'what does report status mean'
+                ],
+                keywords: ['violation', 'detected', 'report', 'reports', 'status', 'queued', 'generating', 'ready', 'evidence', 'review'],
+                text: 'When CASM records a PPE violation, it creates a report row that can move through states like queued, generating, ready, failed, local, or local synced. Reports are where you review the evidence and generated safety summary.',
+                bullets: [
+                    'Open Reports for individual incident rows and evidence.',
+                    'Open Analytics for the bigger pattern across many reports.',
+                    'Use source tags carefully: Cloud, Local, and Local Synced describe where the report came from.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                    { type: 'handbook', label: 'Open reports guide', pageKey: 'workflow', stageKey: 'reports', collapsePanel: true }
+                ]
+            },
+            {
+                id: 'local-cloud-offline',
+                label: 'local and cloud modes',
+                examples: [
+                    'what is local mode',
+                    'what is cloud mode',
+                    'local vs cloud',
+                    'can it work offline',
+                    'what happens when wifi drops',
+                    'do i need internet',
+                    'what is local synced',
+                    'how does sync work',
+                    'what happens when the internet connection becomes unstable',
+                    'what happens when reports are created locally first and sync later',
+                    'what should happen when connection comes back',
+                    'how do local reports synchronize again'
+                ],
+                keywords: ['local', 'cloud', 'offline', 'wifi', 'network', 'connection', 'connectivity', 'sync', 'synchronize', 'synced', 'internet', 'host', 'approved', 'provision'],
+                text: 'Cloud mode uses the hosted backend path. Local mode is for an approved host machine that can keep working locally when connectivity is poor. A local-origin report should only become Local Synced after reconnect and confirmed upload.',
+                bullets: [
+                    'Run Local Mode Checkup before relying on local mode.',
+                    'During disconnection, local reports should remain Local.',
+                    'After connectivity returns, synced local reports can appear as Local Synced.',
+                    'Mira can explain these terms offline; checking live machine health still depends on the app data available to the browser.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true },
+                    { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 },
+                    { type: 'handbook', label: 'Open local guide', pageKey: 'workflow', stageKey: 'local', collapsePanel: true }
+                ]
+            },
+            {
+                id: 'assistant-offline-nlp',
+                label: 'Mira offline NLP',
+                examples: [
+                    'do you need api',
+                    'do you use api',
+                    'can you answer without api',
+                    'can you work without internet',
+                    'how do you understand my question',
+                    'do you have nlp',
+                    'are you an ai assistant',
+                    'what can mira answer',
+                    'what can the assistant do',
+                    'are you calling an online ai model',
+                    'are you using a third party api',
+                    'do you call an external ai service',
+                    'can you understand basic questions inside the app without third party api',
+                    'can you answer casm questions without an online model'
+                ],
+                keywords: ['mira', 'assistant', 'api', 'offline', 'nlp', 'understand', 'question', 'answer', 'natural language', 'without internet', 'external', 'third party', 'online', 'ai', 'model', 'service', 'browser'],
+                text: 'Mira has a basic offline NLP layer in the browser. It normalizes the wording, expands common synonyms, scores likely intents, answers built-in CASM questions, and only uses app APIs when you ask for live data or exports.',
+                bullets: [
+                    'Plain explanations like system purpose, PPE coverage, report meaning, and local/cloud behavior do not need an external API.',
+                    'Navigation and tutorial requests are handled by local intent rules.',
+                    'Live metrics, reports, and CSV exports still use the app data source because those answers depend on current records.',
+                    'Mira is not a general open-ended LLM; it is a focused CASM assistant with safe local NLP.'
+                ],
+                actions: [
+                    { type: 'overview', label: 'Show live overview' },
+                    { type: 'handbook', label: 'Open handbook', pageKey: 'intro', collapsePanel: true },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+                ]
+            },
+            {
+                id: 'page-map',
+                label: 'where things are',
+                examples: [
+                    'where should i go',
+                    'which page should i use',
+                    'what are the pages for',
+                    'where is the camera',
+                    'where is analytics',
+                    'where are reports',
+                    'where do i start',
+                    'where should i go if i want to start',
+                    'which page should i open first',
+                    'what page do i use first',
+                    'which page should i open first if i want to monitor ppe compliance',
+                    'where do i begin monitoring ppe compliance today'
+                ],
+                keywords: ['where', 'page', 'pages', 'home', 'live', 'camera', 'reports', 'analytics', 'settings', 'start'],
+                text: 'Use Home for the overview, Live for camera or image checks, Reports for incident records, Analytics for trends and safety metrics, Settings for local readiness, and Handbook for guidance.',
+                bullets: [
+                    'If you want to supervise now, open Live Monitor.',
+                    'If you want to review what already happened, open Reports or Analytics.',
+                    'If you are preparing local/offline use, open Settings Checkup.'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open live monitor', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
+                    { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
+                ]
+            }
+        ];
+    },
+
+    isNaturalLanguageQuestion(query) {
+        return /\b(what|how|why|where|when|which|who|can|could|does|do|is|are|explain|describe|tell me|meaning|mean|purpose|used for|about)\b/.test(query);
+    },
+
+    hasCasmDomainSignal(query) {
+        return /\b(casm|system|app|assistant|mira|ppe|safety|construction|site|worker|monitor|camera|image|report|reports|analytics|violation|violations|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|local|cloud|sync|settings|handbook)\b/.test(query);
+    },
+
+    resolveSemanticAnswer(raw, query = '') {
+        const normalized = this.normalizeForNlu(raw || query);
+        if (!normalized) return null;
+        if (this.isExportIntent(normalized)) return null;
+
+        const questionLike = this.isNaturalLanguageQuestion(normalized);
+        const negatesLiveData = /\b(not asking for|not looking for|do not need|dont need|without)\b.{0,36}\b(current|live|latest|analytics|statistics|metrics|numbers|counts|snapshot|data)\b/.test(normalized)
+            || /\b(just|only)\b.{0,24}\b(want|need)\b.{0,36}\b(know|understand|explain|which page|where|how to start)\b/.test(normalized);
+        const liveDataQuestion = /\b(how many|count|number|latest|trend|trends|today|yesterday|week|month|high|medium|low|analytics|metric|metrics|score|rate|happened|any)\b/.test(normalized)
+            && /\b(violation|violations|incident|incidents|helmet|hardhat|vest|ppe|report|reports|analytics|score|metric|metrics|compliance|risk)\b/.test(normalized);
+        if (liveDataQuestion && !negatesLiveData) return null;
+
+        const actionOnly = /\b(open|go|start|begin|export|download|switch|apply|use recommended|run checkup)\b/.test(normalized)
+            && !questionLike;
+        if (actionOnly) return null;
+
+        const tokens = this.expandIntentTokens(this.tokenizeForIntent(normalized));
+        const scored = this.getSemanticAnswerModels()
+            .map((model) => this.scoreSemanticAnswerModel(model, normalized, tokens, questionLike))
+            .sort((a, b) => b.confidence - a.confidence);
+        const best = scored[0] || null;
+        if (best && best.confidence >= 0.46) {
+            return best;
+        }
+
+        if (questionLike && this.hasCasmDomainSignal(normalized)) {
+            const docs = this.searchDocs(raw).slice(0, 3);
+            if (docs.length) {
+                return {
+                    id: 'handbook-semantic-fallback',
+                    label: 'handbook answer',
+                    confidence: 0.42,
+                    text: 'I can answer that from the built-in CASM guide rather than an external AI service. These are the closest local handbook matches I found.',
+                    bullets: [
+                        'This is an offline semantic match from the page handbook/glossary content.',
+                        'Open a matched section if you want the detailed workflow view.'
+                    ],
+                    docs: docs.map((doc, index) => ({
+                        label: doc.label,
+                        title: doc.title,
+                        snippet: doc.snippet,
+                        actionIndex: index
+                    })),
+                    actions: docs.map((doc) => ({
+                        type: 'doc-result',
+                        label: doc.title,
+                        pageKey: doc.pageKey || 'intro',
+                        stageKey: doc.stageKey || '',
+                        tutorialFlow: doc.tutorialFlow || '',
+                        tutorialStep: Number(doc.tutorialStep || 0)
+                    }))
+                };
+            }
+
+            return {
+                id: 'casm-domain-fallback',
+                label: 'CASM domain fallback',
+                confidence: 0.38,
+                text: 'I can answer CASM workflow questions without an external API, but I need one more concrete clue to avoid guessing.',
+                bullets: [
+                    'Ask about purpose, live monitoring, image checks, PPE classes, reports, analytics, local mode, cloud mode, or settings.',
+                    'For current counts or CSV files, I will use the app data source because those answers depend on live records.'
+                ],
+                actions: [
+                    { type: 'handbook', label: 'Open handbook', pageKey: 'intro', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
+                ]
+            };
+        }
+
+        return null;
+    },
+
+    scoreSemanticAnswerModel(model, normalized, tokens, questionLike) {
+        const expandedTokenSet = new Set(tokens);
+        const examples = Array.isArray(model.examples) ? model.examples : [];
+        const exactExample = examples.some((example) => {
+            const normalizedExample = this.normalizeForNlu(example);
+            return normalized === normalizedExample || normalized.includes(normalizedExample);
+        });
+        const exampleScores = examples.map((example) => {
+            const exampleTokens = this.expandIntentTokens(this.tokenizeForIntent(this.normalizeForNlu(example)));
+            if (!exampleTokens.length) return 0;
+            const exampleSet = new Set(exampleTokens);
+            const overlap = Array.from(exampleSet).filter((token) => expandedTokenSet.has(token)).length;
+            const coverage = overlap / Math.max(1, Math.min(exampleSet.size, expandedTokenSet.size || 1));
+            const jaccard = overlap / Math.max(1, new Set([...exampleSet, ...expandedTokenSet]).size);
+            return (coverage * 0.72) + (jaccard * 0.28);
+        });
+        const keywordTokens = this.expandIntentTokens(this.tokenizeForIntent((model.keywords || []).join(' ')));
+        const keywordMatches = keywordTokens.filter((token) => expandedTokenSet.has(token)).length;
+        const keywordScore = keywordTokens.length
+            ? Math.min(1, keywordMatches / Math.min(keywordTokens.length, 7))
+            : 0;
+        const questionBoost = questionLike ? 0.08 : 0;
+        const exactBoost = exactExample ? 0.54 : 0;
+        const modelBoost = this.getSemanticModelCueBoost(model.id, normalized);
+        let confidence = Math.min(0.99, exactBoost + (Math.max(0, ...exampleScores) * 0.34) + (keywordScore * 0.28) + questionBoost + modelBoost);
+        if (model.id === 'page-map'
+            && !exactExample
+            && !/\b(where|which page|what page|pages?|open|go|begin|start|first|navigate)\b/.test(normalized)) {
+            confidence = Math.min(confidence, 0.42);
+        }
+        return {
+            ...model,
+            confidence: Number(confidence.toFixed(3))
+        };
+    },
+
+    getSemanticModelCueBoost(modelId, normalized) {
+        if (modelId === 'ppe-detection'
+            && /\b(detect|check|missing|ppe|equipment|gear|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?|worker|image|upload)\b/.test(normalized)
+            && /\b(image|upload|camera|worksite|worker|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?|ppe|equipment|gear)\b/.test(normalized)) {
+            return 0.18;
+        }
+        if (modelId === 'local-cloud-offline'
+            && /\b(local|offline|wifi|internet|network|connection|connectivity|sync|synchronize|synced|reconnect|cloud)\b/.test(normalized)) {
+            return 0.2;
+        }
+        if (modelId === 'assistant-offline-nlp'
+            && /\b(api|third party|external|online|ai model|llm|nlp|understand|answer|question)\b/.test(normalized)
+            && /\b(assistant|mira|you|your|inside|browser|without|need|use|call|calling|model|service|api)\b/.test(normalized)) {
+            return 0.2;
+        }
+        if (modelId === 'page-map'
+            && /\b(where|which page|what page|pages?|open first|go first|start|begin|navigate)\b/.test(normalized)) {
+            return 0.14;
+        }
+        if (modelId === 'system-purpose'
+            && /\b(what|purpose|used for|supposed to|help|do|explain)\b/.test(normalized)
+            && /\b(casm|system|app|project|safety|supervisor|construction|worksite)\b/.test(normalized)) {
+            return 0.14;
+        }
+        return 0;
+    },
+
+    handleSemanticAnswer(answer) {
+        this.pushMessage({
+            role: 'assistant',
+            text: answer.text,
+            bullets: answer.bullets || [],
+            docs: answer.docs || [],
+            actions: answer.actions || []
+        });
+    },
+
     resolveCompoundIntent(raw, query = '', localIntent = null) {
         if (!query) return null;
         const hasCompoundCue = /\b(and|also|plus|then|after that|both|together|all together|at the same time|first|next|with)\b/.test(query)
@@ -1516,13 +1892,25 @@ const CASMAssistant = {
             [/\bwanna\b/g, 'want to'],
             [/\bgonna\b/g, 'going to'],
             [/\bpls\b|\bplz\b/g, 'please'],
+            [/\bthird[- ]party\b/g, 'third party'],
             [/\bstatistic(s)?\b|\bstats\b/g, 'analytics'],
             [/\banalysis dashboard\b/g, 'analytics'],
             [/\bsupervise\b|\bsupervision\b|\bsurveillance\b|\bpatrol\b|\bwatching\b/g, 'monitor'],
             [/\bphoto\b|\bpicture\b|\bsnapshot\b|\bscreenshot\b/g, 'image'],
+            [/\bphotos\b|\bpictures\b|\bsnapshots\b|\bscreenshots\b/g, 'image'],
             [/\bfront gate\b|\bmain entrance\b|\bnorth gate\b|\bwest gate\b/g, 'camera location'],
             [/\bbad stuff\b|\bbad news\b|\bno good results\b|\bsafety problems?\b/g, 'violations'],
             [/\bmissing gear\b|\bforgot (their )?(helmet|hardhat|vest)\b/g, 'ppe violation'],
+            [/\bhelmets\b/g, 'helmet'],
+            [/\bhardhats\b/g, 'hardhat'],
+            [/\bvests\b/g, 'vest'],
+            [/\bmasks\b/g, 'mask'],
+            [/\bboots\b/g, 'boots'],
+            [/\bshoes\b/g, 'shoes'],
+            [/\bworkers\b/g, 'worker'],
+            [/\blocally\b/g, 'local'],
+            [/\bsynchroni[sz](e|es|ed|ing|ation)?\b/g, 'sync'],
+            [/\breconnect(ed|ing)?\b/g, 'sync'],
             [/\brealtime\b/g, 'real time'],
             [/\bppe check\b/g, 'ppe detection'],
             [/\btake me to\b|\bgo to\b|\bbring me to\b/g, 'open'],
@@ -2202,6 +2590,25 @@ const CASMAssistant = {
                     { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
                     { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 },
                     { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
+                ]
+            });
+            return;
+        }
+
+        const offTopicOnly = /\b(weather|pizza|joke|game|capital|bored|banana|universe|homework|recipe|song|movie|poem)\b/.test(query)
+            && !this.hasCasmDomainSignal(query);
+        if (offTopicOnly) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'I could not confidently map that to a CASM workflow because it is outside the monitoring assistant scope.',
+                bullets: [
+                    'I stay focused on live monitoring, image checks, reports, analytics, settings, exports, and handbook guidance.',
+                    'Try a safety task like "start supervision", "check image", or "show analytics this week".'
+                ],
+                actions: [
+                    { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
+                    { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true },
+                    { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 }
                 ]
             });
             return;
@@ -3114,8 +3521,11 @@ const CASMAssistant = {
     autosizeInput() {
         if (!this.ui.input) return;
         this.ui.input.style.height = 'auto';
-        const next = Math.min(this.ui.input.scrollHeight, 132);
-        this.ui.input.style.height = `${Math.max(46, next)}px`;
+        const compactMobile = window.innerWidth <= 520;
+        const maxHeight = compactMobile ? 104 : 132;
+        const minHeight = compactMobile ? 44 : 46;
+        const next = Math.min(this.ui.input.scrollHeight, maxHeight);
+        this.ui.input.style.height = `${Math.max(minHeight, next)}px`;
     },
 
     scrollMessagesToBottom() {

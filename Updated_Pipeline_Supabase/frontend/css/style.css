@@ -9096,7 +9096,7 @@ body.assistant-open .assistant-launcher {
 }
 
 .assistant-panel {
-    width: min(1080px, calc(100vw - 2rem));
+    width: min(840px, calc(100vw - 2rem));
     height: min(84vh, 820px);
     max-height: calc(100vh - 2rem);
     border-radius: 20px;
@@ -9314,5 +9314,111 @@ body.assistant-open .assistant-launcher {
 
     .assistant-subtitle {
         display: none;
+    }
+}
+
+/* Final mobile guard for Mira. A later desktop comfort rule widens the
+   assistant layout to a session rail + chat grid; phones need the chat column
+   to reclaim the full panel so the composer and messages are not squeezed. */
+@media (max-width: 900px) {
+    body.assistant-open .assistant-dock {
+        bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .assistant-panel {
+        height: min(78vh, calc(100vh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+        max-height: calc(100vh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    }
+
+    @supports (height: 100dvh) {
+        .assistant-panel {
+            height: min(78dvh, calc(100dvh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+            max-height: calc(100dvh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        }
+    }
+
+    .assistant-layout {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .assistant-main,
+    .assistant-session-rail {
+        grid-column: 1 / -1;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .assistant-composer {
+        grid-template-columns: minmax(0, 1fr) 48px;
+    }
+}
+
+@media (max-width: 360px) {
+    .assistant-dock {
+        left: 0.5rem;
+        right: 0.5rem;
+    }
+
+    .assistant-shortcut-strip,
+    .assistant-prompt-deck,
+    .assistant-messages,
+    .assistant-composer {
+        padding-left: 0.72rem;
+        padding-right: 0.72rem;
+    }
+
+    .assistant-composer {
+        grid-template-columns: minmax(0, 1fr) 44px;
+    }
+}
+
+/* Mobile content correction: the PPE reference images are useful safety
+   content, so keep them visible as a compact horizontal strip instead of
+   hiding them as decoration. */
+@media (max-width: 768px) {
+    .home-ops-hero {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .home-ops-hero .ppe-standards-strip {
+        display: flex !important;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scroll-snap-type: x mandatory;
+        gap: 0.65rem !important;
+        margin-top: 0.45rem !important;
+        padding: 0.75rem 0 0.15rem !important;
+        background: transparent !important;
+        border-left: 0 !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.28) !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .home-ops-hero .ppe-standards-strip figure {
+        flex: 0 0 112px;
+        min-height: 0;
+        border-radius: 12px !important;
+        scroll-snap-align: start;
+        box-shadow: 0 8px 18px rgba(17, 24, 39, 0.16);
+    }
+
+    .home-ops-hero .ppe-standards-strip img {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 4 / 3 !important;
+        object-fit: cover;
+    }
+
+    .home-ops-hero .ppe-standards-strip figcaption {
+        font-size: 0.68rem;
+        line-height: 1;
+        padding: 0.25rem 0.5rem;
+    }
+}
+
+@media (max-width: 360px) {
+    .home-ops-hero .ppe-standards-strip figure {
+        flex-basis: 96px;
     }
 }

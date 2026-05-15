@@ -3455,14 +3455,20 @@ Required JSON object:
 
         .image-container {{
             width: 100%;
-            max-height: 400px;
+            height: clamp(320px, 34vw, 520px);
             overflow: hidden;
-            background: #000;
+            background: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }}
 
         .image-container img {{
-            width: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
             height: auto;
+            object-fit: contain;
             display: block;
         }}
 
@@ -4027,7 +4033,7 @@ Required JSON object:
                         <h2 class="section-title"><i class="fas fa-camera"></i> Visual Evidence</h2>
                         <div class="grid">
                             <div class="card">
-                                <div class="card-header">Original Image (1920x1080)</div>
+                                <div class="card-header">Original Image</div>
                                 <div class="image-container">
                                     <img src="{original_img}" alt="Original Image">
                                 </div>

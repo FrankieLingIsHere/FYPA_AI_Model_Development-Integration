@@ -163,10 +163,8 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert("restricted-area entry / exclusion-zone breach: observed=true" in compact, "Compact prompt missing restricted-area signal")
     _assert("machinery-related struck-by / caught-between exposure: observed=true" in compact, "Compact prompt missing machinery signal")
     _assert('"risk_category": "PPE"' in compact, "Compact prompt missing PPE risk_category schema")
-    _assert('Observed non-PPE activity categories requiring separate risk cells: restricted_area, machinery' in compact, "Compact prompt missing observed local activity categories")
-    _assert('"risk_category": "restricted_area"' in compact, "Compact prompt missing restricted_area risk object")
-    _assert('"risk_category": "machinery"' in compact, "Compact prompt missing machinery risk object")
-    _assert('Do not merge these activity risks into the PPE risk' in compact, "Compact prompt missing non-merge rule")
+    _assert('Observed non-PPE activity categories from local caption/YOLO: restricted_area, machinery' in compact, "Compact prompt missing observed local activity categories")
+    _assert('Do not invent unlisted activity risks' in compact, "Compact prompt missing anti-invention rule")
     _assert("Generate the regulatory incident report package" in compact, "Compact prompt missing regulatory report package action")
     _assert('Do not write "(inferred)" in likelihood' in compact, "Compact prompt should block inferred labels")
 
@@ -229,8 +227,7 @@ def test_ollama_compact_prompt_expands_local_caption_activity_context():
     }, "original long prompt")
 
     _assert("traffic-interface exposure: observed=true" in compact, "Local caption activity hint should mark traffic observed")
-    _assert('Observed non-PPE activity categories requiring separate risk cells: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
-    _assert('"risk_category": "traffic_interface"' in compact, "Compact prompt missing traffic_interface risk object")
+    _assert('Observed non-PPE activity categories from local caption/YOLO: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
 
 
 def test_cloud_activity_block_allows_clear_direct_image_override():
@@ -310,7 +307,7 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
                 "risks": [
                     {
                         "risk_category": "PPE",
-                        "risk": "The worker could sustain head injury because the hardhat is missing.",
+                        "risk": "The worker could sustain head injury because the hardhat is missing in a traffic environment.",
                         "likelihood": "HIGH",
                         "evidence": "YOLO detected missing Hardhat.",
                     }

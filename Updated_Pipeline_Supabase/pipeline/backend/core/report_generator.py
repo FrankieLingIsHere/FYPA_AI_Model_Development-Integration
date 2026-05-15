@@ -1846,24 +1846,6 @@ RESPONSE FORMAT (JSON):
         )
         observed_activity_categories = self._observed_activity_categories_from_signal_block(activity_risk_signal_block)
         observed_activity_text = ', '.join(observed_activity_categories) if observed_activity_categories else 'none'
-        activity_risk_templates: List[str] = []
-        for category in observed_activity_categories[:4]:
-            activity_risk_templates.append(f"""        {{
-          "risk_category": "{category}",
-          "risk": "Two concise sentences explaining the observed {category} risk for the affected person and what could happen if work continues.",
-          "likelihood": "HIGH/MEDIUM/LOW/REVIEW_REQUIRED",
-          "evidence": "Cite the exact caption, activity_context, or YOLO evidence that marked {category} observed=true.",
-          "regulation_citation": "OSHA 1994 Section 15 or another provided DOSH/JKR citation relevant to {category}",
-          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
-          "mitigation_steps": [
-            "Control the observed {category} hazard before work restarts.",
-            "Document the corrected site control and supervisor verification.",
-            "Brief the worker on the observed activity hazard before re-entry."
-          ]
-        }}""")
-        activity_risk_json = ''
-        if activity_risk_templates:
-            activity_risk_json = ',\n' + ',\n'.join(activity_risk_templates)
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
         ppe_defaults = {
             'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',
@@ -1906,7 +1888,7 @@ RESPONSE FORMAT (JSON):
             "Brief the worker on the observed hazard before work restarts.",
             "Record photographic proof of corrected PPE compliance."
           ]
-        }}{activity_risk_json}
+        }}
       ],
       "corrective_actions": [
         "Stop work and remove Person {idx} from the affected zone until {missing_phrase} is worn correctly.",
@@ -1950,9 +1932,8 @@ Rules:
 - Analyse exactly {person_count} person(s).
 - Keep text concise, factual, and grounded in the evidence above.
 - Include every required top-level key.
-- In persons[].risks and persons[].corrective_actions, include observed activity signals for restricted-area entry, unsafe posture, machinery-related risk, work-at-height, traffic-interface exposure, material stability, and regulatory report generation when observed=true.
-- Observed non-PPE activity categories requiring separate risk cells: {observed_activity_text}.
-- If this list is not "none", persons[].risks must include one separate model-authored risk object for each listed category. Do not merge these activity risks into the PPE risk.
+- Observed non-PPE activity categories from local caption/YOLO: {observed_activity_text}.
+- If you include an activity risk, use only the listed observed categories. Do not invent unlisted activity risks.
 - If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off.
 - Do not write "(inferred)" in likelihood; use HIGH, MEDIUM, LOW, or REVIEW_REQUIRED.
 
@@ -2021,9 +2002,19 @@ Required JSON object:
             terms = category_terms.get(category, (category,))
             for risk in person.get('risks') or []:
                 if isinstance(risk, dict):
+                    category_text = ' '.join(
+                        str(risk.get(key) or '')
+                        for key in ('risk_category', 'category', 'type')
+                    ).lower()
+                    if category_text:
+                        if category in category_text or any(term in category_text for term in terms):
+                            return True
+                        # A PPE-tagged risk may mention road/traffic/machinery as context,
+                        # but it still does not satisfy the separate observed activity cell.
+                        continue
                     text = ' '.join(
                         str(risk.get(key) or '')
-                        for key in ('risk_category', 'category', 'type', 'risk', 'description', 'evidence')
+                        for key in ('risk', 'description', 'evidence')
                     ).lower()
                 else:
                     text = str(risk).lower()

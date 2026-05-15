@@ -2028,7 +2028,11 @@ Required JSON object:
             for sentence in sentences:
                 lowered = sentence.lower()
                 if (
-                    ('visible activity context' in lowered or 'scene also shows' in lowered)
+                    (
+                        'visible activity context' in lowered
+                        or 'scene also shows' in lowered
+                        or 'surrounding context includes' in lowered
+                    )
                     and any(term in lowered for term in terms)
                 ):
                     return sentence.strip()

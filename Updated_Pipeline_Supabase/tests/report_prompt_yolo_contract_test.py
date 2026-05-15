@@ -213,9 +213,10 @@ def test_ollama_compact_prompt_expands_local_caption_activity_context():
     subject = ReportGenerator.__new__(ReportGenerator)
     compact = subject._build_ollama_compact_report_prompt({
         "caption": (
-            "This is an outdoor street scene with 1 visible person. "
-            "Major visible objects include bus. "
-            "The scene also shows a road, street, bus, or vehicle area near the person."
+            "The image shows an outdoor street scene where one visible person is standing "
+            "near a bus, while the surrounding "
+            "context includes a road, street, bus, or vehicle area near the person; "
+            "no PPE is clearly visible."
         ),
         "violation_summary": "Missing Hard Hat",
         "person_count": 1,
@@ -318,8 +319,10 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
     }
     report_data = {
         "caption": (
-            "This is an outdoor street scene with 1 visible person. "
-            "The scene also shows a road, street, bus, or vehicle area near the person."
+            "The image shows an outdoor street scene where one visible person is standing "
+            "near a bus, while the surrounding "
+            "context includes a road, street, bus, or vehicle area near the person; "
+            "no PPE is clearly visible."
         ),
         "detections": [{"class_name": "Person"}, {"class_name": "NO-Hardhat"}],
         "violation_summary": "PPE Violation Detected: NO-Hardhat",

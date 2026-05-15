@@ -47,10 +47,12 @@ def test_render_local_caption_from_json_is_grounded_and_readable():
         "ppe_visible": [],
     })
 
-    _assert(rendered.startswith("This is an outdoor street scene with 3 visible people."), rendered)
-    _assert("Visible people include person in dark jacket and jeans" in rendered, rendered)
-    _assert("Major visible objects include blue bus, building facade." in rendered, rendered)
-    _assert(rendered.endswith("No PPE is visible."), rendered)
+    _assert(rendered.startswith("The image shows an outdoor street scene with three visible people"), rendered)
+    _assert("including a person in dark jacket and jeans and a person in light-colored jacket and jeans" in rendered, rendered)
+    _assert("with a blue bus and a building facade visible nearby" in rendered, rendered)
+    _assert("Visible people include" not in rendered, rendered)
+    _assert("Major visible objects include" not in rendered, rendered)
+    _assert(rendered.endswith("no PPE is clearly visible."), rendered)
 
 
 def test_render_local_caption_from_json_keeps_activity_hints_readable():
@@ -64,10 +66,11 @@ def test_render_local_caption_from_json_keeps_activity_hints_readable():
     })
 
     _assert("Visible activity context includes" not in rendered, rendered)
-    _assert("The scene also shows" in rendered, rendered)
+    _assert("The scene also shows" not in rendered, rendered)
+    _assert("the surrounding context includes" in rendered, rendered)
     _assert("road, street, bus, or vehicle area near the person" in rendered, rendered)
     _assert("machinery or mobile plant near the person" in rendered, rendered)
-    _assert(rendered.endswith("No PPE is visible."), rendered)
+    _assert(rendered.endswith("no PPE is clearly visible."), rendered)
 
 
 def test_caption_image_llava_prefers_structured_local_caption_without_custom_prompt():
@@ -108,10 +111,9 @@ def test_caption_image_llava_prefers_structured_local_caption_without_custom_pro
 
         rendered = caption_image.caption_image_llava(temp_path)
 
-        _assert(rendered.startswith("This is an indoor room with 1 visible person."), rendered)
-        _assert("Visible people include man wearing a grey shirt." in rendered, rendered)
-        _assert("Major visible objects include couch, backpack." in rendered, rendered)
-        _assert(rendered.endswith("No PPE is visible."), rendered)
+        _assert(rendered.startswith("The image shows an indoor room where one visible man is wearing a grey shirt"), rendered)
+        _assert("near a couch and a backpack" in rendered, rendered)
+        _assert(rendered.endswith("no PPE is clearly visible."), rendered)
     finally:
         caption_image._generate_vision_response = original_generate
         caption_image.VISION_PROVIDER_ORDER = original_order

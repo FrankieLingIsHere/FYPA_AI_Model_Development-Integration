@@ -902,36 +902,100 @@ def _render_local_caption_from_json(payload: dict) -> str:
             return ""
         if cleaned.startswith(("a ", "an ", "the ")):
             return cleaned
+        last_word = cleaned.split()[-1]
+        plural_or_uncountable = {
+            "bollards", "buildings", "cars", "cones", "equipment", "glasses",
+            "gloves", "machinery", "people", "persons", "posts", "ppe",
+            "shoes", "tools", "trees", "trucks", "vehicles", "workers",
+        }
+        if last_word in plural_or_uncountable or (last_word.endswith("s") and last_word != "bus"):
+            return cleaned
         article = "an" if cleaned[0] in "aeiou" else "a"
         return f"{article} {cleaned}"
 
-    if scene:
-        first_sentence = (
-            f"This is {_with_article(scene)} with "
-            f"{people_count} visible {'person' if people_count == 1 else 'people'}."
+    def _count_text(value: int) -> str:
+        words = {
+            0: "no", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+            6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+        }
+        return words.get(value, str(value))
+
+    def _join_naturally(items, limit: int = 4) -> str:
+        cleaned = [str(item).strip() for item in items[:limit] if str(item).strip()]
+        if not cleaned:
+            return ""
+        if len(cleaned) == 1:
+            return cleaned[0]
+        if len(cleaned) == 2:
+            return f"{cleaned[0]} and {cleaned[1]}"
+        return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+    def _person_phrase(text: str, with_article: bool = True) -> str:
+        cleaned = str(text or "").strip().lower()
+        if not cleaned:
+            return ""
+        if cleaned.startswith(("a ", "an ", "the ")):
+            return cleaned if with_article else re.sub(r"^(?:a|an|the)\s+", "", cleaned)
+        if re.fullmatch(r"person\s+(standing|sitting|walking|kneeling|crouching|bending|leaning|climbing)", cleaned):
+            action = cleaned.split(None, 1)[1]
+            return f"a {action} person" if with_article else f"person {action}"
+        if with_article and cleaned.startswith(("person ", "man ", "woman ", "worker ", "individual ")):
+            article = "an" if cleaned[0] in "aeiou" else "a"
+            return f"{article} {cleaned}"
+        return _with_article(cleaned) if with_article else cleaned
+
+    def _single_person_clause(text: str) -> str:
+        cleaned = str(text or "").strip().lower()
+        cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned)
+        if not cleaned:
+            return "one visible person is present"
+        action_match = re.fullmatch(
+            r"person\s+(standing|sitting|walking|kneeling|crouching|bending|leaning|climbing)",
+            cleaned,
         )
+        if action_match:
+            return f"one visible person is {action_match.group(1)}"
+        for noun in ("person", "man", "woman", "worker", "individual"):
+            prefix = f"{noun} "
+            if cleaned.startswith(prefix):
+                detail = cleaned[len(prefix):].strip()
+                if detail.startswith(("in ", "on ", "near ", "beside ", "wearing ", "holding ", "facing ")):
+                    return f"one visible {noun} is {detail}"
+                return f"one visible {cleaned}"
+        return f"one visible {_person_phrase(cleaned, with_article=False)}"
+
+    count_phrase = f"{_count_text(people_count)} visible {'person' if people_count == 1 else 'people'}"
+    single_person_clause = _single_person_clause(visible_people[0]) if people_count == 1 and len(visible_people) == 1 else ""
+    if scene and single_person_clause:
+        caption = f"The image shows {_with_article(scene)} where {single_person_clause}"
+    elif single_person_clause:
+        caption = f"The image shows {single_person_clause}"
+    elif scene:
+        caption = f"The image shows {_with_article(scene)} with {count_phrase}"
     else:
-        first_sentence = f"There {'is' if people_count == 1 else 'are'} {people_count} visible {'person' if people_count == 1 else 'people'} in the scene."
+        caption = f"The image shows {count_phrase}"
 
-    sentences = [first_sentence]
+    people_text = _join_naturally([_person_phrase(item) for item in visible_people], 3)
+    if people_text and not single_person_clause:
+        caption += f", including {people_text}"
 
-    if visible_people:
-        people_text = "; ".join(visible_people[:3])
-        sentences.append(f"Visible people include {people_text}.")
+    object_text = _join_naturally([_with_article(item) for item in major_objects], 4)
+    if object_text:
+        if single_person_clause:
+            caption += f" near {object_text}"
+        else:
+            caption += f", with {object_text} visible nearby"
 
-    if major_objects:
-        objects_text = ", ".join(major_objects[:4])
-        sentences.append(f"Major visible objects include {objects_text}.")
-
-    if activity_items:
-        sentences.append(f"The scene also shows {', '.join(activity_items[:4])}.")
+    activity_text = _join_naturally(activity_items, 4)
+    if activity_text:
+        caption += f", while the surrounding context includes {activity_text}"
 
     if ppe_visible:
-        sentences.append(f"Visible PPE includes {', '.join(ppe_visible[:4])}.")
+        caption += f"; visible PPE includes {_join_naturally(ppe_visible, 4)}."
     else:
-        sentences.append("No PPE is visible.")
+        caption += "; no PPE is clearly visible."
 
-    return " ".join(sentences).strip()
+    return caption.strip()
 
 
 def _caption_needs_expansion(caption: str) -> bool:

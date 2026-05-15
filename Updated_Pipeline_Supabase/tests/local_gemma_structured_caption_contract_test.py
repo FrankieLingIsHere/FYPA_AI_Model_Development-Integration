@@ -1,8 +1,8 @@
 """
 Contract tests for the strict-local structured Gemma caption path.
 
-Local Ollama captions should prefer a grounded JSON payload that we render
-deterministically into prose, instead of relying on free-form model wording.
+Local Ollama captions should prefer one grounded JSON payload that carries both
+a natural caption paragraph and compact activity_context tokens for reporting.
 """
 
 import os
@@ -55,6 +55,60 @@ def test_render_local_caption_from_json_is_grounded_and_readable():
     _assert(rendered.endswith("no PPE is clearly visible."), rendered)
 
 
+def test_render_local_caption_from_json_prefers_descriptive_model_caption():
+    narrative = (
+        "The scene depicts an indoor office setting. An indoor scene shows one visible person. "
+        "The person's upper torso and head are visible, and they are seated with a forward-facing posture. "
+        "Their gaze is directed forward, slightly downward. The person is wearing a dark blue short-sleeved shirt, "
+        "and no eyewear is visible. A thin, light-colored object is held horizontally between their lips. "
+        "In the background, there are white wall-mounted shelves with various items, a green wall section, "
+        "and a large window with a grid pattern on the right side."
+    )
+    rendered = caption_image._render_local_caption_from_json({
+        "caption": narrative,
+        "scene": "indoor office setting",
+        "people_count": 1,
+        "visible_people": ["person seated in dark blue shirt"],
+        "major_objects": ["wall-mounted shelves", "green wall section", "large window"],
+        "activity_context": [],
+        "ppe_visible": [],
+    })
+
+    _assert(rendered == narrative, rendered)
+    _assert("Visible people include" not in rendered, rendered)
+    _assert("surrounding context includes" not in rendered, rendered)
+
+
+def test_render_local_caption_from_json_removes_local_inference_sentences():
+    rendered = caption_image._render_local_caption_from_json({
+        "caption": (
+            "The image depicts an outdoor street scene with a single person standing on a sidewalk. "
+            "The individual is wearing a blue shirt and appears to be looking towards the right. "
+            "The scene suggests a typical urban environment with moderate foot traffic. "
+            "The overall setting appears safe. "
+            "There are no immediately apparent hazards or unusual elements in the background. "
+            "The person is not interacting with any machinery or traffic. "
+            "The street is a typical urban road."
+        ),
+        "scene": "outdoor street scene",
+        "people_count": 1,
+        "visible_people": ["person standing on sidewalk"],
+        "major_objects": ["street"],
+        "activity_context": ["traffic_interface"],
+        "ppe_visible": [],
+    })
+
+    _assert("single person standing on a sidewalk" in rendered, rendered)
+    _assert("appears to be looking towards the right" in rendered, rendered)
+    _assert("suggests" not in rendered.lower(), rendered)
+    _assert("appears safe" not in rendered.lower(), rendered)
+    _assert("hazards" not in rendered.lower(), rendered)
+    _assert("unusual elements" not in rendered.lower(), rendered)
+    _assert("not interacting" not in rendered.lower(), rendered)
+    _assert("typical" not in rendered.lower(), rendered)
+    _assert("road or street area" not in rendered, "Traffic evidence already appears in the narrative")
+
+
 def test_render_local_caption_from_json_keeps_activity_hints_readable():
     rendered = caption_image._render_local_caption_from_json({
         "scene": "outdoor street scene",
@@ -90,10 +144,11 @@ def test_caption_image_llava_prefers_structured_local_caption_without_custom_pro
         def _fake_generate(prompt, image_base64, temperature=0.6, max_tokens=300):
             if "Return strict JSON only" not in prompt:
                 raise AssertionError("Expected structured local prompt to be used first")
-            if "activity_context" not in prompt or max_tokens != 300:
-                raise AssertionError("Expected structured local activity hints without a second vision call")
+            if "caption" not in prompt or "activity_context" not in prompt or max_tokens != 650:
+                raise AssertionError("Expected one structured local caption/activity call")
             return """```json
 {
+  "caption": "The scene depicts an indoor room. An indoor scene shows one visible person. The person's upper body is visible, and he appears seated while facing forward. He is wearing a grey shirt, and no PPE is clearly visible. A couch and a backpack are visible nearby.",
   "scene": "indoor room",
   "people_count": 1,
   "visible_people": ["man wearing a grey shirt"],
@@ -111,9 +166,10 @@ def test_caption_image_llava_prefers_structured_local_caption_without_custom_pro
 
         rendered = caption_image.caption_image_llava(temp_path)
 
-        _assert(rendered.startswith("The image shows an indoor room where one visible man is wearing a grey shirt"), rendered)
-        _assert("near a couch and a backpack" in rendered, rendered)
-        _assert(rendered.endswith("no PPE is clearly visible."), rendered)
+        _assert(rendered.startswith("The scene depicts an indoor room."), rendered)
+        _assert("The person's upper body is visible" in rendered, rendered)
+        _assert("A couch and a backpack are visible nearby." in rendered, rendered)
+        _assert("no PPE is clearly visible" in rendered, rendered)
     finally:
         caption_image._generate_vision_response = original_generate
         caption_image.VISION_PROVIDER_ORDER = original_order
@@ -134,6 +190,8 @@ def main():
     tests = [
         test_parse_local_caption_json_handles_fenced_payload,
         test_render_local_caption_from_json_is_grounded_and_readable,
+        test_render_local_caption_from_json_prefers_descriptive_model_caption,
+        test_render_local_caption_from_json_removes_local_inference_sentences,
         test_render_local_caption_from_json_keeps_activity_hints_readable,
         test_caption_image_llava_prefers_structured_local_caption_without_custom_prompt,
     ]

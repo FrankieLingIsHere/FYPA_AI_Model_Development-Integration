@@ -837,6 +837,42 @@ def _render_local_caption_from_json(payload: dict) -> str:
     if not isinstance(payload, dict):
         return ""
 
+    def _strip_inference_sentences(text: str) -> str:
+        sentences = re.split(r'(?<=[.!?])\s+', str(text or '').strip())
+        kept = []
+        blocked_patterns = (
+            'appears safe',
+            'appears unsafe',
+            'overall setting appears',
+            'overall scene appears',
+            'scene suggests',
+            'suggests a typical',
+            'typical ',
+            'immediately apparent hazards',
+            'apparent hazards',
+            'unusual elements',
+            'not interacting with',
+            'no hazards',
+            'likely ',
+            'probably ',
+        )
+        for sentence in sentences:
+            cleaned = sentence.strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if any(pattern in lowered for pattern in blocked_patterns):
+                continue
+            kept.append(cleaned)
+        return ' '.join(kept).strip()
+
+    model_caption = _normalize_caption_text(
+        payload.get("caption")
+        or payload.get("narrative")
+        or payload.get("description")
+        or ""
+    )
+    model_caption = _strip_inference_sentences(model_caption)
     scene = str(payload.get("scene") or "").strip().rstrip(".")
     people_count = payload.get("people_count")
     visible_people = payload.get("visible_people")
@@ -883,6 +919,41 @@ def _render_local_caption_from_json(payload: dict) -> str:
         seen_activity.add(mapped)
         activity_items.append(mapped)
 
+    def _join_naturally(items, limit: int = 4) -> str:
+        cleaned = [str(item).strip() for item in items[:limit] if str(item).strip()]
+        if not cleaned:
+            return ""
+        if len(cleaned) == 1:
+            return cleaned[0]
+        if len(cleaned) == 2:
+            return f"{cleaned[0]} and {cleaned[1]}"
+        return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+    def _caption_has_activity_terms(caption: str, activity: str) -> bool:
+        lowered = caption.lower()
+        term_map = {
+            "a restricted or cordoned zone": ("restricted", "cordoned", "barrier", "cone", "tape"),
+            "awkward bending, leaning, or climbing posture": ("bending", "leaning", "climbing", "kneeling", "posture"),
+            "machinery or mobile plant near the person": ("machinery", "mobile plant", "excavator", "forklift", "crane", "loader"),
+            "a road or street area with a bus or other vehicle near the person": ("road", "street", "bus", "vehicle", "lane", "sidewalk"),
+            "a ladder, scaffold, platform, roof, or elevated edge": ("ladder", "scaffold", "platform", "roof", "elevated", "edge"),
+            "stacked or potentially unstable materials": ("stacked", "unstable", "materials", "pile", "timber"),
+        }
+        return any(term in lowered for term in term_map.get(activity, (activity,)))
+
+    if model_caption:
+        caption = model_caption.rstrip()
+        missing_activity_items = [
+            item for item in activity_items
+            if not _caption_has_activity_terms(caption, item)
+        ]
+        if missing_activity_items:
+            caption = (
+                f"{caption.rstrip('.')}."
+                f" The visible surroundings also include {_join_naturally(missing_activity_items, 4)}."
+            )
+        return caption
+
     try:
         people_count = max(0, int(people_count))
     except (TypeError, ValueError):
@@ -919,16 +990,6 @@ def _render_local_caption_from_json(payload: dict) -> str:
             6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
         }
         return words.get(value, str(value))
-
-    def _join_naturally(items, limit: int = 4) -> str:
-        cleaned = [str(item).strip() for item in items[:limit] if str(item).strip()]
-        if not cleaned:
-            return ""
-        if len(cleaned) == 1:
-            return cleaned[0]
-        if len(cleaned) == 2:
-            return f"{cleaned[0]} and {cleaned[1]}"
-        return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
 
     def _person_phrase(text: str, with_article: bool = True) -> str:
         cleaned = str(text or "").strip().lower()
@@ -1072,10 +1133,15 @@ def caption_image_llava(image_path, prompt=None):
     # Local Gemma/Ollama reacts better to a shorter, stricter grounding prompt
     # than to the longer shared cloud prompt.
     if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-        structured_prompt = """Return strict JSON only with keys scene, people_count, visible_people, major_objects, ppe_visible, activity_context.
+        structured_prompt = """Return strict JSON only with keys caption, scene, people_count, visible_people, major_objects, ppe_visible, activity_context.
 
 Rules:
 - Use only visible evidence from the image.
+- caption: one descriptive paragraph with 5-7 complete narrative sentences, similar to a safety observer's visual note.
+- In caption, describe indoor/outdoor setting, visible people count, visible body region, posture, gaze direction, clothing, eyewear, held objects, and background objects when clear.
+- In caption, mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.
+- In caption, do not say the scene is safe/unsafe, typical, likely, or suggestive of a condition; describe visible facts only.
+- In caption, do not state that hazards, unusual elements, machinery, or traffic interactions are absent; only describe visible objects and PPE absence.
 - scene: short factual setting phrase such as outdoor street scene, indoor room, office area, warehouse interior, or construction area.
 - people_count must count only clearly visible people.
 - visible_people: short list, one person per item, each starting with "person" and mentioning position or clothing.
@@ -1083,7 +1149,8 @@ Rules:
 - ppe_visible: [] when no PPE is clearly visible.
 - activity_context: list using only exact tokens restricted_area, unsafe_posture, machinery, traffic_interface, work_at_height, material_stability; [] when none are clear.
 - traffic_interface = road/street/sidewalk/lane/bus/truck/vehicle near people. machinery = heavy equipment/mobile plant only, such as excavator/crane/forklift/loader/industrial machine. unsafe_posture = awkward bending/leaning/kneeling/climbing/twisting/overreaching. restricted_area = cones/barriers/warning signs/tape/cordon.
-- Do not guess jobs, hazards, or hidden objects.
+- Do not write bullet points, field labels, JSON keys, or activity_context tokens inside caption.
+- Do not guess jobs, hazards, phones, eyewear, gaze, PPE, or hidden objects.
 """
         default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 4-6 complete sentences.
 
@@ -1152,7 +1219,7 @@ Requirements:
                 prompt=structured_prompt,
                 image_base64=image_base64,
                 temperature=0.05,
-                max_tokens=300
+                max_tokens=650
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)

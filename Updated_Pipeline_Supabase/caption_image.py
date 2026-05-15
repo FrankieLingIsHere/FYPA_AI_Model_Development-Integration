@@ -861,17 +861,17 @@ def _render_local_caption_from_json(payload: dict) -> str:
     activity_context = [str(item).strip().strip(".").lower() for item in activity_context if str(item).strip()]
 
     activity_map = {
-        "restricted_area": "restricted area or cordoned zone",
-        "restricted area": "restricted area or cordoned zone",
-        "unsafe_posture": "unsafe posture or awkward body position",
-        "unsafe posture": "unsafe posture or awkward body position",
-        "machinery": "machinery or mobile plant nearby",
-        "traffic_interface": "traffic interface with street, road, bus, or vehicle context",
-        "traffic interface": "traffic interface with street, road, bus, or vehicle context",
-        "work_at_height": "work at height or elevated edge",
-        "work at height": "work at height or elevated edge",
-        "material_stability": "stacked or unstable materials",
-        "material stability": "stacked or unstable materials",
+        "restricted_area": "a restricted or cordoned zone",
+        "restricted area": "a restricted or cordoned zone",
+        "unsafe_posture": "awkward bending, leaning, or climbing posture",
+        "unsafe posture": "awkward bending, leaning, or climbing posture",
+        "machinery": "machinery or mobile plant near the person",
+        "traffic_interface": "a road, street, bus, or vehicle area near the person",
+        "traffic interface": "a road, street, bus, or vehicle area near the person",
+        "work_at_height": "a ladder, scaffold, platform, roof, or elevated edge",
+        "work at height": "a ladder, scaffold, platform, roof, or elevated edge",
+        "material_stability": "stacked or potentially unstable materials",
+        "material stability": "stacked or potentially unstable materials",
     }
     activity_items = []
     seen_activity = set()
@@ -924,7 +924,7 @@ def _render_local_caption_from_json(payload: dict) -> str:
         sentences.append(f"Major visible objects include {objects_text}.")
 
     if activity_items:
-        sentences.append(f"Visible activity context includes {', '.join(activity_items[:4])}.")
+        sentences.append(f"The scene also shows {', '.join(activity_items[:4])}.")
 
     if ppe_visible:
         sentences.append(f"Visible PPE includes {', '.join(ppe_visible[:4])}.")

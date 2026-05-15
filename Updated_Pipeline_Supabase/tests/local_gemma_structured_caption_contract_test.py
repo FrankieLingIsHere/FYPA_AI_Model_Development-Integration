@@ -53,7 +53,7 @@ def test_render_local_caption_from_json_is_grounded_and_readable():
     _assert(rendered.endswith("No PPE is visible."), rendered)
 
 
-def test_render_local_caption_from_json_includes_low_latency_activity_hints():
+def test_render_local_caption_from_json_keeps_activity_hints_readable():
     rendered = caption_image._render_local_caption_from_json({
         "scene": "outdoor street scene",
         "people_count": 2,
@@ -63,9 +63,10 @@ def test_render_local_caption_from_json_includes_low_latency_activity_hints():
         "ppe_visible": [],
     })
 
-    _assert("Visible activity context includes" in rendered, rendered)
-    _assert("traffic interface with street, road, bus, or vehicle context" in rendered, rendered)
-    _assert("machinery or mobile plant nearby" in rendered, rendered)
+    _assert("Visible activity context includes" not in rendered, rendered)
+    _assert("The scene also shows" in rendered, rendered)
+    _assert("road, street, bus, or vehicle area near the person" in rendered, rendered)
+    _assert("machinery or mobile plant near the person" in rendered, rendered)
     _assert(rendered.endswith("No PPE is visible."), rendered)
 
 
@@ -131,7 +132,7 @@ def main():
     tests = [
         test_parse_local_caption_json_handles_fenced_payload,
         test_render_local_caption_from_json_is_grounded_and_readable,
-        test_render_local_caption_from_json_includes_low_latency_activity_hints,
+        test_render_local_caption_from_json_keeps_activity_hints_readable,
         test_caption_image_llava_prefers_structured_local_caption_without_custom_prompt,
     ]
     failures = []

@@ -2027,7 +2027,10 @@ Required JSON object:
             sentences = re.split(r'(?<=[.!?])\s+', caption)
             for sentence in sentences:
                 lowered = sentence.lower()
-                if 'visible activity context' in lowered and any(term in lowered for term in terms):
+                if (
+                    ('visible activity context' in lowered or 'scene also shows' in lowered)
+                    and any(term in lowered for term in terms)
+                ):
                     return sentence.strip()
             for sentence in sentences:
                 lowered = sentence.lower()

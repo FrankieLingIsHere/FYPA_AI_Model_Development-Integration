@@ -1167,6 +1167,7 @@ class ReportGenerator:
         self,
         report_data: Dict[str, Any],
         detections: Optional[List[Dict[str, Any]]] = None,
+        direct_image_available: bool = False,
     ) -> str:
         """Summarize non-caption activity-risk evidence for model-authored lower sections."""
         detections = detections if isinstance(detections, list) else report_data.get('detections', [])
@@ -1186,8 +1187,27 @@ class ReportGenerator:
                 labels.append(label.replace('_', ' '))
         label_text = ' '.join(labels)
 
+        negation_re = re.compile(
+            r'\b(?:no|not|without|nor|neither|absent|absence of|devoid of|free of|none|not visible|no visible|no apparent|no immediate|no immediately apparent)\b'
+        )
+
+        def _text_has_positive(needle: str) -> bool:
+            needle = needle.strip().lower()
+            if not needle:
+                return False
+            for match in re.finditer(re.escape(needle), text):
+                prefix = text[max(0, match.start() - 90):match.start()]
+                suffix = text[match.end():match.end() + 45]
+                if negation_re.search(prefix) or re.search(r'\b(?:not present|absent|not visible|none visible)\b', suffix):
+                    continue
+                return True
+            return False
+
+        def _label_has_any(*needles: str) -> bool:
+            return any(needle in label_text for needle in needles)
+
         def _has_any(*needles: str) -> bool:
-            return any(needle in text or needle in label_text for needle in needles)
+            return any(_text_has_positive(needle) or _label_has_any(needle) for needle in needles)
 
         def _evidence(*parts: str) -> str:
             evidence_parts = [part for part in parts if part]
@@ -1222,13 +1242,14 @@ class ReportGenerator:
         ))
 
         machinery_related = _has_any(
-            'machinery', 'vehicle', 'truck', 'lorry', 'excavator', 'forklift',
-            'crane', 'loader', 'mobile plant', 'plant operator'
+            'machinery', 'heavy equipment', 'construction vehicle', 'dump truck',
+            'cement mixer', 'backhoe', 'bulldozer', 'excavator', 'forklift',
+            'crane', 'loader', 'mobile plant', 'plant operator', 'operating equipment'
         )
         signals.append((
             'machinery-related struck-by / caught-between exposure',
             machinery_related,
-            _evidence('YOLO/caption identifies vehicle, machinery, or mobile plant'),
+            _evidence('YOLO/caption identifies heavy equipment, machinery, or mobile plant'),
         ))
 
         work_height = _has_any('scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform', 'edge')
@@ -1248,14 +1269,21 @@ class ReportGenerator:
             _evidence('caption describes piles, timber, stacked materials, slope, or unstable storage'),
         ))
 
-        traffic_interface = _has_any('road', 'roadside', 'traffic', 'highway', 'lane', 'pavement', 'safety cone')
+        traffic_interface = _has_any(
+            'road', 'roadside', 'traffic', 'highway', 'lane', 'pavement',
+            'street', 'sidewalk', 'bus', 'vehicle', 'parked vehicle', 'safety cone'
+        )
         signals.append((
             'traffic-interface exposure',
             traffic_interface,
             _evidence('caption/detections indicate road, traffic lane, vehicle, or cone-controlled work zone'),
         ))
 
-        regulatory_followup = has_ppe_gap or bool(violation_summary.strip())
+        regulatory_followup = (
+            has_ppe_gap
+            or bool(violation_summary.strip())
+            or _has_any('ppe non-compliance', 'ppe violation', 'missing ppe')
+        )
         signals.append((
             'regulatory report generation / evidence-pack follow-up',
             regulatory_followup,
@@ -1265,8 +1293,15 @@ class ReportGenerator:
         lines = [
             '*** ACTIVITY RISK SIGNALS (Lower Report Sections Only) ***',
             'These signals are context for hazards_faced, persons[].risks, and corrective_actions. Do not copy this block into the caption or visual_evidence.',
-            'Only include categories marked observed=true. Omit categories marked observed=false; do not invent absent activity recognition findings.',
         ]
+        if direct_image_available:
+            lines.append(
+                'Categories marked observed=true are pre-detected from caption/YOLO. Captions can be generic or fallback text, so you must also inspect the attached original image for lower-section risks before finalizing persons[].risks and corrective_actions. Include an observed=false category only when the attached original image clearly shows that risk, such as a bus/road traffic interface, restricted zone, unsafe posture, machinery, work-at-height, or unstable materials, and cite direct image evidence. If uncertain, omit it.'
+            )
+        else:
+            lines.append(
+                'Only include categories marked observed=true. Omit categories marked observed=false; do not invent absent activity recognition findings.'
+            )
         for name, observed, evidence in signals:
             state = 'true' if observed else 'false'
             lines.append(f"- {name}: observed={state}; evidence={evidence}")
@@ -1413,7 +1448,16 @@ class ReportGenerator:
             and str((det or {}).get('class_name') or (det or {}).get('class') or '').strip().startswith('NO-')
         ]
         yolo_violation_text = ', '.join(yolo_violation_classes) if yolo_violation_classes else 'None'
-        activity_risk_signal_block = self._build_activity_risk_signal_block(report_data, detections)
+        direct_image_available = (
+            bool(report_data.get('original_image_path'))
+            and bool(getattr(self, 'use_gemini', False))
+            and not bool(report_data.get('force_local_nlp'))
+        )
+        activity_risk_signal_block = self._build_activity_risk_signal_block(
+            report_data,
+            detections,
+            direct_image_available=direct_image_available,
+        )
 
         # Build context from DOSH documentation (primary source)
         dosh_text = ""
@@ -1774,7 +1818,11 @@ RESPONSE FORMAT (JSON):
             missing_labels = ['Required PPE']
 
         detected_environment = self._extract_environment_from_caption(caption) or 'General Workspace'
-        activity_risk_signal_block = self._build_activity_risk_signal_block(report_data, detections)
+        activity_risk_signal_block = self._build_activity_risk_signal_block(
+            report_data,
+            detections,
+            direct_image_available=False,
+        )
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
         ppe_defaults = {
             'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',

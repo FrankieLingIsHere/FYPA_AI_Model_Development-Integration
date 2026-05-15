@@ -181,6 +181,47 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert('"id": "Person 2"' in compact_two_people, "Compact prompt did not preserve multi-person schema")
 
 
+def test_activity_signals_ignore_negated_caption_terms():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    block = subject._build_activity_risk_signal_block({
+        "caption": (
+            "A person is seated indoors. There are no visible workplace-specific "
+            "hazards like machinery, vehicles, or tools, and no visible barriers."
+        ),
+        "violation_summary": "PPE Violation Detected: Missing PPE Violation",
+        "detections": [],
+    })
+
+    _assert("machinery-related struck-by / caught-between exposure: observed=false" in block, "Negated machinery text should not create machinery risk")
+    _assert("restricted-area entry / exclusion-zone breach: observed=false" in block, "Negated barrier text should not create restricted-area risk")
+    _assert("traffic-interface exposure: observed=false" in block, "Negated vehicle text should not create traffic-interface risk")
+    _assert("regulatory report generation / evidence-pack follow-up: observed=true" in block, "Violation summary should still trigger regulatory follow-up")
+
+
+def test_caption_bus_or_street_creates_traffic_signal():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    block = subject._build_activity_risk_signal_block({
+        "caption": "There are four visible people in an urban street scene featuring a bus.",
+        "detections": [],
+    })
+
+    _assert("traffic-interface exposure: observed=true" in block, "Street/bus caption should create traffic-interface coverage")
+
+
+def test_cloud_activity_block_allows_clear_direct_image_override():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    block = subject._build_activity_risk_signal_block(
+        {
+            "caption": "Auto-generated safety summary with PPE non-compliance indicators.",
+            "detections": [{"class_name": "NO-Hardhat"}],
+        },
+        direct_image_available=True,
+    )
+
+    _assert("attached original image clearly shows that risk" in block, "Cloud image-aware prompt should allow direct image evidence")
+    _assert("Only include categories marked observed=true" not in block, "Cloud image-aware prompt should not be text-only strict")
+
+
 def test_rendered_activity_risk_fields_are_model_json_cells():
     subject = ReportGenerator.__new__(ReportGenerator)
     analysis = subject._sanitize_nlp_analysis({
@@ -255,6 +296,9 @@ def main():
         test_sanitized_report_fields_stay_word_level,
         test_scene_description_does_not_duplicate_caption_yolo_addendum,
         test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe,
+        test_activity_signals_ignore_negated_caption_terms,
+        test_caption_bus_or_street_creates_traffic_signal,
+        test_cloud_activity_block_allows_clear_direct_image_override,
         test_rendered_activity_risk_fields_are_model_json_cells,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
     ]

@@ -139,7 +139,7 @@ GEMINI_CONFIG = {
     'report_model': os.getenv('GEMINI_REPORT_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
     'vision_model': os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')),
     'temperature': float(os.getenv('GEMINI_TEMPERATURE', '0.4')),
-    'max_tokens': int(os.getenv('GEMINI_MAX_TOKENS', '2000')),
+    'max_tokens': int(os.getenv('GEMINI_MAX_TOKENS', '8192')),
     'timeout': int(os.getenv('GEMINI_TIMEOUT', '120')),
     'max_retries': int(os.getenv('GEMINI_MAX_RETRIES', '3')),
     'paid_plan': os.getenv('GEMINI_PAID_PLAN', 'false').lower() == 'true',

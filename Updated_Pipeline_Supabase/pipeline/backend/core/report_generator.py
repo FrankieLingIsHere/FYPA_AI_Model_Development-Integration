@@ -220,7 +220,8 @@ class ReportGenerator:
         self.gemini_cost_per_1m_input_tokens = float(os.getenv('GEMINI_COST_PER_1M_INPUT_TOKENS', '0.30') or 0.30)
         self.gemini_cost_per_1m_output_tokens = float(os.getenv('GEMINI_COST_PER_1M_OUTPUT_TOKENS', '2.50') or 2.50)
         self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '1800') or 1800)
-        self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200)
+        self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192') or 8192)
+        self.strict_model_report_cells = str(os.getenv('STRICT_MODEL_REPORT_CELLS', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_budget_state_path = Path(
             os.getenv(
                 'GEMINI_BUDGET_STATE_PATH',
@@ -885,10 +886,11 @@ class ReportGenerator:
             'Construction Site': [
                 'construction site', 'construction area', 'building site',
                 'construction zone', 'construction project', 'construction work',
+                'construction worker', 'restricted work area',
                 'scaffolding', 'foundation work', 'concrete pour', 'concrete mixing',
                 'demolition', 'building under construction', 'crane', 'rebar',
                 'formwork', 'piling', 'site hoarding', 'tower crane',
-                'backhoe', 'excavator on site', 'cement mixer'
+                'backhoe', 'excavator', 'excavator on site', 'cement mixer'
             ],
             'Work at Height': [
                 'scaffolding', 'scaffold', 'roof', 'rooftop', 'roofing',
@@ -1161,6 +1163,123 @@ class ReportGenerator:
         logger.info(f"Built scene description ({len(description)} chars) for environment '{environment_type}'")
         return description
 
+    def _build_activity_risk_signal_block(
+        self,
+        report_data: Dict[str, Any],
+        detections: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Summarize non-caption activity-risk evidence for model-authored lower sections."""
+        detections = detections if isinstance(detections, list) else report_data.get('detections', [])
+        if not isinstance(detections, list):
+            detections = []
+
+        caption = str(report_data.get('caption') or report_data.get('vlm_caption') or '').strip()
+        violation_summary = str(report_data.get('violation_summary') or '').strip()
+        text = f"{caption} {violation_summary}".lower()
+
+        labels: List[str] = []
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip().lower()
+            if label:
+                labels.append(label.replace('_', ' '))
+        label_text = ' '.join(labels)
+
+        def _has_any(*needles: str) -> bool:
+            return any(needle in text or needle in label_text for needle in needles)
+
+        def _evidence(*parts: str) -> str:
+            evidence_parts = [part for part in parts if part]
+            return '; '.join(evidence_parts[:3]) or 'visual evidence supplied'
+
+        signals: List[Tuple[str, bool, str]] = []
+        has_ppe_gap = any(label.startswith('no-') or label.startswith('no ') for label in labels)
+
+        restricted_area = (
+            _has_any(
+                'restricted area', 'exclusion zone', 'no entry', 'keep out',
+                'restricted work area', 'barricade', 'barrier tape', 'caution tape', 'cordoned',
+                'red zone', 'danger zone'
+            )
+            or ('safety cone' in label_text and any(word in text for word in ('enter', 'inside', 'standing', 'worker', 'person')))
+        )
+        signals.append((
+            'restricted-area entry / exclusion-zone breach',
+            restricted_area,
+            _evidence('caption or detector mentions restricted/controlled access markers', 'worker/person near the controlled zone'),
+        ))
+
+        unsafe_posture = _has_any(
+            'unsafe posture', 'awkward posture', 'bending', 'crouching',
+            'kneeling', 'overreaching', 'leaning', 'twisting', 'climbing',
+            'manual handling', 'lifting', 'carrying heavy'
+        )
+        signals.append((
+            'unsafe posture / manual-handling strain',
+            unsafe_posture,
+            _evidence('caption describes body position or handling posture'),
+        ))
+
+        machinery_related = _has_any(
+            'machinery', 'vehicle', 'truck', 'lorry', 'excavator', 'forklift',
+            'crane', 'loader', 'mobile plant', 'plant operator'
+        )
+        signals.append((
+            'machinery-related struck-by / caught-between exposure',
+            machinery_related,
+            _evidence('YOLO/caption identifies vehicle, machinery, or mobile plant'),
+        ))
+
+        work_height = _has_any('scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform', 'edge')
+        signals.append((
+            'work-at-height fall exposure',
+            work_height,
+            _evidence('caption/detections indicate scaffold, ladder, platform, roof, or elevated edge'),
+        ))
+
+        material_stability = _has_any(
+            'pile', 'timber', 'log', 'stacked material', 'unsecured stack',
+            'unstable stack', 'slope', 'embankment', 'collapse'
+        )
+        signals.append((
+            'material-stability / collapse exposure',
+            material_stability,
+            _evidence('caption describes piles, timber, stacked materials, slope, or unstable storage'),
+        ))
+
+        traffic_interface = _has_any('road', 'roadside', 'traffic', 'highway', 'lane', 'pavement', 'safety cone')
+        signals.append((
+            'traffic-interface exposure',
+            traffic_interface,
+            _evidence('caption/detections indicate road, traffic lane, vehicle, or cone-controlled work zone'),
+        ))
+
+        regulatory_followup = has_ppe_gap or bool(violation_summary.strip())
+        signals.append((
+            'regulatory report generation / evidence-pack follow-up',
+            regulatory_followup,
+            _evidence('confirmed violation report, PPE gap, or enforcement-relevant summary'),
+        ))
+
+        lines = [
+            '*** ACTIVITY RISK SIGNALS (Lower Report Sections Only) ***',
+            'These signals are context for hazards_faced, persons[].risks, and corrective_actions. Do not copy this block into the caption or visual_evidence.',
+            'Only include categories marked observed=true. Omit categories marked observed=false; do not invent absent activity recognition findings.',
+        ]
+        for name, observed, evidence in signals:
+            state = 'true' if observed else 'false'
+            lines.append(f"- {name}: observed={state}; evidence={evidence}")
+        lines.append(
+            'When observed=true, the final JSON must contain a model-authored risk/action for the affected person(s), '
+            'including a plain HIGH/MEDIUM/LOW/REVIEW_REQUIRED likelihood without the word "inferred".'
+        )
+        lines.append(
+            'If regulatory report generation / evidence-pack follow-up is observed=true, add a corrective action that begins '
+            'with "Generate the regulatory incident report package" and names the required image evidence, detector metadata, and supervisor sign-off.'
+        )
+        return '\n'.join(lines)
+
     # =========================================================================
     # NLP - OLLAMA INTEGRATION
     # =========================================================================
@@ -1294,6 +1413,7 @@ class ReportGenerator:
             and str((det or {}).get('class_name') or (det or {}).get('class') or '').strip().startswith('NO-')
         ]
         yolo_violation_text = ', '.join(yolo_violation_classes) if yolo_violation_classes else 'None'
+        activity_risk_signal_block = self._build_activity_risk_signal_block(report_data, detections)
 
         # Build context from DOSH documentation (primary source)
         dosh_text = ""
@@ -1333,6 +1453,8 @@ YOLO violation classes: {yolo_violation_text}
 
 Use the VLM caption for scene/action context, but use this YOLO payload as the authoritative source for detected PPE compliance gaps, object counts, confidence values, and visible classifier outputs. If the VLM caption and YOLO disagree about missing PPE, explicitly prefer YOLO for PPE status and explain the uncertainty only when visibility is genuinely ambiguous.
 
+{activity_risk_signal_block}
+
 *** INSTRUCTION 1: SCENE CLASSIFICATION ***
 Analyze the VLM visual caption and YOLO detection payload above. Based ONLY on the provided visual evidence, classify the scene into ONE of these categories:
 1. "Construction Site": Active building/infrastructure construction with heavy equipment.
@@ -1368,6 +1490,8 @@ Generate a JSON report following this logic:
    - "Person N (Action) + No PPE + [Scene Hazard] = Specific Risk"
     - For each risk, include the most relevant regulation citation from official JKR/DOSH standards in context.
     - Do NOT limit citations to PPE-only rules; include non-PPE breaches (e.g., traffic control, fall protection, unsafe stacking, excavation controls) when evidenced by caption/detections.
+    - In the lower report sections (`hazards_faced`, `persons[].risks`, `persons[].corrective_actions`), cover observed activity risks such as restricted-area entry, unsafe posture, machinery-related exposure, work-at-height, traffic-interface exposure, material collapse, and regulatory report generation / evidence-pack follow-up. Do not add these to the caption or visual_evidence.
+    - When regulatory_followup is observed, include a `corrective_actions` sentence that starts with "Generate the regulatory incident report package" and specifies image evidence, detector metadata, and supervisor sign-off.
 3. **WEIGHTED SEVERITY**:
    - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
 4. **WRITE-UP DEPTH (MANDATORY)**:
@@ -1381,6 +1505,9 @@ Generate a JSON report following this logic:
        name the specific PPE or hazard observed in this frame.
      - `persons[].risks[].risk` MUST be at least 2 sentences explaining
        *what could happen, to whom, and why this scene makes it likely*.
+     - `persons[].risks[].likelihood` MUST be exactly HIGH, MEDIUM, LOW, or REVIEW_REQUIRED; do not write "(inferred)".
+     - `persons[].risks[].risk_category` SHOULD name the evidence category, e.g. PPE, restricted_area, unsafe_posture, machinery, traffic_interface, work_at_height, material_stability, regulatory_followup.
+     - `persons[].risks[].evidence` SHOULD cite the exact caption/detection evidence used for this risk.
      - `persons[].risks[].mitigation_steps` MUST be 2 to 4 concrete site
        actions (engineering / admin / PPE controls), each phrased as a
        full sentence the safety officer can hand to a foreman.
@@ -1395,6 +1522,8 @@ Generate a JSON report following this logic:
    - NO "1." numbering prefixes in the description text.
     - ONLY cite regulations from the provided JKR/DOSH regulation context. Do not invent regulation titles.
    - NO single-word or filler responses for `requirement`, `explanation`, `risk`, `mitigation_steps`, `corrective_actions`. Reject any answer shorter than 35 words and rewrite it longer.
+   - NO activity risk category unless the ACTIVITY RISK SIGNALS block marks it observed=true.
+   - NO "inferred" likelihood labels. Use REVIEW_REQUIRED when likelihood cannot be determined from the evidence.
 
 {dosh_text if dosh_text else ""}{context_text if context_text else ""}
 
@@ -1420,8 +1549,10 @@ RESPONSE FORMAT (JSON):
             ],
             "risks": [
                  {{
+                    "risk_category": "PPE / restricted_area / unsafe_posture / machinery / traffic_interface / work_at_height / material_stability / regulatory_followup",
                     "risk": "TWO-SENTENCE explanation of what could happen, to whom, and why THIS scene makes it likely.",
                     "likelihood": "HIGH/MEDIUM/LOW",
+                    "evidence": "Exact caption or YOLO evidence supporting this risk.",
                     "regulation_citation": "Most relevant official regulation for this risk (PPE or non-PPE)",
                     "legal_regulatory_consequences": "Cite the exact penalty / fine / enforcement notice that would follow under that regulation.",
                     "mitigation_steps": [
@@ -1643,6 +1774,7 @@ RESPONSE FORMAT (JSON):
             missing_labels = ['Required PPE']
 
         detected_environment = self._extract_environment_from_caption(caption) or 'General Workspace'
+        activity_risk_signal_block = self._build_activity_risk_signal_block(report_data, detections)
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
         ppe_defaults = {
             'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',
@@ -1674,8 +1806,10 @@ RESPONSE FORMAT (JSON):
       ],
       "risks": [
         {{
+          "risk_category": "PPE",
           "risk": "Two concise sentences explaining what could happen to Person {idx} and why the missing {missing_phrase} makes it likely.",
-          "likelihood": "{severity}",
+          "likelihood": "{severity if severity in ('HIGH', 'MEDIUM', 'LOW') else 'REVIEW_REQUIRED'}",
+          "evidence": "YOLO detected missing {missing_phrase}.",
           "regulation_citation": "OSHA 1994 Section 15 and BOWEC 1986 general PPE duty",
           "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
           "mitigation_steps": [
@@ -1683,12 +1817,25 @@ RESPONSE FORMAT (JSON):
             "Brief the worker on the observed hazard before work restarts.",
             "Record photographic proof of corrected PPE compliance."
           ]
+        }},
+        {{
+          "risk_category": "restricted_area / unsafe_posture / machinery / traffic_interface / material_stability when observed=true",
+          "risk": "Two concise sentences covering the most important observed non-PPE activity risk for Person {idx}, such as restricted-area entry, unsafe posture, nearby machinery, traffic interface, or unstable materials.",
+          "likelihood": "HIGH/MEDIUM/LOW/REVIEW_REQUIRED",
+          "evidence": "Use only the observed=true activity signal evidence below; omit this second risk object if all non-PPE activity signals are observed=false.",
+          "regulation_citation": "OSHA 1994 Section 15 or another provided DOSH/JKR citation relevant to the observed activity risk",
+          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
+          "mitigation_steps": [
+            "Control the observed non-PPE activity hazard before work restarts.",
+            "Document the corrected access, posture, machinery, traffic, or material-control measure.",
+            "Supervisor must verify the control and sign the case record."
+          ]
         }}
       ],
       "corrective_actions": [
         "Stop work and remove Person {idx} from the affected zone until {missing_phrase} is worn correctly.",
         "Supervisor must inspect PPE fit and record sign-off before work restarts.",
-        "Run a toolbox talk and follow-up audit within 48 hours."
+        "Generate or update the regulatory incident report package with image evidence, detector metadata, and supervisor sign-off before closing the case."
       ]
     }}""")
         if person_count > len(person_entries):
@@ -1719,12 +1866,18 @@ Evidence:
 - Violation summary: {violation_summary or ', '.join(missing_labels)}
 - Severity: {severity}
 
+{activity_risk_signal_block}
+
 Rules:
 - Use YOLO as authoritative for PPE status.
 - Use environment_type "{detected_environment}" unless the evidence clearly proves a more specific category.
 - Analyse exactly {person_count} person(s).
 - Keep text concise, factual, and grounded in the evidence above.
 - Include every required top-level key.
+- In persons[].risks and persons[].corrective_actions, include observed activity signals for restricted-area entry, unsafe posture, machinery-related risk, work-at-height, traffic-interface exposure, material stability, and regulatory report generation when observed=true.
+- When PPE gaps and any non-PPE activity signal are both observed=true, persons[].risks must include at least two model-authored cells: one with risk_category "PPE" and one with a specific observed category such as "restricted_area", "unsafe_posture", "machinery", "traffic_interface", or "material_stability".
+- If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off.
+- Do not write "(inferred)" in likelihood; use HIGH, MEDIUM, LOW, or REVIEW_REQUIRED.
 
 Required JSON object:
 {{
@@ -2383,9 +2536,60 @@ Required JSON object:
 
             fallback = None
             if has_violations:
-                needs_persons = not isinstance(nlp_analysis.get('persons'), list) or len(nlp_analysis.get('persons', [])) == 0
+                persons_payload = nlp_analysis.get('persons')
+                persons_list = persons_payload if isinstance(persons_payload, list) else []
+                needs_persons = len(persons_list) == 0
                 needs_regulation = not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0
                 needs_environment = not str(nlp_analysis.get('environment_type', '')).strip()
+                needs_risk_cells = not any(
+                    isinstance(person, dict)
+                    and isinstance(person.get('risks'), list)
+                    and len(person.get('risks') or []) > 0
+                    for person in persons_list
+                )
+                needs_action_cells = not any(
+                    isinstance(person, dict)
+                    and (
+                        (isinstance(person.get('corrective_actions'), list) and len(person.get('corrective_actions') or []) > 0)
+                        or (isinstance(person.get('actions'), list) and len(person.get('actions') or []) > 0)
+                    )
+                    for person in persons_list
+                )
+
+                missing_model_cells = []
+                if needs_persons:
+                    missing_model_cells.append('persons')
+                if needs_regulation:
+                    missing_model_cells.append('dosh_regulations_cited')
+                if needs_risk_cells:
+                    missing_model_cells.append('persons[].risks')
+                if needs_action_cells:
+                    missing_model_cells.append('persons[].corrective_actions')
+
+                provider_is_model = str(self.last_nlp_provider or '').strip().lower() not in ('', 'fallback', 'mock')
+                allow_cell_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
+                if (
+                    missing_model_cells
+                    and provider_is_model
+                    and self.strict_report_generation
+                    and self.strict_model_report_cells
+                    and not allow_cell_fallback
+                ):
+                    detail = (
+                        'NLP output missing required model-authored report cells: '
+                        + ', '.join(missing_model_cells)
+                    )
+                    self.last_nlp_error = detail
+                    self.last_nlp_fallback_reason = detail
+                    logger.error(
+                        "[NLP_MODEL_CELLS_BLOCKED] report=%s provider=%s model=%s missing=%s",
+                        report_id,
+                        self.last_nlp_provider,
+                        self.last_nlp_model,
+                        ', '.join(missing_model_cells),
+                    )
+                    _record_timing('report_total_seconds', generation_started)
+                    raise RuntimeError(detail)
 
                 if needs_persons or needs_regulation or needs_environment:
                     fallback = self._generate_fallback_analysis(report_data)
@@ -3325,6 +3529,43 @@ Required JSON object:
             border: 1px solid #c3e6cb;
         }}
 
+        .risk-meta-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.5rem;
+            margin-top: 0.65rem;
+        }}
+
+        .risk-meta-pill {{
+            background: #f8fafc;
+            border-left: 3px solid var(--secondary-color);
+            border-radius: 6px;
+            color: #334155;
+            font-size: 0.86rem;
+            line-height: 1.4;
+            padding: 0.5rem 0.65rem;
+            word-break: break-word;
+        }}
+
+        .risk-mitigation {{
+            margin-top: 0.65rem;
+            padding: 0.65rem 0.75rem;
+            border: 1px solid #dbeafe;
+            border-radius: 6px;
+            background: #f8fbff;
+            color: #1f2937;
+            font-size: 0.9rem;
+        }}
+
+        .risk-mitigation ul {{
+            margin: 0.35rem 0 0 1.1rem;
+            padding: 0;
+        }}
+
+        .risk-mitigation li {{
+            margin: 0.25rem 0;
+        }}
+
         /* Likelihood Badge */
         .likelihood-badge {{
             display: inline-flex;
@@ -4066,6 +4307,8 @@ Required JSON object:
     def _get_malaysian_severity_label(self, likelihood: str) -> str:
         """Convert likelihood to Malaysian safety severity terminology."""
         lik = likelihood.lower()
+        if 'not specified' in lik or 'review' in lik:
+            return "REVIEW REQUIRED (Model Likelihood Not Specified)"
         if 'very high' in lik or 'fatal' in lik or 'catastrophic' in lik:
             return "CRITICAL (Immediate Danger to Life & Health)"
         if 'high' in lik:
@@ -4260,6 +4503,16 @@ Required JSON object:
                 return value
             return [value]
 
+        def _action_to_text(value: Any) -> str:
+            if isinstance(value, dict):
+                parts = [
+                    _as_clean_str(value.get('action') or value.get('instruction') or value.get('task')),
+                    _as_clean_str(value.get('owner') or value.get('responsible_party')),
+                    _as_clean_str(value.get('timeline') or value.get('due')),
+                ]
+                return ' | '.join(part for part in parts if part)
+            return _as_clean_str(value)
+
         normalized: Dict[str, Any] = dict(nlp_analysis)
         normalized['summary'] = _as_clean_str(nlp_analysis.get('summary'))
         normalized['visual_evidence'] = _as_clean_str(nlp_analysis.get('visual_evidence'))
@@ -4338,18 +4591,20 @@ Required JSON object:
                     risk_text = _as_clean_str(risk.get('risk') or risk.get('description'))
                     likelihood_text = _as_clean_str(risk.get('likelihood'))
                     if not likelihood_text:
-                        risk_l = risk_text.lower()
-                        if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
-                            likelihood_text = 'High (inferred)'
-                        elif any(tok in risk_l for tok in ('minor', 'unlikely', 'low probability')):
-                            likelihood_text = 'Low (inferred)'
-                        else:
-                            likelihood_text = 'Medium (inferred)'
+                        likelihood_text = 'Not specified by model'
+                    mitigation_steps = [
+                        _as_clean_str(step)
+                        for step in self._ensure_list_of_strings(risk.get('mitigation_steps', []))
+                        if _as_clean_str(step)
+                    ]
                     risk_obj = {
+                        'risk_category': _as_clean_str(risk.get('risk_category') or risk.get('category') or risk.get('type')),
                         'risk': risk_text,
                         'likelihood': likelihood_text,
+                        'evidence': _as_clean_str(risk.get('evidence') or risk.get('source')),
                         'regulation_citation': _as_clean_str(risk.get('regulation_citation')),
                         'legal_regulatory_consequences': _as_clean_str(risk.get('legal_regulatory_consequences')),
+                        'mitigation_steps': mitigation_steps,
                     }
                     if any(risk_obj.values()):
                         risks_out.append(risk_obj)
@@ -4359,7 +4614,11 @@ Required JSON object:
                         risks_out.append(risk_text)
 
             actions_source = person.get('corrective_actions', []) or person.get('actions', [])
-            actions_out = [_as_clean_str(a) for a in self._ensure_list_of_strings(actions_source) if _as_clean_str(a)]
+            actions_out = [
+                action_text
+                for action_text in (_action_to_text(a) for a in self._ensure_list_of_strings(actions_source))
+                if action_text
+            ]
 
             persons_out.append({
                 'id': person_id,
@@ -4981,10 +5240,18 @@ Required JSON object:
             if risks:
                 for r in risks:
                     if isinstance(r, dict):
+                        risk_category = str(r.get('risk_category') or r.get('category') or r.get('type') or '').strip()
                         risk_desc = str(r.get('risk') or r.get('description') or '').strip()
                         likelihood = str(r.get('likelihood') or '').strip()
+                        evidence = str(r.get('evidence') or r.get('source') or '').strip()
                         regulation_citation = str(r.get('regulation_citation') or '').strip()
                         legal_consequence = str(r.get('legal_regulatory_consequences') or r.get('penalty') or '').strip()
+                        mitigation_steps = self._ensure_list_of_strings(r.get('mitigation_steps', []))
+                        mitigation_steps = [
+                            str(step).strip()
+                            for step in mitigation_steps
+                            if str(step).strip()
+                        ]
 
                         # Scenario-aware fallback expansion: if the model
                         # returned a one-liner, pad with environment + missing
@@ -5002,13 +5269,7 @@ Required JSON object:
                             legal_consequence, regulation_citation or 'the cited regulation'
                         )
                         if not likelihood:
-                            risk_l = risk_desc.lower()
-                            if any(tok in risk_l for tok in ('fatal', 'death', 'catastrophic', 'severe', 'immediate')):
-                                likelihood = 'High (inferred)'
-                            elif any(tok in risk_l for tok in ('minor', 'unlikely', 'low probability')):
-                                likelihood = 'Low (inferred)'
-                            else:
-                                likelihood = 'Medium (inferred)'
+                            likelihood = 'Not specified by model'
 
                         lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
@@ -5022,12 +5283,45 @@ Required JSON object:
                         elif 'not specified' in lik_lower:
                             lik_class = 'likelihood-medium'
                             bar_width = '45%'
+                        elif 'review' in lik_lower:
+                            lik_class = 'likelihood-medium'
+                            bar_width = '45%'
+
+                        risk_meta_html = ''
+                        if risk_category or evidence:
+                            meta_items = []
+                            if risk_category:
+                                meta_items.append(
+                                    '<div class="risk-meta-pill"><strong>Category:</strong> '
+                                    f'{self._to_safe_html_text(risk_category)}</div>'
+                                )
+                            if evidence:
+                                meta_items.append(
+                                    '<div class="risk-meta-pill"><strong>Evidence:</strong> '
+                                    f'{self._to_safe_html_text(evidence)}</div>'
+                                )
+                            risk_meta_html = f'<div class="risk-meta-grid">{"".join(meta_items)}</div>'
+
+                        mitigation_html = ''
+                        if mitigation_steps:
+                            mitigation_items = ''.join(
+                                f'<li>{self._to_safe_html_text(step)}</li>'
+                                for step in mitigation_steps
+                            )
+                            mitigation_html = (
+                                '<div class="risk-mitigation">'
+                                '<strong>Mitigation steps</strong>'
+                                f'<ul>{mitigation_items}</ul>'
+                                '</div>'
+                            )
 
                         risks_html += f"""
             <div class="risk-item">
                 <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                {risk_meta_html}
                 {f'<div class="risk-meta" style="margin-top: 0.4rem; font-size: 0.9rem; color: #555;"><strong>Regulation:</strong> {self._to_safe_html_text(regulation_citation)}</div>' if regulation_citation else ''}
                 {f'<div class="risk-meta" style="margin-top: 0.25rem; font-size: 0.88rem; color: #666;"><strong>Legal consequence:</strong> {self._to_safe_html_text(legal_consequence)}</div>' if legal_consequence else ''}
+                {mitigation_html}
                 <div class="likelihood-badge {lik_class}">
                     <span class="likelihood-label">Likelihood</span>
                     <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
@@ -5162,7 +5456,7 @@ Required JSON object:
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
-        likelihood = 'Medium (inferred)'
+        likelihood = 'Not specified by model'
         risk_desc = risk_text
 
         # Parse likelihood

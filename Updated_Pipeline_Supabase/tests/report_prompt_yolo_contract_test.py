@@ -22,7 +22,10 @@ def _assert(condition, message):
 def test_nlp_prompt_injects_yolo_payload():
     subject = ReportGenerator.__new__(ReportGenerator)
     report_data = {
-        "caption": "One worker is standing near construction materials in an active work area.",
+        "caption": (
+            "One worker is standing near construction materials in an active work area, "
+            "leaning into a cordoned zone while an excavator operates nearby."
+        ),
         "detections": [
             {
                 "class_name": "Person",
@@ -39,6 +42,16 @@ def test_nlp_prompt_injects_yolo_payload():
                 "confidence": 0.76,
                 "bbox": [18, 90, 118, 210],
             },
+            {
+                "class_name": "machinery",
+                "confidence": 0.71,
+                "bbox": [320, 40, 520, 300],
+            },
+            {
+                "class_name": "Safety Cone",
+                "confidence": 0.67,
+                "bbox": [250, 300, 280, 360],
+            },
         ],
         "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
         "person_count": 1,
@@ -53,6 +66,14 @@ def test_nlp_prompt_injects_yolo_payload():
     _assert("YOLO violation classes: NO-Hardhat, NO-Safety Vest" in prompt, "Prompt missing YOLO violation summary")
     _assert("CONFIRMED MISSING PPE" in prompt, "Prompt missing missing-PPE directive")
     _assert("prefer YOLO for PPE status" in prompt, "Prompt missing conflict-resolution rule")
+    _assert("ACTIVITY RISK SIGNALS" in prompt, "Prompt missing activity risk signal block")
+    _assert("restricted-area entry / exclusion-zone breach: observed=true" in prompt, "Prompt missing restricted-area coverage")
+    _assert("unsafe posture / manual-handling strain: observed=true" in prompt, "Prompt missing unsafe-posture coverage")
+    _assert("machinery-related struck-by / caught-between exposure: observed=true" in prompt, "Prompt missing machinery-risk coverage")
+    _assert("regulatory report generation / evidence-pack follow-up: observed=true" in prompt, "Prompt missing regulatory report action coverage")
+    _assert("Do not copy this block into the caption or visual_evidence" in prompt, "Activity risks must stay out of captions")
+    _assert('without the word "inferred"' in prompt, "Prompt must block inferred likelihood labels")
+    _assert("Generate the regulatory incident report package" in prompt, "Prompt missing regulatory report package action")
 
 
 def test_report_text_cleaning_does_not_split_characters():
@@ -120,7 +141,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     subject = ReportGenerator.__new__(ReportGenerator)
 
     compact = subject._build_ollama_compact_report_prompt({
-        "caption": "One worker is standing in a work area.",
+        "caption": "One worker is standing in a restricted work area beside machinery.",
         "violation_summary": "Missing Hard Hat, Missing Safety Vest",
         "person_count": 1,
         "severity": "HIGH",
@@ -128,6 +149,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
             {"class_name": "Person", "confidence": 0.91},
             {"class_name": "NO-Hardhat", "confidence": 0.83},
             {"class_name": "NO-Safety Vest", "confidence": 0.76},
+            {"class_name": "machinery", "confidence": 0.64},
         ],
     }, "original long prompt")
 
@@ -137,6 +159,13 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert('"hardhat": "Missing"' in compact, "Compact prompt did not preserve YOLO hardhat gap")
     _assert('"safety_vest": "Missing"' in compact, "Compact prompt did not preserve YOLO vest gap")
     _assert("Do not return an empty object" in compact, "Compact prompt must reject empty JSON")
+    _assert("ACTIVITY RISK SIGNALS" in compact, "Compact prompt missing activity-risk signal block")
+    _assert("restricted-area entry / exclusion-zone breach: observed=true" in compact, "Compact prompt missing restricted-area signal")
+    _assert("machinery-related struck-by / caught-between exposure: observed=true" in compact, "Compact prompt missing machinery signal")
+    _assert('"risk_category": "PPE"' in compact, "Compact prompt missing PPE risk_category schema")
+    _assert('persons[].risks must include at least two model-authored cells' in compact, "Compact prompt missing multi-cell local risk rule")
+    _assert("Generate the regulatory incident report package" in compact, "Compact prompt missing regulatory report package action")
+    _assert('Do not write "(inferred)" in likelihood' in compact, "Compact prompt should block inferred labels")
 
     compact_two_people = subject._build_ollama_compact_report_prompt({
         "caption": "Two workers are standing in a work area.",
@@ -152,6 +181,73 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert('"id": "Person 2"' in compact_two_people, "Compact prompt did not preserve multi-person schema")
 
 
+def test_rendered_activity_risk_fields_are_model_json_cells():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    analysis = subject._sanitize_nlp_analysis({
+        "summary": "Restricted area and machinery exposure observed.",
+        "environment_type": "Construction Site",
+        "persons": [
+            {
+                "id": "Person 1",
+                "description": "Worker is inside a restricted machinery zone without required PPE.",
+                "ppe": {"hardhat": "Missing", "safety_vest": "Missing"},
+                "hazards_faced": [
+                    {"type": "Restricted-area entry", "source": "Caption states restricted work area", "severity": "HIGH"}
+                ],
+                "risks": [
+                    {
+                        "risk_category": "machinery",
+                        "risk": "The worker could be struck by moving plant because the scene places them inside the operating envelope. The missing helmet and vest reduce both impact protection and visibility.",
+                        "likelihood": "HIGH",
+                        "evidence": "caption: restricted work area beside machinery; YOLO: machinery and missing PPE",
+                        "regulation_citation": "OSHA 1994 Section 15",
+                        "legal_regulatory_consequences": "DOSH may issue enforcement action.",
+                        "mitigation_steps": [
+                            "Stop machinery movement until the exclusion zone is cleared.",
+                            "Re-establish barricades and assign a spotter before restart.",
+                            "Record the correction in the regulatory evidence pack."
+                        ],
+                    }
+                ],
+                "corrective_actions": [
+                    "Generate the regulatory incident report package with image evidence and supervisor sign-off before closure.",
+                    "Brief the worker on restricted-zone access controls before re-entry.",
+                    "Verify PPE fit and high-visibility controls before the task restarts.",
+                ],
+            }
+        ],
+    })
+
+    rendered = subject._generate_person_cards_section(analysis, {
+        "caption": "One worker is in a restricted work area beside machinery.",
+        "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
+        "person_count": 1,
+        "detections": [{"class_name": "Person"}, {"class_name": "NO-Hardhat"}, {"class_name": "machinery"}],
+    })
+
+    _assert("Category:" in rendered and "machinery" in rendered, "Rendered risk category missing")
+    _assert("Evidence:" in rendered and "restricted work area beside machinery" in rendered, "Rendered risk evidence missing")
+    _assert("Mitigation steps" in rendered, "Rendered mitigation steps missing")
+    _assert("regulatory incident report package" in rendered, "Regulatory report action missing")
+    _assert("(inferred)" not in rendered.lower(), "Rendered model cells should not display inferred likelihood labels")
+
+
+def test_environment_detection_does_not_treat_restricted_work_area_as_office():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    caption = (
+        "One construction worker is leaning forward inside a cordoned restricted work area "
+        "beside an operating excavator and stacked timber."
+    )
+
+    stable = subject._resolve_stable_environment_type(
+        caption,
+        detections=[{"class_name": "machinery"}],
+        model_environment="Construction Site",
+    )
+
+    _assert(stable == "Construction Site", f"Expected construction environment, got {stable!r}")
+
+
 def main():
     tests = [
         test_nlp_prompt_injects_yolo_payload,
@@ -159,6 +255,8 @@ def main():
         test_sanitized_report_fields_stay_word_level,
         test_scene_description_does_not_duplicate_caption_yolo_addendum,
         test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe,
+        test_rendered_activity_risk_fields_are_model_json_cells,
+        test_environment_detection_does_not_treat_restricted_work_area_as_office,
     ]
     failures = []
     for test_fn in tests:

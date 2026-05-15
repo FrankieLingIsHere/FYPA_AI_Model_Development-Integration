@@ -146,7 +146,7 @@ class GeminiClient:
         prompt_budget = os.getenv('GEMINI_REPORT_PROMPT_MAX_CHARS', '').strip()
         self.report_prompt_max_chars = int(prompt_budget) if prompt_budget.isdigit() else 22000
         output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
-        self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 2200
+        self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 8192
         temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
         try:
             self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2
@@ -460,6 +460,24 @@ class GeminiClient:
                 pass
 
         return None
+
+    def _missing_required_report_keys(self, payload: Optional[Dict[str, Any]]) -> List[str]:
+        """Return required report keys absent from a parsed Gemini NLP payload."""
+        if not isinstance(payload, dict):
+            return ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
+
+        missing = []
+        if not str(payload.get('environment_type') or '').strip():
+            missing.append('environment_type')
+        if not str(payload.get('visual_evidence') or '').strip():
+            missing.append('visual_evidence')
+        if not isinstance(payload.get('persons'), list) or len(payload.get('persons') or []) == 0:
+            missing.append('persons')
+        if not str(payload.get('summary') or '').strip():
+            missing.append('summary')
+        if not isinstance(payload.get('dosh_regulations_cited'), list) or len(payload.get('dosh_regulations_cited') or []) == 0:
+            missing.append('dosh_regulations_cited')
+        return missing
 
     def _repair_json_with_gemini(self, malformed_text: str) -> Optional[Dict[str, Any]]:
         """Ask Gemini to repair malformed JSON into strict JSON object output."""
@@ -792,6 +810,27 @@ class GeminiClient:
                     raw_text = response.text.strip()
                     result = self._parse_json_from_response_text(raw_text)
                     if result is not None:
+                        missing_keys = self._missing_required_report_keys(result)
+                        if missing_keys:
+                            self.last_error = (
+                                "Gemini JSON missing required report keys: "
+                                + ", ".join(missing_keys)
+                            )
+                            logger.warning(self.last_error)
+                            self._capture_nlp_debug(
+                                report_id=report_id,
+                                attempt=attempt + 1,
+                                phase='primary-schema-incomplete',
+                                prompt_text=tight_prompt,
+                                raw_response=raw_text,
+                                parse_strategy=self.last_parse_strategy,
+                                success=False,
+                                error=self.last_error,
+                            )
+                            if attempt < self.max_retries - 1:
+                                continue
+                            break
+
                         logger.info(" NLP report JSON generated successfully")
                         self.last_error = None
                         self._capture_nlp_debug(
@@ -807,6 +846,28 @@ class GeminiClient:
 
                     repaired = self._repair_json_with_gemini(raw_text)
                     if repaired is not None:
+                        missing_keys = self._missing_required_report_keys(repaired)
+                        if missing_keys:
+                            self.last_error = (
+                                "Gemini repaired JSON missing required report keys: "
+                                + ", ".join(missing_keys)
+                            )
+                            logger.warning(self.last_error)
+                            self._capture_nlp_debug(
+                                report_id=report_id,
+                                attempt=attempt + 1,
+                                phase='repair-schema-incomplete',
+                                prompt_text=tight_prompt,
+                                raw_response=raw_text,
+                                parse_strategy='gemini_repair_json',
+                                success=False,
+                                error=self.last_error,
+                                repaired=True,
+                            )
+                            if attempt < self.max_retries - 1:
+                                continue
+                            break
+
                         logger.info(" NLP report JSON repaired successfully")
                         self.last_error = None
                         self._capture_nlp_debug(

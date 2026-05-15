@@ -808,6 +808,37 @@ def _normalize_caption_text(caption: str) -> str:
     return text
 
 
+def _strip_caption_inference_sentences(text: str) -> str:
+    """Remove evaluative caption sentences while preserving visible facts."""
+    sentences = re.split(r'(?<=[.!?])\s+', str(text or '').strip())
+    kept = []
+    blocked_patterns = (
+        'appears safe',
+        'appears unsafe',
+        'overall setting appears',
+        'overall scene appears',
+        'scene suggests',
+        'suggests a typical',
+        'typical ',
+        'immediately apparent hazards',
+        'apparent hazards',
+        'unusual elements',
+        'not interacting with',
+        'no hazards',
+        'likely ',
+        'probably ',
+    )
+    for sentence in sentences:
+        cleaned = sentence.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if any(pattern in lowered for pattern in blocked_patterns):
+            continue
+        kept.append(cleaned)
+    return ' '.join(kept).strip()
+
+
 def _try_parse_local_caption_json(raw_text: str):
     """Parse Ollama local caption JSON payloads, including fenced code blocks."""
     if not raw_text:
@@ -837,42 +868,13 @@ def _render_local_caption_from_json(payload: dict) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    def _strip_inference_sentences(text: str) -> str:
-        sentences = re.split(r'(?<=[.!?])\s+', str(text or '').strip())
-        kept = []
-        blocked_patterns = (
-            'appears safe',
-            'appears unsafe',
-            'overall setting appears',
-            'overall scene appears',
-            'scene suggests',
-            'suggests a typical',
-            'typical ',
-            'immediately apparent hazards',
-            'apparent hazards',
-            'unusual elements',
-            'not interacting with',
-            'no hazards',
-            'likely ',
-            'probably ',
-        )
-        for sentence in sentences:
-            cleaned = sentence.strip()
-            if not cleaned:
-                continue
-            lowered = cleaned.lower()
-            if any(pattern in lowered for pattern in blocked_patterns):
-                continue
-            kept.append(cleaned)
-        return ' '.join(kept).strip()
-
     model_caption = _normalize_caption_text(
         payload.get("caption")
         or payload.get("narrative")
         or payload.get("description")
         or ""
     )
-    model_caption = _strip_inference_sentences(model_caption)
+    model_caption = _strip_caption_inference_sentences(model_caption)
     scene = str(payload.get("scene") or "").strip().rstrip(".")
     people_count = payload.get("people_count")
     visible_people = payload.get("visible_people")
@@ -1175,31 +1177,34 @@ Requirements:
 """
     else:
         # Build prompt for higher quality people/action/situation captions (works across model_api/gemini/ollama).
-        default_prompt = """You are a workplace visual analyst. Write one factual caption from this image only.
+        default_prompt = """You are a workplace visual analyst. Write one descriptive visual caption from this image only.
 
 Output requirements:
-- Single paragraph, 5-7 complete factual sentences.
+- Single paragraph, 5-8 complete narrative sentences, similar to a safety observer's visual note.
 - Do not answer with only one sentence.
-- Start with the actual scene type and total visible people count (for example indoor office/study, residential room, warehouse, roadside, construction site) based only on visible evidence.
-- Describe visible body region, posture, gaze direction, clothing, eyewear, and nearby room or site features such as shelves, cabinets, windows, walls, desks, vehicles, tools, or machinery when they are clearly visible.
-- Mention PPE only when clearly visible; if none is visible, say no PPE is visible.
+- Start in the style "The scene depicts..." or "The image depicts..." and name the actual setting plus total visible people count.
+- Describe visible body region, posture, gaze direction, clothing, eyewear, held objects, and nearby room or site features such as shelves, cabinets, windows, walls, desks, vehicles, tools, or machinery when clearly visible.
+- Mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.
 
 Strict grounding rules:
 - Do not begin with meta wording such as "Here is a description" or "Based on the image".
 - Do not invent objects, actions, hazards, phones, tablets, vehicles, roads, machinery, tools, or construction activity.
 - Do not infer a worksite or traffic context unless those objects are clearly visible.
+- Do not state that the scene is safe/unsafe, typical, likely, or suggestive of a condition.
+- Do not state that hazards, unusual elements, machinery, or traffic interactions are absent; only describe visible objects and PPE absence.
 - If visibility is unclear, say it is unclear instead of guessing.
 - Natural professional English, no bullet points, no markdown, no preamble.
 """
         expansion_prompt = """The previous caption was too short or generic. Rewrite it with richer factual detail from the image only.
 
 Requirements:
-- Single paragraph, 5-7 complete sentences.
+- Single paragraph, 5-8 complete narrative sentences.
 - Do not answer with only one sentence.
-- State environment type and people count first.
-- For each visible person: visible body region, posture, gaze direction, clothing, and context near objects.
-- Mention nearby objects or hazards only if visible.
-- Mention PPE only when clearly visible; if not visible, state not visible.
+- Start in the style "The scene depicts..." or "The image depicts..." and state environment type and visible people count first.
+- For each visible person: visible body region, posture, gaze direction, clothing, eyewear, held objects, and context near objects.
+- Mention nearby objects only when visible.
+- Mention PPE only when clearly visible; if not visible, say no PPE is clearly visible.
+- Do not write safety conclusions such as safe, unsafe, typical, likely, no hazards, or no interaction with traffic/machinery.
 - No bullet points, no markdown, no meta commentary, no "Here is a description" preamble.
 """
     caption_prompt = str(prompt or '').strip() or default_prompt
@@ -1239,6 +1244,7 @@ Requirements:
 
         if caption:
             caption = _normalize_caption_text(caption)
+            caption = _strip_caption_inference_sentences(caption)
 
             should_expand = _caption_needs_expansion(caption) and not caption.startswith('ALERT_')
             if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
@@ -1252,6 +1258,7 @@ Requirements:
                     max_tokens=750
                 )
                 expanded = _normalize_caption_text(expanded)
+                expanded = _strip_caption_inference_sentences(expanded)
                 if expanded and not expanded.startswith('ALERT_'):
                     caption = expanded
 
@@ -1259,10 +1266,6 @@ Requirements:
             prefixes_to_remove = [
                 "In the image, ",
                 "In the image ",
-                "The image shows ",
-                "The image depicts ",
-                "This image shows ",
-                "This image depicts ",
                 "In this image, ",
                 "In this image "
             ]

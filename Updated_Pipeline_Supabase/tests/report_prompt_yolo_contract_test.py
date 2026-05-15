@@ -137,6 +137,26 @@ def test_scene_description_does_not_duplicate_caption_yolo_addendum():
     _assert("Hardhat, Mask, Safety Vest." not in visual, "Scene description appended raw duplicate labels")
 
 
+def test_scene_description_preserves_cloud_caption_opening():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    caption = (
+        "The scene depicts an indoor office setting. An indoor scene shows one visible person. "
+        "The person's upper torso and head are visible, and they are seated with a forward-facing posture. "
+        "Their gaze is directed forward, slightly downward. The person is wearing a dark blue short-sleeved shirt, "
+        "and no eyewear is visible. In the background, there are white wall-mounted shelves and a large window."
+    )
+
+    visual = subject._build_scene_description(
+        caption,
+        "Indoor / Office",
+        [{"class_name": "Person", "confidence": 0.91}],
+    )
+
+    _assert(visual.startswith("The scene depicts an indoor office setting."), visual)
+    _assert(visual.count("The scene depicts") == 1, visual)
+    _assert("upper torso and head are visible" in visual, visual)
+
+
 def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     subject = ReportGenerator.__new__(ReportGenerator)
 
@@ -360,6 +380,7 @@ def main():
         test_report_text_cleaning_does_not_split_characters,
         test_sanitized_report_fields_stay_word_level,
         test_scene_description_does_not_duplicate_caption_yolo_addendum,
+        test_scene_description_preserves_cloud_caption_opening,
         test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe,
         test_activity_signals_ignore_negated_caption_terms,
         test_caption_bus_or_street_creates_traffic_signal,

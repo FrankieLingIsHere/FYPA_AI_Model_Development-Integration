@@ -81,6 +81,55 @@ def test_rich_caption_passes_quality_floor():
     )
 
 
+def test_default_cloud_caption_prompt_matches_descriptive_style():
+    subject = _subject()
+    subject._initialized = True
+    subject.client = object()
+    subject.max_retries = 1
+    subject._load_image_as_part = lambda image_path: object()
+    subject._rate_limit = lambda: None
+    captured = {}
+
+    def _fake_caption_once(prompt, image_part, *, temperature=0.3, max_output_tokens=None):
+        captured["prompt"] = prompt
+        captured["temperature"] = temperature
+        captured["max_output_tokens"] = max_output_tokens
+        return (
+            "The scene depicts an indoor office setting. An indoor scene shows one visible person. "
+            "The person's upper torso and head are visible, and they are seated with a forward-facing posture. "
+            "Their gaze is directed forward, slightly downward. The person is wearing a dark blue short-sleeved shirt. "
+            "No PPE is clearly visible.",
+            "FinishReason.STOP",
+        )
+
+    subject._call_gemini_caption_once = _fake_caption_once
+
+    result = GeminiClient.caption_image(subject, "dummy.jpg")
+    prompt = captured.get("prompt", "")
+
+    _assert(result.startswith("The scene depicts an indoor office setting."), result)
+    _assert("5-8 complete narrative sentences" in prompt, prompt)
+    _assert("visible body region, posture, gaze direction, clothing, eyewear, held objects" in prompt, prompt)
+    _assert("no PPE is clearly visible" in prompt, prompt)
+    _assert("Do not state that hazards, unusual elements, machinery, or traffic interactions are absent" in prompt, prompt)
+
+
+def test_caption_normalization_keeps_descriptive_opening_and_filters_inference():
+    subject = _subject()
+    caption = (
+        "The image depicts an outdoor street scene with a single person standing on a sidewalk. "
+        "The person is wearing a blue shirt and appears to be facing forward with a neutral gaze. "
+        "The scene is a typical urban street environment. "
+        "There are no immediately apparent hazards or unusual elements in the background."
+    )
+
+    cleaned = subject._strip_caption_inference_sentences(subject._normalize_caption_text(caption))
+
+    _assert(cleaned.startswith("The image depicts an outdoor street scene"), cleaned)
+    _assert("typical" not in cleaned.lower(), cleaned)
+    _assert("hazards" not in cleaned.lower(), cleaned)
+
+
 def test_default_model_candidates_include_current_flash_aliases():
     _assert("gemini-flash-lite-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
     _assert("gemini-flash-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
@@ -109,6 +158,8 @@ def main():
         test_vision_config_disables_thinking_by_default,
         test_short_or_truncated_caption_requires_retry,
         test_rich_caption_passes_quality_floor,
+        test_default_cloud_caption_prompt_matches_descriptive_style,
+        test_caption_normalization_keeps_descriptive_opening_and_filters_inference,
         test_default_model_candidates_include_current_flash_aliases,
         test_caption_failover_switches_vision_model_name,
     ]

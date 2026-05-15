@@ -546,10 +546,6 @@ class GeminiClient:
             "Based on the image,",
             "In the image,",
             "In the image",
-            "The image shows",
-            "The image depicts",
-            "This image shows",
-            "This image depicts",
             "In this image,",
             "In this image",
         )
@@ -561,6 +557,36 @@ class GeminiClient:
         if text and text[0].islower():
             text = text[0].upper() + text[1:]
         return text
+
+    def _strip_caption_inference_sentences(self, caption: str) -> str:
+        """Remove evaluative caption sentences while preserving visible facts."""
+        sentences = re.split(r'(?<=[.!?])\s+', str(caption or '').strip())
+        kept = []
+        blocked_patterns = (
+            'appears safe',
+            'appears unsafe',
+            'overall setting appears',
+            'overall scene appears',
+            'scene suggests',
+            'suggests a typical',
+            'typical ',
+            'immediately apparent hazards',
+            'apparent hazards',
+            'unusual elements',
+            'not interacting with',
+            'no hazards',
+            'likely ',
+            'probably ',
+        )
+        for sentence in sentences:
+            cleaned = sentence.strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if any(pattern in lowered for pattern in blocked_patterns):
+                continue
+            kept.append(cleaned)
+        return ' '.join(kept).strip()
 
     def _caption_needs_expansion(self, caption: str, finish_reason: str = '') -> bool:
         """Detect captions that are too short, generic, or visibly truncated."""
@@ -620,6 +646,7 @@ class GeminiClient:
             )
         )
         text = self._normalize_caption_text(response.text if response and response.text else '')
+        text = self._strip_caption_inference_sentences(text)
         return text, self._extract_finish_reason(response)
 
     def caption_image(
@@ -643,19 +670,21 @@ class GeminiClient:
             return "Image captioning not available. Gemini API is not configured"
 
         # Default safety-focused prompt with stronger people/action/situation structure.
-        # Aligned with Local Mode successful pattern for maximum descriptive quality.
+        # Aligned with Local Mode's descriptive paragraph style.
         prompt = custom_prompt or (
-            "You are a workplace visual analyst. Write one factual caption from this image only.\n\n"
+            "You are a workplace visual analyst. Write one descriptive visual caption from this image only.\n\n"
             "Output requirements:\n"
-            "- Single paragraph, 5-7 complete factual sentences.\n"
-            "- Start with the actual scene type and total visible people count based only on visible evidence.\n"
-            "- Describe visible body region, posture, gaze direction, clothing, eyewear, and nearby room or site features.\n"
-            "- Mention PPE only when clearly visible; if none is visible, say no PPE is visible.\n"
+            "- Single paragraph, 5-8 complete narrative sentences, similar to a safety observer's visual note.\n"
+            "- Start in the style \"The scene depicts...\" or \"The image depicts...\" and name the actual setting plus total visible people count.\n"
+            "- Describe visible body region, posture, gaze direction, clothing, eyewear, held objects, and nearby room or site features.\n"
+            "- Mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.\n"
             "- Do not stop mid-sentence; every sentence must be complete.\n\n"
             "Strict grounding rules:\n"
             "- Do not begin with meta wording such as \"Here is a description\" or \"Based on the image\".\n"
             "- Do not invent objects, actions, hazards, phones, tablets, vehicles, roads, machinery, tools, or construction activity.\n"
             "- Do not infer a worksite or traffic context unless those objects are clearly visible.\n"
+            "- Do not state that the scene is safe/unsafe, typical, likely, or suggestive of a condition.\n"
+            "- Do not state that hazards, unusual elements, machinery, or traffic interactions are absent; only describe visible objects and PPE absence.\n"
             "- If visibility is unclear, say it is unclear instead of guessing.\n"
             "- Natural professional English, no bullet points, no markdown, no preamble."
         )
@@ -689,11 +718,12 @@ class GeminiClient:
                             "The previous caption was too short or incomplete. Rewrite it with richer factual detail "
                             "from the image only.\n\n"
                             "Requirements:\n"
-                            "- Single paragraph, 5-7 complete sentences.\n"
-                            "- State environment type and visible people count first.\n"
-                            "- For each visible person: visible body region, posture, gaze direction, clothing, and nearby objects.\n"
-                            "- Mention nearby objects or hazards only if visible.\n"
-                            "- Mention PPE only when clearly visible; if not visible, state no PPE is visible.\n"
+                            "- Single paragraph, 5-8 complete narrative sentences.\n"
+                            "- Start in the style \"The scene depicts...\" or \"The image depicts...\" and state environment type and visible people count first.\n"
+                            "- For each visible person: visible body region, posture, gaze direction, clothing, eyewear, held objects, and nearby objects.\n"
+                            "- Mention nearby objects only if visible.\n"
+                            "- Mention PPE only when clearly visible; if not visible, say no PPE is clearly visible.\n"
+                            "- Do not write safety conclusions such as safe, unsafe, typical, likely, no hazards, or no interaction with traffic/machinery.\n"
                             "- Do not stop mid-sentence. No bullet points, markdown, or meta commentary.\n\n"
                             f"Previous incomplete caption: {caption}"
                         )

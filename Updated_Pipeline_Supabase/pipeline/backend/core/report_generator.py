@@ -1121,20 +1121,21 @@ class ReportGenerator:
         Returns:
             Professional scene description string
         """
-        # 1. Opening statement with environment classification
-        description = f"The scene depicts a {environment_type.lower()} setting. "
-
-        # 2. Append the VLM caption content (cleaned up)
-        # Remove redundant "The image shows" prefix if present to avoid repetition
+        # 1. Prepare the VLM caption content. If the caption already starts as
+        # a polished scene description, preserve it rather than prepending a
+        # second generic "The scene depicts..." sentence.
         caption_clean = caption.strip()
-        for prefix in ['The image shows ', 'The image depicts ', 'The scene shows ', 'This image shows ']:
+        for prefix in ['The image shows ', 'The scene shows ', 'This image shows ']:
             if caption_clean.startswith(prefix):
                 caption_clean = caption_clean[len(prefix):]
                 # Capitalize the remaining text
                 caption_clean = caption_clean[0].upper() + caption_clean[1:] if caption_clean else caption_clean
                 break
 
-        description += caption_clean
+        if caption_clean.lower().startswith(('the scene depicts ', 'the image depicts ')):
+            description = caption_clean
+        else:
+            description = f"The scene depicts a {environment_type.lower()} setting. {caption_clean}"
 
         # Ensure it ends with a period
         if description and not description.endswith('.'):

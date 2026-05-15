@@ -1812,7 +1812,9 @@ RESPONSE FORMAT (JSON):
 
         caption = str(report_data.get('caption') or '').strip()
         violation_summary = str(report_data.get('violation_summary') or '').strip()
-        severity = str(report_data.get('severity') or 'HIGH').strip() or 'HIGH'
+        severity = str(report_data.get('severity') or 'MEDIUM').strip().upper() or 'MEDIUM'
+        if severity not in ('HIGH', 'MEDIUM', 'LOW'):
+            severity = 'MEDIUM'
         try:
             person_count = max(1, int(report_data.get('person_count') or 1))
         except (TypeError, ValueError):
@@ -3262,6 +3264,17 @@ Required JSON object:
                 'compliance_status': 'Non-Compliant' if violations else 'Unknown'
             })
 
+        report_severity = str(report_data.get('severity') or '').strip().upper()
+        if report_severity not in ('HIGH', 'MEDIUM', 'LOW'):
+            ranked = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
+            report_severity = max(
+                [str(info.get('likelihood') or '').strip().upper() for info in risks if isinstance(info, dict)]
+                or ['MEDIUM'],
+                key=lambda value: ranked.get(value, 2),
+            )
+            if report_severity not in ranked:
+                report_severity = 'MEDIUM'
+
         # Situation-Hazard-Standard summary model
         if violation_types:
             ppe_list = ' or '.join([f"MS {std}" for std in ['1731 high-visibility vest' if 'Safety Vest' in violation_types else '', '183 helmet' if 'Hardhat' in violation_types else ''] if std])
@@ -3269,7 +3282,7 @@ Required JSON object:
                 ppe_list = ' and '.join(violation_types)
 
             # Build Situation-Hazard-Standard summary
-            situation = f"High-severity violation at {env_type.lower()}."
+            situation = f"{report_severity.title()}-severity violation at {env_type.lower()}."
             hazard = f"{person_count} personnel operating"
             if has_slope:
                 hazard += " on an unstable embankment"
@@ -3297,7 +3310,7 @@ Required JSON object:
             'persons': person_descriptions,
             'hazards_detected': hazards or ['PPE status recorded for reference'],
             'suggested_actions': actions or ['Assess environment to determine PPE requirements'],
-            'severity_level': 'HIGH' if violations else 'MEDIUM'
+            'severity_level': report_severity if violations else 'LOW'
         }
 
     # Old summary method removed
@@ -3364,12 +3377,22 @@ Required JSON object:
         # Get image paths (relative to violations dir for web viewing)
         original_img = f"/image/{report_id}/original.jpg"
         annotated_img = f"/image/{report_id}/annotated.jpg"
+        report_severity = str(
+            report_data.get('severity') or nlp_analysis.get('severity_level') or 'MEDIUM'
+        ).strip().upper()
+        if report_severity not in ('HIGH', 'MEDIUM', 'LOW'):
+            report_severity = 'MEDIUM'
+        severity_badge_class = {
+            'HIGH': 'badge-danger',
+            'MEDIUM': 'badge-warning',
+            'LOW': 'badge-success',
+        }.get(report_severity, 'badge-warning')
 
         # Build HTML content
         safe_report_id_js = json.dumps(str(report_id))
         safe_timestamp_js = json.dumps(str(report_data.get('timestamp', 'N/A')))
         safe_environment_js = json.dumps(str(nlp_analysis.get('environment_type', 'Construction Site')))
-        safe_severity_js = json.dumps(str(nlp_analysis.get('severity_level', 'HIGH')))
+        safe_severity_js = json.dumps(str(nlp_analysis.get('severity_level') or report_severity))
         safe_summary_js = json.dumps(str(nlp_analysis.get('summary', 'PPE violation detected')))
 
         html_content = f"""<!DOCTYPE html>
@@ -3972,21 +3995,29 @@ Required JSON object:
             border: 1px solid #e2e8f0;
             border-left: 4px solid #3b82f6;
             border-radius: 8px;
-            display: grid;
+            display: block;
             gap: 0.65rem;
-            grid-template-columns: minmax(0, 1fr) auto;
             padding: 0.8rem;
         }}
 
         .risk-main {{
+            display: grid;
+            gap: 0.6rem;
             min-width: 0;
+        }}
+
+        .risk-topline {{
+            display: grid;
+            gap: 0.75rem;
+            grid-template-columns: minmax(0, 1fr) max-content;
+            align-items: start;
         }}
 
         .risk-content {{
             color: #1e293b;
             font-weight: 600;
             line-height: 1.5;
-            margin-bottom: 0.55rem;
+            margin: 0;
         }}
 
         .risk-meta-grid {{
@@ -4019,7 +4050,7 @@ Required JSON object:
             color: #b91c1c;
             font-size: 0.78rem;
             font-weight: 800;
-            grid-column: 1 / -1;
+            margin-top: 0.65rem;
             padding-top: 0.55rem;
         }}
 
@@ -4048,9 +4079,11 @@ Required JSON object:
             flex-direction: column;
             align-items: flex-start;
             align-self: start;
+            justify-self: end;
             padding: 0.5rem 0.75rem;
             border-radius: 8px;
-            min-width: 108px;
+            min-width: 104px;
+            max-width: 132px;
             border: 1px solid rgba(0,0,0,0.1);
         }}
 
@@ -4260,11 +4293,16 @@ Required JSON object:
             }}
 
             .risk-item {{
+                padding: 0.75rem;
+            }}
+
+            .risk-topline {{
                 grid-template-columns: 1fr;
             }}
 
             .likelihood-badge {{
-                width: 100%;
+                justify-self: start;
+                width: min(100%, 148px);
             }}
 
             .report-expand-toggle {{
@@ -4330,7 +4368,7 @@ Required JSON object:
                             </div>
                             <div class="info-item">
                                 <span class="info-label">Severity:</span>
-                                <span class="info-value"><span class="badge badge-danger">{report_data.get('severity', 'HIGH')}</span></span>
+                                <span class="info-value"><span class="badge {severity_badge_class}">{report_severity}</span></span>
                             </div>
                             <div class="info-item">
                                 <span class="info-label">Violation Count:</span>
@@ -5835,18 +5873,20 @@ Required JSON object:
                         risks_html += f"""
             <div class="risk-item">
                 <div class="risk-main">
-                    <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                    <div class="risk-topline">
+                        <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                        <div class="likelihood-badge {lik_class}">
+                            <span class="likelihood-label">Likelihood</span>
+                            <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
+                            <div class="likelihood-bar">
+                                <div class="bar-fill" style="width: {bar_width}"></div>
+                            </div>
+                        </div>
+                    </div>
                     {risk_meta_html}
                     {f'<div class="risk-meta"><strong>Regulation:</strong> {self._to_safe_html_text(regulation_citation)}</div>' if regulation_citation else ''}
                     {f'<div class="risk-meta"><strong>Legal consequence:</strong> {self._to_safe_html_text(legal_consequence)}</div>' if legal_consequence else ''}
                     {mitigation_html}
-                </div>
-                <div class="likelihood-badge {lik_class}">
-                    <span class="likelihood-label">Likelihood</span>
-                    <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
-                    <div class="likelihood-bar">
-                        <div class="bar-fill" style="width: {bar_width}"></div>
-                    </div>
                 </div>
                 <div class="severity-footer">
                     Severity: {self._get_malaysian_severity_label(likelihood)}
@@ -6011,13 +6051,15 @@ Required JSON object:
         return f"""
             <div class="risk-item">
                 <div class="risk-main">
-                    <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
-                </div>
-                <div class="likelihood-badge {badge_class}">
-                    <span class="likelihood-label">Likelihood</span>
-                    <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
-                    <div class="likelihood-bar">
-                        <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%' if 'low' in likelihood.lower() else '45%'}"></div>
+                    <div class="risk-topline">
+                        <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                        <div class="likelihood-badge {badge_class}">
+                            <span class="likelihood-label">Likelihood</span>
+                            <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
+                            <div class="likelihood-bar">
+                                <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%' if 'low' in likelihood.lower() else '45%'}"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="severity-footer">

@@ -880,6 +880,16 @@ const CASMAssistant = {
             return;
         }
 
+        const explanation = this.resolveExplanation(query);
+        if (this.isExplanationQuestion(query) && explanation) {
+            this.pushMessage({
+                role: 'assistant',
+                text: explanation.text,
+                actions: explanation.actions || []
+            });
+            return;
+        }
+
         if (docsIntent && !exportIntent) {
             this.handleDocsSearch(raw);
             return;
@@ -924,16 +934,6 @@ const CASMAssistant = {
 
         if (this.isCapabilityIntent(query)) {
             this.handleCapabilityIntent();
-            return;
-        }
-
-        const explanation = this.resolveExplanation(query);
-        if (this.isExplanationQuestion(query) && explanation) {
-            this.pushMessage({
-                role: 'assistant',
-                text: explanation.text,
-                actions: explanation.actions || []
-            });
             return;
         }
 
@@ -2834,13 +2834,13 @@ const CASMAssistant = {
             return { type: /\b(previous|prev|back)\b/.test(normalized) ? 'previous' : 'next' };
         }
 
-        const reportCue = /\b(reports?|report id|report #|incident records?|evidence list|violation records?)\b/.test(normalized);
+        const reportCue = /\b(reports?|report id|report #|incident records?|evidence list|violation records?|cases?|case records?|main risks?|risk summary|risk summaries)\b/.test(normalized);
         if (!reportCue) return null;
 
         const filters = this.buildReportFilters(raw);
         const hasFilters = this.hasActiveReportFilters(filters);
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?reports?\b/.test(normalized);
-        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|scan)\b/.test(normalized);
+        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|scan|know|understand|summari[sz]e|main|risk|risks|case|cases)\b/.test(normalized);
         if (directOpen && !hasFilters && !/\b(show|review|check|browse|inspect|slide|slideshow|list|find|filter|view)\b/.test(normalized)) {
             return null;
         }
@@ -3266,6 +3266,14 @@ const CASMAssistant = {
                 ]
             },
             {
+                match: /\b(likelihood|risk likelihood|probability|chance)\b/,
+                text: 'Likelihood in a report means how probable the listed harm is if the observed scene continues without correction. It is separate from severity: severity describes consequence, while likelihood describes the chance of that consequence in context.',
+                actions: [
+                    { type: 'handbook', label: 'Open report terminology', pageKey: 'workflow', stageKey: 'reports' },
+                    { type: 'route', label: 'Open Reports', page: 'reports' }
+                ]
+            },
+            {
                 match: /\bcheckup|readiness|provisioning\b/,
                 text: 'Local Mode Checkup verifies machine approval, local backend health, camera readiness, and model availability before you rely on local generation.',
                 actions: [
@@ -3583,6 +3591,15 @@ const CASMAssistant = {
                 keywords: ['checkup', 'local mode', 'readiness', 'provisioning']
             },
             {
+                id: 'glossary-report-risk-terms',
+                label: 'Glossary',
+                title: 'Report risk terminology',
+                text: 'Severity describes the consequence level of the observed violation. Likelihood describes how probable the listed harm is if the scene continues without correction. Main risks summarize the highest-priority risk cells for each report card.',
+                pageKey: 'workflow',
+                stageKey: 'reports',
+                keywords: ['severity', 'likelihood', 'probability', 'chance', 'main risks', 'risk summary', 'case']
+            },
+            {
                 id: 'glossary-assistant',
                 label: 'Assistant',
                 title: 'Assistant shortcuts and exports',
@@ -3796,7 +3813,8 @@ const CASMAssistant = {
                     'show', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
                     'slide', 'slideshow', 'carousel', 'look', 'through', 'as',
                     'what', 'why', 'how', 'where', 'when', 'which', 'are', 'is', 'was', 'were', 'do', 'does', 'did',
-                    'mean', 'means', 'meaning', 'purpose', 'used', 'for', 'explain', 'about',
+                    'mean', 'means', 'meaning', 'purpose', 'used', 'for', 'explain', 'about', 'on', 'at', 'in', 'of',
+                    'main', 'risk', 'risks', 'case', 'cases', 'each', 'likelihood', 'probability', 'chance', 'know', 'understand',
                     'status', 'statuses', 'tag', 'tags',
                     'can', 'you', 'find', 'get', 'make', 'create', 'need', 'want', 'wanna', 'them', 'to', 'me', 'all', 'any', 'rows', 'row',
                     'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low',

@@ -957,6 +957,86 @@ def _resolve_violation_types_and_count(
     return violation_types, resolved_count
 
 
+_REPORT_SEVERITY_RANK = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
+
+
+def _normalize_report_severity(value: Any, default: str = 'MEDIUM') -> str:
+    """Normalize persisted report severity to the user-facing report levels."""
+    normalized = str(value or '').strip().upper()
+    if normalized == 'CRITICAL':
+        return 'HIGH'
+    if normalized in _REPORT_SEVERITY_RANK:
+        return normalized
+    fallback = str(default or 'MEDIUM').strip().upper()
+    return fallback if fallback in _REPORT_SEVERITY_RANK else 'MEDIUM'
+
+
+def _severity_from_violation_label(label: Any) -> str:
+    """Resolve a single PPE violation label to LOW/MEDIUM/HIGH from config rules."""
+    normalized_label = _normalize_violation_type_label(label)
+    if not normalized_label:
+        return ''
+
+    try:
+        required_ppe = (VIOLATION_RULES or {}).get('required_ppe') or {}
+        for rule in required_ppe.values():
+            if not isinstance(rule, dict):
+                continue
+            negative_classes = rule.get('negative_classes') or []
+            normalized_negative = {
+                _normalize_violation_type_label(item).lower()
+                for item in negative_classes
+                if _normalize_violation_type_label(item)
+            }
+            if normalized_label.lower() in normalized_negative:
+                return _normalize_report_severity(rule.get('severity'), default='MEDIUM')
+    except Exception:
+        pass
+
+    normalized_key = normalized_label.lower()
+    if normalized_key in {'no-hardhat', 'no-safety vest', 'no-safety-vest', 'no-harness'}:
+        return 'HIGH'
+    if normalized_key in {'no-mask', 'no-gloves', 'no-goggles', 'no-safety shoes', 'no-safety-shoes'}:
+        return 'MEDIUM'
+    if normalized_key.startswith('no-'):
+        return 'MEDIUM'
+    return ''
+
+
+def _classify_violation_severity(
+    *,
+    violation_types: Optional[List[str]] = None,
+    detections: Optional[List[Dict[str, Any]]] = None,
+    violation_count: Optional[Any] = None,
+    violation_summary: Optional[str] = None,
+) -> str:
+    """Classify report severity from observed PPE evidence instead of defaulting to HIGH."""
+    labels = _normalize_violation_type_list(
+        violation_types,
+        _extract_violation_types_from_detections(detections or []),
+        _extract_violation_types_from_summary(violation_summary or ''),
+    )
+
+    severities = [_severity_from_violation_label(label) for label in labels]
+    severities = [severity for severity in severities if severity]
+    if severities:
+        distinct_medium = {
+            label.lower()
+            for label in labels
+            if _severity_from_violation_label(label) == 'MEDIUM'
+        }
+        highest = max(severities, key=lambda value: _REPORT_SEVERITY_RANK.get(value, 2))
+        if highest == 'MEDIUM' and len(distinct_medium) >= 3:
+            return 'HIGH'
+        return highest
+
+    try:
+        count = int(violation_count or 0)
+    except Exception:
+        count = 0
+    return 'MEDIUM' if count > 0 else 'LOW'
+
+
 _CAPTION_HARD_FAILURE_MARKERS = (
     'caption generation failed',
     'caption generation returned empty',
@@ -3009,12 +3089,18 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             'source': recovery_sync_source,
             'allow_placeholder_report': True,
         }
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types,
+            detections=detections,
+            violation_count=resolved_violation_count,
+        )
+        queue_payload['severity'] = resolved_severity
 
         enqueued = violation_queue.enqueue(
             violation_data=queue_payload,
             device_id=recovery_device_id,
             report_id=report_id,
-            severity='HIGH',
+            severity=resolved_severity,
             expedite=False,
         )
 
@@ -3324,6 +3410,12 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             'source': handoff_sync_source,
             'allow_placeholder_report': True,
         }
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types,
+            detections=detections,
+            violation_count=resolved_count,
+        )
+        queue_payload['severity'] = resolved_severity
 
         recovery_device_id = f"cloud_recovery_{report_id}_{time.time_ns()}"
 
@@ -3335,7 +3427,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             violation_data=queue_payload,
             device_id=recovery_device_id,
             report_id=report_id,
-            severity='HIGH',
+            severity=resolved_severity,
             expedite=False,
         )
 
@@ -3795,6 +3887,11 @@ def enqueue_violation(
 
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types_raw,
+            detections=detections,
+            violation_count=len(violation_detections),
+        )
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         runtime_device_id = 'local_cache' if local_runtime_active else 'webcam_0'
 
@@ -3858,7 +3955,7 @@ def enqueue_violation(
                 if violation_types else 'PPE Violation Detected'
             ),
             'device_id': runtime_device_id,
-            'severity': 'HIGH',
+            'severity': resolved_severity,
             'location': 'Live Stream Monitor',
             'detection_count': len(detections or []),
             'status': 'pending',
@@ -3913,7 +4010,7 @@ def enqueue_violation(
                     timestamp=timestamp.isoformat(),  # Use ISO format to preserve timezone
                     person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
                     violation_count=len(violation_detections),
-                    severity='HIGH',
+                    severity=resolved_severity,
                     device_id=runtime_device_id,
                     status='pending'
                 )
@@ -3973,7 +4070,8 @@ def enqueue_violation(
             'violation_count': len(violation_detections),
             'original_image_path': str(original_path),
             'annotated_image_path': str(annotated_path),
-            'violation_dir': str(violation_dir)
+            'violation_dir': str(violation_dir),
+            'severity': resolved_severity,
         }
 
         if local_runtime_active:
@@ -3981,7 +4079,7 @@ def enqueue_violation(
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'
 
-        queue_severity = 'URGENT' if trigger_source == 'upload' else 'HIGH'
+        queue_severity = 'URGENT' if trigger_source == 'upload' else resolved_severity
         queue_expedite = trigger_source == 'upload'
 
         success = violation_queue.enqueue(
@@ -4329,6 +4427,12 @@ def _handoff_partial_local_report_to_cloud(
 
     source_scope_marker = str(source_scope or 'synced_local').strip().lower() or 'synced_local'
     sync_source_marker = str(sync_source or 'sync_local_cache_partial').strip().lower() or 'sync_local_cache_partial'
+    resolved_severity = _classify_violation_severity(
+        violation_types=violation_types_raw,
+        detections=detections,
+        violation_count=resolved_violation_count,
+        violation_summary=violation_summary_text,
+    )
     adopt_after = (
         float(cloud_adopt_after_epoch)
         if cloud_adopt_after_epoch is not None
@@ -4345,6 +4449,7 @@ def _handoff_partial_local_report_to_cloud(
         'sync_source': sync_source_marker,
         'source': sync_source_marker,
         'device_id': device_id,
+        'severity': resolved_severity,
         'cloud_handoff': {
             'state': 'partial_artifacts_uploaded',
             'reason': reason,
@@ -4362,7 +4467,7 @@ def _handoff_partial_local_report_to_cloud(
                 timestamp=ts_value,
                 person_count=person_count,
                 violation_count=resolved_violation_count,
-                severity='HIGH',
+                severity=resolved_severity,
                 device_id=device_id,
                 status='pending',
             )
@@ -4542,6 +4647,21 @@ def _handle_local_cache_sync_job(
         else 'PPE Violation Detected'
     )
     missing_ppe_values = _missing_ppe_from_violation_types(violation_types_raw)
+    try:
+        queued_count_int_for_sync = int(queued_violation_count or 0)
+    except Exception:
+        queued_count_int_for_sync = 0
+    resolved_violation_count_for_sync = max(
+        len(violation_types_raw),
+        queued_count_int_for_sync,
+        1,
+    )
+    resolved_severity = _classify_violation_severity(
+        violation_types=violation_types_raw,
+        detections=detections,
+        violation_count=resolved_violation_count_for_sync,
+        violation_summary=violation_summary_text,
+    )
 
     sync_source_marker = str(queued_sync_source or 'sync_local_cache').strip().lower() or 'sync_local_cache'
     source_scope_marker = str(queued_source_scope or 'synced_local').strip().lower() or 'synced_local'
@@ -4559,6 +4679,7 @@ def _handle_local_cache_sync_job(
         'source': sync_source_marker,
         'origin': 'local_synced',
         'device_id': queue_device_id,
+        'severity': resolved_severity,
     }
 
     local_has_annotated = annotated_path.exists()
@@ -4578,17 +4699,12 @@ def _handle_local_cache_sync_job(
             event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
 
             if not event and hasattr(db_manager, 'insert_detection_event'):
-                resolved_violation_count = max(
-                    len(violation_types_raw),
-                    int(queued_violation_count or 0),
-                    1,
-                )
                 db_manager.insert_detection_event(
                     report_id=report_id,
                     timestamp=ts_value,
                     person_count=max(1, len([d for d in detections if 'person' in str((d or {}).get('class_name', '')).lower()])),
-                    violation_count=resolved_violation_count,
-                    severity='HIGH',
+                    violation_count=resolved_violation_count_for_sync,
+                    severity=resolved_severity,
                     device_id=queue_device_id,
                     status='completed',
                 )
@@ -4722,6 +4838,18 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     detections = data['detections']
     violation_types = data.get('violation_types') or []
     queued_violation_count = data.get('violation_count')
+    calculated_report_severity = _classify_violation_severity(
+        violation_types=violation_types if isinstance(violation_types, list) else [],
+        detections=detections if isinstance(detections, list) else [],
+        violation_count=queued_violation_count,
+        violation_summary=data.get('violation_summary'),
+    )
+    data_severity = str(data.get('severity') or '').strip().upper()
+    resolved_report_severity = (
+        _normalize_report_severity(data_severity, default=calculated_report_severity)
+        if data_severity in _REPORT_SEVERITY_RANK
+        else calculated_report_severity
+    )
     original_path = Path(data['original_image_path'])
     annotated_path = Path(data['annotated_image_path'])
     queue_device_id = (
@@ -5002,7 +5130,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'original_image_path': str(original_path),
                 'annotated_image_path': str(effective_annotated_path),
                 'location': 'Live Stream Monitor',
-                'severity': 'HIGH',
+                'severity': resolved_report_severity,
                 'person_count': detected_person_count,
                 'cloud_upload_disabled': force_local_artifact_pipeline,
                 'force_local_nlp': force_local_artifact_pipeline,
@@ -5220,7 +5348,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             if violation_types_formatted else 'PPE Violation Detected'
         ),
         'device_id': queue_device_id,
-        'severity': 'HIGH',
+        'severity': resolved_report_severity,
         'location': 'Live Stream Monitor',
         'detection_count': len(detections),
         'has_original': original_path.exists(),
@@ -5306,6 +5434,10 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
             "This placeholder was produced so the violation is still recorded; the report will be "
             "regenerated automatically once the cloud provider is reachable again."
         )
+    placeholder_severity = _classify_violation_severity(
+        detections=detections if isinstance(detections, list) else [],
+        violation_count=len(detections or []),
+    )
     diagnostics_html = ""
     if placeholder_routing_profile == 'local':
         diagnostics_html = f"""
@@ -5335,7 +5467,7 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
         <h1>PPE Violation Report</h1>
         <p><strong>Report ID:</strong> {report_id}</p>
         <p><strong>Timestamp:</strong> {timestamp}</p>
-        <p><strong>Severity:</strong> HIGH</p>
+        <p><strong>Severity:</strong> {placeholder_severity}</p>
 
         <div class="warning">
             <h3>Report Generator Not Available</h3>
@@ -5390,6 +5522,11 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             return
 
         violation_types = [d['class_name'] for d in violation_detections]
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types,
+            detections=detections,
+            violation_count=len(violation_detections),
+        )
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         logger.info("   Starting full processing...")
         logger.info(f"   Pipeline available: {FULL_PIPELINE_AVAILABLE}")
@@ -5414,7 +5551,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
             'violation_type': ', '.join(violation_types),
-            'severity': 'HIGH',
+            'severity': resolved_severity,
             'location': 'Live Stream Monitor',
             'detection_count': len(detections),
             'violation_count': len(violation_detections),
@@ -5435,7 +5572,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     timestamp=timestamp,
                     person_count=len([d for d in detections if 'person' in d['class_name'].lower()]),
                     violation_count=len(violation_detections),
-                    severity='HIGH',
+                    severity=resolved_severity,
                     device_id=runtime_device_id,
                     status='pending'
                 )
@@ -5567,7 +5704,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     'original_image_path': str(original_path),
                     'annotated_image_path': str(annotated_path),
                     'location': 'Live Stream Monitor',
-                    'severity': 'HIGH',
+                    'severity': resolved_severity,
                     'person_count': detected_person_count
                 }
 
@@ -5618,8 +5755,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         metadata = {
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
-            'violation_type': 'NO-HARDHAT',
-            'severity': 'HIGH',
+            'violation_type': violation_types[0] if violation_types else 'PPE Violation',
+            'severity': resolved_severity,
             'location': 'Live Stream Monitor',
             'detection_count': len(detections),
             'no_hardhat_count': sum(1 for d in detections if 'no-hardhat' in d['class_name'].lower()),
@@ -5954,6 +6091,17 @@ def api_violations():
                     metadata_violation_count = metadata.get('detection_count')
                 if not isinstance(metadata_violation_count, (int, float)):
                     metadata_violation_count = len(metadata_ppe_tags or metadata_missing_ppe)
+                classified_metadata_severity = _classify_violation_severity(
+                    violation_types=metadata_ppe_tags,
+                    detections=metadata.get('detections') if isinstance(metadata.get('detections'), list) else [],
+                    violation_count=metadata_violation_count,
+                    violation_summary=metadata.get('violation_summary'),
+                )
+                metadata_severity = (
+                    classified_metadata_severity
+                    if (metadata_ppe_tags or metadata_missing_ppe or isinstance(metadata.get('detections'), list))
+                    else _normalize_report_severity(metadata.get('severity'), default=classified_metadata_severity)
+                )
 
                 if has_report:
                     status = 'completed'
@@ -5971,7 +6119,7 @@ def api_violations():
                     'has_annotated': has_annotated,
                     'has_report': has_report,
                     'status': status,
-                    'severity': metadata.get('severity', 'HIGH'),
+                    'severity': metadata_severity,
                     'person_count': int(metadata.get('person_count') or 0) if isinstance(metadata.get('person_count'), (int, float)) else 0,
                     'violation_count': int(metadata_violation_count or 0),
                     'missing_ppe': metadata_missing_ppe,
@@ -6153,6 +6301,22 @@ def api_violations():
             if normalized_ppe_tags:
                 ppe_tags = normalized_ppe_tags
                 missing_ppe = _missing_ppe_from_violation_types(normalized_ppe_tags)
+            row_detections = (
+                detection_data_parsed.get('detections')
+                if isinstance(detection_data_parsed, dict) and isinstance(detection_data_parsed.get('detections'), list)
+                else []
+            )
+            classified_row_severity = _classify_violation_severity(
+                violation_types=ppe_tags,
+                detections=row_detections,
+                violation_count=v.get('violation_count') if v.get('violation_count') else len(missing_ppe),
+                violation_summary=v.get('violation_summary'),
+            )
+            row_severity = (
+                classified_row_severity
+                if (ppe_tags or missing_ppe or row_detections)
+                else _normalize_report_severity(v.get('severity'), default=classified_row_severity)
+            )
 
             source_scope, source_reason = _infer_report_source_scope(
                 device_id=v.get('device_id'),
@@ -6184,7 +6348,7 @@ def api_violations():
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
                 'person_count': resolved_person_count,
                 'violation_count': v.get('violation_count') if v.get('violation_count') else len(missing_ppe) if missing_ppe else 1,
-                'severity': v.get('severity', 'UNKNOWN'),
+                'severity': row_severity,
                 'status': status,
                 'device_id': v.get('device_id'),
                 'error_message': v.get('error_message'),
@@ -6280,7 +6444,14 @@ def api_violations():
                         1 if (local_row.get('has_report') and local_status == 'completed') else 0
                     )
                 ),
-                'severity': 'HIGH',
+                'severity': _normalize_report_severity(
+                    local_row.get('severity'),
+                    default=_classify_violation_severity(
+                        violation_types=list(local_row.get('ppe_tags') or []),
+                        violation_count=local_row.get('violation_count'),
+                        violation_summary=local_row.get('violation_summary'),
+                    ),
+                ),
                 'status': local_status,
                 'device_id': local_row.get('device_id') or 'local_cache',
                 'error_message': local_row.get('error_message'),
@@ -11592,6 +11763,12 @@ def api_report_recovery_execute():
                 ts_value = item_ts
             else:
                 ts_value = _parse_report_id_timestamp(report_id).isoformat()
+            resolved_severity = _classify_violation_severity(
+                violation_types=violation_types,
+                detections=detections,
+                violation_count=resolved_violation_count,
+                violation_summary=violation_summary_text,
+            )
 
             violation_data = {
                 'report_id': report_id,
@@ -11601,7 +11778,8 @@ def api_report_recovery_execute():
                 'violation_count': resolved_violation_count,
                 'original_image_path': str(original_path),
                 'annotated_image_path': str(annotated_path),
-                'violation_dir': str(violation_dir)
+                'violation_dir': str(violation_dir),
+                'severity': resolved_severity,
             }
             if source_scope_marker:
                 violation_data['source_scope'] = source_scope_marker
@@ -12150,6 +12328,12 @@ def _sync_local_cache_candidates(
             violation_types = _normalize_violation_type_list(violation_types, local_metadata_violation_types)
         resolved_violation_count = max(int(resolved_violation_count or 0), len(violation_types), 1)
         missing_ppe_values = _missing_ppe_from_violation_types(violation_types)
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types,
+            detections=detections,
+            violation_count=resolved_violation_count,
+            violation_summary=violation_summary_text or metadata.get('violation_summary'),
+        )
 
         violation_data = {
             'report_id': report_id,
@@ -12166,6 +12350,7 @@ def _sync_local_cache_candidates(
             'sync_source': sync_source_marker,
             'source': sync_source_marker,
             'origin': sync_origin,
+            'severity': resolved_severity,
         }
         if original_sync_source:
             violation_data['origin_sync_source'] = original_sync_source
@@ -12179,7 +12364,7 @@ def _sync_local_cache_candidates(
                     timestamp=ts_value,
                     person_count=0,
                     violation_count=max(1, violation_data['violation_count']),
-                    severity='HIGH',
+                    severity=resolved_severity,
                     device_id=event_device_id,
                     status='pending'
                 )
@@ -12428,6 +12613,16 @@ def api_report_local_draft_handoff():
                 if _is_report_queued_or_processing(report_id):
                     queued = True
                 else:
+                    try:
+                        metadata_violation_count_int = int(metadata.get('violation_count') or 0)
+                    except Exception:
+                        metadata_violation_count_int = 0
+                    resolved_severity = _classify_violation_severity(
+                        violation_types=metadata_violation_types,
+                        detections=[d for d in detections if isinstance(d, dict)],
+                        violation_count=max(metadata_violation_count_int, len(metadata_violation_types), 1),
+                        violation_summary=metadata.get('violation_summary'),
+                    )
                     queue_payload = {
                         'report_id': report_id,
                         'timestamp': timestamp_value,
@@ -12435,13 +12630,14 @@ def api_report_local_draft_handoff():
                         'violation_types': metadata_violation_types,
                         'ppe_tags': metadata_violation_types,
                         'missing_ppe': metadata_missing_ppe,
-                        'violation_count': max(int(metadata.get('violation_count') or 0), len(metadata_violation_types), 1),
+                        'violation_count': max(metadata_violation_count_int, len(metadata_violation_types), 1),
                         'original_image_path': str(original_path),
                         'annotated_image_path': str(annotated_path),
                         'violation_dir': str(violation_dir),
                         'source_scope': 'synced_local',
                         'sync_source': 'browser_local_draft_handoff',
                         'source': 'browser_local_draft_handoff',
+                        'severity': resolved_severity,
                     }
                     queued = bool(violation_queue.enqueue(
                         violation_data=queue_payload,
@@ -12594,7 +12790,7 @@ def api_pending_reports():
             'timestamp': row.get('updated_at') or row.get('timestamp'),
             'status': status,
             'device_id': local_seed_device_id,
-            'severity': 'HIGH',
+            'severity': _normalize_report_severity(row.get('severity'), default='MEDIUM'),
             'has_original': bool(row.get('has_original')),
             'has_annotated': bool(row.get('has_annotated')),
             'has_report': bool(row.get('has_report')),
@@ -12867,6 +13063,12 @@ def api_generate_report_now(report_id):
         )
         if not violation_types and local_violation_types:
             violation_types = local_violation_types
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types,
+            detections=detections,
+            violation_count=resolved_violation_count,
+            violation_summary=violation_summary_text or local_metadata.get('violation_summary'),
+        )
 
         if not annotated_path.exists():
             try:
@@ -12893,7 +13095,7 @@ def api_generate_report_now(report_id):
                     timestamp=_parse_report_id_timestamp(report_id).isoformat(),
                     person_count=0,
                     violation_count=max(1, int(resolved_violation_count or 1)),
-                    severity='HIGH',
+                    severity=resolved_severity,
                     device_id=device_id,
                     status='pending'
                 )
@@ -12918,6 +13120,7 @@ def api_generate_report_now(report_id):
             'annotated_image_path': str(annotated_path),
             'violation_dir': str(violation_dir),
             'force_reprocess': force_reprocess,
+            'severity': resolved_severity,
         }
         if placeholder_reprocess_recovery_used:
             violation_data['skip_environment_validation'] = True
@@ -13945,7 +14148,7 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
     // Fallback handler: ensure documentation buttons always work even if report JS breaks.
     const reportId = traceData.report_id || 'UNKNOWN';
     const timestamp = (traceData.inspected_at_utc || '').replace('T', ' ').replace('Z', ' UTC');
-    const severity = (traceData.severity || 'HIGH');
+    const severity = (traceData.severity || 'MEDIUM');
 
     const openDocWindow = (title, html) => {{
         const win = window.open('', '_blank');
@@ -15344,7 +15547,10 @@ def cleanup():
     with camera_lock:
         _stop_live_source_locked()
 
-    cv2.destroyAllWindows()
+    try:
+        cv2.destroyAllWindows()
+    except cv2.error as cleanup_error:
+        logger.debug(f"OpenCV window cleanup skipped: {cleanup_error}")
 
 
 # Register cleanup for both direct (python casm_app.py) and gunicorn (worker exit) runs.

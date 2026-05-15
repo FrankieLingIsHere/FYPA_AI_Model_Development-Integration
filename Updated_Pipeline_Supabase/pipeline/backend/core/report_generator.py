@@ -3598,42 +3598,187 @@ Required JSON object:
             transform: translateX(-50%) translateY(-5px);
         }}
 
+        /* Expanded report inspector */
+        .expanded-context-shell {{
+            background: #f8fafc;
+            border-top: 1px solid #dbe3ee;
+            padding: 1rem;
+        }}
+
+        .section-expanded {{
+            background: transparent;
+            padding: 0;
+            border-bottom: 0;
+        }}
+
+        .section-title-expanded {{
+            align-items: center;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 8px;
+            display: flex;
+            gap: 0.65rem;
+            justify-content: space-between;
+            margin: 0 0 1rem;
+            padding: 0.85rem 1rem;
+        }}
+
+        .section-title-expanded .title-copy {{
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+        }}
+
+        .section-eyebrow {{
+            color: #64748b;
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0;
+            margin-bottom: 0.2rem;
+            text-transform: uppercase;
+        }}
+
+        .regulation-intro {{
+            align-items: center;
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            border-radius: 8px;
+            color: #9a3412;
+            display: flex;
+            gap: 0.65rem;
+            margin-bottom: 1rem;
+            padding: 0.85rem 1rem;
+        }}
+
+        .regulation-list {{
+            display: grid;
+            gap: 0.75rem;
+        }}
+
+        .regulation-card {{
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #ea580c;
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+
+        .regulation-header {{
+            align-items: center;
+            background: #fff7ed;
+            color: #7c2d12;
+            display: flex;
+            gap: 0.55rem;
+            font-weight: 800;
+            padding: 0.75rem 1rem;
+        }}
+
+        .regulation-body {{
+            color: #334155;
+            display: grid;
+            gap: 0.65rem;
+            padding: 0.9rem 1rem 1rem;
+        }}
+
+        .regulation-body p,
+        .regulation-note {{
+            margin: 0;
+            white-space: normal;
+            word-break: break-word;
+        }}
+
+        .regulation-note {{
+            border-top: 1px solid #e2e8f0;
+            color: #475569;
+            font-size: 0.9rem;
+            padding-top: 0.65rem;
+        }}
+
         /* Person Cards */
         .persons-grid {{
             display: grid;
-            gap: 1.5rem;
+            gap: 1rem;
         }}
 
         .person-card {{
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
+            background: #ffffff;
+            border: 1px solid #dbe3ee;
+            border-radius: 8px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
             overflow: hidden;
-            background: white;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }}
 
         .person-card:hover {{
-            transform: translateY(-4px);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            border-color: #94a3b8;
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
+        }}
+
+        .person-card[open] {{
+            border-color: #bfdbfe;
+        }}
+
+        .person-details {{
+            display: block;
+        }}
+
+        .person-details > summary {{
+            cursor: pointer;
+            list-style: none;
+        }}
+
+        .person-details > summary:focus-visible {{
+            outline: 3px solid rgba(37, 99, 235, 0.28);
+            outline-offset: -3px;
+        }}
+
+        .person-details > summary::-webkit-details-marker {{
+            display: none;
         }}
 
         .person-header {{
-            background: linear-gradient(135deg, var(--primary-color), #34495e);
-            color: white;
-            padding: 1.5rem;
-            display: flex;
-            justify-content: space-between;
+            background: #ffffff;
+            border-left: 5px solid var(--danger-color);
+            color: var(--primary-color);
+            display: grid;
+            gap: 0.8rem;
+            grid-template-columns: 1fr auto auto;
             align-items: center;
+            padding: 1rem 1.1rem;
+        }}
+
+        .person-toggle-icon {{
+            align-items: center;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            color: #1d4ed8;
+            display: inline-flex;
+            height: 2rem;
+            justify-content: center;
+            width: 2rem;
+        }}
+
+        .person-details[open] .person-toggle-icon i {{
+            transform: rotate(180deg);
+        }}
+
+        .person-toggle-icon i {{
+            transition: transform 0.18s ease;
         }}
 
         .person-header h3 {{
-            font-size: 1.25rem;
+            color: #0f172a;
+            font-size: 1.05rem;
             margin-bottom: 0.25rem;
         }}
 
         .person-header p {{
-            font-size: 0.9rem;
-            opacity: 0.9;
+            color: #475569;
+            font-size: 0.88rem;
+            line-height: 1.45;
+            max-width: 78ch;
             white-space: normal;
             overflow: visible;
             text-overflow: unset;
@@ -3641,66 +3786,94 @@ Required JSON object:
         }}
 
         .person-content {{
-            padding: 1.5rem;
+            border-top: 1px solid #e2e8f0;
             display: grid;
-            gap: 1.25rem;
+            gap: 1rem;
+            padding: 1rem;
+        }}
+
+        .scene-level-banner {{
+            align-items: flex-start;
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-left: 4px solid #f59e0b;
+            border-radius: 8px;
+            color: #92400e;
+            display: flex;
+            gap: 0.55rem;
+            line-height: 1.45;
+            padding: 0.7rem 0.8rem;
+        }}
+
+        .person-section {{
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0.85rem;
         }}
 
         .person-section h4 {{
+            align-items: center;
             color: var(--primary-color);
-            font-size: 1rem;
+            display: flex;
+            font-size: 0.92rem;
+            gap: 0.45rem;
             margin-bottom: 0.75rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.55rem;
+            border-bottom: 1px solid #e2e8f0;
         }}
 
         .ppe-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 0.75rem;
+            grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+            gap: 0.6rem;
         }}
 
         .ppe-item {{
+            align-items: center;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem;
-            background: var(--background);
-            border-radius: 6px;
+            min-height: 46px;
+            padding: 0.6rem 0.7rem;
         }}
 
         .ppe-label {{
-            font-weight: 600;
-            color: var(--text-color);
-            font-size: 0.9rem;
+            font-weight: 700;
+            color: #334155;
+            font-size: 0.82rem;
         }}
 
         .ppe-status {{
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-align: center;
         }}
 
         .ppe-status-mentioned {{
-            background: rgba(46,204,113,0.1);
-            color: var(--success-color);
+            background: #dcfce7;
+            color: #15803d;
         }}
 
         .ppe-status-missing {{
-            background: rgba(231,76,60,0.1);
-            color: var(--danger-color);
+            background: #fee2e2;
+            color: #dc2626;
         }}
 
         .ppe-status-not-mentioned {{
-            background: rgba(149,165,166,0.1);
-            color: #7f8c8d;
+            background: #e2e8f0;
+            color: #475569;
         }}
 
         .ppe-status-not-required {{
-            background: rgba(52,152,219,0.1);
-            color: var(--secondary-color);
+            background: #dbeafe;
+            color: #1d4ed8;
         }}
 
         .list-compact {{
@@ -3769,52 +3942,95 @@ Required JSON object:
 
         /* Chips and Badges */
         .hazard-chip, .action-chip {{
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            margin: 0.25rem 0.5rem 0.25rem 0;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            line-height: 1.4;
+            align-items: flex-start;
+            border-radius: 8px;
+            display: flex;
+            gap: 0.45rem;
+            line-height: 1.45;
+            padding: 0.55rem 0.7rem;
         }}
 
         .hazard-chip {{
-            background-color: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeeba;
+            background-color: #fffbeb;
+            border: 1px solid #fde68a;
+            color: #92400e;
         }}
 
         .action-chip {{
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background-color: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            color: #166534;
+        }}
+
+        .risk-list {{
+            display: grid;
+            gap: 0.75rem;
+        }}
+
+        .risk-item {{
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #3b82f6;
+            border-radius: 8px;
+            display: grid;
+            gap: 0.65rem;
+            grid-template-columns: minmax(0, 1fr) auto;
+            padding: 0.8rem;
+        }}
+
+        .risk-main {{
+            min-width: 0;
+        }}
+
+        .risk-content {{
+            color: #1e293b;
+            font-weight: 600;
+            line-height: 1.5;
+            margin-bottom: 0.55rem;
         }}
 
         .risk-meta-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 0.5rem;
-            margin-top: 0.65rem;
+            margin-top: 0.5rem;
         }}
 
         .risk-meta-pill {{
             background: #f8fafc;
-            border-left: 3px solid var(--secondary-color);
-            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
             color: #334155;
-            font-size: 0.86rem;
+            font-size: 0.82rem;
             line-height: 1.4;
             padding: 0.5rem 0.65rem;
             word-break: break-word;
         }}
 
+        .risk-meta {{
+            color: #475569;
+            font-size: 0.84rem;
+            line-height: 1.45;
+            margin-top: 0.4rem;
+        }}
+
+        .severity-footer {{
+            border-top: 1px dashed #cbd5e1;
+            color: #b91c1c;
+            font-size: 0.78rem;
+            font-weight: 800;
+            grid-column: 1 / -1;
+            padding-top: 0.55rem;
+        }}
+
         .risk-mitigation {{
             margin-top: 0.65rem;
-            padding: 0.65rem 0.75rem;
-            border: 1px solid #dbeafe;
-            border-radius: 6px;
-            background: #f8fbff;
+            padding: 0.65rem 0.8rem;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            background: #eff6ff;
             color: #1f2937;
-            font-size: 0.9rem;
+            font-size: 0.86rem;
         }}
 
         .risk-mitigation ul {{
@@ -3831,16 +4047,17 @@ Required JSON object:
             display: inline-flex;
             flex-direction: column;
             align-items: flex-start;
-            padding: 0.5rem 1rem;
+            align-self: start;
+            padding: 0.5rem 0.75rem;
             border-radius: 8px;
-            min-width: 120px;
+            min-width: 108px;
             border: 1px solid rgba(0,0,0,0.1);
         }}
 
         .likelihood-label {{
             font-size: 0.75rem;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0;
             opacity: 0.8;
             margin-bottom: 0.25rem;
         }}
@@ -3893,8 +4110,7 @@ Required JSON object:
         }}
 
         .risk-grid, .action-grid {{
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
             gap: 0.5rem;
         }}
 
@@ -3921,11 +4137,11 @@ Required JSON object:
         }}
 
         .report-split-card.expanded .report-split-top {{
-            transform: translateY(-6px);
+            transform: none;
         }}
 
         .report-split-card.expanded .report-split-bottom {{
-            transform: translateY(6px);
+            transform: none;
         }}
 
         .report-split-card.expanded .report-split-middle {{
@@ -3946,14 +4162,17 @@ Required JSON object:
             color: #ffffff;
             border: none;
             border-radius: 999px;
-            padding: 0.65rem 1.25rem;
+            padding: 0.75rem 1.35rem;
             font-weight: 600;
             cursor: pointer;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
         }}
 
         .report-expand-toggle:hover {{
             filter: brightness(1.06);
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
         }}
 
         @media (max-width: 768px) {{
@@ -3968,6 +4187,19 @@ Required JSON object:
             .report-split-card.expanded .report-split-top,
             .report-split-card.expanded .report-split-bottom {{
                 transform: none;
+            }}
+
+            .expanded-context-shell {{
+                padding: 0.85rem;
+            }}
+
+            .section-title-expanded {{
+                align-items: flex-start;
+                flex-direction: column;
+            }}
+
+            .person-header {{
+                grid-template-columns: 1fr auto;
             }}
         }}
 
@@ -4009,9 +4241,13 @@ Required JSON object:
 
             .person-header {{
                 padding: 1rem;
-                flex-direction: column;
                 align-items: flex-start;
-                gap: 0.4rem;
+                gap: 0.65rem;
+                grid-template-columns: 1fr;
+            }}
+
+            .person-toggle-icon {{
+                justify-self: start;
             }}
 
             .person-content {{
@@ -4021,6 +4257,14 @@ Required JSON object:
 
             .ppe-grid {{
                 grid-template-columns: 1fr;
+            }}
+
+            .risk-item {{
+                grid-template-columns: 1fr;
+            }}
+
+            .likelihood-badge {{
+                width: 100%;
             }}
 
             .report-expand-toggle {{
@@ -4125,11 +4369,13 @@ Required JSON object:
                 </div>
 
                 <div class="report-split-middle" id="reportExpandedContext" aria-hidden="true">
-                    <!-- DOSH Regulations -->
-                    {self._generate_dosh_regulations_section(nlp_analysis)}
+                    <div class="expanded-context-shell">
+                        <!-- DOSH Regulations -->
+                        {self._generate_dosh_regulations_section(nlp_analysis)}
 
-                    <!-- Individual Person Analysis -->
-                    {self._generate_person_cards_section(nlp_analysis, report_data)}
+                        <!-- Individual Person Analysis -->
+                        {self._generate_person_cards_section(nlp_analysis, report_data)}
+                    </div>
                 </div>
 
                 <div class="report-split-bottom">
@@ -5284,34 +5530,45 @@ Required JSON object:
             safe_penalty = self._to_safe_html_text(penalty)
 
             explanation_block = (
-                f'<p style="margin: 0.6rem 0 0; color: #444; white-space: normal; word-break: break-word;">'
-                f'<strong>Why this applies here:</strong> {safe_explanation}</p>'
+                f'<p><strong>Why this applies here:</strong> {safe_explanation}</p>'
             ) if safe_explanation else ''
 
             reg_items.append(f"""
-                <div class="card" style="margin-bottom: 1rem;">
-                    <div class="card-header" style="background: linear-gradient(135deg, #e67e22, #d35400); color: white;">
+                <article class="regulation-card">
+                    <div class="regulation-header">
                         <i class="fas fa-book-open"></i> {safe_regulation}
                     </div>
-                    <div class="card-content">
-                        {f'<p style="margin-bottom: 0; white-space: normal; word-break: break-word;"><strong>Requirement:</strong> {safe_requirement}</p>' if safe_requirement else ''}
+                    <div class="regulation-body">
+                        {f'<p><strong>Requirement:</strong> {safe_requirement}</p>' if safe_requirement else ''}
                         {explanation_block}
-                        {f'<div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(0,0,0,0.1); font-size: 0.9rem; color: #555; white-space: normal; word-break: break-word;"><strong><i class="fas fa-gavel"></i> Legal Backing (Penalty):</strong> {safe_penalty}</div>' if safe_penalty else ''}
+                        {f'<div class="regulation-note"><strong><i class="fas fa-gavel"></i> Legal Backing:</strong> {safe_penalty}</div>' if safe_penalty else ''}
                     </div>
-                </div>
+                </article>
             """)
 
 
         return f"""
-            <div class="section">
-                <h2 class="section-title"><i class="fas fa-book-open"></i> Verified Safety Regulations & Standards ({nlp_analysis.get('environment_type', 'General')})</h2>
-                <div style="background: rgba(230, 126, 34, 0.1); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
-                    <p style="margin: 0; color: #e67e22; font-weight: 600;">
-                        <i class="fas fa-info-circle"></i> The following official JKR/DOSH regulations may apply to observed scene violations (PPE and non-PPE):
+            <section class="section section-expanded">
+                <h2 class="section-title section-title-expanded">
+                    <span class="title-copy">
+                        <i class="fas fa-book-open"></i>
+                        <span>
+                            <span class="section-eyebrow">Reference Basis</span>
+                            Verified Safety Regulations &amp; Standards
+                        </span>
+                    </span>
+                    <span class="badge badge-warning">{self._to_safe_html_text(nlp_analysis.get('environment_type', 'General'))}</span>
+                </h2>
+                <div class="regulation-intro">
+                    <i class="fas fa-info-circle"></i>
+                    <p style="margin: 0; font-weight: 700;">
+                        Official JKR/DOSH references matched to the observed scene violations.
                     </p>
                 </div>
-                {''.join(reg_items)}
-            </div>
+                <div class="regulation-list">
+                    {''.join(reg_items)}
+                </div>
+            </section>
         """
 
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
@@ -5577,11 +5834,13 @@ Required JSON object:
 
                         risks_html += f"""
             <div class="risk-item">
-                <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
-                {risk_meta_html}
-                {f'<div class="risk-meta" style="margin-top: 0.4rem; font-size: 0.9rem; color: #555;"><strong>Regulation:</strong> {self._to_safe_html_text(regulation_citation)}</div>' if regulation_citation else ''}
-                {f'<div class="risk-meta" style="margin-top: 0.25rem; font-size: 0.88rem; color: #666;"><strong>Legal consequence:</strong> {self._to_safe_html_text(legal_consequence)}</div>' if legal_consequence else ''}
-                {mitigation_html}
+                <div class="risk-main">
+                    <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                    {risk_meta_html}
+                    {f'<div class="risk-meta"><strong>Regulation:</strong> {self._to_safe_html_text(regulation_citation)}</div>' if regulation_citation else ''}
+                    {f'<div class="risk-meta"><strong>Legal consequence:</strong> {self._to_safe_html_text(legal_consequence)}</div>' if legal_consequence else ''}
+                    {mitigation_html}
+                </div>
                 <div class="likelihood-badge {lik_class}">
                     <span class="likelihood-label">Likelihood</span>
                     <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
@@ -5589,7 +5848,7 @@ Required JSON object:
                         <div class="bar-fill" style="width: {bar_width}"></div>
                     </div>
                 </div>
-                <div class="severity-footer" style="margin-top: 0.5rem; font-size: 0.8rem; border-top: 1px dashed #ddd; padding-top: 0.4rem; color: #e74c3c; font-weight: bold;">
+                <div class="severity-footer">
                     Severity: {self._get_malaysian_severity_label(likelihood)}
                 </div>
             </div>
@@ -5632,64 +5891,72 @@ Required JSON object:
             )
             is_placeholder = bool(person.get('__placeholder__'))
             placeholder_banner = (
-                '<div style="margin-bottom:0.75rem; padding:0.55rem 0.75rem; '
-                'background:#fff3cd; border-left:4px solid #f0ad4e; border-radius:4px; '
-                'font-size:0.85rem; color:#856404;">'
+                '<div class="scene-level-banner">'
                 '<i class="fas fa-info-circle"></i>&nbsp;'
                 '<strong>Scene level data shown.</strong> The model analysed this scene as a group. '
-                'the PPE status, hazards and risks below are the same scene-wide findings '
+                'The PPE status, hazards and risks below are the same scene-wide findings '
                 'that apply to all personnel in the frame. '
                 'Regenerate the report for a full per-person breakdown.</div>'
             ) if is_placeholder else ''
+            open_attr = ' open' if i == 0 else ''
             person_cards.append(f"""
-                <div class="person-card">
-                    <div class="person-header">
+                <details class="person-card person-details"{open_attr}>
+                    <summary class="person-header">
                         <div>
                             <h3>Person {person_id_display}</h3>
                             <p style="white-space: normal; word-break: break-word;">{description or 'No description provided by model'}</p>
                         </div>
                         {comp_badge}
-                    </div>
+                        <span class="person-toggle-icon" aria-hidden="true"><i class="fas fa-chevron-down"></i></span>
+                    </summary>
                     <div class="person-content">
                         {placeholder_banner}
                         <div class="person-section">
-                            <h4>PPE Status</h4>
+                            <h4><i class="fas fa-hard-hat"></i> PPE Status</h4>
                             <div class="ppe-grid">
                                 {"".join(ppe_items)}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>&#x26A0;&#xFE0F; Hazards Faced</h4>
+                            <h4><i class="fas fa-exclamation-triangle"></i> Hazards Faced</h4>
                             <div class="risk-grid">
                                 {hazards_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>&#x2695;&#xFE0F; Potential Risks &amp; Likelihood</h4>
+                            <h4><i class="fas fa-chart-line"></i> Potential Risks &amp; Likelihood</h4>
                             <div class="risk-list">
                                 {risks_html}
                             </div>
                         </div>
 
                         <div class="person-section">
-                            <h4>Recommended Actions</h4>
+                            <h4><i class="fas fa-clipboard-check"></i> Recommended Actions</h4>
                             <div class="action-grid">
                                 {actions_html}
                             </div>
                         </div>
                     </div>
-                </div>
+                </details>
             """)
 
         return f"""
-            <div class="section">
-                <h2 class="section-title"><i class="fas fa-users"></i> Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})</h2>
+            <section class="section section-expanded">
+                <h2 class="section-title section-title-expanded">
+                    <span class="title-copy">
+                        <i class="fas fa-users"></i>
+                        <span>
+                            <span class="section-eyebrow">Per-Person Review</span>
+                            Individual Analysis ({len(persons)} Person{'s' if len(persons) > 1 else ''})
+                        </span>
+                    </span>
+                </h2>
                 <div class="persons-grid">
                     {''.join(person_cards)}
                 </div>
-            </div>
+            </section>
         """
 
     def _generate_recommendations_section(self, nlp_analysis: Dict[str, Any]) -> str:
@@ -5743,13 +6010,18 @@ Required JSON object:
 
         return f"""
             <div class="risk-item">
-                <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                <div class="risk-main">
+                    <div class="risk-content">{self._to_safe_html_text(risk_desc or 'Risk detail not provided by model')}</div>
+                </div>
                 <div class="likelihood-badge {badge_class}">
                     <span class="likelihood-label">Likelihood</span>
                     <span class="likelihood-value">{self._to_safe_html_text(likelihood)}</span>
                     <div class="likelihood-bar">
                         <div class="bar-fill" style="width: {'100%' if 'high' in likelihood.lower() else '60%' if 'medium' in likelihood.lower() else '30%' if 'low' in likelihood.lower() else '45%'}"></div>
                     </div>
+                </div>
+                <div class="severity-footer">
+                    Severity: {self._get_malaysian_severity_label(likelihood)}
                 </div>
             </div>
         """

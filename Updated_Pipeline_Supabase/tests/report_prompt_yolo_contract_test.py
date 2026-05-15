@@ -316,6 +316,43 @@ def test_rendered_activity_risk_fields_are_model_json_cells():
     _assert("(inferred)" not in rendered.lower(), "Rendered model cells should not display inferred likelihood labels")
 
 
+def test_fallback_report_risks_have_concrete_likelihood_badges():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    report_data = {
+        "caption": (
+            "An outdoor street scene shows a person near a bus or vehicle while holding a phone. "
+            "No PPE is clearly visible."
+        ),
+        "vlm_caption": (
+            "An outdoor street scene shows a person near a bus or vehicle while holding a phone. "
+            "No PPE is clearly visible."
+        ),
+        "detections": [
+            {"class_name": "Person", "confidence": 0.91},
+            {"class_name": "NO-Hardhat", "confidence": 0.82},
+            {"class_name": "NO-Safety Vest", "confidence": 0.79},
+            {"class_name": "vehicle", "confidence": 0.86},
+        ],
+        "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
+        "person_count": 1,
+    }
+
+    analysis = subject._generate_fallback_analysis(report_data)
+    allowed = {"HIGH", "MEDIUM", "LOW", "REVIEW_REQUIRED"}
+
+    risks = analysis["persons"][0]["risks"]
+    _assert(risks, "Fallback analysis should emit risk rows")
+    _assert(all(isinstance(risk, dict) for risk in risks), f"Fallback risks should be structured dicts: {risks!r}")
+    _assert(
+        all(str(risk.get("likelihood") or "").strip() in allowed for risk in risks),
+        f"Fallback risks must use concrete likelihood values: {risks!r}",
+    )
+
+    rendered = subject._generate_person_cards_section(analysis, report_data)
+    _assert("Not specified by model" not in rendered, "Fallback report should not render unspecified likelihood badges")
+    _assert("REVIEW REQUIRED (Model Likelihood Not Specified)" not in rendered, "Fallback severity footer should not blame model omission")
+
+
 def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it():
     subject = ReportGenerator.__new__(ReportGenerator)
     subject.enforce_strict_provider_split = True
@@ -387,6 +424,7 @@ def main():
         test_ollama_compact_prompt_expands_local_caption_activity_context,
         test_cloud_activity_block_allows_clear_direct_image_override,
         test_rendered_activity_risk_fields_are_model_json_cells,
+        test_fallback_report_risks_have_concrete_likelihood_badges,
         test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
     ]

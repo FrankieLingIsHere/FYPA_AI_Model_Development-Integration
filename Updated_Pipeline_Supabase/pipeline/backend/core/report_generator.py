@@ -3128,7 +3128,20 @@ Required JSON object:
             if ppe_field:
                 ppe_status[ppe_field] = 'Missing'
             hazards.append(data['hazard'])
-            risks.append(data['risk'])
+            risk_category = {
+                'roadside_risk': 'traffic_interface',
+                'unsecured_piles': 'material_stability',
+                'harness': 'work_at_height',
+            }.get(key, 'PPE')
+            risks.append({
+                'risk_category': risk_category,
+                'risk': data['risk'],
+                'likelihood': data.get('risk_tier') or 'REVIEW_REQUIRED',
+                'evidence': data['hazard'],
+                'regulation_citation': data['regulation'],
+                'legal_regulatory_consequences': data.get('penalty', ''),
+                'mitigation_steps': [data['action']],
+            })
             actions.append(data['action'])
             regulations.append({
                 'regulation': data['regulation'],
@@ -3136,6 +3149,14 @@ Required JSON object:
                 'penalty': data.get('penalty', ''),
                 'legal_url': data.get('legal_url', ''),
                 'standard_url': data.get('standard_url', '')
+            })
+
+        def _add_phone_distraction_risk() -> None:
+            risks.append({
+                'risk_category': 'unsafe_posture',
+                'risk': 'Distracted Behavior: Reduced situational awareness while operating in high-risk zone.',
+                'likelihood': 'MEDIUM',
+                'evidence': 'Caption mentions phone, mobile, call, or handheld device use.',
             })
 
         for v in violations:
@@ -3208,27 +3229,27 @@ Required JSON object:
                 if has_piles:
                     desc += " Risk: Loss of situational awareness near heavy timber loads."
                 if has_phone:
-                     desc += " DISTRACTED by mobile phone/device."
-                     risks.append("Distracted Behavior: Reduced situational awareness while operating in high-risk zone.")
+                    desc += " DISTRACTED by mobile phone/device."
+                    _add_phone_distraction_risk()
             elif 'Safety Vest' in violation_types:
                 desc = f"Worker without MS 1731 high-visibility vest. INVISIBLE to lorry/plant operators."
                 if has_roadside:
                     desc += " FATAL RISK from passing traffic."
                 if has_phone:
-                     desc += " DISTRACTED by mobile phone/device."
-                     risks.append("Distracted Behavior: Reduced situational awareness while operating in high-risk zone.")
+                    desc += " DISTRACTED by mobile phone/device."
+                    _add_phone_distraction_risk()
             elif 'Hardhat' in violation_types:
                 desc = f"Worker without MS 183 rigid helmet in falling object zone."
                 if has_piles:
                     desc += " Violation: BOWEC 1986 Reg. 24 (sun hats do not meet impact requirements)."
                 if has_phone:
-                     desc += " DISTRACTED by mobile phone/device."
-                     risks.append("Distracted Behavior: Reduced situational awareness while operating in high-risk zone.")
+                    desc += " DISTRACTED by mobile phone/device."
+                    _add_phone_distraction_risk()
             else:
                 desc = f"Worker observed with PPE status as detailed below."
                 if has_phone:
-                     desc += " Worker is DISTRACTED by mobile phone/device."
-                     risks.append("Distracted Behavior: Reduced situational awareness while operating in high-risk zone.")
+                    desc += " Worker is DISTRACTED by mobile phone/device."
+                    _add_phone_distraction_risk()
 
 
             person_descriptions.append({
@@ -4547,7 +4568,7 @@ Required JSON object:
         """Convert likelihood to Malaysian safety severity terminology."""
         lik = likelihood.lower()
         if 'not specified' in lik or 'review' in lik:
-            return "REVIEW REQUIRED (Model Likelihood Not Specified)"
+            return "REVIEW REQUIRED (Safety Officer Confirmation Required)"
         if 'very high' in lik or 'fatal' in lik or 'catastrophic' in lik:
             return "CRITICAL (Immediate Danger to Life & Health)"
         if 'high' in lik:
@@ -4830,7 +4851,7 @@ Required JSON object:
                     risk_text = _as_clean_str(risk.get('risk') or risk.get('description'))
                     likelihood_text = _as_clean_str(risk.get('likelihood'))
                     if not likelihood_text:
-                        likelihood_text = 'Not specified by model'
+                        likelihood_text = 'REVIEW_REQUIRED'
                     mitigation_steps = [
                         _as_clean_str(step)
                         for step in self._ensure_list_of_strings(risk.get('mitigation_steps', []))
@@ -5508,7 +5529,7 @@ Required JSON object:
                             legal_consequence, regulation_citation or 'the cited regulation'
                         )
                         if not likelihood:
-                            likelihood = 'Not specified by model'
+                            likelihood = 'REVIEW_REQUIRED'
 
                         lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
@@ -5695,7 +5716,7 @@ Required JSON object:
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
-        likelihood = 'Not specified by model'
+        likelihood = 'REVIEW_REQUIRED'
         risk_desc = risk_text
 
         # Parse likelihood

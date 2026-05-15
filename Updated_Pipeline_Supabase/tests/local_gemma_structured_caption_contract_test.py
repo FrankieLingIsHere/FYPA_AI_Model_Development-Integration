@@ -53,6 +53,22 @@ def test_render_local_caption_from_json_is_grounded_and_readable():
     _assert(rendered.endswith("No PPE is visible."), rendered)
 
 
+def test_render_local_caption_from_json_includes_low_latency_activity_hints():
+    rendered = caption_image._render_local_caption_from_json({
+        "scene": "outdoor street scene",
+        "people_count": 2,
+        "visible_people": ["person on sidewalk wearing dark jacket"],
+        "major_objects": ["blue bus", "street bollards"],
+        "activity_context": ["traffic_interface", "machinery", "traffic_interface"],
+        "ppe_visible": [],
+    })
+
+    _assert("Visible activity context includes" in rendered, rendered)
+    _assert("traffic interface with street, road, bus, or vehicle context" in rendered, rendered)
+    _assert("machinery or mobile plant nearby" in rendered, rendered)
+    _assert(rendered.endswith("No PPE is visible."), rendered)
+
+
 def test_caption_image_llava_prefers_structured_local_caption_without_custom_prompt():
     original_generate = caption_image._generate_vision_response
     original_order = list(caption_image.VISION_PROVIDER_ORDER)
@@ -70,12 +86,15 @@ def test_caption_image_llava_prefers_structured_local_caption_without_custom_pro
         def _fake_generate(prompt, image_base64, temperature=0.6, max_tokens=300):
             if "Return strict JSON only" not in prompt:
                 raise AssertionError("Expected structured local prompt to be used first")
+            if "activity_context" not in prompt or max_tokens != 300:
+                raise AssertionError("Expected structured local activity hints without a second vision call")
             return """```json
 {
   "scene": "indoor room",
   "people_count": 1,
   "visible_people": ["man wearing a grey shirt"],
   "major_objects": ["couch", "backpack"],
+  "activity_context": [],
   "ppe_visible": []
 }
 ```"""
@@ -112,6 +131,7 @@ def main():
     tests = [
         test_parse_local_caption_json_handles_fenced_payload,
         test_render_local_caption_from_json_is_grounded_and_readable,
+        test_render_local_caption_from_json_includes_low_latency_activity_hints,
         test_caption_image_llava_prefers_structured_local_caption_without_custom_prompt,
     ]
     failures = []

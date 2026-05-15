@@ -842,6 +842,7 @@ def _render_local_caption_from_json(payload: dict) -> str:
     visible_people = payload.get("visible_people")
     major_objects = payload.get("major_objects")
     ppe_visible = payload.get("ppe_visible")
+    activity_context = payload.get("activity_context")
 
     if not isinstance(visible_people, list):
         visible_people = [visible_people] if visible_people else []
@@ -851,10 +852,36 @@ def _render_local_caption_from_json(payload: dict) -> str:
         ppe_visible = [ppe_visible] if ppe_visible.strip() else []
     elif not isinstance(ppe_visible, list):
         ppe_visible = []
+    if not isinstance(activity_context, list):
+        activity_context = [activity_context] if activity_context else []
 
     visible_people = [str(item).strip().strip(".") for item in visible_people if str(item).strip()]
     major_objects = [str(item).strip().strip(".") for item in major_objects if str(item).strip()]
     ppe_visible = [str(item).strip().strip(".") for item in ppe_visible if str(item).strip()]
+    activity_context = [str(item).strip().strip(".").lower() for item in activity_context if str(item).strip()]
+
+    activity_map = {
+        "restricted_area": "restricted area or cordoned zone",
+        "restricted area": "restricted area or cordoned zone",
+        "unsafe_posture": "unsafe posture or awkward body position",
+        "unsafe posture": "unsafe posture or awkward body position",
+        "machinery": "machinery or mobile plant nearby",
+        "traffic_interface": "traffic interface with street, road, bus, or vehicle context",
+        "traffic interface": "traffic interface with street, road, bus, or vehicle context",
+        "work_at_height": "work at height or elevated edge",
+        "work at height": "work at height or elevated edge",
+        "material_stability": "stacked or unstable materials",
+        "material stability": "stacked or unstable materials",
+    }
+    activity_items = []
+    seen_activity = set()
+    for item in activity_context:
+        normalized = item.replace("-", "_").replace(" ", "_")
+        mapped = activity_map.get(normalized) or activity_map.get(item)
+        if not mapped or mapped in seen_activity:
+            continue
+        seen_activity.add(mapped)
+        activity_items.append(mapped)
 
     try:
         people_count = max(0, int(people_count))
@@ -895,6 +922,9 @@ def _render_local_caption_from_json(payload: dict) -> str:
     if major_objects:
         objects_text = ", ".join(major_objects[:4])
         sentences.append(f"Major visible objects include {objects_text}.")
+
+    if activity_items:
+        sentences.append(f"Visible activity context includes {', '.join(activity_items[:4])}.")
 
     if ppe_visible:
         sentences.append(f"Visible PPE includes {', '.join(ppe_visible[:4])}.")
@@ -978,16 +1008,17 @@ def caption_image_llava(image_path, prompt=None):
     # Local Gemma/Ollama reacts better to a shorter, stricter grounding prompt
     # than to the longer shared cloud prompt.
     if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-        structured_prompt = """Return strict JSON only with keys scene, people_count, visible_people, major_objects, ppe_visible.
+        structured_prompt = """Return strict JSON only with keys scene, people_count, visible_people, major_objects, ppe_visible, activity_context.
 
 Rules:
 - Use only visible evidence from the image.
-- scene must be a short factual setting phrase such as outdoor street scene, indoor room, office area, warehouse interior, or construction area.
+- scene: short factual setting phrase such as outdoor street scene, indoor room, office area, warehouse interior, or construction area.
 - people_count must count only clearly visible people.
-- visible_people must be a list of short phrases, one person per item, and each item must start with "person" and mention position or clothing, for example "person on the left wearing a light jacket and jeans".
-- major_objects must be a list of specific visible objects or structures using full noun phrases, for example "blue EMT Madrid bus" or "building facade with balconies".
-- If a large vehicle is clearly visible, include it in major_objects.
-- ppe_visible must be an empty list when no PPE is clearly visible.
+- visible_people: short list, one person per item, each starting with "person" and mentioning position or clothing.
+- major_objects: specific visible objects/structures; include large vehicles when clear.
+- ppe_visible: [] when no PPE is clearly visible.
+- activity_context: list using only exact tokens restricted_area, unsafe_posture, machinery, traffic_interface, work_at_height, material_stability; [] when none are clear.
+- traffic_interface = road/street/sidewalk/lane/bus/truck/vehicle near people. machinery = heavy equipment/mobile plant only, such as excavator/crane/forklift/loader/industrial machine. unsafe_posture = awkward bending/leaning/kneeling/climbing/twisting/overreaching. restricted_area = cones/barriers/warning signs/tape/cordon.
 - Do not guess jobs, hazards, or hidden objects.
 """
         default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 4-6 complete sentences.
@@ -1057,7 +1088,7 @@ Requirements:
                 prompt=structured_prompt,
                 image_base64=image_base64,
                 temperature=0.05,
-                max_tokens=260
+                max_tokens=300
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)

@@ -1315,6 +1315,27 @@ class ReportGenerator:
         )
         return '\n'.join(lines)
 
+    def _observed_activity_categories_from_signal_block(self, signal_block: str) -> List[str]:
+        """Extract observed non-PPE activity category tokens from a signal block."""
+        mapping = {
+            'restricted-area entry / exclusion-zone breach': 'restricted_area',
+            'unsafe posture / manual-handling strain': 'unsafe_posture',
+            'machinery-related struck-by / caught-between exposure': 'machinery',
+            'work-at-height fall exposure': 'work_at_height',
+            'material-stability / collapse exposure': 'material_stability',
+            'traffic-interface exposure': 'traffic_interface',
+        }
+        observed: List[str] = []
+        for line in str(signal_block or '').splitlines():
+            cleaned = line.strip()
+            if not cleaned.startswith('- ') or ': observed=true' not in cleaned:
+                continue
+            label = cleaned[2:].split(': observed=', 1)[0].strip()
+            category = mapping.get(label)
+            if category and category not in observed:
+                observed.append(category)
+        return observed
+
     # =========================================================================
     # NLP - OLLAMA INTEGRATION
     # =========================================================================
@@ -1823,6 +1844,26 @@ RESPONSE FORMAT (JSON):
             detections,
             direct_image_available=False,
         )
+        observed_activity_categories = self._observed_activity_categories_from_signal_block(activity_risk_signal_block)
+        observed_activity_text = ', '.join(observed_activity_categories) if observed_activity_categories else 'none'
+        activity_risk_templates: List[str] = []
+        for category in observed_activity_categories[:4]:
+            activity_risk_templates.append(f"""        {{
+          "risk_category": "{category}",
+          "risk": "Two concise sentences explaining the observed {category} risk for the affected person and what could happen if work continues.",
+          "likelihood": "HIGH/MEDIUM/LOW/REVIEW_REQUIRED",
+          "evidence": "Cite the exact caption, activity_context, or YOLO evidence that marked {category} observed=true.",
+          "regulation_citation": "OSHA 1994 Section 15 or another provided DOSH/JKR citation relevant to {category}",
+          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
+          "mitigation_steps": [
+            "Control the observed {category} hazard before work restarts.",
+            "Document the corrected site control and supervisor verification.",
+            "Brief the worker on the observed activity hazard before re-entry."
+          ]
+        }}""")
+        activity_risk_json = ''
+        if activity_risk_templates:
+            activity_risk_json = ',\n' + ',\n'.join(activity_risk_templates)
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
         ppe_defaults = {
             'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',
@@ -1865,20 +1906,7 @@ RESPONSE FORMAT (JSON):
             "Brief the worker on the observed hazard before work restarts.",
             "Record photographic proof of corrected PPE compliance."
           ]
-        }},
-        {{
-          "risk_category": "restricted_area / unsafe_posture / machinery / traffic_interface / material_stability when observed=true",
-          "risk": "Two concise sentences covering the most important observed non-PPE activity risk for Person {idx}, such as restricted-area entry, unsafe posture, nearby machinery, traffic interface, or unstable materials.",
-          "likelihood": "HIGH/MEDIUM/LOW/REVIEW_REQUIRED",
-          "evidence": "Use only the observed=true activity signal evidence below; omit this second risk object if all non-PPE activity signals are observed=false.",
-          "regulation_citation": "OSHA 1994 Section 15 or another provided DOSH/JKR citation relevant to the observed activity risk",
-          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
-          "mitigation_steps": [
-            "Control the observed non-PPE activity hazard before work restarts.",
-            "Document the corrected access, posture, machinery, traffic, or material-control measure.",
-            "Supervisor must verify the control and sign the case record."
-          ]
-        }}
+        }}{activity_risk_json}
       ],
       "corrective_actions": [
         "Stop work and remove Person {idx} from the affected zone until {missing_phrase} is worn correctly.",
@@ -1923,7 +1951,8 @@ Rules:
 - Keep text concise, factual, and grounded in the evidence above.
 - Include every required top-level key.
 - In persons[].risks and persons[].corrective_actions, include observed activity signals for restricted-area entry, unsafe posture, machinery-related risk, work-at-height, traffic-interface exposure, material stability, and regulatory report generation when observed=true.
-- When PPE gaps and any non-PPE activity signal are both observed=true, persons[].risks must include at least two model-authored cells: one with risk_category "PPE" and one with a specific observed category such as "restricted_area", "unsafe_posture", "machinery", "traffic_interface", or "material_stability".
+- Observed non-PPE activity categories requiring separate risk cells: {observed_activity_text}.
+- If this list is not "none", persons[].risks must include one separate model-authored risk object for each listed category. Do not merge these activity risks into the PPE risk.
 - If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off.
 - Do not write "(inferred)" in likelihood; use HIGH, MEDIUM, LOW, or REVIEW_REQUIRED.
 
@@ -1944,6 +1973,161 @@ Required JSON object:
     }}
   ]
 }}"""
+
+    def _augment_local_observed_activity_risks(
+        self,
+        nlp_analysis: Optional[Dict[str, Any]],
+        report_data: Dict[str, Any],
+        force_local_nlp: bool = False,
+    ) -> None:
+        """Add local observed activity-risk cells when Gemma omits caption hints."""
+        if not isinstance(nlp_analysis, dict):
+            return
+
+        is_local_route = force_local_nlp or self.strict_local_profile or str(self.routing_profile or '').strip().lower() == 'local'
+        if not is_local_route:
+            return
+
+        enabled = str(os.getenv('LOCAL_ACTIVITY_RISK_AUGMENTATION', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            return
+
+        detections = report_data.get('detections', [])
+        signal_block = self._build_activity_risk_signal_block(
+            report_data,
+            detections if isinstance(detections, list) else [],
+            direct_image_available=False,
+        )
+        observed_categories = self._observed_activity_categories_from_signal_block(signal_block)
+        if not observed_categories:
+            return
+
+        persons = nlp_analysis.get('persons')
+        if not isinstance(persons, list) or not persons:
+            return
+
+        caption = str(report_data.get('caption') or report_data.get('vlm_caption') or '').strip()
+
+        category_terms = {
+            'restricted_area': ('restricted', 'cordon', 'barrier', 'exclusion', 'cone'),
+            'unsafe_posture': ('posture', 'leaning', 'bending', 'kneeling', 'climbing', 'overreach'),
+            'machinery': ('machinery', 'mobile plant', 'excavator', 'forklift', 'crane', 'loader'),
+            'work_at_height': ('height', 'ladder', 'scaffold', 'roof', 'elevated'),
+            'material_stability': ('material', 'stacked', 'timber', 'collapse', 'pile'),
+            'traffic_interface': ('traffic', 'road', 'street', 'bus', 'vehicle', 'lane', 'sidewalk'),
+        }
+
+        def _already_has_category(person: Dict[str, Any], category: str) -> bool:
+            terms = category_terms.get(category, (category,))
+            for risk in person.get('risks') or []:
+                if isinstance(risk, dict):
+                    text = ' '.join(
+                        str(risk.get(key) or '')
+                        for key in ('risk_category', 'category', 'type', 'risk', 'description', 'evidence')
+                    ).lower()
+                else:
+                    text = str(risk).lower()
+                if category in text or any(term in text for term in terms):
+                    return True
+            return False
+
+        def _evidence_sentence(category: str) -> str:
+            terms = category_terms.get(category, (category,))
+            sentences = re.split(r'(?<=[.!?])\s+', caption)
+            for sentence in sentences:
+                lowered = sentence.lower()
+                if 'visible activity context' in lowered and any(term in lowered for term in terms):
+                    return sentence.strip()
+            for sentence in sentences:
+                lowered = sentence.lower()
+                if any(term in lowered for term in terms):
+                    return sentence.strip()
+            return caption[:220].strip() if caption else 'local caption activity context'
+
+        risk_templates = {
+            'restricted_area': (
+                'The local caption indicates a restricted or cordoned work area around the affected person. '
+                'Uncontrolled entry into this zone can expose the person to struck-by, caught-between, or unauthorized-access hazards until access controls are verified.'
+            ),
+            'unsafe_posture': (
+                'The local caption indicates an awkward or unsafe body posture for the affected person. '
+                'Continuing the task without posture correction can increase the chance of strains, loss of balance, or contact with nearby hazards.'
+            ),
+            'machinery': (
+                'The local caption indicates machinery or mobile plant near the affected person. '
+                'Working near operating equipment can expose the person to struck-by, caught-between, or blind-spot hazards if separation controls are not confirmed.'
+            ),
+            'work_at_height': (
+                'The local caption indicates elevated work, a ladder, scaffold, roof, platform, or edge exposure. '
+                'A fall from height can cause severe injury unless fall-prevention controls and access conditions are verified before work continues.'
+            ),
+            'material_stability': (
+                'The local caption indicates stacked, piled, or potentially unstable materials near the affected person. '
+                'Material movement or collapse can cause struck-by or crush injuries if storage stability is not checked and controlled.'
+            ),
+            'traffic_interface': (
+                'The local caption indicates a traffic interface with a street, road, bus, vehicle, lane, or sidewalk context near the affected person. '
+                'Vehicle movement and reduced worker visibility can create struck-by exposure unless pedestrian and work-zone separation is verified.'
+            ),
+        }
+        action_templates = {
+            'restricted_area': 'Verify restricted-zone barriers, access control, and supervisor authorization before the person re-enters the area.',
+            'unsafe_posture': 'Pause the task and correct the worker posture, access position, or manual-handling method before work restarts.',
+            'machinery': 'Confirm machinery exclusion zones, operator visibility, and spotter controls before allowing work near mobile plant.',
+            'work_at_height': 'Verify fall-prevention controls, access equipment condition, and edge protection before elevated work continues.',
+            'material_stability': 'Inspect stacked materials for stability and secure or re-stack them before personnel work nearby.',
+            'traffic_interface': 'Confirm traffic separation, visibility controls, and pedestrian routing before work continues near the road or vehicle area.',
+        }
+        hazard_labels = {
+            'restricted_area': 'Restricted-area access exposure',
+            'unsafe_posture': 'Unsafe posture / manual-handling exposure',
+            'machinery': 'Machinery struck-by / caught-between exposure',
+            'work_at_height': 'Work-at-height fall exposure',
+            'material_stability': 'Material stability / collapse exposure',
+            'traffic_interface': 'Traffic-interface struck-by exposure',
+        }
+
+        for person in persons:
+            if not isinstance(person, dict):
+                continue
+            person.setdefault('risks', [])
+            if not isinstance(person['risks'], list):
+                person['risks'] = [person['risks']]
+            person.setdefault('hazards_faced', [])
+            if not isinstance(person['hazards_faced'], list):
+                person['hazards_faced'] = [person['hazards_faced']]
+            person.setdefault('corrective_actions', [])
+            if not isinstance(person['corrective_actions'], list):
+                person['corrective_actions'] = [person['corrective_actions']]
+
+            for category in observed_categories:
+                if _already_has_category(person, category):
+                    continue
+                risk_text = risk_templates.get(category)
+                if not risk_text:
+                    continue
+                evidence = _evidence_sentence(category)
+                person['risks'].append({
+                    'risk_category': category,
+                    'risk': risk_text,
+                    'likelihood': 'REVIEW_REQUIRED',
+                    'evidence': evidence,
+                    'regulation_citation': 'OSHA 1994 Section 15',
+                    'legal_regulatory_consequences': 'DOSH may require corrective evidence, supervisor review, or enforcement follow-up if the observed hazard is not controlled.',
+                    'mitigation_steps': [
+                        action_templates.get(category, 'Verify and control the observed activity hazard before work continues.'),
+                        'Record image evidence and supervisor verification in the report file.',
+                    ],
+                    'source': 'local_caption_activity_context',
+                })
+                person['hazards_faced'].append({
+                    'type': hazard_labels.get(category, category),
+                    'source': evidence,
+                    'severity': 'REVIEW_REQUIRED',
+                })
+                action = action_templates.get(category)
+                if action and not any(action.lower() in str(existing).lower() for existing in person['corrective_actions']):
+                    person['corrective_actions'].append(action)
 
     def _call_ollama_api(
         self,
@@ -2665,6 +2849,8 @@ Required JSON object:
                 nlp_analysis['provider'] = self.last_nlp_provider
             if self.last_nlp_model and not nlp_analysis.get('model'):
                 nlp_analysis['model'] = self.last_nlp_model
+
+        self._augment_local_observed_activity_risks(nlp_analysis, report_data, force_local_nlp=force_local_nlp)
 
         # Normalize structure once so all sections (including hidden expanded parts)
         # consume consistent model-aligned data shapes.

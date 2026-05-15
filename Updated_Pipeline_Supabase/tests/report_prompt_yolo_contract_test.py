@@ -163,7 +163,10 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert("restricted-area entry / exclusion-zone breach: observed=true" in compact, "Compact prompt missing restricted-area signal")
     _assert("machinery-related struck-by / caught-between exposure: observed=true" in compact, "Compact prompt missing machinery signal")
     _assert('"risk_category": "PPE"' in compact, "Compact prompt missing PPE risk_category schema")
-    _assert('persons[].risks must include at least two model-authored cells' in compact, "Compact prompt missing multi-cell local risk rule")
+    _assert('Observed non-PPE activity categories requiring separate risk cells: restricted_area, machinery' in compact, "Compact prompt missing observed local activity categories")
+    _assert('"risk_category": "restricted_area"' in compact, "Compact prompt missing restricted_area risk object")
+    _assert('"risk_category": "machinery"' in compact, "Compact prompt missing machinery risk object")
+    _assert('Do not merge these activity risks into the PPE risk' in compact, "Compact prompt missing non-merge rule")
     _assert("Generate the regulatory incident report package" in compact, "Compact prompt missing regulatory report package action")
     _assert('Do not write "(inferred)" in likelihood' in compact, "Compact prompt should block inferred labels")
 
@@ -206,6 +209,28 @@ def test_caption_bus_or_street_creates_traffic_signal():
     })
 
     _assert("traffic-interface exposure: observed=true" in block, "Street/bus caption should create traffic-interface coverage")
+
+
+def test_ollama_compact_prompt_expands_local_caption_activity_context():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    compact = subject._build_ollama_compact_report_prompt({
+        "caption": (
+            "This is an outdoor street scene with 1 visible person. "
+            "Major visible objects include bus. "
+            "Visible activity context includes traffic interface with street, road, bus, or vehicle context."
+        ),
+        "violation_summary": "Missing Hard Hat",
+        "person_count": 1,
+        "severity": "HIGH",
+        "detections": [
+            {"class_name": "Person", "confidence": 0.91},
+            {"class_name": "NO-Hardhat", "confidence": 0.83},
+        ],
+    }, "original long prompt")
+
+    _assert("traffic-interface exposure: observed=true" in compact, "Local caption activity hint should mark traffic observed")
+    _assert('Observed non-PPE activity categories requiring separate risk cells: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
+    _assert('"risk_category": "traffic_interface"' in compact, "Compact prompt missing traffic_interface risk object")
 
 
 def test_cloud_activity_block_allows_clear_direct_image_override():
@@ -273,6 +298,46 @@ def test_rendered_activity_risk_fields_are_model_json_cells():
     _assert("(inferred)" not in rendered.lower(), "Rendered model cells should not display inferred likelihood labels")
 
 
+def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    subject.enforce_strict_provider_split = True
+    subject.routing_profile = "local"
+    analysis = {
+        "persons": [
+            {
+                "id": "Person 1",
+                "ppe": {"hardhat": "Missing"},
+                "risks": [
+                    {
+                        "risk_category": "PPE",
+                        "risk": "The worker could sustain head injury because the hardhat is missing.",
+                        "likelihood": "HIGH",
+                        "evidence": "YOLO detected missing Hardhat.",
+                    }
+                ],
+                "corrective_actions": ["Provide hardhat before work restarts."],
+            }
+        ]
+    }
+    report_data = {
+        "caption": (
+            "This is an outdoor street scene with 1 visible person. "
+            "Visible activity context includes traffic interface with street, road, bus, or vehicle context."
+        ),
+        "detections": [{"class_name": "Person"}, {"class_name": "NO-Hardhat"}],
+        "violation_summary": "PPE Violation Detected: NO-Hardhat",
+    }
+
+    subject._augment_local_observed_activity_risks(analysis, report_data, force_local_nlp=True)
+
+    risks = analysis["persons"][0]["risks"]
+    categories = [risk.get("risk_category") for risk in risks if isinstance(risk, dict)]
+    _assert("traffic_interface" in categories, f"Missing augmented traffic risk: {risks!r}")
+    traffic_risk = next(risk for risk in risks if isinstance(risk, dict) and risk.get("risk_category") == "traffic_interface")
+    _assert("street, road, bus, or vehicle context" in traffic_risk.get("evidence", ""), "Augmented risk should cite local caption evidence")
+    _assert("(inferred)" not in str(traffic_risk).lower(), "Augmented risk must not use inferred likelihood labels")
+
+
 def test_environment_detection_does_not_treat_restricted_work_area_as_office():
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
@@ -298,8 +363,10 @@ def main():
         test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe,
         test_activity_signals_ignore_negated_caption_terms,
         test_caption_bus_or_street_creates_traffic_signal,
+        test_ollama_compact_prompt_expands_local_caption_activity_context,
         test_cloud_activity_block_allows_clear_direct_image_override,
         test_rendered_activity_risk_fields_are_model_json_cells,
+        test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
     ]
     failures = []

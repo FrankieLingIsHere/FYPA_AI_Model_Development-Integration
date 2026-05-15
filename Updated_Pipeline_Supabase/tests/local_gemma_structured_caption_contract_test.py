@@ -68,7 +68,7 @@ def test_render_local_caption_from_json_keeps_activity_hints_readable():
     _assert("Visible activity context includes" not in rendered, rendered)
     _assert("The scene also shows" not in rendered, rendered)
     _assert("the surrounding context includes" in rendered, rendered)
-    _assert("road, street, bus, or vehicle area near the person" in rendered, rendered)
+    _assert("road or street area with a bus or other vehicle near the person" in rendered, rendered)
     _assert("machinery or mobile plant near the person" in rendered, rendered)
     _assert(rendered.endswith("no PPE is clearly visible."), rendered)
 

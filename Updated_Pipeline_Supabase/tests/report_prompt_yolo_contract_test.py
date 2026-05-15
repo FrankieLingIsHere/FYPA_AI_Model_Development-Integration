@@ -215,7 +215,7 @@ def test_ollama_compact_prompt_expands_local_caption_activity_context():
         "caption": (
             "The image shows an outdoor street scene where one visible person is standing "
             "near a bus, while the surrounding "
-            "context includes a road, street, bus, or vehicle area near the person; "
+            "context includes a road or street area with a bus or other vehicle near the person; "
             "no PPE is clearly visible."
         ),
         "violation_summary": "Missing Hard Hat",
@@ -321,7 +321,7 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
         "caption": (
             "The image shows an outdoor street scene where one visible person is standing "
             "near a bus, while the surrounding "
-            "context includes a road, street, bus, or vehicle area near the person; "
+            "context includes a road or street area with a bus or other vehicle near the person; "
             "no PPE is clearly visible."
         ),
         "detections": [{"class_name": "Person"}, {"class_name": "NO-Hardhat"}],
@@ -334,7 +334,7 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
     categories = [risk.get("risk_category") for risk in risks if isinstance(risk, dict)]
     _assert("traffic_interface" in categories, f"Missing augmented traffic risk: {risks!r}")
     traffic_risk = next(risk for risk in risks if isinstance(risk, dict) and risk.get("risk_category") == "traffic_interface")
-    _assert("road, street, bus, or vehicle area" in traffic_risk.get("evidence", ""), "Augmented risk should cite local caption evidence")
+    _assert("road or street area with a bus or other vehicle" in traffic_risk.get("evidence", ""), "Augmented risk should cite local caption evidence")
     _assert("(inferred)" not in str(traffic_risk).lower(), "Augmented risk must not use inferred likelihood labels")
 
 

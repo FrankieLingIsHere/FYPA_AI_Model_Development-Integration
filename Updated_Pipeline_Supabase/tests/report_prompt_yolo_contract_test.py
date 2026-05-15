@@ -114,6 +114,55 @@ def test_sanitized_report_fields_stay_word_level():
     _assert("to , to" not in rendered, "Rendered person HTML contains character-split text")
 
 
+def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    analysis = subject._sanitize_nlp_analysis({
+        "summary": "Two workers require PPE follow-up.",
+        "environment_type": "Construction Site",
+        "persons": [
+            {
+                "id": "Person 1",
+                "description": "Worker near the platform without mask.",
+                "ppe": {"hardhat": "Mentioned", "mask": "Missing"},
+                "risks": [{"risk": "PPE exposure risk.", "likelihood": "MEDIUM"}],
+                "corrective_actions": ["Check PPE"],
+            }
+        ],
+    })
+    report_data = {
+        "caption": "Two workers are visible in a construction site.",
+        "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
+        "person_count": 2,
+        "violation_count": 99,
+        "missing_ppe": ["Hardhat", "Safety Vest"],
+        "detections": [
+            {"class_name": "Person"},
+            {"class_name": "Person"},
+            {"class_name": "NO-Hardhat"},
+            {"class_name": "NO-Safety Vest"},
+        ],
+    }
+
+    rendered = subject._generate_person_cards_section(analysis, report_data)
+    summary = subject._format_summary_html(analysis, report_data)
+
+    _assert(rendered.count('<details class="person-card') == 2, "Person card count must match detected/caption count")
+    _assert(
+        rendered.count("Detector-confirmed PPE conditions: missing Hardhat and Safety Vest.") == 2,
+        "Each person card description must name the exact detector-confirmed PPE gaps",
+    )
+    _assert(
+        rendered.count('ppe-status-missing">Missing</span>') == 4,
+        "Only Hardhat and Safety Vest should be marked missing on two person cards",
+    )
+    _assert("missing mask" not in rendered.lower(), "Unsupported model PPE gap should not survive reconciliation")
+    _assert(report_data["violation_count"] == 2, "Violation count should tally with distinct detector-confirmed PPE gaps")
+    _assert(
+        "Report lists 2 person(s); 2 with detector-confirmed PPE conditions: Hardhat, Safety Vest." in summary,
+        "Summary WHO row must tally with the normalized person cards",
+    )
+
+
 def test_scene_description_does_not_duplicate_caption_yolo_addendum():
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (

@@ -159,6 +159,43 @@ def _text_has_yolo_ppe_context(text: str) -> bool:
     )
 
 
+_PPE_CANONICAL_LABELS = {
+    'hardhat': 'Hardhat',
+    'safety_vest': 'Safety Vest',
+    'gloves': 'Gloves',
+    'goggles': 'Goggles',
+    'footwear': 'Footwear',
+    'mask': 'Mask',
+}
+_PPE_CANONICAL_ORDER = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
+_PPE_CANONICAL_TERMS = {
+    'hardhat': ('hardhat', 'hard hat', 'helmet', 'safety helmet'),
+    'safety_vest': ('safety vest', 'vest', 'hi vis', 'hi-vis', 'high visibility', 'high-visibility'),
+    'gloves': ('glove', 'gloves', 'hand protection'),
+    'goggles': ('goggle', 'goggles', 'safety glasses', 'eye protection'),
+    'footwear': ('footwear', 'boot', 'boots', 'shoe', 'shoes', 'safety shoes', 'safety boots'),
+    'mask': ('mask', 'respirator', 'face mask', 'n95'),
+}
+
+
+def _canonical_ppe_key(value: Any) -> str:
+    """Map model/YOLO PPE labels into the report's canonical PPE fields."""
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    text = re.sub(r'^(?:NO[-_\s]*|Missing\s+)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'[\-_]+', ' ', text).strip().lower()
+    text = re.sub(r'\s+', ' ', text)
+    for key, terms in _PPE_CANONICAL_TERMS.items():
+        if any(term in text for term in terms):
+            return key
+    return ''
+
+
+def _ppe_label_for_key(key: str) -> str:
+    return _PPE_CANONICAL_LABELS.get(str(key or '').strip(), str(key or '').replace('_', ' ').title())
+
+
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
@@ -2215,6 +2252,21 @@ Required JSON object:
             connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
             request_timeout = (connect_timeout, forced_read_timeout)
 
+        try:
+            local_num_predict = int(
+                os.getenv(
+                    'OLLAMA_FORCE_LOCAL_NUM_PREDICT' if fast_mode else 'OLLAMA_REPORT_NUM_PREDICT',
+                    '1400' if fast_mode else '2048',
+                ) or (1400 if fast_mode else 2048)
+            )
+        except (TypeError, ValueError):
+            local_num_predict = 1400 if fast_mode else 2048
+        local_num_predict = max(512, min(local_num_predict, 4096))
+        local_keep_alive = os.getenv(
+            'OLLAMA_FORCE_LOCAL_KEEP_ALIVE' if fast_mode else 'OLLAMA_REPORT_KEEP_ALIVE',
+            '5m' if fast_mode else '0',
+        )
+
         def _sleep_before_retry(attempt_no: int):
             if backoff_seconds <= 0:
                 return
@@ -2228,13 +2280,14 @@ Required JSON object:
                 'context': [],
                 'stream': False,
                 'format': 'json',
+                'keep_alive': local_keep_alive,
                 'options': {
                     # Match Gemini's discipline for structured JSON output.
                     # Gemma at temp=0.7 produces inconsistent / "creative" descriptions
                     # while Gemini is capped at 0.2. Use the same low temperature here
                     # so local-mode reports look like cloud-mode reports.
                     'temperature': self.temperature,
-                    'num_predict': 2048,         # was 1500  avoid mid-JSON truncation on multi-person scenes
+                    'num_predict': local_num_predict,
                     'top_k': 20,                 # was 40  tighter token selection
                     'top_p': 0.7,                # was 0.9  less wandering
                     'repeat_penalty': 1.15,      # discourage repetitive phrasing
@@ -3373,6 +3426,8 @@ Required JSON object:
                 else:
                     summary_parts.append(vio)
             report_data['violation_summary'] = ", ".join(summary_parts)
+
+        nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
 
         # Get image paths (relative to violations dir for web viewing)
         original_img = f"/image/{report_id}/original.jpg"
@@ -4535,12 +4590,13 @@ Required JSON object:
         """Format summary as a structured table for 'AT A GLANCE' view."""
         import re
 
+        report_data = report_data or {}
+        nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
         summary_text = str(nlp_analysis.get('summary') or '').strip()
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
             persons = []
 
-        report_data = report_data or {}
         violation_summary = str(report_data.get('violation_summary') or '').strip()
         caption_text = str(report_data.get('caption') or '').strip()
         visual_evidence_text = str(nlp_analysis.get('visual_evidence') or '').strip()
@@ -4572,7 +4628,7 @@ Required JSON object:
                 return first
             return first[: max_len - 3].rstrip(' ,;') + '...'
 
-        # WHO should reflect model output first; detector stats are context only.
+        # WHO and the expanded cards must describe the same detector-confirmed PPE facts.
         model_person_rows: List[str] = []
         model_non_compliant_count = 0
         detected_missing_labels: List[str] = []
@@ -4629,8 +4685,13 @@ Required JSON object:
             if label.startswith('no-'):
                 detected_violations.append(det)
 
+        detector_missing_keys = self._extract_detector_missing_ppe_keys(report_data)
         detected_person_count = len(detected_people) if detections else int(report_data.get('person_count', 0) or 0)
-        detected_violation_items = len(detected_violations) if detections else int(report_data.get('violation_count', 0) or 0)
+        detected_violation_items = (
+            len(detector_missing_keys)
+            if detector_missing_keys
+            else (len(detected_violations) if detections else int(report_data.get('violation_count', 0) or 0))
+        )
 
         def _infer_people_count_from_text(*texts: str) -> int:
             return infer_people_count_from_text(*texts)
@@ -4649,10 +4710,14 @@ Required JSON object:
             if model_person_count > 4:
                 preview_rows.append(f" +{model_person_count - 4} more model-identified person entries")
 
-            who_header = (
-                f"Model identified {model_person_count} person(s), "
-                f"{model_non_compliant_count} with non-compliance signals."
-            )
+            if detected_missing_labels:
+                who_header = (
+                    f"Report lists {model_person_count} person(s); "
+                    f"{model_non_compliant_count} with detector-confirmed PPE conditions: "
+                    f"{', '.join(detected_missing_labels[:5])}."
+                )
+            else:
+                who_header = f"Report lists {model_person_count} person(s); no detector-confirmed PPE condition was available."
             count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}"
         else:
             people_count_for_display = detected_person_count if detected_person_count > 0 else inferred_person_count
@@ -5178,6 +5243,190 @@ Required JSON object:
         normalized['persons'] = persons_out
         return normalized
 
+    def _extract_detector_missing_ppe_keys(self, report_data: Optional[Dict[str, Any]]) -> List[str]:
+        """Return distinct detector-confirmed missing PPE keys in stable display order."""
+        if not isinstance(report_data, dict):
+            return []
+
+        keys: List[str] = []
+
+        def _add(value: Any) -> None:
+            key = _canonical_ppe_key(value)
+            if key and key not in keys:
+                keys.append(key)
+
+        detections = report_data.get('detections')
+        if isinstance(detections, list):
+            for det in detections:
+                if not isinstance(det, dict):
+                    continue
+                label = str(det.get('class_name') or det.get('class') or '').strip()
+                if label.upper().startswith('NO-'):
+                    _add(label)
+
+        for field in ('missing_ppe', 'ppe_tags', 'violation_types'):
+            values = report_data.get(field)
+            if isinstance(values, list):
+                for value in values:
+                    _add(value)
+
+        for field in ('violation_type', 'violation_summary'):
+            text = str(report_data.get(field) or '')
+            if not text.strip():
+                continue
+            for match in re.finditer(
+                r'(?:NO[-_\s]*|Missing\s+)(Hardhat|Hard\s+Hat|Helmet|Safety\s+Helmet|Safety\s+Vest|Vest|Gloves?|Goggles?|Safety\s+Glasses|Footwear|Boots?|Shoes?|Mask|Respirator)',
+                text,
+                flags=re.IGNORECASE,
+            ):
+                _add(match.group(0))
+
+        return [key for key in _PPE_CANONICAL_ORDER if key in keys] + [
+            key for key in keys if key not in _PPE_CANONICAL_ORDER
+        ]
+
+    def _detector_missing_ppe_phrase(self, missing_keys: List[str]) -> str:
+        labels = [_ppe_label_for_key(key) for key in (missing_keys or [])]
+        if not labels:
+            return 'no detector-confirmed PPE gap'
+        if len(labels) == 1:
+            return f"missing {labels[0]}"
+        return "missing " + ", ".join(labels[:-1]) + f" and {labels[-1]}"
+
+    def _person_card_target_count(self, persons: List[Dict[str, Any]], report_data: Dict[str, Any]) -> int:
+        """Use the same person-count logic for summary rows and card rendering."""
+        try:
+            target_count = int(report_data.get('person_count') or 0)
+        except (TypeError, ValueError):
+            target_count = 0
+
+        caption_text = str(report_data.get('caption') or '')
+        violation_summary_text = str(report_data.get('violation_summary') or '')
+        inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
+
+        yolo_person_count = 0
+        detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip().lower()
+            label = label.replace('_', '-').replace(' ', '-')
+            if label in {'person', 'worker', 'man', 'woman', 'people'}:
+                yolo_person_count += 1
+
+        if inferred_from_caption > 0:
+            return inferred_from_caption
+        if yolo_person_count > 0:
+            return yolo_person_count
+        if target_count > 0:
+            return target_count
+        return len(persons)
+
+    def _reconcile_person_cards_with_detection_facts(
+        self,
+        nlp_analysis: Optional[Dict[str, Any]],
+        report_data: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Ground per-person cards in the detector payload so descriptions, PPE
+        status grids, and summary counts cannot drift from YOLO metadata.
+        """
+        if not isinstance(nlp_analysis, dict):
+            nlp_analysis = {}
+        if not isinstance(report_data, dict):
+            report_data = {}
+        if nlp_analysis.get('_person_card_detection_reconciled'):
+            return nlp_analysis
+
+        persons = nlp_analysis.get('persons')
+        if not isinstance(persons, list):
+            persons = []
+        persons = [p for p in persons if isinstance(p, dict)]
+
+        missing_keys = self._extract_detector_missing_ppe_keys(report_data)
+        missing_phrase = self._detector_missing_ppe_phrase(missing_keys)
+        target_count = self._person_card_target_count(persons, report_data)
+        if target_count <= 0 and missing_keys:
+            target_count = 1
+
+        if target_count and len(persons) > target_count:
+            persons = persons[:target_count]
+
+        while target_count and len(persons) < target_count:
+            persons.append({
+                'id': f'Person {len(persons) + 1}',
+                'description': '',
+                'compliance_status': '',
+                'ppe': {},
+                'hazards_faced': [],
+                'risks': [],
+                'corrective_actions': [],
+                '__placeholder__': True,
+            })
+
+        environment_type = str(nlp_analysis.get('environment_type') or 'work area').strip() or 'work area'
+        if missing_keys:
+            try:
+                report_data['violation_count'] = len(missing_keys)
+            except Exception:
+                pass
+
+        for idx, person in enumerate(persons):
+            raw_ppe = person.get('ppe') if isinstance(person.get('ppe'), dict) else {}
+            grounded_ppe: Dict[str, str] = {}
+            for key in _PPE_CANONICAL_ORDER:
+                if key in missing_keys:
+                    grounded_ppe[key] = 'Missing'
+                else:
+                    model_value = ''
+                    for raw_key, raw_value in raw_ppe.items():
+                        if _canonical_ppe_key(raw_key) == key:
+                            model_value = str(raw_value or '').strip()
+                            break
+                    model_lower = model_value.lower()
+                    if model_value and not ('missing' in model_lower or model_lower.startswith('no ')):
+                        grounded_ppe[key] = model_value
+                    else:
+                        grounded_ppe[key] = 'Not Flagged'
+
+            original_desc = self._clean_plain_text_for_report(person.get('description') or '')
+            unsupported_missing = False
+            if original_desc and missing_keys:
+                for key, terms in _PPE_CANONICAL_TERMS.items():
+                    if key in missing_keys:
+                        continue
+                    if any(
+                        re.search(rf'\b(?:missing|without|no|lack of|not wearing)\s+(?:\w+\s+){{0,2}}{re.escape(term)}\b', original_desc, re.IGNORECASE)
+                        for term in terms
+                    ):
+                        unsupported_missing = True
+                        break
+
+            exact_sentence = (
+                f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
+                f"Detector-confirmed PPE conditions: {missing_phrase}."
+            )
+            if not missing_keys:
+                exact_sentence = (
+                    f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
+                    "No detector-confirmed missing PPE condition was available for this card."
+                )
+
+            if original_desc and not unsupported_missing:
+                person['description'] = f"{exact_sentence} Scene note: {original_desc}"
+            else:
+                person['description'] = exact_sentence
+            person['ppe'] = grounded_ppe
+            if missing_keys:
+                person['compliance_status'] = 'Non-Compliant'
+
+        nlp_analysis['persons'] = persons
+        nlp_analysis['_detector_missing_ppe'] = [_ppe_label_for_key(key) for key in missing_keys]
+        nlp_analysis['_person_card_count'] = len(persons)
+        nlp_analysis['_person_card_non_compliant_count'] = len(persons) if missing_keys else 0
+        nlp_analysis['_person_card_detection_reconciled'] = True
+        return nlp_analysis
+
     def _content_tokens(self, text: str) -> List[str]:
         """Extract lightweight content tokens for lexical grounding checks."""
         text = str(text or '').lower()
@@ -5611,6 +5860,8 @@ Required JSON object:
 
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
         """Generate per-person analysis cards (inspired by NLP_CASM)."""
+        report_data = report_data or {}
+        nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
             persons = []

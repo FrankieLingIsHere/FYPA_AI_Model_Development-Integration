@@ -1790,17 +1790,19 @@ ollama_semaphore = Semaphore(1)  # Only 1 concurrent Ollama call allowed
 # =========================================================================
 # Set to False to DISABLE environment checking (process ALL violations)
 # Useful for testing when you can't simulate a real construction site
-ENVIRONMENT_VALIDATION_ENABLED = False  # <-- SET TO False TO DISABLE SKIPPING
+ENVIRONMENT_VALIDATION_ENABLED = str(
+    os.getenv('ENVIRONMENT_VALIDATION_ENABLED', 'false')
+).strip().lower() in ('1', 'true', 'yes', 'on')
 
 # How environment classification works:
 # 1. LLaVA model analyzes the image and classifies it as:
 #    A) CONSTRUCTION/INDUSTRIAL - construction site, factory, warehouse, workshop  VALID
-#    B) OFFICE/COMMERCIAL - office, retail, meeting room  VALID (may need PPE)
+#    B) OFFICE/COMMERCIAL - office, retail, meeting room  INVALID
 #    C) RESIDENTIAL/CASUAL - home, living room, park, beach  INVALID (skipped)
-#    D) OTHER - unclear scenes  VALID (benefit of doubt)
+#    D) OTHER - unclear scenes/public roads without work-zone evidence  INVALID
 #
-# 2. Only category C (residential/casual) causes skipping
-# 3. Categories A, B, D all proceed with report generation
+# 2. Only category A proceeds to report generation
+# 3. Categories B, C, and D are skipped
 
 # Keywords used for SECONDARY validation (checking caption content)
 # These are checked AFTER environment validation passes

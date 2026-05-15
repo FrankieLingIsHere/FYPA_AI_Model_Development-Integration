@@ -17,6 +17,7 @@ import requests
 import json
 import time
 import hashlib
+import io
 import re
 import shutil
 import subprocess
@@ -81,6 +82,9 @@ OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_S
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
 OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
 OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
+ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM = max(256, _safe_int_env('ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM', 512))
+ENVIRONMENT_VALIDATION_OLLAMA_NUM_CTX = max(512, _safe_int_env('ENVIRONMENT_VALIDATION_OLLAMA_NUM_CTX', 768))
+ENVIRONMENT_VALIDATION_OLLAMA_KEEP_ALIVE = os.getenv('ENVIRONMENT_VALIDATION_OLLAMA_KEEP_ALIVE', '5m')
 OLLAMA_AUTO_RECOVER_ENABLED = os.getenv('OLLAMA_AUTO_RECOVER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
 OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS = max(5, _safe_int_env('OLLAMA_AUTO_RECOVER_COOLDOWN_SECONDS', 45))
 OLLAMA_AUTO_RECOVER_WAIT_SECONDS = max(1, _safe_int_env('OLLAMA_AUTO_RECOVER_WAIT_SECONDS', 8))
@@ -253,6 +257,29 @@ def encode_image_to_base64(image_path):
     """Convert image to base64 string for API."""
     with open(image_path, 'rb') as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
+
+
+def _encode_environment_validation_image(image_path):
+    """Encode a smaller JPEG for fast scene gating; fall back to original bytes."""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(image_path) as image:
+            image = ImageOps.exif_transpose(image)
+            if max(image.size) > ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM:
+                image.thumbnail(
+                    (ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM, ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM),
+                    Image.Resampling.LANCZOS,
+                )
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            buffer = io.BytesIO()
+            image.save(buffer, format='JPEG', quality=82, optimize=True)
+            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+    except Exception as e:
+        logger.debug("Environment validation image downscale failed; using original bytes: %s", e)
+        return encode_image_to_base64(image_path)
 
 
 def _normalize_openai_base_url(raw_url: str, endpoint_suffix: str) -> str:
@@ -592,7 +619,13 @@ def attempt_ollama_auto_recover(reason: str = '', model_name: str = '', require_
     return result
 
 
-def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 250) -> str:
+def _call_ollama_vision(
+    prompt: str,
+    image_base64: str,
+    temperature: float = 0.6,
+    max_tokens: int = 250,
+    ollama_options: dict = None,
+) -> str:
     """Call local Ollama vision model."""
     target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma3:4b'
     logger.info(
@@ -626,18 +659,23 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
             _record_provider_failure('ollama', f"Model '{target_model}' is not available")
             return ''
 
+    request_overrides = dict(ollama_options or {})
+    keep_alive = request_overrides.pop('keep_alive', os.getenv('OLLAMA_VISION_KEEP_ALIVE', '0'))
+    options = {
+        'temperature': temperature,
+        'num_predict': max_tokens,
+        'num_ctx': OLLAMA_VISION_NUM_CTX,
+        'num_gpu': OLLAMA_VISION_NUM_GPU,
+    }
+    options.update(request_overrides)
+
     payload = {
         'model': target_model,
         'prompt': prompt,
         'images': [image_base64],
         'stream': False,
-        'keep_alive': os.getenv('OLLAMA_VISION_KEEP_ALIVE', '0'),
-        'options': {
-            'temperature': temperature,
-            'num_predict': max_tokens,
-            'num_ctx': OLLAMA_VISION_NUM_CTX,
-            'num_gpu': OLLAMA_VISION_NUM_GPU,
-        }
+        'keep_alive': keep_alive,
+        'options': options,
     }
     if OLLAMA_VISION_NUM_THREAD > 0:
         payload['options']['num_thread'] = OLLAMA_VISION_NUM_THREAD
@@ -720,7 +758,13 @@ def _call_ollama_vision(prompt: str, image_base64: str, temperature: float = 0.6
         return ''
 
 
-def _generate_vision_response(prompt: str, image_base64: str, temperature: float = 0.6, max_tokens: int = 300) -> str:
+def _generate_vision_response(
+    prompt: str,
+    image_base64: str,
+    temperature: float = 0.6,
+    max_tokens: int = 300,
+    ollama_options: dict = None,
+) -> str:
     """Try providers in configured order until one returns a response."""
     global _LAST_PROVIDER_USED
     _LAST_PROVIDER_FAILURES.clear()
@@ -754,7 +798,13 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
         elif provider == 'gemini':
             output = _call_gemini_vision(prompt, image_base64, temperature=temperature, max_tokens=max_tokens)
         elif provider == 'ollama':
-            output = _call_ollama_vision(prompt, image_base64, temperature=temperature, max_tokens=max_tokens)
+            output = _call_ollama_vision(
+                prompt,
+                image_base64,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                ollama_options=ollama_options,
+            )
         else:
             output = ''
 
@@ -767,6 +817,15 @@ def _generate_vision_response(prompt: str, image_base64: str, temperature: float
 
     logger.warning("[VLM] all configured providers failed; returning user-facing provider failure message")
     return _build_user_facing_failure_message()
+
+
+def _parse_environment_validation_category(answer: str) -> str:
+    """Extract the A/B/C/D environment category from short model answers."""
+    text = str(answer or '').strip().upper()
+    if not text:
+        return ''
+    match = re.search(r'^\s*(?:CATEGORY\s*)?([ABCD])(?:\b|[\s\)\]\-:./])', text)
+    return match.group(1) if match else ''
 
 
 def _normalize_caption_text(caption: str) -> str:
@@ -1301,155 +1360,169 @@ Requirements:
 
 def validate_work_environment(image_path):
     """
-    Quick check to determine if the image shows a valid work environment
-    where PPE monitoring is appropriate (construction site, factory, warehouse, etc.).
+    Quick check to determine if the image shows a construction-related work
+    environment where PPE report generation is appropriate.
 
     CLASSIFICATION LOGIC:
     =====================
     The LLaVA model classifies the scene into 4 categories:
 
-    A) CONSTRUCTION/INDUSTRIAL  is_valid=TRUE, confidence=HIGH
+    A) CONSTRUCTION/INDUSTRIAL WORK ZONE  is_valid=TRUE, confidence=HIGH
        - Construction sites, factories, warehouses, workshops
        - Manufacturing plants, work zones, industrial areas
        - Any place where PPE is typically required
 
-    B) OFFICE/COMMERCIAL  is_valid=TRUE, confidence=MEDIUM
+    B) OFFICE/COMMERCIAL  is_valid=FALSE, confidence=MEDIUM
        - Office buildings, retail stores, meeting rooms
-       - These environments MAY require PPE in certain areas
-       - Still processed (not skipped)
+       - Not enough construction-related evidence for a PPE violation report
 
     C) RESIDENTIAL/CASUAL  is_valid=FALSE, confidence=HIGH
        - Homes, living rooms, bedrooms, kitchens
        - Parks, beaches, restaurants, casual settings
        - These are SKIPPED (no report generated)
 
-    D) OTHER/UNCLEAR  is_valid=TRUE, confidence=LOW
+    D) OTHER/UNCLEAR  is_valid=FALSE, confidence=LOW
        - Outdoor roads, vehicle interiors, unclear scenes
-       - Benefit of doubt - still processed
+       - Skipped unless clear construction/industrial/work-zone evidence is present
 
-    ONLY Category C causes violations to be SKIPPED.
-    Categories A, B, D all proceed with normal processing.
+    ONLY Category A proceeds to report generation.
+    Categories B, C, and D are skipped.
 
     Args:
         image_path: Path to image file
 
     Returns:
         dict with:
-            - is_valid: bool - True if this is a work environment (A, B, D) or False (C only)
+            - is_valid: bool - True only if this is category A
             - confidence: str - 'high', 'medium', 'low'
             - environment_type: str - type of environment detected
             - reason: str - explanation
     """
     print(f"Validating work environment...")
 
+    def _with_provider_diagnostics(result: dict) -> dict:
+        diagnostics = get_runtime_provider_diagnostics()
+        provider = diagnostics.get('last_provider_used')
+        model_by_provider = {
+            'gemini': diagnostics.get('gemini_model'),
+            'ollama': diagnostics.get('ollama_model'),
+            'model_api': diagnostics.get('vision_api_model'),
+        }
+        result.update({
+            'provider': provider,
+            'model': model_by_provider.get(str(provider or '').lower()) or diagnostics.get('vision_api_model'),
+            'vision_provider_order': diagnostics.get('vision_provider_order'),
+            'routing_profile': os.getenv('CASM_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE),
+        })
+        return result
+
     # Verify image exists
     if not Path(image_path).exists():
         print(f"Error: Image not found at {image_path}")
-        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Image file not found'}
+        return _with_provider_diagnostics({
+            'is_valid': False,
+            'confidence': 'low',
+            'environment_type': 'unknown',
+            'reason': 'Image file not found',
+        })
 
-    # Quick environment classification prompt - STRICT scene recognition
-    prompt = """Look at this image carefully and classify the ACTUAL environment you see.
+    # Quick environment classification prompt - strict scene recognition.
+    prompt = """Classify the ACTUAL environment in the image for PPE report generation.
 
-CHECK FOR THESE INDICATORS:
+A = valid construction/industrial/work zone: construction site, factory, warehouse, workshop, scaffolding, concrete/lumber, machinery, barriers, tools, or active roadworks with cones/signage/workers.
+B = office/commercial but not construction-related: office desks, meeting rooms, retail, checkout counters, business furniture.
+C = residential/casual: home, living room, bedroom, kitchen, sofa, dining area, park, beach, restaurant, cafe, leisure venue. Safety gear alone does NOT make it A.
+D = other/unclear: public street, sidewalk, bus stop, vehicle area, road without visible roadworks, unclear background.
 
-A) CONSTRUCTION/INDUSTRIAL:
-    Scaffolding, concrete, lumber, construction equipment
-    Factory machinery, assembly lines, warehouses with industrial shelving
-    Visible construction materials, work site barriers, heavy machinery
-    People wearing multiple PPE items in an active work zone
-    Choose A ONLY if you see CLEAR industrial/construction indicators
-
-B) OFFICE/COMMERCIAL:
-    Office desks, computers, cubicles, meeting rooms
-    Retail displays, store shelves, checkout counters
-    Professional indoor setting with business furniture
-
-C) RESIDENTIAL/CASUAL:
-    Home furniture: sofas, TV stands, beds, dining tables, home decor
-    Residential kitchen, living room, bedroom, home interior
-    Parks, beaches, restaurants, cafes, casual outdoor settings
-    Person at home (even if wearing safety gear for testing purposes)
-    Choose C if this looks like someone's HOME or casual setting
-
-D) OTHER:
-    Vehicle interior, outdoor road/street, unclear background
-    Cannot determine the setting
-
-IMPORTANT: Do NOT classify a residential living room as construction site just because someone is wearing safety gear! The ENVIRONMENT determines the category, not the person's clothing.
-
-Answer with just the letter (A/B/C/D) followed by 2-4 words. Examples:
-- "A - construction site with scaffolding"
-- "C - person in living room"
-- "C - home interior with sofa"
-- "B - office desk area" """
+Only choose A when visible construction, industrial, or active work-zone evidence is clear.
+Answer as one category letter followed by a dash and 2 to 5 words, for example: "A - construction site", "C - home living room", or "D - public street"."""
 
     # Encode image to base64
     try:
-        image_base64 = encode_image_to_base64(image_path)
+        image_base64 = _encode_environment_validation_image(image_path)
     except Exception as e:
         print(f"Error encoding image: {e}")
-        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': 'Image encoding failed'}
+        return _with_provider_diagnostics({
+            'is_valid': False,
+            'confidence': 'low',
+            'environment_type': 'unknown',
+            'reason': 'Image encoding failed',
+        })
 
     try:
-        answer = _generate_vision_response(
+        raw_answer = _generate_vision_response(
             prompt=prompt,
             image_base64=image_base64,
-            temperature=0.3,
-            max_tokens=40
-        ).upper()
+            temperature=0.2,
+            max_tokens=24,
+            ollama_options={
+                'num_ctx': ENVIRONMENT_VALIDATION_OLLAMA_NUM_CTX,
+                'keep_alive': ENVIRONMENT_VALIDATION_OLLAMA_KEEP_ALIVE,
+            },
+        )
+        answer = str(raw_answer or '').strip()
 
         if not answer:
-            return {
-                'is_valid': True,
+            return _with_provider_diagnostics({
+                'is_valid': False,
                 'confidence': 'low',
                 'environment_type': 'unknown',
                 'reason': 'No response from configured providers'
-            }
+            })
 
-        print(f"Environment check result: {answer}")
+        print(f"Environment check result: {answer.upper()}")
 
-        # Parse the response - ONLY category C causes is_valid=False
-        if answer.startswith('A'):
-            return {
+        # Parse the response - ONLY category A proceeds to report generation.
+        category = _parse_environment_validation_category(answer)
+        if category == 'A':
+            return _with_provider_diagnostics({
                 'is_valid': True,
                 'confidence': 'high',
                 'environment_type': 'construction/industrial',
-                'reason': answer
-            }
-        elif answer.startswith('B'):
-            # Office environments may still need PPE in certain areas
-            return {
-                'is_valid': True,
+                'reason': answer,
+                'raw_response': answer,
+            })
+        elif category == 'B':
+            return _with_provider_diagnostics({
+                'is_valid': False,
                 'confidence': 'medium',
                 'environment_type': 'office/commercial',
-                'reason': answer
-            }
-        elif answer.startswith('C'):
-            return {
+                'reason': answer,
+                'raw_response': answer,
+            })
+        elif category == 'C':
+            return _with_provider_diagnostics({
                 'is_valid': False,
                 'confidence': 'high',
                 'environment_type': 'residential/casual',
-                'reason': answer
-            }
-        elif answer.startswith('D'):
-            return {
-                'is_valid': True,
+                'reason': answer,
+                'raw_response': answer,
+            })
+        elif category == 'D':
+            return _with_provider_diagnostics({
+                'is_valid': False,
                 'confidence': 'low',
                 'environment_type': 'other',
-                'reason': answer
-            }
+                'reason': answer,
+                'raw_response': answer,
+            })
         else:
-            # Couldn't parse - default to valid with low confidence
-            return {
-                'is_valid': True,
+            # Couldn't parse - fail closed so non-construction scenes cannot generate reports.
+            return _with_provider_diagnostics({
+                'is_valid': False,
                 'confidence': 'low',
                 'environment_type': 'unknown',
                 'reason': f'Unparseable response: {answer[:50]}'
-            }
+            })
 
     except Exception as e:
-        print(f"Environment validation error: {e} - defaulting to valid")
-        return {'is_valid': True, 'confidence': 'low', 'environment_type': 'unknown', 'reason': str(e)}
+        print(f"Environment validation error: {e} - blocking report generation")
+        return _with_provider_diagnostics({
+            'is_valid': False,
+            'confidence': 'low',
+            'environment_type': 'unknown',
+            'reason': str(e),
+        })
 
 
 if __name__ == "__main__":

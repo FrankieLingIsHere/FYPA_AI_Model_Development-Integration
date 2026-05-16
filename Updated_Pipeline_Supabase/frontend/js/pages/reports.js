@@ -1113,6 +1113,18 @@ const ReportsPage = {
         const existingExplicit = this.normalizeSourceScope(existing && existing.source_scope);
         const sourceExplicit = this.normalizeSourceScope(sourceRecord && sourceRecord.source_scope);
         const anchoredScope = existingExplicit || sourceExplicit;
+        const forceCloudRuntime = !!(
+            patch
+            && (
+                patch.routed_via_cloud_fallback
+                || patch.force_cloud_runtime
+                || patch.source_reason === 'manual_cloud_reprocess_fallback'
+            )
+        );
+
+        if (forceCloudRuntime && normalizedCandidate === 'cloud') {
+            return 'cloud';
+        }
 
         if (
             normalizedCandidate === 'cloud'
@@ -2106,7 +2118,9 @@ const ReportsPage = {
                 status: result.already_completed ? 'completed' : (result.status || 'pending'),
                 has_report: !!(result.already_completed || result.has_report),
                 source_scope: result.source_scope || sourceScope,
-                source_label: result.source_label || ''
+                source_label: result.source_label || '',
+                source_reason: result.routed_via_cloud_fallback ? 'manual_cloud_reprocess_fallback' : '',
+                routed_via_cloud_fallback: !!result.routed_via_cloud_fallback
             }, sourceHint);
             if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                 NotificationManager.reportGenerating(reportId, {

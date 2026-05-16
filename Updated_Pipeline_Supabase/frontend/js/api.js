@@ -511,6 +511,20 @@ const API = {
         return `${base || ''}${path}`;
     },
 
+    getCloudReportScopedUrl(path) {
+        const cloudBase = this.getCloudBackendBaseUrl();
+        if (cloudBase && this.canUseRemoteCloudBackendFromPage(cloudBase)) {
+            return `${cloudBase}${path}`;
+        }
+
+        const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
+        if (!this.isLocalBackendBase(currentBase)) {
+            return `${currentBase || ''}${path}`;
+        }
+
+        return `${currentBase || ''}${path}`;
+    },
+
     isCloudReportScope(sourceHint = null) {
         const scope = this.inferReportSourceScope(sourceHint);
         return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
@@ -2018,19 +2032,58 @@ const API = {
         try {
             const sourceHint = options.source || options.violation || options.sourceHint || null;
             const sourceScope = sourceHint ? this.inferReportSourceScope(sourceHint) : '';
-            const url = sourceHint
-                ? this.buildReportScopedUrl(`/api/report/${reportId}/generate-now`, sourceHint)
-                : `${API_CONFIG.BASE_URL}/api/report/${reportId}/generate-now`;
-            const response = await fetch(url, {
+            const requestPath = `/api/report/${reportId}/generate-now`;
+            const primaryUrl = sourceHint
+                ? this.buildReportScopedUrl(requestPath, sourceHint)
+                : `${API_CONFIG.BASE_URL}${requestPath}`;
+            const cloudUrl = this.getCloudReportScopedUrl(requestPath);
+            const localRouteUnavailable = (
+                this.isLocalBackendBase(primaryUrl)
+                && !this.canUseLocalBackendFromPage(primaryUrl)
+                && cloudUrl !== primaryUrl
+            );
+            const buildPayload = (scopeOverride = '') => {
+                const effectiveScope = scopeOverride || sourceScope;
+                const usingCloudFallback = scopeOverride === 'cloud';
+                return JSON.stringify({
+                    force: !!options.force,
+                    source_scope: effectiveScope || undefined,
+                    source_label: usingCloudFallback
+                        ? 'Cloud'
+                        : (sourceHint && sourceHint.source_label ? sourceHint.source_label : undefined),
+                    sync_source: usingCloudFallback
+                        ? undefined
+                        : (sourceHint && (sourceHint.sync_source || sourceHint.source) ? (sourceHint.sync_source || sourceHint.source) : undefined)
+                });
+            };
+            const submit = async (url, scopeOverride = '') => fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    force: !!options.force,
-                    source_scope: sourceScope || undefined,
-                    source_label: sourceHint && sourceHint.source_label ? sourceHint.source_label : undefined,
-                    sync_source: sourceHint && (sourceHint.sync_source || sourceHint.source) ? (sourceHint.sync_source || sourceHint.source) : undefined
-                })
+                body: buildPayload(scopeOverride)
             });
+
+            let response;
+            let usedCloudFallback = false;
+            if (localRouteUnavailable) {
+                response = await submit(cloudUrl, 'cloud');
+                usedCloudFallback = true;
+            } else {
+                try {
+                    response = await submit(primaryUrl);
+                } catch (primaryError) {
+                    if (
+                        this.isExpectedOfflineFetchError(primaryError)
+                        && this.isLocalBackendBase(primaryUrl)
+                        && cloudUrl !== primaryUrl
+                    ) {
+                        this.logFetchFailure('Local report reprocess route unavailable; retrying cloud route', primaryError);
+                        response = await submit(cloudUrl, 'cloud');
+                        usedCloudFallback = true;
+                    } else {
+                        throw primaryError;
+                    }
+                }
+            }
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
                 return {
@@ -2040,10 +2093,14 @@ const API = {
                     queue_size: Number(data.queue_size || 0),
                     queue_capacity: Number(data.queue_capacity || 0),
                     worker_running: data.worker_running,
-                    http_status: response.status
+                    http_status: response.status,
+                    routed_via_cloud_fallback: usedCloudFallback
                 };
             }
-            return data;
+            return {
+                ...data,
+                routed_via_cloud_fallback: !!(usedCloudFallback || data.routed_via_cloud_fallback)
+            };
         } catch (error) {
             this.logFetchFailure('Error triggering priority generation', error);
             return { success: false, error: error.message };

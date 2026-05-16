@@ -443,6 +443,14 @@ def test_report_response_injects_summary_readability_styles_for_legacy_reports()
         "Legacy report response did not inject summary readability CSS",
     )
     _assert(
+        'id="casm-summary-layout-normalizer"' in response_html,
+        "Legacy report response did not inject summary layout normalizer",
+    )
+    _assert(
+        "summary-bullet-list" in response_html,
+        "Summary bullet-list CSS/normalizer missing from legacy report response",
+    )
+    _assert(
         '.card[style*="border-left: 5px solid #e74c3c"] table' in response_html,
         "Legacy summary table selector missing from readability CSS",
     )

@@ -3385,7 +3385,8 @@ Required JSON object:
         ]
 
         for pattern, img_file in replacements:
-            text = re.sub(pattern, f'<span class="ppe-tooltip" data-image="{img_file}">\\g<0></span>', text, flags=re.IGNORECASE)
+            bounded_pattern = rf'(?<![A-Za-z0-9-]){pattern}(?![A-Za-z0-9-])'
+            text = re.sub(bounded_pattern, f'<span class="ppe-tooltip" data-image="{img_file}">\\g<0></span>', text, flags=re.IGNORECASE)
 
         return text
 
@@ -3994,9 +3995,9 @@ Required JSON object:
             border: 1px solid #fecdd3;
             border-right: 0;
             border-radius: 10px 0 0 10px;
-            color: #991b1b;
+            color: #7f1d1d;
             font-size: 0.78rem;
-            font-weight: 800;
+            font-weight: 900;
             letter-spacing: 0;
             padding: 1.05rem 1rem;
             text-transform: uppercase;
@@ -4021,7 +4022,7 @@ Required JSON object:
 
         .summary-value-danger {{
             color: #b91c1c;
-            font-weight: 600;
+            font-weight: 500;
         }}
 
         .summary-cell-copy {{
@@ -4041,6 +4042,34 @@ Required JSON object:
 
         .summary-cell-copy li {{
             margin-bottom: 0.45rem;
+        }}
+
+        .summary-copy-paragraph {{
+            margin: 0;
+        }}
+
+        .summary-bullet-list {{
+            display: grid;
+            gap: 0;
+            list-style: disc;
+            margin: 0;
+            padding-left: 1.15rem;
+        }}
+
+        .summary-bullet-list li {{
+            margin: 0;
+            padding: 0.3rem 0 0.35rem;
+        }}
+
+        .summary-bullet-list li + li {{
+            border-top: 1px dashed #fecdd3;
+            padding-top: 0.65rem;
+        }}
+
+        .summary-item-label {{
+            color: #7f1d1d;
+            font-weight: 900;
+            margin-right: 0.3rem;
         }}
 
 
@@ -4893,15 +4922,7 @@ Required JSON object:
         )
 
         if _is_meaningful_summary(summary_text):
-            # Handle Malaysian Executive Summary format (bullet points with emojis)
-            # If the model provides a bulleted list, we wrap it in a clean HTML list
-            # but keep it inside the 'WHAT' table cell.
-            if '' in summary_text or '*' in summary_text:
-                lines = [line.strip(' *') for line in summary_text.split('\n') if line.strip()]
-                list_items = "".join([f"<li style='margin-bottom: 0.4rem;'>{self._to_safe_html_text(line)}</li>" for line in lines])
-                what_text = f"<ul style='list-style-type: none; padding-left: 0; margin: 0;'>{list_items}</ul>"
-            else:
-                what_text = summary_text
+            what_text = summary_text
         else:
             if no_concrete_ppe_evidence and caption_safety_neutral:
                 what_text = (
@@ -4972,7 +4993,7 @@ Required JSON object:
         if no_concrete_ppe_evidence and caption_safety_neutral:
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
-            hazard_text = '<br>'.join(f" {self._inject_interactive_tooltips(item)}" for item in hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
+            hazard_text = self._format_summary_bullet_list(hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
 
         if not reg_names:
             inferred_regs: List[str] = []
@@ -4995,13 +5016,9 @@ Required JSON object:
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
-            reg_text = '<br>'.join(f" {self._inject_interactive_tooltips(name)}" for name in reg_names)
+            reg_text = self._format_summary_bullet_list(reg_names)
 
-        # Parse Markdown for Summary (Bold and Lists)
-        # 1. Bold: **text** -> <strong>text</strong>
-        parsed_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', what_text)
-        # 2. Lists/Newlines:  or - -> <br>
-        parsed_summary = parsed_summary.replace('\n', '<br>')
+        parsed_summary = self._format_summary_what_html(what_text)
 
 
         return f"""
@@ -5018,7 +5035,7 @@ Required JSON object:
                     </tr>
                     <tr class="summary-row">
                         <td class="summary-label">WHAT</td>
-                        <td class="summary-value"><div class="summary-cell-copy">{self._inject_interactive_tooltips(parsed_summary)}</div></td>
+                        <td class="summary-value"><div class="summary-cell-copy">{parsed_summary}</div></td>
                     </tr>
                     <tr class="summary-row">
                         <td class="summary-label">DANGER</td>
@@ -5032,6 +5049,97 @@ Required JSON object:
             </div>
         </div>
         """
+
+    def _clean_summary_copy_text(self, text: Any) -> str:
+        """Normalize markdown-ish model copy before rendering summary cells."""
+        clean = re.sub(r'\s+', ' ', str(text or '')).strip()
+        clean = re.sub(r'\*\*(.*?)\*\*', r'\1', clean)
+        clean = clean.replace('**', '')
+        return clean.strip()
+
+    def _split_summary_labeled_segments(self, text: str) -> List[Tuple[str, str]]:
+        """Split legacy model summaries like 'CRITICAL RISK: ... Core Violation: ...'."""
+        clean = self._clean_summary_copy_text(text)
+        if not clean:
+            return []
+
+        label_map = {
+            'scene class': 'Scene class',
+            'critical risk': 'Critical risk',
+            'core violation': 'Core violation',
+            'immediate risk': 'Immediate risk',
+            'critical action': 'Critical action',
+            'recommended action': 'Recommended action',
+            'action required': 'Action required',
+            'why it matters': 'Why it matters',
+            'evidence': 'Evidence',
+            'summary': 'Summary',
+        }
+        labels = sorted(label_map.keys(), key=len, reverse=True)
+        pattern = re.compile(
+            r'(?i)(?:^|\s)(?:\*\*)?\b(' + '|'.join(re.escape(label) for label in labels) + r')\b(?:\*\*)?\s*[:：]\s*'
+        )
+        matches = list(pattern.finditer(clean))
+        if len(matches) < 2:
+            return []
+
+        segments: List[Tuple[str, str]] = []
+        for index, match in enumerate(matches):
+            label_key = match.group(1).strip().lower()
+            body_start = match.end()
+            body_end = matches[index + 1].start() if index + 1 < len(matches) else len(clean)
+            body = clean[body_start:body_end].strip(' -;')
+            if body:
+                segments.append((label_map.get(label_key, label_key.title()), body))
+        return segments
+
+    def _format_summary_bullet_list(self, items: Any) -> str:
+        """Render summary cell line items with clear bullets and row separators."""
+        if not isinstance(items, list):
+            items = [items]
+        lines = [
+            self._clean_summary_copy_text(item)
+            for item in items
+            if self._clean_summary_copy_text(item)
+        ]
+        if not lines:
+            return ''
+
+        rendered_items = []
+        for item in lines:
+            safe_item = self._inject_interactive_tooltips(self._to_safe_html_text(item))
+            rendered_items.append(f"<li>{safe_item}</li>")
+        return f"<ul class=\"summary-bullet-list\">{''.join(rendered_items)}</ul>"
+
+    def _format_summary_what_html(self, text: Any) -> str:
+        """Render WHAT copy as readable line items without over-bold model prose."""
+        clean = self._clean_summary_copy_text(text)
+        if not clean:
+            return '<p class="summary-copy-paragraph">Summary unavailable.</p>'
+
+        labeled_segments = self._split_summary_labeled_segments(clean)
+        if labeled_segments:
+            items = []
+            for label, body in labeled_segments:
+                safe_label = self._to_safe_html_text(label)
+                safe_body = self._inject_interactive_tooltips(self._to_safe_html_text(body))
+                items.append(
+                    f"<li><strong class=\"summary-item-label\">{safe_label}:</strong> {safe_body}</li>"
+                )
+            return f"<ul class=\"summary-bullet-list\">{''.join(items)}</ul>"
+
+        raw_lines = [line.strip() for line in re.split(r'[\r\n]+', str(text or '')) if line.strip()]
+        bullet_lines = [
+            self._clean_summary_copy_text(re.sub(r'^\s*[-*•]\s*', '', line))
+            for line in raw_lines
+            if self._clean_summary_copy_text(re.sub(r'^\s*[-*•]\s*', '', line))
+        ]
+        has_explicit_bullets = any(re.match(r'^\s*[-*•]\s+', line) for line in raw_lines)
+        if len(bullet_lines) > 1 or has_explicit_bullets:
+            return self._format_summary_bullet_list(bullet_lines)
+
+        safe_clean = self._inject_interactive_tooltips(self._to_safe_html_text(clean))
+        return f"<p class=\"summary-copy-paragraph\">{safe_clean}</p>"
 
     def _get_malaysian_severity_label(self, likelihood: str) -> str:
         """Convert likelihood to Malaysian safety severity terminology."""

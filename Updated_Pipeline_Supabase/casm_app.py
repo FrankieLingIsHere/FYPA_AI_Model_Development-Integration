@@ -14444,14 +14444,30 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
     """Add breathable summary-table styling to generated and legacy reports."""
     if not html_content or not isinstance(html_content, str):
         return html_content
-    if 'id="casm-summary-readability-overrides"' in html_content:
-        return html_content
     if 'EXECUTIVE SAFETY SUMMARY' not in html_content and 'AT A GLANCE' not in html_content:
         return html_content
+    if 'id="casm-summary-readability-overrides"' in html_content and 'id="casm-summary-layout-normalizer"' in html_content:
+        return html_content
+    if 'id="casm-summary-readability-overrides"' in html_content:
+        html_content = re.sub(
+            r'\s*<style\s+id=["\']casm-summary-readability-overrides["\'][\s\S]*?</style>\s*',
+            '\n',
+            html_content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    if 'id="casm-summary-layout-normalizer"' in html_content:
+        html_content = re.sub(
+            r'\s*<script\s+id=["\']casm-summary-layout-normalizer["\'][\s\S]*?</script>\s*',
+            '\n',
+            html_content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
     if 'class="summary-table"' in html_content and '.summary-table' in html_content:
         return html_content
 
-    style_block = """
+    injection_block = """
 <style id="casm-summary-readability-overrides">
     .summary-card,
     .card[style*="border-left: 5px solid #e74c3c"] {
@@ -14491,9 +14507,9 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
         border: 1px solid #fecdd3 !important;
         border-right: 0 !important;
         border-radius: 10px 0 0 10px !important;
-        color: #991b1b !important;
+        color: #7f1d1d !important;
         font-size: 0.78rem !important;
-        font-weight: 800 !important;
+        font-weight: 900 !important;
         letter-spacing: 0 !important;
         padding: 1.05rem 1rem !important;
         text-transform: uppercase !important;
@@ -14520,7 +14536,7 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
     .summary-value-danger,
     .card[style*="border-left: 5px solid #e74c3c"] table tr:nth-child(3) td:not(:first-child) {
         color: #b91c1c !important;
-        font-weight: 600 !important;
+        font-weight: 500 !important;
     }
 
     .summary-cell-copy {
@@ -14543,6 +14559,34 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
     .summary-cell-copy li,
     .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) li {
         margin-bottom: 0.45rem !important;
+    }
+
+    .summary-copy-paragraph {
+        margin: 0 !important;
+    }
+
+    .summary-bullet-list {
+        display: grid !important;
+        gap: 0 !important;
+        list-style: disc !important;
+        margin: 0 !important;
+        padding-left: 1.15rem !important;
+    }
+
+    .summary-bullet-list li {
+        margin: 0 !important;
+        padding: 0.3rem 0 0.35rem !important;
+    }
+
+    .summary-bullet-list li + li {
+        border-top: 1px dashed #fecdd3 !important;
+        padding-top: 0.65rem !important;
+    }
+
+    .summary-item-label {
+        color: #7f1d1d !important;
+        font-weight: 900 !important;
+        margin-right: 0.3rem !important;
     }
 
     @media (max-width: 680px) {
@@ -14594,11 +14638,152 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
         }
     }
 </style>
+<script id="casm-summary-layout-normalizer">
+(function normalizeExecutiveSummaryLayout() {
+    function ready(fn) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', fn, { once: true });
+        } else {
+            fn();
+        }
+    }
+
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function cleanText(value) {
+        return String(value || '')
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\*\*/g, '')
+            .replace(/[ \t]+/g, ' ')
+            .trim();
+    }
+
+    const labelMap = new Map([
+        ['scene class', 'Scene class'],
+        ['critical risk', 'Critical risk'],
+        ['core violation', 'Core violation'],
+        ['immediate risk', 'Immediate risk'],
+        ['critical action', 'Critical action'],
+        ['recommended action', 'Recommended action'],
+        ['action required', 'Action required'],
+        ['why it matters', 'Why it matters'],
+        ['evidence', 'Evidence'],
+        ['summary', 'Summary'],
+    ]);
+
+    function splitLabeledSegments(text) {
+        const clean = cleanText(text);
+        const labels = Array.from(labelMap.keys()).sort((a, b) => b.length - a.length);
+        const source = '(?:^|\\\\s)(?:\\\\*\\\\*)?\\\\b(' + labels.map((label) => label.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|') + ')\\\\b(?:\\\\*\\\\*)?\\\\s*[:：]\\\\s*';
+        const pattern = new RegExp(source, 'gi');
+        const matches = Array.from(clean.matchAll(pattern));
+        if (matches.length < 2) return [];
+        return matches.map((match, index) => {
+            const start = match.index + match[0].length;
+            const end = index + 1 < matches.length ? matches[index + 1].index : clean.length;
+            const key = String(match[1] || '').toLowerCase();
+            const body = clean.slice(start, end).replace(/^[\\s\\-;]+|[\\s\\-;]+$/g, '');
+            return body ? { label: labelMap.get(key) || key, body } : null;
+        }).filter(Boolean);
+    }
+
+    function renderBulletList(items) {
+        const safeItems = items.map((item) => {
+            if (typeof item === 'string') {
+                return '<li>' + escapeHtml(cleanText(item)) + '</li>';
+            }
+            return '<li><strong class="summary-item-label">' + escapeHtml(item.label) + ':</strong> ' + escapeHtml(cleanText(item.body)) + '</li>';
+        }).join('');
+        return '<ul class="summary-bullet-list">' + safeItems + '</ul>';
+    }
+
+    function splitLines(text) {
+        return String(text || '')
+            .split(/[\\n\\r]+/)
+            .map((line) => cleanText(line.replace(/^\\s*[-*•]\\s*/, '')))
+            .filter(Boolean);
+    }
+
+    function normalizeCell(rowLabel, valueCell) {
+        let copy = valueCell.querySelector('.summary-cell-copy');
+        if (!copy) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'summary-cell-copy';
+            while (valueCell.firstChild) wrapper.appendChild(valueCell.firstChild);
+            valueCell.appendChild(wrapper);
+            copy = wrapper;
+        }
+        if (copy.dataset.summaryNormalized === 'true') return;
+
+        const rawText = copy.innerText || copy.textContent || '';
+        const upperLabel = String(rowLabel || '').trim().toUpperCase();
+        if (upperLabel === 'WHAT') {
+            const labeled = splitLabeledSegments(rawText);
+            if (labeled.length) {
+                copy.innerHTML = renderBulletList(labeled);
+            } else {
+                const lines = splitLines(rawText);
+                copy.innerHTML = lines.length > 1
+                    ? renderBulletList(lines)
+                    : '<p class="summary-copy-paragraph">' + escapeHtml(cleanText(rawText)) + '</p>';
+            }
+        } else if (upperLabel === 'DANGER' || upperLabel === 'LAW') {
+            const lines = splitLines(rawText);
+            copy.innerHTML = lines.length > 1
+                ? renderBulletList(lines)
+                : '<p class="summary-copy-paragraph">' + escapeHtml(cleanText(rawText)) + '</p>';
+        }
+        copy.dataset.summaryNormalized = 'true';
+    }
+
+    ready(() => {
+        const cards = Array.from(document.querySelectorAll('.summary-card, .card'))
+            .filter((card) => card.classList.contains('summary-card')
+                || String(card.getAttribute('style') || '').includes('border-left: 5px solid #e74c3c')
+                || /EXECUTIVE SAFETY SUMMARY/i.test(card.innerText || ''));
+
+        cards.forEach((card) => {
+            const table = card.querySelector('table');
+            if (!table) return;
+            card.classList.add('summary-card');
+            const header = card.querySelector('.card-header');
+            if (header) header.classList.add('summary-card-header');
+            table.classList.add('summary-table');
+            Array.from(table.querySelectorAll('tr')).forEach((row) => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 2) return;
+                const rowLabel = cleanText(cells[0].innerText || cells[0].textContent || '');
+                row.classList.add('summary-row');
+                cells[0].classList.add('summary-label');
+                cells[0].innerHTML = escapeHtml(rowLabel.toUpperCase());
+                cells[1].classList.add('summary-value');
+                if (rowLabel.toUpperCase() === 'DANGER') {
+                    cells[1].classList.add('summary-value-danger');
+                }
+                normalizeCell(rowLabel, cells[1]);
+            });
+        });
+    });
+})();
+</script>
 """
 
     if re.search(r'</head\s*>', html_content, flags=re.IGNORECASE):
-        return re.sub(r'</head\s*>', style_block + '\n</head>', html_content, count=1, flags=re.IGNORECASE)
-    return style_block + html_content
+        return re.sub(
+            r'</head\s*>',
+            lambda _match: injection_block + '\n</head>',
+            html_content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return injection_block + html_content
 
 
 def _report_html_response(html_content: str):

@@ -463,6 +463,49 @@ def test_environment_detection_does_not_treat_restricted_work_area_as_office():
     _assert(stable == "Construction Site", f"Expected construction environment, got {stable!r}")
 
 
+def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    analysis = {
+        "summary": (
+            "SCENE CLASS: Indoor / Office CRITICAL RISK: **Direct exposure to potential respiratory hazards** "
+            "Core Violation: Non-compliance with respiratory protection requirements "
+            "Immediate Risk: The individual faces immediate health risks from inhaling contaminants "
+            "Critical Action**: Stop work until PPE is worn."
+        ),
+        "visual_evidence": "One worker is visible indoors with missing mask and safety vest.",
+        "environment_type": "Indoor / Office",
+        "hazards_detected": [
+            "Struck-by risk due to reduced worker visibility",
+            "Respiratory exposure risk from dust or airborne contaminants",
+        ],
+        "dosh_regulations_cited": [
+            {"regulation": "USECHH Regulations 2000"},
+            {"regulation": "JKR Standard Specification Section A"},
+        ],
+        "persons": [],
+    }
+    report_data = {
+        "caption": "One worker is visible indoors with missing mask and safety vest.",
+        "violation_summary": "Missing Mask, Missing Safety Vest",
+        "person_count": 1,
+        "violation_count": 2,
+        "detections": [
+            {"class_name": "Person"},
+            {"class_name": "NO-Mask"},
+            {"class_name": "NO-Safety Vest"},
+        ],
+    }
+
+    summary = subject._format_summary_html(analysis, report_data)
+
+    _assert(summary.count('class="summary-bullet-list"') >= 3, "WHAT/DANGER/LAW should render as bullet lists")
+    _assert('<strong class="summary-item-label">Scene class:</strong>' in summary, "WHAT row should expose labeled line items")
+    _assert('<strong class="summary-item-label">Critical risk:</strong>' in summary, "Critical risk should be a line-item label")
+    _assert("**" not in summary, "Markdown bold markers must not leak into executive summary")
+    _assert("summary-value-danger" in summary, "DANGER row should keep danger styling without bolding all copy")
+    _assert("Respirator</span>y" not in summary, "Tooltip injection must not split the word respiratory")
+
+
 def main():
     tests = [
         test_nlp_prompt_injects_yolo_payload,
@@ -479,6 +522,7 @@ def main():
         test_fallback_report_risks_have_concrete_likelihood_badges,
         test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
+        test_executive_summary_formats_labeled_what_and_danger_as_bullets,
     ]
     failures = []
     for test_fn in tests:

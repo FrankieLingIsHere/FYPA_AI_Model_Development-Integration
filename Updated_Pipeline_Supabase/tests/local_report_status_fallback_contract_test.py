@@ -231,6 +231,59 @@ class CaptureProcessingDB:
         self.status_updates.append((report_id, status, error_message))
 
 
+class ManualReprocessStaleHandoffDB(CaptureUpdateDB):
+    def __init__(self, report_id):
+        super().__init__()
+        self.report_id = report_id
+        self.status_updates = []
+
+    def get_detection_event(self, report_id):
+        return {
+            "report_id": report_id,
+            "status": "completed",
+            "device_id": "webcam_0",
+            "timestamp": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    def get_violation(self, report_id):
+        return {
+            "report_id": report_id,
+            "original_image_key": f"violations/{report_id}/original.jpg",
+            "annotated_image_key": f"violations/{report_id}/annotated.jpg",
+            "report_html_key": f"reports/{report_id}/report.html",
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "browser_local_draft_handoff",
+                "caption_validation": {"is_valid": True},
+            },
+        }
+
+    def update_detection_status(self, report_id, status, error_message=None):
+        self.status_updates.append((report_id, status, error_message))
+
+
+class PendingStaleHandoffDB:
+    def __init__(self, report_id):
+        self.report_id = report_id
+
+    def get_pending_reports(self, limit=300):
+        return [{
+            "report_id": self.report_id,
+            "status": "pending",
+            "device_id": "webcam_0",
+            "timestamp": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "original_image_key": f"violations/{self.report_id}/original.jpg",
+            "annotated_image_key": None,
+            "report_html_key": None,
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "browser_local_draft_handoff",
+            },
+        }]
+
+
 def _assert(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -486,6 +539,95 @@ def test_manual_cloud_reprocess_persists_source_scope_repair():
     _assert(detection_data.get("source") == "manual_cloud_reprocess", f"Persisted source marker wrong: {detection_data}")
     _assert("sync_source" not in detection_data, f"Persisted stale sync marker: {detection_data}")
     _assert(detection_data.get("caption_validation") == {"is_valid": True}, "Persisted repair lost detection details")
+
+
+def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
+    report_id = "stale_handoff_route_001"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
+        casm_app.cv2.imwrite(str(report_dir / "original.jpg"), frame)
+        casm_app.cv2.imwrite(str(report_dir / "annotated.jpg"), frame)
+
+        fake_queue = CaptureQueue()
+        fake_db = ManualReprocessStaleHandoffDB(report_id)
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_violation_queue = casm_app.violation_queue
+        old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.violation_queue = fake_queue
+            casm_app.ensure_queue_worker_running = lambda: True
+
+            with casm_app.app.test_client() as client:
+                response = client.post(
+                    f"/api/report/{report_id}/generate-now",
+                    json={
+                        "force": True,
+                        "source_scope": "synced_local",
+                        "source": "browser_local_draft_handoff",
+                    },
+                )
+                payload = response.get_json() or {}
+
+            _assert(response.status_code == 200, f"generate-now failed: {response.status_code} {payload}")
+            _assert(payload.get("source_scope") == "cloud", f"Response stayed local-synced: {payload}")
+            _assert(fake_queue.items, "Manual reprocess did not enqueue")
+            queue_payload = fake_queue.items[0]["violation_data"]
+            _assert(queue_payload.get("source_scope") == "cloud", f"Queue scope drifted: {queue_payload}")
+            _assert("sync_source" not in queue_payload, f"Queue kept stale sync marker: {queue_payload}")
+            _assert(fake_db.calls, "Manual reprocess did not persist source repair")
+            repaired_detection_data = fake_db.calls[0][1].get("detection_data") or {}
+            _assert(repaired_detection_data.get("source_scope") == "cloud", f"DB repair scope drifted: {repaired_detection_data}")
+            _assert(repaired_detection_data.get("source") == "manual_cloud_reprocess", f"DB repair source drifted: {repaired_detection_data}")
+            _assert("sync_source" not in repaired_detection_data, f"DB repair kept stale sync marker: {repaired_detection_data}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.violation_queue = old_violation_queue
+            casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
+def test_pending_reports_repairs_stale_browser_handoff_to_cloud_scope():
+    report_id = "stale_handoff_pending_001"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = PendingStaleHandoffDB(report_id)
+
+            with casm_app.app.test_client() as client:
+                response = client.get("/api/reports/pending")
+                payload = response.get_json() or []
+
+            _assert(response.status_code == 200, f"Pending reports failed: {response.status_code} {payload}")
+            row = next((item for item in payload if item.get("report_id") == report_id), None)
+            _assert(row is not None, f"Missing pending row: {payload}")
+            _assert(row.get("source_scope") == "cloud", f"Pending row stayed local-synced: {row}")
+            _assert(row.get("source_label") == "Cloud", f"Pending row label drifted: {row}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
 
 
 def test_report_response_injects_summary_readability_styles_for_legacy_reports():
@@ -910,6 +1052,8 @@ def main():
         test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud,
         test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers,
         test_manual_cloud_reprocess_persists_source_scope_repair,
+        test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope,
+        test_pending_reports_repairs_stale_browser_handoff_to_cloud_scope,
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,

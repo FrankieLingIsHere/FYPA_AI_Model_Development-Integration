@@ -981,7 +981,14 @@ const LivePage = {
                             report_id: result.report_id,
                             timestamp: new Date().toISOString(),
                             severity: 'HIGH',
+                            status: 'pending',
+                            has_report: false,
+                            has_original: true,
+                            has_annotated: false,
+                            source_scope: result.source_scope || 'cloud',
+                            source_label: result.source_label || 'Cloud',
                             missing_ppe: friendlyMissing,
+                            violation_count: Number(result.violation_count || friendlyMissing.length || 1),
                             violation_type: friendlyMissing.length
                                 ? `Missing ${friendlyMissing.join(', ')}`
                                 : 'PPE Violation',
@@ -1014,6 +1021,19 @@ const LivePage = {
                                     violation_count: Number(result.violation_count || friendlyMissing.length || 1)
                                 }).catch((draftErr) => {
                                     console.debug('Could not persist local violation draft:', draftErr);
+                                });
+                            } else if (typeof API !== 'undefined'
+                                && typeof API.upsertPendingReportCache === 'function'
+                                && synthViolation.report_id) {
+                                void API.upsertPendingReportCache({
+                                    ...synthViolation,
+                                    detections: Array.isArray(result.detections) ? result.detections : [],
+                                    source_scope: result.source_scope || 'cloud',
+                                    source_label: result.source_label || 'Cloud',
+                                    report_queue_reason: result.report_queue_reason || '',
+                                    report_queued: true
+                                }).catch((cacheErr) => {
+                                    console.debug('Could not seed queued report cache:', cacheErr);
                                 });
                             }
                         } catch (draftErr) {
@@ -1532,6 +1552,27 @@ const LivePage = {
                         violation_summary: 'PPE Violation Detected'
                     }).catch((draftErr) => {
                         console.debug('Could not persist uploaded violation draft:', draftErr);
+                    });
+                } else if (typeof API !== 'undefined'
+                    && typeof API.upsertPendingReportCache === 'function') {
+                    void API.upsertPendingReportCache({
+                        report_id: result.report_id,
+                        timestamp: new Date().toISOString(),
+                        status: 'pending',
+                        severity: 'HIGH',
+                        has_original: true,
+                        has_annotated: false,
+                        has_report: false,
+                        source_scope: result.source_scope || 'cloud',
+                        source_label: result.source_label || 'Cloud',
+                        violation_count: Number(result.violation_count || 1),
+                        detections: Array.isArray(result.detections) ? result.detections : [],
+                        missing_ppe: [],
+                        violation_summary: 'PPE Violation Detected',
+                        report_queue_reason: result.report_queue_reason || '',
+                        report_queued: true
+                    }).catch((cacheErr) => {
+                        console.debug('Could not seed uploaded report cache:', cacheErr);
                     });
                 }
             } catch (draftErr) {

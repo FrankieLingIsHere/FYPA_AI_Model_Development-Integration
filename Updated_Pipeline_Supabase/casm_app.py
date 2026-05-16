@@ -72,7 +72,13 @@ report_progress = {
     'status': 'idle',  # idle, processing, completed, error
     'current_step': '',
     'error_message': None,
-    'updated_at': None
+    'updated_at': None,
+    'started_at': None,
+    'stage_started_at': None,
+    'started_at_epoch': None,
+    'stage_started_at_epoch': None,
+    'elapsed_seconds': 0,
+    'stage_elapsed_seconds': 0,
 }
 report_progress_lock = Lock()
 
@@ -2007,13 +2013,26 @@ def update_report_progress(
     """Update the global report generation progress."""
     global report_progress
     with report_progress_lock:
+        now_epoch = time.time()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        previous_current = report_progress.get('current')
+        previous_step = report_progress.get('current_step')
         if current is not None:
             report_progress['current'] = current
         if total is not None:
             report_progress['total'] = total
         step_value = current_step if current_step is not None else step
+        current_changed = current is not None and current != previous_current
+        if status in ('waiting', 'processing', 'generating', 'running', 'active') and (
+            current_changed or not report_progress.get('started_at_epoch')
+        ):
+            report_progress['started_at_epoch'] = now_epoch
+            report_progress['started_at'] = now_iso
         if step_value:
             report_progress['current_step'] = step_value
+            if step_value != previous_step or current_changed or not report_progress.get('stage_started_at_epoch'):
+                report_progress['stage_started_at_epoch'] = now_epoch
+                report_progress['stage_started_at'] = now_iso
         report_progress['status'] = status
         error_value = error_message if error_message is not None else error
         if error_value:
@@ -2022,13 +2041,38 @@ def update_report_progress(
             report_progress['completed'] = completed
         if status == 'completed':
             report_progress['completed'] = report_progress.get('total', 0)
-        report_progress['updated_at'] = datetime.now(timezone.utc).isoformat()
+        if status in ('idle',):
+            report_progress['started_at_epoch'] = None
+            report_progress['stage_started_at_epoch'] = None
+            report_progress['started_at'] = None
+            report_progress['stage_started_at'] = None
+            report_progress['elapsed_seconds'] = 0
+            report_progress['stage_elapsed_seconds'] = 0
+        else:
+            started_epoch = report_progress.get('started_at_epoch')
+            stage_epoch = report_progress.get('stage_started_at_epoch')
+            if started_epoch:
+                report_progress['elapsed_seconds'] = round(max(0.0, now_epoch - float(started_epoch)), 1)
+            if stage_epoch:
+                report_progress['stage_elapsed_seconds'] = round(max(0.0, now_epoch - float(stage_epoch)), 1)
+        report_progress['updated_at'] = now_iso
     _invalidate_queue_context_snapshot_cache()
 
 def get_report_progress():
     """Get current report generation progress."""
     with report_progress_lock:
-        return report_progress.copy()
+        progress = report_progress.copy()
+    now_epoch = time.time()
+    try:
+        started_epoch = progress.get('started_at_epoch')
+        if started_epoch:
+            progress['elapsed_seconds'] = round(max(0.0, now_epoch - float(started_epoch)), 1)
+        stage_epoch = progress.get('stage_started_at_epoch')
+        if stage_epoch:
+            progress['stage_elapsed_seconds'] = round(max(0.0, now_epoch - float(stage_epoch)), 1)
+    except Exception:
+        pass
+    return progress
 
 def reset_report_progress():
     """Reset report progress tracking."""
@@ -2041,7 +2085,13 @@ def reset_report_progress():
             'status': 'idle',
             'current_step': '',
             'error_message': None,
-            'updated_at': None
+            'updated_at': None,
+            'started_at': None,
+            'stage_started_at': None,
+            'started_at_epoch': None,
+            'stage_started_at_epoch': None,
+            'elapsed_seconds': 0,
+            'stage_elapsed_seconds': 0,
         }
     _invalidate_queue_context_snapshot_cache()
 
@@ -2096,6 +2146,10 @@ def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
             snapshot['active_report_id'] = progress_current or None
             snapshot['active_step'] = progress.get('current_step')
             snapshot['active_status'] = progress_status
+            snapshot['active_elapsed_seconds'] = progress.get('elapsed_seconds')
+            snapshot['active_stage_elapsed_seconds'] = progress.get('stage_elapsed_seconds')
+            snapshot['active_started_at'] = progress.get('started_at')
+            snapshot['active_stage_started_at'] = progress.get('stage_started_at')
     except Exception:
         pass
 
@@ -2120,6 +2174,10 @@ def _queue_context_for_target_from_snapshot(report_id: str, snapshot: Optional[D
         'active_report_id': snapshot.get('active_report_id'),
         'active_step': snapshot.get('active_step'),
         'active_status': snapshot.get('active_status'),
+        'active_elapsed_seconds': snapshot.get('active_elapsed_seconds'),
+        'active_stage_elapsed_seconds': snapshot.get('active_stage_elapsed_seconds'),
+        'active_started_at': snapshot.get('active_started_at'),
+        'active_stage_started_at': snapshot.get('active_stage_started_at'),
         'worker_heartbeat_age_seconds': snapshot.get('worker_heartbeat_age_seconds'),
     }
 
@@ -4344,6 +4402,54 @@ def _is_local_cache_sync_job_marker(sync_source: str = '', device_id: str = '') 
     return normalized_source in sync_markers or normalized_device in sync_markers
 
 
+def _is_local_artifact_origin_device(device_id: str = '') -> bool:
+    normalized_device = str(device_id or '').strip().lower()
+    return (
+        normalized_device in {
+            'local_cache',
+            'offline_local_cache',
+            'browser_local_draft',
+            'local_cache_sync',
+            'sync_local_cache',
+        }
+        or normalized_device.startswith('local_')
+        or normalized_device.startswith('offline_')
+        or normalized_device.startswith('browser_local')
+    )
+
+
+def _has_confirmed_synced_local_evidence(
+    *,
+    sync_source: str = '',
+    device_id: str = '',
+    sync_state: str = '',
+    has_cloud_artifacts: bool = False,
+    report_id: str = '',
+) -> bool:
+    """Return True only when Local Synced is backed by a real local->cloud sync signal."""
+    normalized_source = str(sync_source or '').strip().lower()
+    normalized_state = str(sync_state or '').strip().lower()
+    normalized_report_id = str(report_id or '').strip().lower()
+    local_artifact_origin = (
+        _is_local_artifact_origin_device(device_id)
+        or bool(re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', normalized_report_id))
+    )
+
+    if _is_local_cache_sync_job_marker(sync_source=normalized_source, device_id=device_id):
+        return True
+    if normalized_source == 'local_synced':
+        return local_artifact_origin and has_cloud_artifacts
+    if normalized_source == 'browser_local_draft_handoff' and local_artifact_origin and has_cloud_artifacts:
+        return True
+
+    sync_state_confirmed = (
+        normalized_state in {'synced', 'cloud_completed', 'completed_synced'}
+        or normalized_state.startswith('cloud_sync_')
+        or normalized_state.startswith('sync_')
+    )
+    return bool(sync_state_confirmed and local_artifact_origin and has_cloud_artifacts)
+
+
 def _should_force_local_artifact_pipeline(sync_source: str = '', device_id: str = '') -> bool:
     """Return True when local runtime should generate reports locally and defer cloud upload."""
     if not LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS:
@@ -5062,6 +5168,16 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
+    generation_started_at = time.perf_counter()
+    generation_timings_seconds: Dict[str, float] = {}
+
+    def _record_generation_timing(stage_name: str, started_at: float) -> None:
+        try:
+            elapsed = round(max(0.0, time.perf_counter() - float(started_at)), 2)
+            generation_timings_seconds[stage_name] = elapsed
+            logger.info("Report generation timing %s stage=%s elapsed=%.2fs", report_id, stage_name, elapsed)
+        except Exception:
+            pass
 
     logger.info(f" Processing queued violation: {report_id}")
 
@@ -5086,6 +5202,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             return
 
     if not annotated_path.exists() and original_path.exists():
+        annotation_started_at = time.perf_counter()
         try:
             update_report_progress(
                 current=report_id,
@@ -5100,6 +5217,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 logger.warning(f"Could not read original image for annotation: {original_path}")
         except Exception as annotate_err:
             logger.warning(f"Could not create annotated image for {report_id}: {annotate_err}")
+        finally:
+            _record_generation_timing('annotation', annotation_started_at)
 
     # Update progress
     update_report_progress(
@@ -5110,6 +5229,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     # === ENVIRONMENT VALIDATION (before heavy processing) ===
     # Uses semaphore to prevent concurrent Ollama calls (VRAM exhaustion)
     if ENVIRONMENT_VALIDATION_ENABLED and not skip_environment_validation:
+        environment_started_at = time.perf_counter()
         try:
             from caption_image import validate_work_environment
 
@@ -5155,6 +5275,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.warning("validate_work_environment not available - skipping environment check")
         except Exception as e:
             logger.warning(f"Environment validation failed: {e} - proceeding with processing")
+        finally:
+            _record_generation_timing('environment_validation', environment_started_at)
 
     # Update status to generating
     if db_manager:
@@ -5177,6 +5299,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_path = violation_dir / 'caption.txt'
     caption_quality_fallback_applied = False
     caption_quality_reason = ''
+    caption_started_at = time.perf_counter()
     if caption_generator:
         try:
             logger.info(" Generating image caption with LLaVA (acquiring Ollama lock)...")
@@ -5244,6 +5367,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             )
     except Exception as caption_write_error:
         logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
+    _record_generation_timing('caption_generation', caption_started_at)
 
     context_adjusted_severity = _classify_violation_severity(
         violation_types=violation_types if isinstance(violation_types, list) else [],
@@ -5269,6 +5393,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     result_storage_keys: Dict[str, Any] = {}
     caption_provider = None
     caption_model = None
+    report_generation_started_at = time.perf_counter()
     try:
         from caption_image import get_runtime_provider_diagnostics
         vision_diag = get_runtime_provider_diagnostics() or {}
@@ -5452,6 +5577,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception as e:
             logger.error(f" Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
+    _record_generation_timing('report_generation', report_generation_started_at)
 
     if not report_created and allow_placeholder_report and force_reprocess_requested:
         try:
@@ -5506,6 +5632,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 logger.warning(f"Could not update failed status for report: {e}")
 
     # Save metadata
+    generation_timings_seconds['total'] = round(max(0.0, time.perf_counter() - generation_started_at), 2)
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
     # Compute violation/person counts and missing-PPE labels so the reports
     # page card can display them even when no Supabase violation row was
@@ -5556,7 +5683,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'has_annotated': annotated_path.exists(),
         'has_caption': bool(caption),
         'has_report': report_created,
-        'failure_reason': failure_reason
+        'failure_reason': failure_reason,
+        'generation_timings_seconds': dict(generation_timings_seconds),
     }
     if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
         metadata['source_scope'] = 'local'
@@ -6161,12 +6289,7 @@ def api_violations():
         # deployment is actually a cloud-mode runtime.
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(device_id or '').strip().lower()
-        local_device_markers = {'local_cache', 'offline_local_cache', 'local_cache_sync', 'sync_local_cache'}
-        is_local_device = (
-            device_key in local_device_markers
-            or device_key.startswith('local_')
-            or device_key.startswith('offline_')
-        )
+        is_local_device = _is_local_artifact_origin_device(device_key)
         source_marker = str(
             detection_data.get('origin')
             or detection_data.get('source')
@@ -6193,7 +6316,13 @@ def api_violations():
             or sync_state.startswith('sync_')
         )
         local_origin = local_sync_marker or local_origin_marker or is_local_device
-        confirmed_synced_local = local_sync_marker or (local_origin and (has_cloud_artifacts or sync_state_confirmed))
+        confirmed_synced_local = _has_confirmed_synced_local_evidence(
+            sync_source=source_marker,
+            device_id=device_key,
+            sync_state=sync_state,
+            has_cloud_artifacts=has_cloud_artifacts,
+            report_id='',
+        )
 
         explicit_scope = _normalize_source_scope(
             detection_data.get('source_scope')
@@ -6206,6 +6335,8 @@ def api_violations():
                     return 'synced_local', 'confirmed_synced_local'
                 if active_profile != 'local' and has_cloud_artifacts and not local_origin:
                     return 'cloud', 'repaired_synced_local_in_cloud_mode'
+                if active_profile != 'local' and has_cloud_artifacts and not confirmed_synced_local:
+                    return 'cloud', 'repaired_stale_synced_local_handoff'
                 if local_origin or has_local_artifacts:
                     return 'local', 'repaired_unsynced_local_scope'
             return explicit_scope, 'detection_data.scope'
@@ -6796,11 +6927,31 @@ def api_stats():
 
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(row.get('device_id') or '').strip().lower()
-        is_local_device = (
-            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync'}
-            or device_key.startswith('local_')
-            or device_key.startswith('offline_')
-            or device_key.startswith('browser_local')
+        is_local_device = _is_local_artifact_origin_device(device_key)
+        has_cloud_artifacts = bool(
+            row.get('original_image_key')
+            or row.get('annotated_image_key')
+            or row.get('report_html_key')
+            or row.get('report_pdf_key')
+        )
+        source_marker_for_repair = str(
+            detection_payload.get('origin')
+            or detection_payload.get('source')
+            or detection_payload.get('sync_source')
+            or ''
+        ).strip().lower()
+        sync_state_for_repair = str(
+            row.get('sync_state')
+            or detection_payload.get('sync_state')
+            or detection_payload.get('cloud_sync_state')
+            or ''
+        ).strip().lower()
+        confirmed_synced_local = _has_confirmed_synced_local_evidence(
+            sync_source=source_marker_for_repair,
+            device_id=device_key,
+            sync_state=sync_state_for_repair,
+            has_cloud_artifacts=has_cloud_artifacts,
+            report_id=str(row.get('report_id') or ''),
         )
 
         explicit_scope = _normalize_source_scope(
@@ -6809,27 +6960,13 @@ def api_stats():
             or detection_payload.get('scope')
         )
         if explicit_scope:
-            source_marker_for_repair = str(
-                detection_payload.get('origin')
-                or detection_payload.get('source')
-                or detection_payload.get('sync_source')
-                or ''
-            ).strip().lower()
-            is_local_sync_marker = source_marker_for_repair in {
-                'local_synced',
-                'sync_local_cache',
-                'local_cache_sync',
-                'offline_local_cache_sync',
-                'sync_local_cache_partial',
-                'browser_local_draft_handoff',
-            }
-            if (
-                explicit_scope == 'synced_local'
-                and active_profile != 'local'
-                and not is_local_device
-                and not is_local_sync_marker
-            ):
-                return 'cloud'
+            if explicit_scope == 'synced_local':
+                if confirmed_synced_local:
+                    return 'synced_local'
+                if active_profile != 'local' and has_cloud_artifacts:
+                    return 'cloud'
+                if is_local_device or has_local_artifacts:
+                    return 'local'
             return explicit_scope
 
         source_marker = str(
@@ -6844,13 +6981,6 @@ def api_stats():
             'local_pending_recovery',
             'local_pipeline',
         }
-
-        has_cloud_artifacts = bool(
-            row.get('original_image_key')
-            or row.get('annotated_image_key')
-            or row.get('report_html_key')
-            or row.get('report_pdf_key')
-        )
 
         if source_marker in local_markers:
             return 'synced_local' if has_cloud_artifacts else 'local'
@@ -7461,12 +7591,12 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
         if active_report_id and active_report_id != report_id:
             position_text = f" at position {position}" if position else ""
             message_map['pending'] = (
-                f"Report is queued for local generation"
+                f"Report is queued for generation"
                 f"{position_text}; "
-                f"the local worker is currently processing {active_report_id}."
+                f"the worker is currently processing {active_report_id}."
             )
         elif position:
-            message_map['pending'] = f"Report is queued for local generation at position {position}."
+            message_map['pending'] = f"Report is queued for generation at position {position}."
 
     return {
         'status': status,
@@ -7558,11 +7688,7 @@ def api_report_status(report_id):
         )
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(device_id or '').strip().lower()
-        local_device = (
-            device_key in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'sync_local_cache'}
-            or device_key.startswith('local_')
-            or device_key.startswith('offline_')
-        )
+        local_device = _is_local_artifact_origin_device(device_key)
         local_sync_marker = _is_local_cache_sync_job_marker(
             sync_source=sync_source,
             device_id=device_key,
@@ -7584,13 +7710,25 @@ def api_report_status(report_id):
             or sync_state.startswith('sync_')
         )
         local_origin = local_sync_marker or local_origin_marker or local_device
-        confirmed_synced_local = local_sync_marker or (local_origin and (has_cloud_artifacts or sync_state_confirmed))
+        confirmed_synced_local = _has_confirmed_synced_local_evidence(
+            sync_source=sync_source,
+            device_id=device_key,
+            sync_state=sync_state,
+            has_cloud_artifacts=has_cloud_artifacts,
+            report_id=(
+                (event_row or {}).get('report_id')
+                or (violation_row or {}).get('report_id')
+                or ''
+            ),
+        )
 
         if explicit_scope:
             if explicit_scope == 'synced_local':
                 if confirmed_synced_local:
                     return 'synced_local'
                 if active_profile != 'local' and has_cloud_artifacts and not local_origin:
+                    return 'cloud'
+                if active_profile != 'local' and has_cloud_artifacts and not confirmed_synced_local:
                     return 'cloud'
                 if local_origin or has_local_artifacts:
                     return 'local'
@@ -7761,6 +7899,10 @@ def api_report_status(report_id):
                 'active_report_id',
                 'active_step',
                 'active_status',
+                'active_elapsed_seconds',
+                'active_stage_elapsed_seconds',
+                'active_started_at',
+                'active_stage_started_at',
                 'worker_heartbeat_age_seconds',
                 'source_scope',
                 'source_label',
@@ -7800,6 +7942,10 @@ def api_report_status(report_id):
             'active_report_id': status_info.get('active_report_id'),
             'active_step': status_info.get('active_step'),
             'active_status': status_info.get('active_status'),
+            'active_elapsed_seconds': status_info.get('active_elapsed_seconds'),
+            'active_stage_elapsed_seconds': status_info.get('active_stage_elapsed_seconds'),
+            'active_started_at': status_info.get('active_started_at'),
+            'active_stage_started_at': status_info.get('active_stage_started_at'),
             'worker_heartbeat_age_seconds': status_info.get('worker_heartbeat_age_seconds'),
             'source_scope': status_info.get('source_scope'),
             'source_label': status_info.get('source_label'),
@@ -13016,12 +13162,32 @@ def api_pending_reports():
             return 20
         return 0
 
-    def _normalize_pending_source_scope(scope: Any, device_id: Any) -> str:
+    def _normalize_pending_source_scope(
+        scope: Any,
+        device_id: Any,
+        *,
+        sync_source: Any = '',
+        sync_state: Any = '',
+        has_cloud_artifacts: bool = False,
+        report_id: Any = '',
+    ) -> str:
         normalized_scope = str(scope or '').strip().lower()
+        device_key = str(device_id or '').strip().lower()
         if normalized_scope in ('local', 'cloud', 'shared', 'synced_local'):
+            if normalized_scope == 'synced_local' and not _has_confirmed_synced_local_evidence(
+                sync_source=str(sync_source or ''),
+                device_id=device_key,
+                sync_state=str(sync_state or ''),
+                has_cloud_artifacts=has_cloud_artifacts,
+                report_id=str(report_id or ''),
+            ):
+                return 'local' if active_profile == 'local' and _is_local_pipeline_origin_marker(
+                    source_scope='',
+                    sync_source=str(sync_source or ''),
+                    device_id=device_key,
+                ) else 'cloud'
             return normalized_scope
 
-        device_key = str(device_id or '').strip().lower()
         if device_key in ('local_cache_sync', 'sync_local_cache'):
             return 'synced_local'
         if (
@@ -13053,6 +13219,7 @@ def api_pending_reports():
     local_artifact_scope = 'local' if active_profile == 'local' else 'cloud'
     local_seed_device_id = 'local_cache' if active_profile == 'local' else None
     local_rows = _collect_local_report_state_rows(limit=300)
+    queue_snapshot = _get_queue_context_snapshot()
     completed_local_report_ids = set()
     for row in local_rows:
         report_id = str(row.get('report_id') or '').strip()
@@ -13104,6 +13271,38 @@ def api_pending_reports():
                     continue
 
                 has_report = bool((p or {}).get('report_html_key'))
+                raw_detection_data = (p or {}).get('detection_data') or {}
+                if isinstance(raw_detection_data, str):
+                    try:
+                        raw_detection_data = json.loads(raw_detection_data)
+                    except Exception:
+                        raw_detection_data = {}
+                detection_payload = raw_detection_data if isinstance(raw_detection_data, dict) else {}
+                has_cloud_artifacts = bool(
+                    (p or {}).get('original_image_key')
+                    or (p or {}).get('annotated_image_key')
+                    or (p or {}).get('report_html_key')
+                )
+                source_scope_value = (
+                    (p or {}).get('source_scope')
+                    or detection_payload.get('source_scope')
+                    or detection_payload.get('report_scope')
+                    or detection_payload.get('scope')
+                )
+                source_marker = (
+                    (p or {}).get('sync_source')
+                    or (p or {}).get('source')
+                    or detection_payload.get('sync_source')
+                    or detection_payload.get('source')
+                    or detection_payload.get('origin')
+                    or ''
+                )
+                sync_state_value = (
+                    (p or {}).get('sync_state')
+                    or detection_payload.get('sync_state')
+                    or detection_payload.get('cloud_sync_state')
+                    or ''
+                )
                 status = _normalize_pending_status((p or {}).get('status'), has_report=has_report)
                 if report_id in completed_local_report_ids and status in ('pending', 'generating'):
                     pending_by_id.pop(report_id, None)
@@ -13113,10 +13312,14 @@ def api_pending_reports():
                     continue
 
                 source_scope = _normalize_pending_source_scope(
-                    (p or {}).get('source_scope'),
+                    source_scope_value,
                     (p or {}).get('device_id'),
+                    sync_source=source_marker,
+                    sync_state=sync_state_value,
+                    has_cloud_artifacts=has_cloud_artifacts,
+                    report_id=report_id,
                 )
-                explicit_source_scope = str((p or {}).get('source_scope') or '').strip().lower()
+                explicit_source_scope = str(source_scope_value or '').strip().lower()
 
                 ts = (p or {}).get('timestamp')
                 if hasattr(ts, 'isoformat'):
@@ -13144,6 +13347,7 @@ def api_pending_reports():
                 existing_scope = _normalize_pending_source_scope(
                     merged.get('source_scope'),
                     merged.get('device_id'),
+                    report_id=report_id,
                 )
                 preserve_local_scope = bool(
                     existing_scope == 'local'
@@ -13177,6 +13381,10 @@ def api_pending_reports():
                     merged_scope = 'local'
                 merged['source_scope'] = merged_scope
                 merged['source_label'] = _source_label(merged_scope)
+
+                queue_context = _queue_context_for_target_from_snapshot(report_id, queue_snapshot)
+                if queue_context.get('queued') or str(queue_context.get('active_report_id') or '') == report_id:
+                    merged.update(queue_context)
 
                 pending_by_id[report_id] = merged
 
@@ -13388,15 +13596,41 @@ def api_generate_report_now(report_id):
             sync_source=sync_source_marker,
             device_id=device_key,
         )
-        is_local_sync_marker_for_repair = _is_local_cache_sync_job_marker(
+        event_sync_state = (event or {}).get('sync_state') if isinstance(event, dict) else ''
+        sync_state_marker = str(event_sync_state or '').strip().lower() or str(
+            detection_data.get('sync_state')
+            or detection_data.get('cloud_sync_state')
+            or ''
+        ).strip().lower()
+        has_cloud_artifacts_for_scope = bool(
+            isinstance(violation, dict)
+            and (
+                violation.get('original_image_key')
+                or violation.get('annotated_image_key')
+                or violation.get('report_html_key')
+            )
+        )
+        confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=sync_source_marker,
             device_id=device_key,
-        ) or local_origin_marker
-        if source_scope_marker == 'synced_local' and not is_local_sync_marker_for_repair:
+            sync_state=sync_state_marker,
+            has_cloud_artifacts=has_cloud_artifacts_for_scope,
+            report_id=report_id,
+        )
+        if source_scope_marker == 'synced_local' and not confirmed_synced_local:
             source_scope_marker = 'cloud' if active_profile == 'cloud' else 'local'
         elif not source_scope_marker:
-            source_scope_marker = 'local' if (active_profile == 'local' or local_origin_marker) else 'cloud'
+            strict_local_origin_marker = (
+                local_origin_marker
+                and (
+                    _is_local_artifact_origin_device(device_key)
+                    or re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', report_id.lower())
+                )
+            )
+            source_scope_marker = 'local' if (active_profile == 'local' or strict_local_origin_marker) else 'cloud'
         if source_scope_marker == 'cloud' and not payload.get('sync_source') and not payload.get('source'):
+            sync_source_marker = ''
+        if source_scope_marker == 'cloud' and not confirmed_synced_local:
             sync_source_marker = ''
 
         if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):

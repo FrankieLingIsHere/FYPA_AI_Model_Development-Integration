@@ -151,6 +151,41 @@ async function testCloudPageSkipsUnusableLocalReprocessRoute() {
   assertEqual(result.routed_via_cloud_fallback, true, 'result should mark cloud fallback routing');
 }
 
+async function testStaleBrowserHandoffReprocessUsesCloudScope() {
+  const calls = [];
+  const context = loadApiContext(async (url, init) => {
+    calls.push({ url, init });
+    return createResponse(true, 200, {
+      success: true,
+      status: 'pending',
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    });
+  });
+
+  const result = await context.API.generateReportNow('stale-handoff-001', {
+    force: true,
+    source: {
+      report_id: 'stale-handoff-001',
+      status: 'completed',
+      source_scope: 'synced_local',
+      source_label: 'Local Synced',
+      source: 'browser_local_draft_handoff',
+      device_id: 'webcam_0',
+      original_image_key: 'violations/stale-handoff-001/original.jpg',
+      report_html_key: 'reports/stale-handoff-001/report.html',
+      has_report: false,
+    },
+  });
+
+  assertEqual(result.success, true, 'stale handoff reprocess should succeed');
+  assertEqual(calls.length, 1, 'stale handoff should route directly to cloud backend');
+  const body = JSON.parse(calls[0].init.body);
+  assertEqual(body.source_scope, 'cloud', 'stale browser handoff should be repaired to cloud before enqueue');
+  assertEqual(body.source_label, 'Cloud', 'stale browser handoff should send cloud label');
+  assert(!Object.prototype.hasOwnProperty.call(body, 'sync_source'), 'stale browser handoff should not resend local sync source');
+}
+
 async function testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists() {
   const calls = [];
   const context = loadApiContext(
@@ -194,6 +229,31 @@ async function testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists() {
   assertEqual(result.routed_via_cloud_fallback, true, 'fallback retry should be marked');
 }
 
+async function testQueuedCloudReportSeedsPendingCache() {
+  const context = loadApiContext(async () => createResponse(true, 200, {}));
+
+  await context.API.upsertPendingReportCache({
+    report_id: 'fresh-cloud-queued-001',
+    status: 'pending',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    violation_count: 2,
+    has_original: true,
+    has_report: false,
+  });
+
+  const pending = await context.API.readJsonCache('reports:pending');
+  const row = pending.data.find((item) => item.report_id === 'fresh-cloud-queued-001');
+  assert(row, 'queued cloud report should be present in pending cache');
+  assertEqual(row.source_scope, 'cloud', 'queued cloud cache source scope');
+  assertEqual(row.source_label, 'Cloud', 'queued cloud cache source label');
+  assertEqual(row.status, 'pending', 'queued cloud cache status');
+
+  const violations = await context.API.readJsonCache('violations:limit:1000');
+  const violationRow = violations.data.find((item) => item.report_id === 'fresh-cloud-queued-001');
+  assert(violationRow, 'queued cloud report should seed violations cache for Reports page mount');
+}
+
 function testCloudFallbackPatchOverridesStaleLocalAnchor() {
   const ReportsPage = loadReportsPage();
   ReportsPage.violations = [{
@@ -216,6 +276,18 @@ function testCloudFallbackPatchOverridesStaleLocalAnchor() {
 
   assertEqual(record.source_scope, 'cloud', 'cloud fallback patch source scope');
   assertEqual(record.source_label, 'Cloud', 'cloud fallback patch source label');
+}
+
+function testReportsPageMountStartsWithFreshLoad() {
+  const source = fs.readFileSync(REPORTS_JS, 'utf8');
+  assert(
+    source.includes('await this.loadReports({ noCache: true });'),
+    'Reports page mount should force a fresh first load so newly queued cloud reports appear without manual refresh',
+  );
+  assert(
+    source.includes("window.addEventListener('ppe-report-queue:update'"),
+    'Reports page should listen for optimistic queue updates',
+  );
 }
 
 async function testCloudFallbackRepairsStaleLocalReportCaches() {
@@ -351,8 +423,11 @@ function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
+    testStaleBrowserHandoffReprocessUsesCloudScope,
     testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists,
+    testQueuedCloudReportSeedsPendingCache,
     testCloudFallbackPatchOverridesStaleLocalAnchor,
+    testReportsPageMountStartsWithFreshLoad,
     testCloudFallbackRepairsStaleLocalReportCaches,
     testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
   ];

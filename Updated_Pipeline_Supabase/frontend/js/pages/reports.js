@@ -125,7 +125,7 @@ const ReportsPage = {
         this.timezoneChangeHandler = () => this.renderReports();
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
 
-        await this.loadReports();
+        await this.loadReports({ noCache: true });
         await this.updateProviderRuntimeBadge();
         this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
         this.syncFallbackPolling();
@@ -144,6 +144,9 @@ const ReportsPage = {
 
         this.localSyncHandler = (event) => this.applyLocalSyncUpdate((event && event.detail) || {});
         window.addEventListener('ppe-local-report-sync:update', this.localSyncHandler);
+
+        this.reportQueueHandler = (event) => this.applyReportQueueUpdate((event && event.detail) || {});
+        window.addEventListener('ppe-report-queue:update', this.reportQueueHandler);
     },
 
     unmount() {
@@ -178,6 +181,10 @@ const ReportsPage = {
         if (this.localSyncHandler) {
             window.removeEventListener('ppe-local-report-sync:update', this.localSyncHandler);
             this.localSyncHandler = null;
+        }
+        if (this.reportQueueHandler) {
+            window.removeEventListener('ppe-report-queue:update', this.reportQueueHandler);
+            this.reportQueueHandler = null;
         }
         if (this.timezoneChangeHandler) {
             window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
@@ -241,6 +248,42 @@ const ReportsPage = {
         this.renderReports();
         this.scheduleReportPrefetch({ reason: noCache ? 'fresh-load' : 'cached-load' });
         this.applyPendingFocusRequest();
+    },
+
+    applyReportQueueUpdate(detail = {}) {
+        const rows = [];
+        if (detail && detail.report && typeof detail.report === 'object') {
+            rows.push(detail.report);
+        }
+        if (detail && Array.isArray(detail.reports)) {
+            detail.reports.forEach((report) => {
+                if (report && typeof report === 'object') rows.push(report);
+            });
+        }
+        if (!rows.length && detail && detail.report_id) {
+            rows.push(detail);
+        }
+
+        const seen = new Set();
+        rows.forEach((row) => {
+            const reportId = String((row && row.report_id) || '').trim();
+            if (!reportId || seen.has(reportId)) return;
+            seen.add(reportId);
+            const sourceScope = this.inferSourceScope(row) || 'cloud';
+            this.upsertReportRuntimeState(reportId, {
+                ...row,
+                status: this.normalizeStatusValue(row.status || 'pending', !!row.has_report),
+                has_report: !!row.has_report,
+                source_scope: sourceScope,
+                source_label: String(row.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
+            }, row);
+        });
+
+        if (seen.size) {
+            setTimeout(() => this.loadReports({ noCache: true }), 1200);
+        } else if (detail && detail.success) {
+            setTimeout(() => this.loadReports({ noCache: true }), 700);
+        }
     },
 
     applyLocalSyncUpdate(detail = {}) {
@@ -951,20 +994,25 @@ const ReportsPage = {
             if (this.hasSyncedLocalEvidence(violation)) {
                 return 'synced_local';
             }
-            return this.hasLocalOriginEvidence(violation) ? 'local' : 'cloud';
+            return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
         if (explicit) return explicit;
 
         const sourceMarker = this.getSourceMarker(violation);
         if (
-            sourceMarker === 'local_synced'
-            || sourceMarker === 'sync_local_cache'
+            sourceMarker === 'sync_local_cache'
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
-            || sourceMarker === 'sync_local_cache_partial'
-            || sourceMarker === 'browser_local_draft_handoff'
         ) {
             return 'synced_local';
+        }
+        if (sourceMarker === 'local_synced') {
+            if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
+        }
+        if (sourceMarker === 'browser_local_draft_handoff') {
+            if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
 
         const deviceId = this.getDeviceKey(violation);
@@ -997,8 +1045,38 @@ const ReportsPage = {
         ).trim().toLowerCase();
     },
 
+    getSourceMarkers(record = {}) {
+        return [
+            record && record.origin,
+            record && record.sync_source,
+            record && record.source,
+            record && record.source_reason
+        ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+    },
+
     getDeviceKey(record = {}) {
         return String((record && record.device_id) || '').trim().toLowerCase();
+    },
+
+    hasLocalArtifactOriginDevice(deviceId = '') {
+        const normalized = String(deviceId || '').trim().toLowerCase();
+        return (
+            normalized === 'local_cache'
+            || normalized === 'offline_local_cache'
+            || normalized === 'browser_local_draft'
+            || normalized === 'local_cache_sync'
+            || normalized === 'sync_local_cache'
+            || normalized.startsWith('local_')
+            || normalized.startsWith('offline_')
+            || normalized.startsWith('browser_local')
+        );
+    },
+
+    hasStrictLocalArtifactOrigin(record = {}) {
+        if (!record || typeof record !== 'object') return false;
+        const reportId = String((record && (record.report_id || record.id)) || '').trim().toLowerCase();
+        if (/^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(reportId)) return true;
+        return this.hasLocalArtifactOriginDevice(this.getDeviceKey(record));
     },
 
     getSyncState(record = {}) {
@@ -1023,6 +1101,11 @@ const ReportsPage = {
 
     hasLocalOriginMarkerEvidence(record = {}) {
         const sourceMarker = this.getSourceMarker(record);
+        const handoffOnlyMarker = sourceMarker === 'browser_local_draft_handoff'
+            || sourceMarker === 'sync_local_cache_partial';
+        if (handoffOnlyMarker) {
+            return this.hasStrictLocalArtifactOrigin(record);
+        }
         if (
             sourceMarker === 'local'
             || sourceMarker === 'local_pipeline'
@@ -1030,16 +1113,14 @@ const ReportsPage = {
             || sourceMarker === 'offline_local'
             || sourceMarker === 'offline_local_cache'
             || sourceMarker === 'browser_local_draft'
-            || sourceMarker === 'browser_local_draft_handoff'
             || sourceMarker === 'sync_local_cache'
-            || sourceMarker === 'sync_local_cache_partial'
             || sourceMarker === 'local_cache'
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
             || sourceMarker === 'local_synced'
             || sourceMarker.startsWith('local_')
             || sourceMarker.startsWith('offline_')
-            || sourceMarker.startsWith('browser_local')
+            || (sourceMarker.startsWith('browser_local') && sourceMarker !== 'browser_local_draft_handoff')
         ) {
             return true;
         }
@@ -1076,22 +1157,28 @@ const ReportsPage = {
 
     hasSyncedLocalEvidence(record = {}) {
         const explicit = this.normalizeSourceScope(record && record.source_scope);
-        const sourceMarker = this.getSourceMarker(record);
+        const sourceMarkers = this.getSourceMarkers(record);
+        const hasMarker = (marker) => sourceMarkers.includes(marker);
+        const sourceMarker = sourceMarkers[0] || '';
         const deviceId = this.getDeviceKey(record);
         const syncState = this.getSyncState(record);
-        const localOrigin = this.hasLocalOriginMarkerEvidence(record);
         const syncMarker = (
-            sourceMarker === 'local_synced'
-            || sourceMarker === 'sync_local_cache'
-            || sourceMarker === 'local_cache_sync'
-            || sourceMarker === 'offline_local_cache_sync'
-            || sourceMarker === 'sync_local_cache_partial'
-            || sourceMarker === 'browser_local_draft_handoff'
+            hasMarker('sync_local_cache')
+            || hasMarker('local_cache_sync')
+            || hasMarker('offline_local_cache_sync')
             || deviceId === 'local_cache_sync'
             || deviceId === 'sync_local_cache'
         );
         if (syncMarker) {
             return true;
+        }
+
+        const strictLocalOrigin = this.hasStrictLocalArtifactOrigin(record);
+        if (hasMarker('local_synced')) {
+            return strictLocalOrigin && this.hasCloudArtifactEvidence(record);
+        }
+        if (hasMarker('browser_local_draft_handoff')) {
+            return strictLocalOrigin && this.hasCloudArtifactEvidence(record);
         }
 
         const syncStateConfirmed = (
@@ -1101,11 +1188,11 @@ const ReportsPage = {
             || syncState.startsWith('cloud_sync_')
             || syncState.startsWith('sync_')
         );
-        if (syncStateConfirmed && (explicit === 'synced_local' || localOrigin)) {
+        if (syncStateConfirmed && strictLocalOrigin && this.hasCloudArtifactEvidence(record)) {
             return true;
         }
 
-        return localOrigin && this.hasCloudArtifactEvidence(record);
+        return false;
     },
 
     resolveStableRuntimeSourceScope(existing = {}, sourceRecord = {}, patch = {}, candidateScope = '') {
@@ -1571,23 +1658,37 @@ const ReportsPage = {
 
         switch(status) {
             case 'generating':
-                return 'The AI is analyzing the violation and generating a detailed report. This usually takes 30-60 seconds.';
+                if (violation && violation.active_step) {
+                    const elapsed = this.formatDuration(violation.active_elapsed_seconds);
+                    const stageElapsed = this.formatDuration(violation.active_stage_elapsed_seconds);
+                    const timingText = elapsed
+                        ? ` Elapsed ${elapsed}${stageElapsed ? `; current step ${stageElapsed}` : ''}.`
+                        : '';
+                    return `${violation.active_step}.${timingText}`;
+                }
+                return 'The AI is analyzing the violation and generating a detailed report. Provider timing can vary by image caption and report-analysis latency.';
             case 'processing':
+                if (violation && violation.active_step) {
+                    const elapsed = this.formatDuration(violation.active_elapsed_seconds);
+                    return `${violation.active_step}.${elapsed ? ` Elapsed ${elapsed}.` : ''}`;
+                }
                 return 'The report job is actively processing and generation is in progress.';
             case 'pending':
                 if (violation && violation.active_report_id && String(violation.active_report_id) !== String(violation.report_id || '')) {
-                    return `Queued for local generation. The local worker is currently processing ${violation.active_report_id}.`;
+                    const elapsed = this.formatDuration(violation.active_elapsed_seconds);
+                    return `Queued for generation. The worker is currently processing ${violation.active_report_id}${elapsed ? ` (${elapsed} elapsed)` : ''}.`;
                 }
                 if (violation && violation.queue_position) {
-                    return `Queued for local generation at position ${violation.queue_position}.`;
+                    return `Queued for generation at position ${violation.queue_position}.`;
                 }
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'queued':
                 if (violation && violation.active_report_id && String(violation.active_report_id) !== String(violation.report_id || '')) {
-                    return `Queued for local generation. The local worker is currently processing ${violation.active_report_id}.`;
+                    const elapsed = this.formatDuration(violation.active_elapsed_seconds);
+                    return `Queued for generation. The worker is currently processing ${violation.active_report_id}${elapsed ? ` (${elapsed} elapsed)` : ''}.`;
                 }
                 if (violation && violation.queue_position) {
-                    return `Queued for local generation at position ${violation.queue_position}.`;
+                    return `Queued for generation at position ${violation.queue_position}.`;
                 }
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'failed':
@@ -1613,6 +1714,16 @@ const ReportsPage = {
         return this.modalRuntime;
     },
 
+    formatDuration(seconds) {
+        const value = Number(seconds || 0);
+        if (!Number.isFinite(value) || value <= 0) return '';
+        const total = Math.floor(value);
+        if (total < 60) return `${total}s`;
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        return secs ? `${mins}m ${secs}s` : `${mins}m`;
+    },
+
     updateModalEtaText() {
         const etaEl = document.getElementById('report-modal-eta');
         if (!etaEl) return;
@@ -1623,8 +1734,7 @@ const ReportsPage = {
         }
 
         const elapsedSec = Math.max(0, Math.floor((Date.now() - this.modalRuntime.pollStartedAt) / 1000));
-        const remainingSec = Math.max(0, this.modalRuntime.expectedDurationSec - elapsedSec);
-        etaEl.textContent = `Elapsed: ${elapsedSec}s | Est. remaining: ~${remainingSec}s`;
+        etaEl.textContent = `Elapsed: ${this.formatDuration(elapsedSec) || '0s'} | Current provider/runtime speed may vary by caption and report analysis.`;
     },
 
     setModalStatusText(message) {

@@ -338,6 +338,48 @@ class GeminiClient:
 
         return None
 
+    def _extract_json_string_field(self, text: str, key: str) -> Optional[str]:
+        """Extract a top-level JSON string value, tolerating a truncated closing quote."""
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*"', str(text or ''))
+        if not match:
+            return None
+
+        raw_chars: List[str] = []
+        escaped = False
+        closed = False
+        for ch in str(text or '')[match.end():]:
+            if escaped:
+                raw_chars.append('\\' + ch)
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                closed = True
+                break
+            raw_chars.append(ch)
+
+        raw_value = ''.join(raw_chars).strip()
+        if not raw_value:
+            return None
+        if closed:
+            try:
+                decoded = json.loads('"' + raw_value + '"')
+                return str(decoded).strip() or None
+            except Exception:
+                pass
+        return re.sub(r'\s+', ' ', raw_value).strip() or None
+
+    def _extract_partial_top_level_json_fields(self, text: str) -> Optional[Dict[str, Any]]:
+        """Recover useful leading fields from malformed/truncated Gemini JSON."""
+        partial: Dict[str, Any] = {}
+        for key in ('environment_type', 'visual_evidence', 'summary'):
+            value = self._extract_json_string_field(text, key)
+            if value:
+                partial[key] = value
+        return partial or None
+
     def _sanitize_debug_text(self, value: Any, max_chars: Optional[int] = None) -> str:
         """Sanitize debug text to keep logs safe and bounded."""
         limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else self.raw_capture_max_chars
@@ -511,6 +553,14 @@ class GeminiClient:
                     return parsed
             except json.JSONDecodeError:
                 pass
+
+        # 4) Truncated JSON recovery. Gemini may return the start of a useful
+        # object but stop mid-string before the final brace. Keep the grounded
+        # top-level fields and let downstream schema completion fill the rest.
+        partial = self._extract_partial_top_level_json_fields(raw_text)
+        if partial:
+            self.last_parse_strategy = 'partial_top_level_fields'
+            return partial
 
         return None
 

@@ -153,6 +153,23 @@ def test_caption_failover_switches_vision_model_name():
     _assert(subject.model_name == "gemini-2.5-flash", "Caption failover should not rewrite report model")
 
 
+def test_truncated_report_json_keeps_grounding_fields_for_schema_completion():
+    subject = _subject()
+    subject.last_parse_strategy = None
+    raw = (
+        '{\n'
+        '  "environment_type": "Indoor / Office",\n'
+        '  "visual_evidence": "The scene depicts an indoor office setting with one person whose head and upper torso are'
+    )
+
+    parsed = subject._parse_json_from_response_text(raw)
+
+    _assert(parsed is not None, "Expected partial Gemini JSON to be recoverable")
+    _assert(parsed.get("environment_type") == "Indoor / Office", parsed)
+    _assert("indoor office setting" in parsed.get("visual_evidence", ""), parsed)
+    _assert(subject.last_parse_strategy == "partial_top_level_fields", subject.last_parse_strategy)
+
+
 def main():
     tests = [
         test_vision_config_disables_thinking_by_default,
@@ -162,6 +179,7 @@ def main():
         test_caption_normalization_keeps_descriptive_opening_and_filters_inference,
         test_default_model_candidates_include_current_flash_aliases,
         test_caption_failover_switches_vision_model_name,
+        test_truncated_report_json_keeps_grounding_fields_for_schema_completion,
     ]
     failures = []
     for test_fn in tests:

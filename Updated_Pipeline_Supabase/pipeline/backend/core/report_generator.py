@@ -3266,12 +3266,173 @@ Required JSON object:
             reported_person_count = 0
         person_count = max(1, reported_person_count, detected_person_count)
 
+        # Detect environment from caption keywords AND YOLO detections
+        caption = report_data.get('vlm_caption', '') or report_data.get('caption', '') or ''
+        caption_lower = caption.lower()
+
+        # YOLO Object Context
+        detections_str = " ".join([d.get('class_name', '').lower() for d in report_data.get('detections', [])])
+        yolo_cones = 'cone' in detections_str
+        yolo_vehicle = 'vehicle' in detections_str or 'truck' in detections_str or 'lorry' in detections_str
+        yolo_machinery = 'machinery' in detections_str or 'excavator' in detections_str
+
+        # Environment detection with specificity
+        # Check for specific Malaysian context hazards from caption + YOLO
+        def _caption_has_positive_keyword(keyword: str) -> bool:
+            return self._has_positive_environment_keyword(caption_lower, keyword)
+
+        has_piles = any(_caption_has_positive_keyword(kw) for kw in ['pile', 'timber', 'log', 'bakau', 'wood'])
+        has_slope = any(_caption_has_positive_keyword(kw) for kw in ['slope', 'incline', 'embankment', 'unstable', 'dirt'])
+        traffic_terms = [
+            'road', 'roadside', 'traffic', 'highway', 'street', 'sidewalk',
+            'pavement', 'bus', 'public transport', 'vehicle', 'pedestrian',
+        ]
+        work_zone_terms = [
+            'road work', 'roadworks', 'work zone', 'construction', 'site',
+            'cone', 'barrier', 'flagman', 'flagger', 'lane closure',
+        ]
+        has_traffic_interface = any(_caption_has_positive_keyword(kw) for kw in traffic_terms) or yolo_cones or yolo_vehicle
+        has_work_zone_marker = any(_caption_has_positive_keyword(kw) for kw in work_zone_terms) or yolo_cones
+        has_roadside = has_traffic_interface and has_work_zone_marker
+        has_lorry = any(_caption_has_positive_keyword(kw) for kw in ['lorry', 'truck', 'flatbed'])
+        has_phone = any(_caption_has_positive_keyword(kw) for kw in ['phone', 'mobile', 'call', 'device', 'watsapp', 'texting'])
+        has_work_height = any(_caption_has_positive_keyword(kw) for kw in ['scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform'])
+        caption_env_type = self._normalize_environment_type(self._extract_environment_from_caption(caption))
+
+        if has_roadside and has_piles:
+            env_type = 'Roadside Bakau Piling Zone'
+            env_detail = 'High-risk roadside timber piling zone with struck-by-vehicle and crush hazards.'
+        elif has_roadside:
+            env_type = 'Roadside Work Zone'
+            env_detail = 'Roadside location with struck-by-vehicle risk from passing traffic. JKR ATJ 2C/85 traffic management required.'
+        elif has_piles:
+            env_type = 'Material Handling Area'
+            env_detail = 'Bakau piling zone with crush hazards from unsecured timber loads. BOWEC Reg. 18 applies.'
+        elif any(_caption_has_positive_keyword(kw) for kw in ['construction', 'building', 'scaffold', 'crane', 'excavat', 'foundation']):
+            env_type = 'Construction Site'
+            env_detail = 'Active construction zone with potential heavy machinery and falling object hazards.'
+        elif any(_caption_has_positive_keyword(kw) for kw in ['warehouse', 'factory', 'industrial', 'manufacturing']):
+            env_type = 'Industrial Warehouse'
+            env_detail = 'Industrial environment with forklift traffic and material handling hazards.'
+        elif caption_env_type and caption_env_type != 'General Workspace':
+            env_type = caption_env_type
+            if env_type == 'Indoor / Office':
+                env_detail = 'Indoor or office-like setting; PPE severity depends on confirmed task and zone controls.'
+            elif env_type == 'Residential':
+                env_detail = 'Residential or casual indoor setting; PPE findings require context review before enforcement.'
+            elif env_type == 'Public Area':
+                env_detail = 'Public or open area; PPE severity depends on confirmed work-zone/task context.'
+            else:
+                env_detail = 'Work environment identified from visual analysis.'
+        elif has_traffic_interface:
+            env_type = 'Public Area'
+            env_detail = 'Public traffic or pedestrian interface; PPE severity depends on confirmed work-zone/task context.'
+        else:
+            env_type = 'General Workspace'
+            env_detail = 'Work environment identified from visual analysis.'
+
+        low_hazard_scene = bool(
+            env_type in {'Indoor / Office', 'Residential'}
+            and not (has_roadside or has_piles or has_work_height or has_work_zone_marker or yolo_machinery)
+        )
+        public_context_review = bool(
+            env_type == 'Public Area'
+            and not has_work_zone_marker
+            and not has_roadside
+            and not yolo_machinery
+        )
+        context_review_scene = low_hazard_scene or public_context_review
+
+        def _contextual_violation_data(key: str) -> Optional[Dict[str, Any]]:
+            data = VIOLATION_DATA.get(key)
+            if not data:
+                return None
+            if not context_review_scene or key not in {'hardhat', 'safety vest', 'mask'}:
+                return data
+
+            scene_label = env_type.lower()
+            review_penalty = (
+                'Review under OSHA 1994 Section 15 employer duty; escalate if the task, zone, '
+                'or permit conditions confirm mandatory PPE exposure.'
+            )
+            if key == 'hardhat':
+                return {
+                    'hazard': (
+                        f'Detector-confirmed missing hardhat in {scene_label}; no overhead work, '
+                        'falling-object, or site-entry exposure is confirmed from the scene evidence.'
+                    ),
+                    'risk': (
+                        'Moderate: head-protection non-compliance requires supervisor review before '
+                        'treating it as a mandatory hard-hat-zone breach.'
+                    ),
+                    'action': (
+                        'VERIFY HARDHAT REQUIREMENT: Confirm the task and zone controls, then issue '
+                        'MS 183:2001 head protection if overhead or site-entry hazards apply.'
+                    ),
+                    'legal_citation': 'OSHA 1994 Section 15: Employer duty to provide suitable PPE.',
+                    'technical_standard': 'MS 183:2001: Specifications for industrial safety helmets.',
+                    'regulation': 'OSHA 1994 Sec. 15 / MS 183:2001',
+                    'requirement': (
+                        'Head protection must match the actual task and zone risk; mandatory hard-hat '
+                        'controls should be enforced when overhead, impact, or controlled-site hazards exist.'
+                    ),
+                    'penalty': review_penalty,
+                    'risk_tier': 'MEDIUM',
+                }
+            if key == 'safety vest':
+                return {
+                    'hazard': (
+                        f'Detector-confirmed missing high-visibility vest in {scene_label}; active '
+                        'vehicle, moving plant, or work-zone traffic exposure is not confirmed.'
+                    ),
+                    'risk': (
+                        'Moderate: visibility PPE gap requires context review before classifying it '
+                        'as a struck-by vehicle hazard.'
+                    ),
+                    'action': (
+                        'VERIFY HI-VIS REQUIREMENT: Confirm whether the person is assigned to an '
+                        'active work zone, traffic interface, or plant movement area before stop-work escalation.'
+                    ),
+                    'legal_citation': 'OSHA 1994 Section 15: Employer duty to maintain a safe system of work.',
+                    'technical_standard': 'MS 1731:2004: High-visibility safety vest standard.',
+                    'regulation': 'OSHA 1994 Sec. 15 / MS 1731:2004',
+                    'requirement': (
+                        'High-visibility clothing should be enforced where traffic, mobile equipment, '
+                        'low-visibility, or controlled work-zone exposure is present.'
+                    ),
+                    'penalty': review_penalty,
+                    'risk_tier': 'MEDIUM',
+                }
+            return {
+                'hazard': (
+                    f'Detector-confirmed missing mask in {scene_label}; dust, fumes, chemicals, '
+                    'spray, or airborne contaminant exposure is not confirmed from the scene evidence.'
+                ),
+                'risk': (
+                    'Moderate: respiratory PPE gap requires task/exposure review before classifying '
+                    'it as a hazardous-substance exposure.'
+                ),
+                'action': (
+                    'VERIFY RESPIRATORY EXPOSURE: Check the task, SDS/permit controls, and visible '
+                    'dust or fume sources; issue suitable respiratory protection if exposure is confirmed.'
+                ),
+                'legal_citation': 'USECHH Regulations 2000 / OSHA 1994 Section 15.',
+                'technical_standard': 'MS 2323:2010: Respiratory protective devices.',
+                'regulation': 'USECHH 2000 / MS 2323:2010',
+                'requirement': (
+                    'Respiratory protection is required when the task exposes personnel to hazardous '
+                    'dusts, fumes, vapours, chemicals, or airborne contaminants.'
+                ),
+                'penalty': review_penalty,
+                'risk_tier': 'MEDIUM',
+            }
+
         # Build PPE status and collect data
         ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
         hazards, risks, actions, regulations = [], [], [], []
 
         def _add_violation_signal(key: str, ppe_field: Optional[str] = None) -> None:
-            data = VIOLATION_DATA.get(key)
+            data = _contextual_violation_data(key)
             if not data:
                 return
             if ppe_field:
@@ -3303,7 +3464,7 @@ Required JSON object:
         def _add_phone_distraction_risk() -> None:
             risks.append({
                 'risk_category': 'unsafe_posture',
-                'risk': 'Distracted Behavior: Reduced situational awareness while operating in high-risk zone.',
+                'risk': 'Distracted behavior: reduced situational awareness while operating in a monitored work area.',
                 'likelihood': 'MEDIUM',
                 'evidence': 'Caption mentions phone, mobile, call, or handheld device use.',
             })
@@ -3316,35 +3477,6 @@ Required JSON object:
                     _add_violation_signal(key, ppe_field=ppe_field)
                     break
 
-        # Detect environment from caption keywords AND YOLO detections
-        caption = report_data.get('vlm_caption', '') or report_data.get('caption', '') or ''
-        caption_lower = caption.lower()
-
-        # YOLO Object Context
-        detections_str = " ".join([d.get('class_name', '').lower() for d in report_data.get('detections', [])])
-        yolo_cones = 'cone' in detections_str
-        yolo_vehicle = 'vehicle' in detections_str or 'truck' in detections_str or 'lorry' in detections_str
-        yolo_machinery = 'machinery' in detections_str or 'excavator' in detections_str
-
-        # Environment detection with specificity
-        # Check for specific Malaysian context hazards from caption + YOLO
-        has_piles = any(kw in caption_lower for kw in ['pile', 'timber', 'log', 'bakau', 'wood'])
-        has_slope = any(kw in caption_lower for kw in ['slope', 'incline', 'embankment', 'unstable', 'dirt'])
-        traffic_terms = [
-            'road', 'roadside', 'traffic', 'highway', 'street', 'sidewalk',
-            'pavement', 'bus', 'public transport', 'vehicle', 'pedestrian',
-        ]
-        work_zone_terms = [
-            'road work', 'roadworks', 'work zone', 'construction', 'site',
-            'cone', 'barrier', 'flagman', 'flagger', 'lane closure',
-        ]
-        has_traffic_interface = any(kw in caption_lower for kw in traffic_terms) or yolo_cones or yolo_vehicle
-        has_work_zone_marker = any(kw in caption_lower for kw in work_zone_terms) or yolo_cones
-        has_roadside = has_traffic_interface and has_work_zone_marker
-        has_lorry = any(kw in caption_lower for kw in ['lorry', 'truck', 'flatbed'])
-        has_phone = any(kw in caption_lower for kw in ['phone', 'mobile', 'call', 'device', 'watsapp', 'texting'])
-        has_work_height = any(kw in caption_lower for kw in ['scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform'])
-
         # Add non-PPE regulatory signals from scene context when evidenced.
         if has_roadside:
             _add_violation_signal('roadside_risk')
@@ -3352,28 +3484,6 @@ Required JSON object:
             _add_violation_signal('unsecured_piles')
         if has_work_height and 'NO-Harness' in violations:
             _add_violation_signal('harness', ppe_field='harness')
-
-        if has_roadside and has_piles:
-            env_type = 'Roadside Bakau Piling Zone'
-            env_detail = 'High-risk roadside timber piling zone with struck-by-vehicle and crush hazards.'
-        elif has_roadside:
-            env_type = 'Roadside Work Zone'
-            env_detail = 'Roadside location with struck-by-vehicle risk from passing traffic. JKR ATJ 2C/85 traffic management required.'
-        elif has_piles:
-            env_type = 'Material Handling Area'
-            env_detail = 'Bakau piling zone with crush hazards from unsecured timber loads. BOWEC Reg. 18 applies.'
-        elif any(kw in caption_lower for kw in ['construction', 'building', 'scaffold', 'crane', 'excavat', 'foundation']):
-            env_type = 'Construction Site'
-            env_detail = 'Active construction zone with potential heavy machinery and falling object hazards.'
-        elif any(kw in caption_lower for kw in ['warehouse', 'factory', 'industrial', 'manufacturing']):
-            env_type = 'Industrial Warehouse'
-            env_detail = 'Industrial environment with forklift traffic and material handling hazards.'
-        elif has_traffic_interface:
-            env_type = 'Public Area'
-            env_detail = 'Public traffic or pedestrian interface; PPE severity depends on confirmed work-zone/task context.'
-        else:
-            env_type = 'General Workspace'
-            env_detail = 'Work environment identified from visual analysis.'
 
         # Generate behavior-based person descriptions (not generic "Individual detected")
         violation_types = [v.replace('NO-', '') for v in violations]
@@ -3385,7 +3495,13 @@ Required JSON object:
 
             # Build behavior-based description
             if 'Safety Vest' in violation_types and 'Hardhat' in violation_types:
-                desc = f"Worker operating in {env_type} without MS 1731 high-visibility vest or MS 183 helmet."
+                if context_review_scene:
+                    desc = (
+                        f"Person observed in {env_type} with detector-confirmed missing hardhat "
+                        "and safety vest; task and zone context should be verified before high-severity escalation."
+                    )
+                else:
+                    desc = f"Worker operating in {env_type} without MS 1731 high-visibility vest or MS 183 helmet."
                 if has_slope:
                     desc += " Positioned on unstable embankment."
                 if has_piles:
@@ -3394,14 +3510,26 @@ Required JSON object:
                     desc += " DISTRACTED by mobile phone/device."
                     _add_phone_distraction_risk()
             elif 'Safety Vest' in violation_types:
-                desc = f"Worker without MS 1731 high-visibility vest. INVISIBLE to lorry/plant operators."
+                if context_review_scene:
+                    desc = (
+                        f"Person observed in {env_type} without a high-visibility vest; active "
+                        "traffic or plant-interface exposure is not confirmed."
+                    )
+                else:
+                    desc = f"Worker without MS 1731 high-visibility vest. INVISIBLE to lorry/plant operators."
                 if has_roadside:
                     desc += " FATAL RISK from passing traffic."
                 if has_phone:
                     desc += " DISTRACTED by mobile phone/device."
                     _add_phone_distraction_risk()
             elif 'Hardhat' in violation_types:
-                desc = f"Worker without MS 183 rigid helmet in falling object zone."
+                if context_review_scene:
+                    desc = (
+                        f"Person observed in {env_type} without a hardhat; overhead or falling-object "
+                        "exposure is not confirmed."
+                    )
+                else:
+                    desc = f"Worker without MS 183 rigid helmet in falling object zone."
                 if has_piles:
                     desc += " Violation: BOWEC 1986 Reg. 24 (sun hats do not meet impact requirements)."
                 if has_phone:
@@ -3425,8 +3553,8 @@ Required JSON object:
             })
 
         report_severity = str(report_data.get('severity') or '').strip().upper()
+        ranked = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
         if report_severity not in ('HIGH', 'MEDIUM', 'LOW'):
-            ranked = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
             report_severity = max(
                 [str(info.get('likelihood') or '').strip().upper() for info in risks if isinstance(info, dict)]
                 or ['MEDIUM'],
@@ -3434,6 +3562,15 @@ Required JSON object:
             )
             if report_severity not in ranked:
                 report_severity = 'MEDIUM'
+        if context_review_scene and report_severity == 'HIGH':
+            confirmed_high_risk = any(
+                str(info.get('likelihood') or '').strip().upper() == 'HIGH'
+                for info in risks
+                if isinstance(info, dict)
+            )
+            if not confirmed_high_risk:
+                report_severity = 'MEDIUM'
+        report_data['severity'] = report_severity
 
         # Situation-Hazard-Standard summary model
         if violation_types:
@@ -3456,10 +3593,20 @@ Required JSON object:
                     "Supervisor review recommended to confirm work-zone status, task context, "
                     "and whether PPE requirements apply before enforcement action."
                 )
+            elif context_review_scene:
+                standard = (
+                    "Supervisor review recommended to confirm the task, zone controls, and whether "
+                    "mandatory PPE rules apply before stop-work escalation."
+                )
             else:
                 standard = "Stop Work order recommended per BOWEC 1986."
 
-            if 'Safety Vest' in violation_types and has_roadside:
+            if context_review_scene:
+                risk_desc = (
+                    "This is a compliance concern; immediate hazard severity depends on confirmed "
+                    "work activity and exposure context."
+                )
+            elif 'Safety Vest' in violation_types and has_roadside:
                 risk_desc = "This creates an immediate risk of being struck by the lorry or passing traffic."
             elif 'Safety Vest' in violation_types and has_traffic_interface:
                 risk_desc = "This creates a visibility risk around vehicle or pedestrian movement if the scene is an active work area."

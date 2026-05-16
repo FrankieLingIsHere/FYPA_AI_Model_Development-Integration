@@ -64,6 +64,10 @@ def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists()
         violation_types=["NO-Mask", "NO-Gloves", "NO-Safety Shoes"],
         context_text="Administrative office room.",
     ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Hardhat", "NO-Safety Vest", "NO-Mask"],
+        context_text="Indoor / Office scene with a desk and no visible traffic, machinery, dust, fumes, or overhead work.",
+    ) == "MEDIUM"
 
 
 def test_report_severity_uses_detection_and_summary_fallbacks():

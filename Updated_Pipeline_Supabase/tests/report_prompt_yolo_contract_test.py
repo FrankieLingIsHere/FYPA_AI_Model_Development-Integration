@@ -405,6 +405,45 @@ def test_fallback_report_risks_have_concrete_likelihood_badges():
     _assert("REVIEW REQUIRED (Model Likelihood Not Specified)" not in rendered, "Fallback severity footer should not blame model omission")
 
 
+def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    caption = (
+        "An indoor office scene shows one person standing near a desk, chairs, and a computer monitor. "
+        "No road, vehicle traffic, cones, machinery, dust, fumes, or overhead construction work are visible."
+    )
+    report_data = {
+        "caption": caption,
+        "vlm_caption": caption,
+        "detections": [
+            {"class_name": "Person", "confidence": 0.91},
+            {"class_name": "NO-Hardhat", "confidence": 0.82},
+            {"class_name": "NO-Safety Vest", "confidence": 0.79},
+            {"class_name": "NO-Mask", "confidence": 0.75},
+        ],
+        "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest, NO-Mask",
+        "person_count": 1,
+        "severity": "HIGH",
+    }
+
+    analysis = subject._generate_fallback_analysis(report_data)
+    risks = analysis["persons"][0]["risks"]
+    combined_text = " ".join([
+        analysis.get("summary", ""),
+        " ".join(analysis.get("hazards_detected", [])),
+        " ".join(analysis.get("suggested_actions", [])),
+        " ".join(str(risk.get("risk", "")) + " " + str(risk.get("evidence", "")) for risk in risks),
+    ]).lower()
+
+    _assert(analysis["environment_type"] == "Indoor / Office", analysis["environment_type"])
+    _assert(analysis["severity_level"] == "MEDIUM", analysis["severity_level"])
+    _assert(report_data["severity"] == "MEDIUM", report_data["severity"])
+    _assert(all(risk.get("likelihood") != "HIGH" for risk in risks), f"Unexpected high likelihood risk: {risks!r}")
+    _assert("falling timber" not in combined_text, "Office fallback should not invent falling timber hazard")
+    _assert("lorry" not in combined_text and "excavator" not in combined_text, "Office fallback should not invent vehicle/plant hazard")
+    _assert("silica" not in combined_text, "Office fallback should not invent construction dust hazard")
+    _assert("stop work" not in combined_text, "Office fallback should request review before stop-work escalation")
+
+
 def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it():
     subject = ReportGenerator.__new__(ReportGenerator)
     subject.enforce_strict_provider_split = True
@@ -520,6 +559,7 @@ def main():
         test_cloud_activity_block_allows_clear_direct_image_override,
         test_rendered_activity_risk_fields_are_model_json_cells,
         test_fallback_report_risks_have_concrete_likelihood_badges,
+        test_fallback_office_ppe_gaps_do_not_invent_construction_hazards,
         test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
         test_executive_summary_formats_labeled_what_and_danger_as_bullets,

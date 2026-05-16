@@ -6025,10 +6025,10 @@ def api_violations():
             if explicit_scope == 'synced_local':
                 if confirmed_synced_local:
                     return 'synced_local', 'confirmed_synced_local'
+                if active_profile != 'local' and has_cloud_artifacts and not local_origin:
+                    return 'cloud', 'repaired_synced_local_in_cloud_mode'
                 if local_origin or has_local_artifacts:
                     return 'local', 'repaired_unsynced_local_scope'
-                if active_profile != 'local' and has_cloud_artifacts:
-                    return 'cloud', 'repaired_synced_local_in_cloud_mode'
             return explicit_scope, 'detection_data.scope'
 
         if confirmed_synced_local:
@@ -7141,6 +7141,86 @@ def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, 
     return event, violation
 
 
+def _build_manual_reprocess_detection_data(
+    existing_detection_data: Any,
+    *,
+    source_scope: str,
+    sync_source: str = '',
+    force_reprocess: bool = False,
+) -> Dict[str, Any]:
+    """Merge source-scope repair metadata without discarding detection details."""
+    if isinstance(existing_detection_data, dict):
+        metadata = dict(existing_detection_data)
+    elif isinstance(existing_detection_data, str):
+        try:
+            parsed = json.loads(existing_detection_data)
+            metadata = dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            metadata = {}
+    else:
+        metadata = {}
+
+    normalized_scope = str(source_scope or '').strip().lower()
+    normalized_sync = str(sync_source or '').strip().lower()
+    if normalized_scope in {'local', 'cloud', 'shared', 'synced_local'}:
+        metadata['source_scope'] = normalized_scope
+
+    metadata['reprocessed'] = bool(force_reprocess)
+    metadata['manual_reprocess_at'] = datetime.now(timezone.utc).isoformat()
+
+    if normalized_scope == 'cloud':
+        # Stale local-handoff markers are what make old rows snap back to
+        # Local after a refresh. Replace them with a neutral cloud repair
+        # marker so status/list inference remains cloud-authoritative.
+        metadata.pop('origin', None)
+        metadata.pop('sync_source', None)
+        metadata['source'] = 'manual_cloud_reprocess'
+        metadata['source_label'] = 'Cloud'
+    elif normalized_scope == 'synced_local':
+        metadata['sync_source'] = normalized_sync or metadata.get('sync_source') or 'sync_local_cache'
+        metadata['source'] = metadata.get('source') or metadata['sync_source']
+        metadata['source_label'] = 'Local Synced'
+    elif normalized_scope == 'local':
+        metadata['source_label'] = 'Local'
+        metadata['source'] = metadata.get('source') or 'manual_local_reprocess'
+    elif normalized_scope == 'shared':
+        metadata['source_label'] = 'Shared'
+    elif normalized_sync:
+        metadata['sync_source'] = normalized_sync
+        metadata['source'] = normalized_sync
+
+    return metadata
+
+
+def _persist_manual_reprocess_source_scope(
+    report_id: str,
+    *,
+    source_scope: str,
+    sync_source: str = '',
+    force_reprocess: bool = False,
+    violation: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Best-effort DB repair so refreshes do not rehydrate stale source tags."""
+    normalized_scope = str(source_scope or '').strip().lower()
+    if normalized_scope not in {'local', 'cloud', 'shared', 'synced_local'}:
+        return
+    if db_manager is None or not hasattr(db_manager, 'update_violation'):
+        return
+
+    existing_payload = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
+    repaired_payload = _build_manual_reprocess_detection_data(
+        existing_payload,
+        source_scope=normalized_scope,
+        sync_source=sync_source,
+        force_reprocess=force_reprocess,
+    )
+    try:
+        db_manager.update_violation(report_id, detection_data=repaired_payload)
+    except Exception as repair_err:
+        _activate_local_offline_runtime('api_generate_report_now.persist_source_scope', repair_err)
+        logger.warning(f"Could not persist manual source-scope repair for {report_id}: {repair_err}")
+
+
 def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any]]:
     """Build report status from local artifacts for offline/backoff runtimes."""
     report_id = str(report_id or '').strip()
@@ -7331,10 +7411,10 @@ def api_report_status(report_id):
             if explicit_scope == 'synced_local':
                 if confirmed_synced_local:
                     return 'synced_local'
+                if active_profile != 'local' and has_cloud_artifacts and not local_origin:
+                    return 'cloud'
                 if local_origin or has_local_artifacts:
                     return 'local'
-                if active_profile != 'local' and has_cloud_artifacts:
-                    return 'cloud'
             return explicit_scope
 
         if confirmed_synced_local:
@@ -13137,6 +13217,8 @@ def api_generate_report_now(report_id):
             source_scope_marker = 'cloud' if active_profile == 'cloud' else 'local'
         elif not source_scope_marker:
             source_scope_marker = 'local' if (active_profile == 'local' or local_origin_marker) else 'cloud'
+        if source_scope_marker == 'cloud' and not payload.get('sync_source') and not payload.get('source'):
+            sync_source_marker = ''
 
         if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):
             try:
@@ -13172,13 +13254,12 @@ def api_generate_report_now(report_id):
             'force_reprocess': force_reprocess,
             'severity': resolved_severity,
         }
-        reprocess_metadata = {
-            'reprocessed': bool(force_reprocess),
-            'source_scope': source_scope_marker,
-        }
-        if sync_source_marker:
-            reprocess_metadata['sync_source'] = sync_source_marker
-            reprocess_metadata['source'] = sync_source_marker
+        reprocess_metadata = _build_manual_reprocess_detection_data(
+            detection_data,
+            source_scope=source_scope_marker,
+            sync_source=sync_source_marker,
+            force_reprocess=force_reprocess,
+        )
         violation_data['detection_data'] = reprocess_metadata
         if placeholder_reprocess_recovery_used:
             violation_data['skip_environment_validation'] = True
@@ -13189,6 +13270,14 @@ def api_generate_report_now(report_id):
         if sync_source_marker:
             violation_data['sync_source'] = sync_source_marker
             violation_data['source'] = sync_source_marker
+
+        _persist_manual_reprocess_source_scope(
+            report_id,
+            source_scope=source_scope_marker,
+            sync_source=sync_source_marker,
+            force_reprocess=force_reprocess,
+            violation=violation,
+        )
 
         enqueue_device_id = (
             f"manual_reprocess_{report_id}_{time.time_ns()}"

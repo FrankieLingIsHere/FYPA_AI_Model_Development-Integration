@@ -1270,6 +1270,79 @@ const API = {
         }
     },
 
+    async repairReportSourceCaches(reportId, patch = {}) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return;
+
+        const scope = this.inferReportSourceScope({
+            report_id: rid,
+            ...patch
+        }) || String(patch.source_scope || '').trim().toLowerCase();
+        if (!['cloud', 'local', 'shared', 'synced_local'].includes(scope)) return;
+
+        const label = patch.source_label || (
+            scope === 'cloud' ? 'Cloud'
+                : scope === 'local' ? 'Local'
+                    : scope === 'synced_local' ? 'Local Synced'
+                        : 'Shared'
+        );
+
+        const updateRecord = (item) => {
+            if (!item || String(item.report_id || '').trim() !== rid) return item;
+            const next = {
+                ...item,
+                ...patch,
+                report_id: rid,
+                source_scope: scope,
+                source_label: label,
+                updated_at: new Date().toISOString()
+            };
+            if (scope === 'cloud') {
+                delete next.local_image_url;
+                delete next.local_report_url;
+                next.has_local_artifacts = false;
+                next.has_local_report = false;
+                next.origin = '';
+                next.sync_source = '';
+                next.source = 'manual_cloud_reprocess';
+                next.source_reason = patch.source_reason || 'manual_cloud_reprocess_fallback';
+                next.force_cloud_runtime = true;
+            }
+            return next;
+        };
+
+        if (scope === 'cloud') {
+            try {
+                await this.removeLocalReportDraft(rid);
+            } catch (error) {
+                // Best-effort cache repair only.
+            }
+        }
+
+        const cacheScopes = [
+            'reports:pending',
+            'violations:limit:100',
+            'violations:limit:1000',
+            'violations:limit:5000'
+        ];
+        await Promise.all(cacheScopes.map(async (cacheScope) => {
+            const cached = await this.readJsonCache(cacheScope);
+            if (!cached || !Array.isArray(cached.data)) return;
+            await this.writeJsonCache(cacheScope, cached.data.map(updateRecord));
+        }));
+
+        const baseKeys = Array.from(new Set([
+            this._normalizeBaseUrl((typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) || ''),
+            this.getCloudBackendBaseUrl(),
+            this.getLocalBackendBaseUrl(),
+            ''
+        ].map((base) => base || 'same-origin')));
+        await Promise.all(baseKeys.flatMap((baseKey) => [
+            this.removeJsonCache(`report-status:${baseKey}:${rid}`),
+            this.removeJsonCache(`violation:${baseKey}:${rid}`)
+        ]));
+    },
+
     async readLocalReportDrafts() {
         const cached = await this.readJsonCache(this.LOCAL_REPORT_DRAFTS_SCOPE);
         const drafts = cached && Array.isArray(cached.data) ? cached.data : [];
@@ -2097,10 +2170,23 @@ const API = {
                     routed_via_cloud_fallback: usedCloudFallback
                 };
             }
-            return {
+            const result = {
                 ...data,
                 routed_via_cloud_fallback: !!(usedCloudFallback || data.routed_via_cloud_fallback)
             };
+            if (result.source_scope === 'cloud' || result.routed_via_cloud_fallback) {
+                await this.repairReportSourceCaches(reportId, {
+                    ...(sourceHint && typeof sourceHint === 'object' ? sourceHint : {}),
+                    ...result,
+                    status: result.status || 'pending',
+                    source_scope: 'cloud',
+                    source_label: 'Cloud',
+                    source_reason: 'manual_cloud_reprocess_fallback',
+                    routed_via_cloud_fallback: !!result.routed_via_cloud_fallback,
+                    force_cloud_runtime: true
+                });
+            }
+            return result;
         } catch (error) {
             this.logFetchFailure('Error triggering priority generation', error);
             return { success: false, error: error.message };

@@ -36,7 +36,34 @@ function createResponse(ok, status, payload) {
   };
 }
 
+function createLocalStorageMock() {
+  const storage = new Map();
+  return {
+    storage,
+    get length() {
+      return storage.size;
+    },
+    key(index) {
+      return Array.from(storage.keys())[index] || null;
+    },
+    getItem(key) {
+      const normalized = String(key);
+      return storage.has(normalized) ? storage.get(normalized) : null;
+    },
+    setItem(key, value) {
+      storage.set(String(key), String(value));
+    },
+    removeItem(key) {
+      storage.delete(String(key));
+    },
+    clear() {
+      storage.clear();
+    },
+  };
+}
+
 function loadApiContext(fetchImpl, windowOverrides = {}) {
+  const localStorage = createLocalStorageMock();
   const windowObject = {
     PPE_API_URL: '',
     __PPE_CONFIG__: { API_BASE_URL: 'https://cloud-api.example.test' },
@@ -52,6 +79,8 @@ function loadApiContext(fetchImpl, windowOverrides = {}) {
     fetch: fetchImpl,
     navigator: { onLine: true },
     window: windowObject,
+    localStorage,
+    __localStorageMap: localStorage.storage,
     URL,
     setTimeout,
     clearTimeout,
@@ -189,11 +218,69 @@ function testCloudFallbackPatchOverridesStaleLocalAnchor() {
   assertEqual(record.source_label, 'Cloud', 'cloud fallback patch source label');
 }
 
+async function testCloudFallbackRepairsStaleLocalReportCaches() {
+  const context = loadApiContext(async () => createResponse(true, 200, {
+    success: true,
+    status: 'pending',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    has_report: false,
+  }));
+  const reportId = 'bad-local-004';
+  const staleLocalRow = {
+    report_id: reportId,
+    status: 'processing',
+    source_scope: 'local',
+    source_label: 'Local',
+    source: 'offline_local_cache',
+    has_local_artifacts: true,
+    has_local_report: true,
+    local_image_url: 'blob:stale-original',
+    local_report_url: 'blob:stale-report',
+  };
+
+  await context.API.writeLocalReportDrafts([staleLocalRow]);
+  await context.API.writeJsonCache('reports:pending', [staleLocalRow]);
+  await context.API.writeJsonCache('violations:limit:1000', [staleLocalRow]);
+  await context.API.writeJsonCache(`report-status:https://cloud-api.example.test:${reportId}`, staleLocalRow);
+  await context.API.writeJsonCache(`violation:https://cloud-api.example.test:${reportId}`, staleLocalRow);
+
+  const result = await context.API.generateReportNow(reportId, {
+    force: true,
+    source: staleLocalRow,
+  });
+
+  assertEqual(result.success, true, 'cloud fallback result should succeed');
+  assertEqual(result.routed_via_cloud_fallback, true, 'cloud cache repair should mark fallback routing');
+
+  const drafts = await context.API.readLocalReportDrafts();
+  assert(!drafts.some((item) => item.report_id === reportId), 'stale local draft should be removed');
+
+  const pending = await context.API.readJsonCache('reports:pending');
+  const pendingRow = pending.data.find((item) => item.report_id === reportId);
+  assertEqual(pendingRow.source_scope, 'cloud', 'pending cache source scope should be repaired');
+  assertEqual(pendingRow.source_label, 'Cloud', 'pending cache source label should be repaired');
+  assertEqual(pendingRow.source, 'manual_cloud_reprocess', 'pending cache local source marker should be replaced');
+  assertEqual(pendingRow.has_local_artifacts, false, 'pending cache local artifact flag should be cleared');
+  assert(!Object.prototype.hasOwnProperty.call(pendingRow, 'local_report_url'), 'pending cache local report URL should be removed');
+
+  const violations = await context.API.readJsonCache('violations:limit:1000');
+  const violationRow = violations.data.find((item) => item.report_id === reportId);
+  assertEqual(violationRow.source_scope, 'cloud', 'violations cache source scope should be repaired');
+  assertEqual(violationRow.source_label, 'Cloud', 'violations cache source label should be repaired');
+
+  const staleStatus = await context.API.readJsonCache(`report-status:https://cloud-api.example.test:${reportId}`);
+  const staleDetail = await context.API.readJsonCache(`violation:https://cloud-api.example.test:${reportId}`);
+  assertEqual(staleStatus, null, 'stale per-report status cache should be removed');
+  assertEqual(staleDetail, null, 'stale per-report detail cache should be removed');
+}
+
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
     testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists,
     testCloudFallbackPatchOverridesStaleLocalAnchor,
+    testCloudFallbackRepairsStaleLocalReportCaches,
   ];
   const failures = [];
   for (const testFn of tests) {

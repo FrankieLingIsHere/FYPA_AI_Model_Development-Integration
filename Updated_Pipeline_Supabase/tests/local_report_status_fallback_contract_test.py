@@ -115,6 +115,50 @@ class LocalSyncedDB:
         }
 
 
+class CloudStaleSyncedLocalDB:
+    def get_detection_event(self, report_id):
+        return {
+            "report_id": report_id,
+            "status": "completed",
+            "device_id": "webcam_0",
+            "timestamp": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    def get_violation(self, report_id):
+        return {
+            "report_id": report_id,
+            "original_image_key": f"violations/{report_id}/original.jpg",
+            "annotated_image_key": f"violations/{report_id}/annotated.jpg",
+            "report_html_key": f"reports/{report_id}/report.html",
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "cloud_pending_local_handoff",
+            },
+        }
+
+    def get_all_violations_with_status(self, limit=100):
+        report_id = "20260516_112819"
+        event = self.get_detection_event(report_id)
+        violation = self.get_violation(report_id)
+        return [{
+            **event,
+            "person_count": 1,
+            "violation_count": 2,
+            "severity": "HIGH",
+            "violation_summary": "Missing Mask, Missing Safety Vest",
+            **violation,
+        }]
+
+
+class CaptureUpdateDB:
+    def __init__(self):
+        self.calls = []
+
+    def update_violation(self, report_id, **kwargs):
+        self.calls.append((report_id, kwargs))
+
+
 def _assert(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -281,6 +325,97 @@ def test_cloud_profile_does_not_promote_backoff_to_local_pipeline():
             casm_app.supabase_offline_backoff_error = old_error
 
 
+def test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud():
+    report_id = "20260516_112819"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"stale-local-original")
+        (report_dir / "report.html").write_text("<html>cloud report exists</html>", encoding="utf-8")
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = CloudStaleSyncedLocalDB()
+
+            with casm_app.app.test_client() as client:
+                status_response = client.get(f"/api/report/{report_id}/status")
+                status_payload = status_response.get_json() or {}
+                list_response = client.get("/api/violations?limit=10")
+                list_payload = list_response.get_json() or []
+
+            _assert(status_response.status_code == 200, f"Unexpected status code: {status_response.status_code}")
+            _assert(status_payload.get("source_scope") == "cloud", f"Status stayed stale local: {status_payload}")
+            _assert(status_payload.get("source_label") == "Cloud", f"Status label stayed stale local: {status_payload}")
+
+            row = next((item for item in list_payload if item.get("report_id") == report_id), None)
+            _assert(row is not None, f"Report missing from list payload: {list_payload}")
+            _assert(row.get("source_scope") == "cloud", f"List stayed stale local: {row}")
+            _assert(row.get("source_label") == "Cloud", f"List label stayed stale local: {row}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
+def test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers():
+    payload = casm_app._build_manual_reprocess_detection_data(
+        {
+            "source_scope": "synced_local",
+            "source": "cloud_pending_local_handoff",
+            "sync_source": "browser_local_draft_handoff",
+            "caption_validation": {"is_valid": True},
+        },
+        source_scope="cloud",
+        force_reprocess=True,
+    )
+
+    _assert(payload.get("source_scope") == "cloud", f"Cloud scope not persisted: {payload}")
+    _assert(payload.get("source") == "manual_cloud_reprocess", f"Cloud repair source missing: {payload}")
+    _assert("sync_source" not in payload, f"Stale local sync marker survived: {payload}")
+    _assert(payload.get("caption_validation") == {"is_valid": True}, "Existing detection details were lost")
+
+
+def test_manual_cloud_reprocess_persists_source_scope_repair():
+    report_id = "20260516_112819"
+    fake_db = CaptureUpdateDB()
+    old_db_manager = casm_app.db_manager
+    try:
+        casm_app.db_manager = fake_db
+        casm_app._persist_manual_reprocess_source_scope(
+            report_id,
+            source_scope="cloud",
+            force_reprocess=True,
+            violation={
+                "detection_data": {
+                    "source_scope": "synced_local",
+                    "source": "cloud_pending_local_handoff",
+                    "sync_source": "browser_local_draft_handoff",
+                    "caption_validation": {"is_valid": True},
+                }
+            },
+        )
+    finally:
+        casm_app.db_manager = old_db_manager
+
+    _assert(len(fake_db.calls) == 1, f"Expected one DB repair call, got {fake_db.calls}")
+    called_report_id, kwargs = fake_db.calls[0]
+    detection_data = kwargs.get("detection_data") or {}
+    _assert(called_report_id == report_id, f"Wrong report id persisted: {fake_db.calls}")
+    _assert(detection_data.get("source_scope") == "cloud", f"Persisted repair did not set cloud: {detection_data}")
+    _assert(detection_data.get("source") == "manual_cloud_reprocess", f"Persisted source marker wrong: {detection_data}")
+    _assert("sync_source" not in detection_data, f"Persisted stale sync marker: {detection_data}")
+    _assert(detection_data.get("caption_validation") == {"is_valid": True}, "Persisted repair lost detection details")
+
+
 def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
     report_id = "20260513_181500"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -356,6 +491,9 @@ def main():
         test_cloud_status_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_profile_does_not_promote_backoff_to_local_pipeline,
+        test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud,
+        test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers,
+        test_manual_cloud_reprocess_persists_source_scope_repair,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
     ]

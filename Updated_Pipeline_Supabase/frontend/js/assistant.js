@@ -21,6 +21,7 @@ const CASMAssistant = {
     syncQueued: false,
     isResponding: false,
     responseFeedbackText: 'Thinking...',
+    preparedCsvDownloads: {},
     ui: {},
 
     init() {
@@ -2371,12 +2372,25 @@ const CASMAssistant = {
         }
 
         const outcome = await this.exportReportsCsv(raw);
+        const previewBullets = outcome.success
+            ? [
+                `Matched rows: ${outcome.rowCount}${outcome.filterSummary ? ` using ${outcome.filterSummary}` : ''}.`,
+                ...(outcome.previewRows || []).map((row) => `${row.report_id || 'unknown'} | ${row.timestamp || 'time unknown'} | ${row.severity || 'unknown'} | ${row.status || 'unknown'} | ${row.source_label || row.source_scope || 'unknown source'} | ${row.missing_ppe || 'no PPE labels'}`)
+            ]
+            : [];
         this.pushMessage({
             role: 'assistant',
             text: outcome.success
-                ? `Reports CSV is ready. I exported ${outcome.rowCount} report rows${outcome.filterSummary ? ` using ${outcome.filterSummary}` : ''}.`
+                ? 'Reports CSV is prepared. Review the preview, then download it when you are happy with the filter.'
                 : outcome.message,
+            bullets: previewBullets,
             actions: [
+                ...(outcome.success ? [{
+                    type: 'download-prepared-csv',
+                    label: 'Download CSV',
+                    exportId: outcome.exportId,
+                    filename: outcome.filename
+                }] : []),
                 { type: 'route', label: 'Open Reports', page: 'reports' },
                 { type: 'overview', label: 'System overview' }
             ]
@@ -2840,7 +2854,7 @@ const CASMAssistant = {
         const filters = this.buildReportFilters(raw);
         const hasFilters = this.hasActiveReportFilters(filters);
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?reports?\b/.test(normalized);
-        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|scan|know|understand|summari[sz]e|main|risk|risks|case|cases)\b/.test(normalized);
+        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|look|scan|know|understand|summari[sz]e|explain|interpret|latest|recent|current|so far|have a look|get|main|risk|risks|case|cases)\b/.test(normalized);
         if (directOpen && !hasFilters && !/\b(show|review|check|browse|inspect|slide|slideshow|list|find|filter|view)\b/.test(normalized)) {
             return null;
         }
@@ -2859,7 +2873,9 @@ const CASMAssistant = {
         return !!(
             filters.source
             || filters.severity
+            || filters.status
             || filters.dateRange
+            || filters.dateExact
             || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length)
             || (Array.isArray(filters.searchTokens) && filters.searchTokens.length)
         );
@@ -2868,7 +2884,7 @@ const CASMAssistant = {
     async handleReportReviewIntent(intent) {
         if (!intent) return;
         if (intent.type === 'explain-current') {
-            this.explainCurrentReportReview();
+            await this.explainCurrentReportReview();
             return;
         }
         if (intent.type === 'next' || intent.type === 'previous') {
@@ -2899,7 +2915,8 @@ const CASMAssistant = {
                 return;
             }
 
-            const reports = filtered.slice(0, 50).map((row) => this.normalizeReportPreview(row));
+            const maxCarouselReports = filtered.length > 15 ? 12 : 50;
+            const reports = filtered.slice(0, maxCarouselReports).map((row) => this.normalizeReportPreview(row));
             const session = this.getActiveSession();
             if (session) {
                 session.context.reportReview = {
@@ -2908,6 +2925,8 @@ const CASMAssistant = {
                     filters,
                     filterSummary: summary,
                     totalMatched: filtered.length,
+                    shownLimit: maxCarouselReports,
+                    selectionSummary: this.buildReportSelectionSummary(filtered, filters),
                     createdAt: Date.now()
                 };
             }
@@ -2922,6 +2941,37 @@ const CASMAssistant = {
                 ]
             });
         }
+    },
+
+    buildReportSelectionSummary(rows = [], filters = {}) {
+        const list = Array.isArray(rows) ? rows : [];
+        const sourceCounts = { cloud: 0, local: 0, synced_local: 0, shared: 0, unknown: 0 };
+        const severityCounts = { high: 0, medium: 0, low: 0, unknown: 0 };
+        list.forEach((row) => {
+            const source = String(row?.source_scope || row?.source_label || '').trim().toLowerCase().replace(/\s+/g, '_');
+            const sourceKey = Object.prototype.hasOwnProperty.call(sourceCounts, source) ? source : 'unknown';
+            sourceCounts[sourceKey] += 1;
+
+            const severity = String(row?.severity || '').trim().toLowerCase();
+            const severityKey = Object.prototype.hasOwnProperty.call(severityCounts, severity) ? severity : 'unknown';
+            severityCounts[severityKey] += 1;
+        });
+
+        const activeFilters = this.describeReportFilters(filters);
+        const sourceText = Object.entries(sourceCounts)
+            .filter(([, count]) => count > 0)
+            .map(([key, count]) => `${count} ${key.replace(/_/g, ' ')}`)
+            .join(', ');
+        const severityText = Object.entries(severityCounts)
+            .filter(([, count]) => count > 0)
+            .map(([key, count]) => `${count} ${key}`)
+            .join(', ');
+
+        return {
+            activeFilters,
+            sourceText,
+            severityText
+        };
     },
 
     normalizeReportPreview(row = {}) {
@@ -2940,10 +2990,16 @@ const CASMAssistant = {
             deviceId: String(row.device_id || row.camera_id || '').trim(),
             violationCount: Number(row.violation_count || 0),
             missingPpe: Array.isArray(row.missing_ppe) ? row.missing_ppe.map((item) => String(item || '').trim()).filter(Boolean) : [],
+            ppeTags: Array.isArray(row.ppe_tags) ? row.ppe_tags.map((item) => String(item || '').trim()).filter(Boolean) : [],
+            errorMessage: String(row.error_message || row.failure_reason || '').trim(),
+            hasReport: !!row.has_report,
+            hasOriginal: !!row.has_original,
+            hasAnnotated: !!row.has_annotated,
             sourceScope,
             sourceLabel,
             timestamp,
             timestampLabel: this.formatReportTimestamp(timestamp),
+            location: String(row.location || row.zone || row.area || '').trim(),
             summary: String(row.violation_summary || row.summary || 'PPE violation report').trim(),
             thumbnailUrl: this.resolveReportThumbnailUrl(row)
         };
@@ -3010,6 +3066,16 @@ const CASMAssistant = {
         const shownTotal = context.reports.length;
         const matchedTotal = Number(context.totalMatched || shownTotal);
         const filterText = context.filterSummary ? ` for ${context.filterSummary}` : '';
+        const manyMatches = matchedTotal > shownTotal;
+        const selection = context.selectionSummary || {};
+        const bullets = [
+            manyMatches
+                ? `Showing the newest ${shownTotal} matches first so the list stays usable; ${matchedTotal} rows matched overall.`
+                : 'Use Previous report and Next report to move through the filtered set.',
+            selection.severityText ? `Severity mix in this match set: ${selection.severityText}.` : '',
+            selection.sourceText ? `Source mix in this match set: ${selection.sourceText}.` : '',
+            'Select Explain this report when you want Mira to interpret the selected row.'
+        ].filter(Boolean);
         return {
             role: 'assistant',
             text: `I found ${matchedTotal} report${matchedTotal === 1 ? '' : 's'}${filterText}. Here is the report slideshow.`,
@@ -3017,10 +3083,7 @@ const CASMAssistant = {
                 report,
                 positionLabel: `Report ${context.index + 1} of ${shownTotal}${matchedTotal > shownTotal ? ` (${matchedTotal} matched)` : ''}`
             },
-            bullets: [
-                'Use Previous report and Next report to move through the filtered set.',
-                'Select Explain this report when you want Mira to interpret the selected row.'
-            ],
+            bullets,
             actions: this.buildReportReviewActions(context, report)
         };
     },
@@ -3073,7 +3136,98 @@ const CASMAssistant = {
         this.upsertReportReviewMessage();
     },
 
-    explainCurrentReportReview() {
+    async fetchReportDocumentText(report = {}) {
+        const reportId = String(report.reportId || '').trim();
+        if (!reportId || !window.API || typeof API.getReportUrl !== 'function' || typeof fetch !== 'function') {
+            return '';
+        }
+
+        try {
+            const sourceHint = {
+                report_id: reportId,
+                source_scope: report.sourceScope,
+                source_label: report.sourceLabel
+            };
+            const url = API.getReportUrl(reportId, sourceHint);
+            if (!url) return '';
+            const response = await fetch(url, { cache: 'no-store' });
+            if (!response.ok) return '';
+            const html = await response.text();
+            if (!html) return '';
+            if (typeof DOMParser === 'undefined') {
+                return this.compactText(html.replace(/<[^>]+>/g, ' ')).slice(0, 12000);
+            }
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            doc.querySelectorAll('script, style, noscript, svg, canvas').forEach((node) => node.remove());
+            return this.compactText((doc.body && (doc.body.innerText || doc.body.textContent)) || doc.documentElement.textContent || '').slice(0, 12000);
+        } catch (error) {
+            console.debug('Mira report content fetch skipped:', error);
+            return '';
+        }
+    },
+
+    pickReportSentences(text = '', keywords = [], maxCount = 2) {
+        const normalizedKeywords = (keywords || []).map((keyword) => this.normalizeText(keyword)).filter(Boolean);
+        if (!text || !normalizedKeywords.length) return [];
+        const rawSentences = this.compactText(text)
+            .split(/(?:\.|\?|!|\n)\s+/)
+            .map((sentence) => sentence.trim())
+            .filter((sentence) => sentence.length >= 24 && sentence.length <= 260);
+        const picked = [];
+        rawSentences.forEach((sentence) => {
+            if (picked.length >= maxCount) return;
+            const normalized = this.normalizeText(sentence);
+            if (normalizedKeywords.some((keyword) => normalized.includes(keyword))) {
+                picked.push(sentence.replace(/\s+/g, ' ').trim());
+            }
+        });
+        return picked;
+    },
+
+    buildDetailedReportExplanation(report = {}, documentText = '') {
+        const missing = report.missingPpe.length ? report.missingPpe.join(', ') : 'no PPE labels recorded';
+        const ppeTags = report.ppeTags && report.ppeTags.length ? report.ppeTags.join(', ') : missing;
+        const status = String(report.status || 'unknown').toLowerCase();
+        const ready = status === 'completed' || status === 'ready';
+        const riskSentences = this.pickReportSentences(documentText, ['risk', 'severity', 'likelihood', 'hazard', 'injury'], 2);
+        const actionSentences = this.pickReportSentences(documentText, ['corrective', 'action', 'recommend', 'control', 'mitigation', 'supervisor'], 2);
+        const evidenceSentences = this.pickReportSentences(documentText, ['visual', 'evidence', 'caption', 'observed', 'detected', 'worker', 'scene'], 2);
+        const complianceSentences = this.pickReportSentences(documentText, ['regulation', 'standard', 'compliance', 'ms', 'iso', 'osha', 'requirement'], 1);
+
+        const riskDetail = riskSentences.length
+            ? riskSentences.join(' ')
+            : `${report.severity || 'Unknown'} severity means this row should be reviewed according to the site risk matrix, especially if the same PPE gap repeats.`;
+        const actionDetail = actionSentences.length
+            ? actionSentences.join(' ')
+            : 'Verify the worker has the missing PPE before continuing the task, record the corrective action, and use the report as evidence for follow-up.';
+        const evidenceDetail = evidenceSentences.length
+            ? evidenceSentences.join(' ')
+            : `Use the ${report.hasAnnotated ? 'annotated and original images' : report.hasOriginal ? 'original image' : 'available report evidence'} to confirm the detection before closing the case.`;
+        const complianceDetail = complianceSentences.length
+            ? complianceSentences.join(' ')
+            : 'Check the report body for any listed Malaysian standards or site policy references before sharing it outside the team.';
+
+        return {
+            role: 'assistant',
+            text: `Here is a fuller read of report ${report.reportId}.`,
+            bullets: [
+                `What happened: ${report.summary || 'The report row does not include a generated summary yet.'}`,
+                `PPE concern: ${missing}. Detection labels recorded: ${ppeTags}.`,
+                `Risk interpretation: ${riskDetail}`,
+                `Evidence to check: ${evidenceDetail}`,
+                `Recommended next step: ${actionDetail}`,
+                `Compliance note: ${complianceDetail}`,
+                `Traceability: ${report.sourceLabel || 'Unknown source'} row, ${report.severity || 'unknown'} severity, ${ready ? 'ready for evidence review' : `currently ${report.status || 'not ready'}`}, timestamp ${report.timestampLabel || 'unknown'}.`
+            ],
+            actions: [
+                { type: 'open-report', label: 'Open report', reportId: report.reportId },
+                { type: 'report-review-prev', label: 'Previous report' },
+                { type: 'report-review-next', label: 'Next report' }
+            ]
+        };
+    },
+
+    async explainCurrentReportReview() {
         const current = this.getCurrentReportReview();
         if (!current || !current.report) {
             this.pushMessage({
@@ -3084,23 +3238,8 @@ const CASMAssistant = {
             return;
         }
         const report = current.report;
-        const missing = report.missingPpe.length ? report.missingPpe.join(', ') : 'no PPE labels recorded';
-        this.pushMessage({
-            role: 'assistant',
-            text: `Report ${report.reportId} is a ${report.sourceLabel} row with ${report.severity} severity and status ${report.status}.`,
-            bullets: [
-                `Missing PPE / violation labels: ${missing}.`,
-                `Summary: ${report.summary || 'No summary text was stored for this report.'}`,
-                report.status.toLowerCase() === 'completed' || report.status.toLowerCase() === 'ready'
-                    ? 'This report should be ready for evidence review.'
-                    : 'This report may still be queued, pending, local-only, or waiting for generation/sync.'
-            ],
-            actions: [
-                { type: 'open-report', label: 'Open report', reportId: report.reportId },
-                { type: 'report-review-prev', label: 'Previous report' },
-                { type: 'report-review-next', label: 'Next report' }
-            ]
-        });
+        const documentText = await this.fetchReportDocumentText(report);
+        this.pushMessage(this.buildDetailedReportExplanation(report, documentText));
     },
 
     async openSelectedReport(reportId = '') {
@@ -3421,6 +3560,21 @@ const CASMAssistant = {
                 }
                 return;
             }
+            case 'download-prepared-csv': {
+                const exportId = String(action.exportId || '').trim();
+                const prepared = exportId ? this.preparedCsvDownloads[exportId] : null;
+                const filename = String((prepared && prepared.filename) || action.filename || `casm-assistant-export-${this.buildTimestampToken()}.csv`);
+                const content = prepared && prepared.content ? prepared.content : action.content;
+                if (!content) {
+                    this.pushMessage({
+                        role: 'assistant',
+                        text: 'That prepared CSV is no longer available in this chat session. Ask me to prepare the export again and I will rebuild it.'
+                    });
+                    return;
+                }
+                this.downloadCsv(filename, content);
+                return;
+            }
             case 'overview': {
                 await this.handleOverviewIntent();
                 return;
@@ -3442,7 +3596,7 @@ const CASMAssistant = {
                 return;
             }
             case 'report-review-explain': {
-                this.explainCurrentReportReview();
+                await this.explainCurrentReportReview();
                 return;
             }
             case 'open-report': {
@@ -3761,14 +3915,32 @@ const CASMAssistant = {
                 ];
                 lines.push(values.map((value) => this.escapeCsv(value)).join(','));
             });
-            this.downloadCsv(`casm-assistant-reports-${this.buildTimestampToken()}.csv`, '\uFEFF' + lines.join('\r\n'));
+            const filename = `casm-assistant-reports-${this.buildTimestampToken()}.csv`;
+            const content = '\uFEFF' + lines.join('\r\n');
+            const exportId = `reports-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            this.preparedCsvDownloads[exportId] = {
+                filename,
+                content,
+                createdAt: Date.now()
+            };
             const summary = this.describeReportFilters(filters);
             const session = this.getActiveSession();
             if (session) session.context.lastExportKind = 'reports';
             return {
                 success: true,
                 rowCount: filtered.length,
-                filterSummary: summary
+                filterSummary: summary,
+                filename,
+                exportId,
+                previewRows: filtered.slice(0, 5).map((row) => ({
+                    report_id: row.report_id,
+                    timestamp: row.timestamp,
+                    status: row.status,
+                    severity: row.severity,
+                    source_scope: row.source_scope,
+                    source_label: row.source_label,
+                    missing_ppe: Array.isArray(row.missing_ppe) ? row.missing_ppe.join('; ') : ''
+                }))
             };
         } catch (error) {
             console.error('Assistant reports CSV export failed:', error);
@@ -3782,14 +3954,31 @@ const CASMAssistant = {
     buildReportFilters(rawQuery = '') {
         const query = this.normalizeText(rawQuery);
         const ppeTypes = this.extractAnalyticsPpeTypes(rawQuery);
-        return {
-            source: /\blocal synced\b/.test(query)
-                ? 'synced_local'
-                : /\blocal\b/.test(query) && !/\blocal synced\b/.test(query)
+        const source = /\blocal synced\b|\bsynced local\b/.test(query)
+            ? 'synced_local'
+            : /\bshared\b/.test(query)
+                ? 'shared'
+                : /\blocal\b/.test(query) && !/\blocal synced\b|\bsynced local\b/.test(query)
                     ? 'local'
                     : /\bcloud\b/.test(query)
                         ? 'cloud'
-                        : '',
+                        : '';
+        const status = /\b(ready|completed|complete|done|finished)\b/.test(query)
+            ? 'completed'
+            : /\b(generating|processing|in progress|running)\b/.test(query)
+                ? 'generating'
+                : /\b(queued|queue|pending|waiting)\b/.test(query)
+                    ? 'pending'
+                    : /\b(failed|failure|error|errored)\b/.test(query)
+                        ? 'failed'
+                        : /\b(skipped|cancelled|canceled)\b/.test(query)
+                            ? 'skipped'
+                            : /\bpartial|partially\b/.test(query)
+                                ? 'partial'
+                                : '';
+        const dateExact = this.extractReportExactDateFilter(rawQuery);
+        return {
+            source,
             severity: /\bhigh\b/.test(query)
                 ? 'high'
                 : /\bmedium\b/.test(query)
@@ -3797,32 +3986,85 @@ const CASMAssistant = {
                     : /\blow\b/.test(query)
                         ? 'low'
                         : '',
-            dateRange: /\btoday\b/.test(query)
+            status,
+            dateRange: dateExact
+                ? ''
+                : /\btoday\b/.test(query)
                 ? 'today'
-                : /\byesterday\b|\blast night\b/.test(query)
-                    ? 'yesterday'
-                    : /\bweek\b|\blast seven days\b|\bseven days\b|\b7 days\b|\blast 7 days\b/.test(query)
+                : /\bweek\b|\bthis week\b|\blast seven days\b|\bseven days\b|\b7 days\b|\blast 7 days\b/.test(query)
                         ? 'week'
-                        : /\bmonth\b|\blast 30 days\b|\b30 days\b/.test(query)
+                        : /\bmonth\b|\bthis month\b|\blast 30 days\b|\b30 days\b/.test(query)
                             ? 'month'
                             : '',
+            dateExact,
             ppeTypes,
             searchTokens: this.tokenize(query)
                 .filter((token) => ![
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
                     'show', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
-                    'slide', 'slideshow', 'carousel', 'look', 'through', 'as',
+                    'slide', 'slideshow', 'carousel', 'look', 'through', 'as', 'tag', 'tags', 'source',
                     'what', 'why', 'how', 'where', 'when', 'which', 'are', 'is', 'was', 'were', 'do', 'does', 'did',
                     'mean', 'means', 'meaning', 'purpose', 'used', 'for', 'explain', 'about', 'on', 'at', 'in', 'of',
                     'main', 'risk', 'risks', 'case', 'cases', 'each', 'likelihood', 'probability', 'chance', 'know', 'understand',
                     'status', 'statuses', 'tag', 'tags',
                     'can', 'you', 'find', 'get', 'make', 'create', 'need', 'want', 'wanna', 'them', 'to', 'me', 'all', 'any', 'rows', 'row',
-                    'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low',
+                    'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low', 'severity',
+                    'ready', 'completed', 'complete', 'done', 'finished', 'generating', 'processing', 'pending', 'queued', 'queue', 'waiting',
+                    'failed', 'failure', 'error', 'errored', 'skipped', 'partial', 'shared',
                     'violation', 'violations', 'incident', 'incidents', 'ppe',
                     'helmet', 'helmets', 'hardhat', 'hardhats', 'hard', 'hat', 'vest', 'vests',
-                    'glove', 'gloves', 'mask', 'masks', 'goggle', 'goggles', 'boot', 'boots', 'shoe', 'shoes'
+                    'glove', 'gloves', 'mask', 'masks', 'goggle', 'goggles', 'boot', 'boots', 'shoe', 'shoes',
+                    'jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may', 'jun', 'june',
+                    'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september', 'oct', 'october', 'nov', 'november', 'dec', 'december'
                 ].includes(token))
+                .filter((token) => !(dateExact && /^\d+(st|nd|rd|th)?$/.test(token)))
         };
+    },
+
+    extractReportExactDateFilter(rawQuery = '') {
+        const source = String(rawQuery || '').trim();
+        const lowerSource = source.toLowerCase();
+        const normalized = this.normalizeText(source);
+
+        const isoMatch = lowerSource.match(/\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b/);
+        if (isoMatch) {
+            const [, year, month, day] = isoMatch;
+            return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+
+        const slashMatch = lowerSource.match(/\b(0?[1-9]|[12]\d|3[01])[-/](0?[1-9]|1[0-2])[-/](20\d{2})\b/);
+        if (slashMatch) {
+            const [, day, month, year] = slashMatch;
+            return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+
+        const monthNames = {
+            jan: '01', january: '01',
+            feb: '02', february: '02',
+            mar: '03', march: '03',
+            apr: '04', april: '04',
+            may: '05',
+            jun: '06', june: '06',
+            jul: '07', july: '07',
+            aug: '08', august: '08',
+            sep: '09', sept: '09', september: '09',
+            oct: '10', october: '10',
+            nov: '11', november: '11',
+            dec: '12', december: '12'
+        };
+        const monthPattern = Object.keys(monthNames).join('|');
+        const namedMonthFirst = normalized.match(new RegExp(`\\b(${monthPattern})\\s+(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\s+(20\\d{2})\\b`));
+        if (namedMonthFirst) {
+            const [, monthName, day, year] = namedMonthFirst;
+            return `${year}-${monthNames[monthName]}-${String(day).padStart(2, '0')}`;
+        }
+        const namedDayFirst = normalized.match(new RegExp(`\\b(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\s+(${monthPattern})\\s+(20\\d{2})\\b`));
+        if (namedDayFirst) {
+            const [, day, monthName, year] = namedDayFirst;
+            return `${year}-${monthNames[monthName]}-${String(day).padStart(2, '0')}`;
+        }
+
+        return '';
     },
 
     matchesReportFilters(row, filters) {
@@ -3831,6 +4073,7 @@ const CASMAssistant = {
             if (filters.source === 'cloud' && scope !== 'cloud') return false;
             if (filters.source === 'local' && scope !== 'local') return false;
             if (filters.source === 'synced_local' && scope !== 'synced_local') return false;
+            if (filters.source === 'shared' && scope !== 'shared') return false;
         }
 
         if (filters.severity) {
@@ -3838,16 +4081,32 @@ const CASMAssistant = {
             if (severity !== filters.severity) return false;
         }
 
+        if (filters.status) {
+            const status = String(row?.status || '').trim().toLowerCase();
+            const normalizedStatus = status === 'ready' || status === 'done' ? 'completed'
+                : status === 'queued' || status === 'waiting' ? 'pending'
+                    : status === 'processing' || status === 'running' ? 'generating'
+                        : status;
+            if (filters.status === 'pending' && normalizedStatus !== 'pending') return false;
+            if (filters.status === 'generating' && normalizedStatus !== 'generating') return false;
+            if (filters.status === 'completed' && normalizedStatus !== 'completed') return false;
+            if (filters.status === 'failed' && normalizedStatus !== 'failed' && normalizedStatus !== 'error') return false;
+            if (filters.status === 'skipped' && normalizedStatus !== 'skipped') return false;
+            if (filters.status === 'partial' && normalizedStatus !== 'partial') return false;
+        }
+
+        if (filters.dateExact) {
+            const rowDate = new Date(row?.timestamp || 0);
+            if (Number.isNaN(rowDate.getTime())) return false;
+            const rowDateKey = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}-${String(rowDate.getDate()).padStart(2, '0')}`;
+            if (rowDateKey !== filters.dateExact) return false;
+        }
+
         if (filters.dateRange) {
             const rowDate = new Date(row?.timestamp || 0);
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             if (filters.dateRange === 'today' && rowDate < today) return false;
-            if (filters.dateRange === 'yesterday') {
-                const yesterday = new Date(today);
-                yesterday.setDate(yesterday.getDate() - 1);
-                if (rowDate < yesterday || rowDate >= today) return false;
-            }
             if (filters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
@@ -3866,19 +4125,25 @@ const CASMAssistant = {
                 row?.device_id,
                 row?.timestamp,
                 row?.violation_summary,
-                Array.isArray(row?.missing_ppe) ? row.missing_ppe.join(' ') : ''
+                Array.isArray(row?.missing_ppe) ? row.missing_ppe.join(' ') : '',
+                Array.isArray(row?.ppe_tags) ? row.ppe_tags.join(' ') : '',
+                row?.severity,
+                row?.status,
+                row?.source_scope,
+                row?.source_label
             ].join(' '));
             if (!filters.searchTokens.every((token) => haystack.includes(token))) return false;
         }
 
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
+            const ppeTags = Array.isArray(row?.ppe_tags) ? row.ppe_tags : [];
             const breakdownLabels = row?.breakdown && typeof row.breakdown === 'object'
                 ? Object.entries(row.breakdown)
                     .filter(([, value]) => Number(value) > 0)
                     .map(([label]) => label)
                 : [];
-            const normalizedLabels = new Set([...missing, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
             if (!filters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
@@ -3890,7 +4155,10 @@ const CASMAssistant = {
         if (filters.source === 'cloud') parts.push('cloud rows');
         if (filters.source === 'local') parts.push('local rows');
         if (filters.source === 'synced_local') parts.push('local-synced rows');
+        if (filters.source === 'shared') parts.push('shared rows');
         if (filters.severity) parts.push(`${filters.severity} severity`);
+        if (filters.status) parts.push(`${filters.status === 'completed' ? 'ready' : filters.status} status`);
+        if (filters.dateExact) parts.push(filters.dateExact);
         if (filters.dateRange) parts.push(filters.dateRange);
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const labels = filters.ppeTypes.map((label) => String(label || '')

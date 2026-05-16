@@ -342,7 +342,9 @@ def main() -> int:
             if not desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.is_visible():
                 raise RuntimeError("Assistant report slideshow did not expose Explain this report control")
             desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
-            desktop_page.wait_for_selector("text=Missing PPE / violation labels", timeout=15000)
+            desktop_page.wait_for_selector("text=Here is a fuller read of report", timeout=20000)
+            desktop_page.wait_for_selector("text=What happened:", timeout=15000)
+            desktop_page.wait_for_selector("text=Recommended next step:", timeout=15000)
             print(f"PASS: assistant report slideshow supports filtered review via '{report_review_prompt}'")
 
             assistant_input.fill("!!!")
@@ -432,9 +434,14 @@ def main() -> int:
                     raise RuntimeError("Prompt deck did not adapt after analytics export")
                 print("PASS: analytics CSV download contains summary metrics")
 
+                assistant_input.fill(export_prompt)
+                assistant_input.press("Enter")
+                desktop_page.wait_for_selector(".assistant-action-btn:has-text('Download CSV')", timeout=30000)
+                preview_text = desktop_page.locator("#assistantMessages").inner_text()
+                if "Reports CSV is prepared" not in preview_text:
+                    raise RuntimeError("Assistant reports export did not show a preview before download")
                 with desktop_page.expect_download(timeout=30000) as download_info:
-                    assistant_input.fill(export_prompt)
-                    assistant_input.press("Enter")
+                    desktop_page.locator(".assistant-action-btn", has_text="Download CSV").last.click()
                 reports_download = download_info.value
                 reports_name = reports_download.suggested_filename
                 if "reports" not in reports_name.lower():

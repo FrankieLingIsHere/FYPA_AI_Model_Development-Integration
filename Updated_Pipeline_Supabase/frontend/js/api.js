@@ -2017,6 +2017,7 @@ const API = {
     async generateReportNow(reportId, options = {}) {
         try {
             const sourceHint = options.source || options.violation || options.sourceHint || null;
+            const sourceScope = sourceHint ? this.inferReportSourceScope(sourceHint) : '';
             const url = sourceHint
                 ? this.buildReportScopedUrl(`/api/report/${reportId}/generate-now`, sourceHint)
                 : `${API_CONFIG.BASE_URL}/api/report/${reportId}/generate-now`;
@@ -2024,7 +2025,10 @@ const API = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    force: !!options.force
+                    force: !!options.force,
+                    source_scope: sourceScope || undefined,
+                    source_label: sourceHint && sourceHint.source_label ? sourceHint.source_label : undefined,
+                    sync_source: sourceHint && (sourceHint.sync_source || sourceHint.source) ? (sourceHint.sync_source || sourceHint.source) : undefined
                 })
             });
             const data = await response.json().catch(() => ({}));

@@ -248,6 +248,39 @@ def test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exis
             casm_app.reset_report_progress()
 
 
+def test_cloud_profile_does_not_promote_backoff_to_local_pipeline():
+    old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+    old_until = casm_app.supabase_offline_backoff_until_epoch
+    old_context = casm_app.supabase_offline_backoff_context
+    old_error = casm_app.supabase_offline_backoff_error
+    try:
+        os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+        with casm_app.supabase_offline_backoff_lock:
+            casm_app.supabase_offline_backoff_until_epoch = 9999999999.0
+            casm_app.supabase_offline_backoff_context = "contract-test"
+            casm_app.supabase_offline_backoff_error = "simulated lag"
+
+        _assert(
+            casm_app._is_local_pipeline_runtime_active() is False,
+            "Cloud profile should not switch report generation to local artifact mode",
+        )
+
+        os.environ["CASM_ROUTING_PROFILE"] = "local"
+        _assert(
+            casm_app._is_local_pipeline_runtime_active() is True,
+            "Local profile should still use local artifact mode during reconnect backoff",
+        )
+    finally:
+        if old_profile is None:
+            os.environ.pop("CASM_ROUTING_PROFILE", None)
+        else:
+            os.environ["CASM_ROUTING_PROFILE"] = old_profile
+        with casm_app.supabase_offline_backoff_lock:
+            casm_app.supabase_offline_backoff_until_epoch = old_until
+            casm_app.supabase_offline_backoff_context = old_context
+            casm_app.supabase_offline_backoff_error = old_error
+
+
 def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
     report_id = "20260513_181500"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -322,6 +355,7 @@ def main():
         test_status_endpoint_uses_local_artifacts_during_db_backoff,
         test_cloud_status_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exist,
+        test_cloud_profile_does_not_promote_backoff_to_local_pipeline,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
     ]

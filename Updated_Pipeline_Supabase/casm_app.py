@@ -1635,12 +1635,22 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
     global supabase_offline_failure_count
 
-    allow_demotion = ALLOW_OFFLINE_LOCAL_MODE and not _is_hosted_runtime_environment()
+    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    allow_demotion = (
+        ALLOW_OFFLINE_LOCAL_MODE
+        and active_profile == 'local'
+        and not _is_hosted_runtime_environment()
+    )
 
     error_text = str(error or '').strip()
     if error_text and not _is_supabase_connectivity_failure(error_text):
         return
     if not allow_demotion and not _is_supabase_restriction_failure(error_text):
+        if active_profile == 'cloud':
+            logger.warning(
+                "Cloud profile retained after cloud persistence warning "
+                f"(context={context}, error={error_text or 'none'})"
+            )
         return
 
     now_epoch = time.time()
@@ -1709,7 +1719,10 @@ def _is_local_pipeline_runtime_active() -> bool:
     """Return True when this local host should generate/cache reports locally."""
     if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
         return False
-    if _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', '')) == 'local':
+    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    if active_profile == 'cloud':
+        return False
+    if active_profile == 'local':
         return True
     if _is_supabase_offline_backoff_active():
         return True
@@ -2992,10 +3005,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             break
 
         recovery_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-        recovery_in_local_mode = (
-            recovery_routing_profile == 'local'
-            or not _is_hosted_runtime_environment()
-        )
+        recovery_in_local_mode = recovery_routing_profile == 'local'
         # Recovery sweep should preserve the runtime's active routing profile so
         # cloud-mode reports being recovered don't get tagged with the orange
         # 'Local' / 'Local Synced' chips. Use a neutral webcam_0 device id in
@@ -3059,7 +3069,13 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 or _guard_device.startswith('offline_')
                 # Reports not in Supabase at all were created on this machine only —
                 # safe to recover as local regardless of the metadata scope value.
-                or (event is None and violation is None and db_manager is not None)
+                or (
+                    event is None
+                    and violation is None
+                    and db_manager is not None
+                    and _guard_scope not in {'cloud', 'shared'}
+                    and _guard_origin not in {'cloud', 'cloud_live', 'live_capture', 'cloud_pending_recovery'}
+                )
             )
             if not _is_local_origin_for_recovery:
                 summary['eligible'] -= 1
@@ -3714,7 +3730,7 @@ def queue_worker_loop():
                 # from a previous local session where the camera wasn't ready)
                 # produces spurious black-picture reports that confuse the UI.
                 _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-                if _queue_worker_routing == 'local' or not _is_hosted_runtime_environment():
+                if _queue_worker_routing == 'local':
                     recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
                     enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
                     if enqueued_count > 0:
@@ -4019,7 +4035,10 @@ def enqueue_violation(
                 logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
-                if _is_supabase_connectivity_failure(e):
+                if (
+                    _is_supabase_connectivity_failure(e)
+                    and _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', '')) == 'local'
+                ):
                     local_runtime_active = True
                     force_local_scope = bool(
                         _should_force_local_artifact_pipeline(
@@ -5134,6 +5153,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'location': 'Live Stream Monitor',
                 'severity': resolved_report_severity,
                 'person_count': detected_person_count,
+                'detection_data': data.get('detection_data') if isinstance(data.get('detection_data'), dict) else {},
                 'cloud_upload_disabled': force_local_artifact_pipeline,
                 'force_local_nlp': force_local_artifact_pipeline,
                 'allow_local_nlp_fallback': force_local_artifact_pipeline,
@@ -12771,8 +12791,8 @@ def api_pending_reports():
     # mere presence of disk artifacts. Otherwise a cloud-mode report card
     # incorrectly shows the 'Local' chip during the generating window and
     # only flips to 'Cloud' once the DB row appears as completed.
-    local_artifact_scope = 'local' if (db_manager is None or active_profile == 'local') else 'cloud'
-    local_seed_device_id = 'local_cache' if (db_manager is None or active_profile == 'local') else None
+    local_artifact_scope = 'local' if active_profile == 'local' else 'cloud'
+    local_seed_device_id = 'local_cache' if active_profile == 'local' else None
     local_rows = _collect_local_report_state_rows(limit=300)
     completed_local_report_ids = set()
     for row in local_rows:
@@ -13033,22 +13053,34 @@ def api_generate_report_now(report_id):
         detections = []
         violation_types = []
         detection_data = {}
-        source_scope_marker = ''
-        sync_source_marker = ''
 
-        if isinstance(violation, dict) and isinstance(violation.get('detection_data'), dict):
-            detection_data = violation.get('detection_data') or {}
+        raw_detection_data = violation.get('detection_data') if isinstance(violation, dict) else None
+        if isinstance(raw_detection_data, dict):
+            detection_data = raw_detection_data
+        elif isinstance(raw_detection_data, str):
+            try:
+                parsed_detection_data = json.loads(raw_detection_data)
+                if isinstance(parsed_detection_data, dict):
+                    detection_data = parsed_detection_data
+            except Exception:
+                detection_data = {}
+
+        if isinstance(detection_data, dict):
             detections = detection_data.get('detections', []) or []
-            source_scope_marker = str(
-                detection_data.get('source_scope')
-                or detection_data.get('report_scope')
-                or ''
-            ).strip().lower()
-            sync_source_marker = str(
-                detection_data.get('sync_source')
-                or detection_data.get('source')
-                or ''
-            ).strip().lower()
+
+        source_scope_marker = str(
+            payload.get('source_scope')
+            or detection_data.get('source_scope')
+            or detection_data.get('report_scope')
+            or ''
+        ).strip().lower()
+        sync_source_marker = str(
+            payload.get('sync_source')
+            or payload.get('source')
+            or detection_data.get('sync_source')
+            or detection_data.get('source')
+            or ''
+        ).strip().lower()
 
         local_violation_type = str(local_metadata.get('violation_type') or '').strip()
         local_violation_types = [local_violation_type] if local_violation_type else []
@@ -13090,6 +13122,22 @@ def api_generate_report_now(report_id):
                 'manual_regenerate_offline' if db_manager is None else f'manual_regenerate_{report_id}'
             )
 
+        active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        device_key = str(device_id or '').strip().lower()
+        local_origin_marker = _is_local_pipeline_origin_marker(
+            source_scope=source_scope_marker,
+            sync_source=sync_source_marker,
+            device_id=device_key,
+        )
+        is_local_sync_marker_for_repair = _is_local_cache_sync_job_marker(
+            sync_source=sync_source_marker,
+            device_id=device_key,
+        ) or local_origin_marker
+        if source_scope_marker == 'synced_local' and not is_local_sync_marker_for_repair:
+            source_scope_marker = 'cloud' if active_profile == 'cloud' else 'local'
+        elif not source_scope_marker:
+            source_scope_marker = 'local' if (active_profile == 'local' or local_origin_marker) else 'cloud'
+
         if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):
             try:
                 db_manager.insert_detection_event(
@@ -13124,6 +13172,14 @@ def api_generate_report_now(report_id):
             'force_reprocess': force_reprocess,
             'severity': resolved_severity,
         }
+        reprocess_metadata = {
+            'reprocessed': bool(force_reprocess),
+            'source_scope': source_scope_marker,
+        }
+        if sync_source_marker:
+            reprocess_metadata['sync_source'] = sync_source_marker
+            reprocess_metadata['source'] = sync_source_marker
+        violation_data['detection_data'] = reprocess_metadata
         if placeholder_reprocess_recovery_used:
             violation_data['skip_environment_validation'] = True
             violation_data['allow_placeholder_report'] = True
@@ -13134,12 +13190,17 @@ def api_generate_report_now(report_id):
             violation_data['sync_source'] = sync_source_marker
             violation_data['source'] = sync_source_marker
 
-        enqueue_device_id = device_id
+        enqueue_device_id = (
+            f"manual_reprocess_{report_id}_{time.time_ns()}"
+            if force_reprocess
+            else f"manual_process_{report_id}_{time.time_ns()}"
+        )
         enqueued = violation_queue.enqueue(
             violation_data=violation_data,
             device_id=enqueue_device_id,
             report_id=report_id,
-            severity='CRITICAL'
+            severity='CRITICAL',
+            expedite=True,
         )
 
         if not enqueued:
@@ -13154,7 +13215,8 @@ def api_generate_report_now(report_id):
                     violation_data=violation_data,
                     device_id=fallback_device_id,
                     report_id=report_id,
-                    severity='CRITICAL'
+                    severity='CRITICAL',
+                    expedite=True,
                 )
                 if enqueued:
                     enqueue_device_id = fallback_device_id
@@ -13177,6 +13239,8 @@ def api_generate_report_now(report_id):
                 'worker_running': _is_queue_worker_alive()
             }), 409
 
+        _invalidate_queue_context_snapshot_cache()
+
         if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
             try:
                 db_manager.update_detection_status(report_id, 'pending')
@@ -13195,7 +13259,14 @@ def api_generate_report_now(report_id):
             'db_event_available': event is not None,
             'queue_size': queue_stats.get('current_size', 0),
             'enqueue_device_id': enqueue_device_id,
-            'worker_running': _is_queue_worker_alive()
+            'worker_running': _is_queue_worker_alive(),
+            'source_scope': source_scope_marker,
+            'source_label': (
+                'Local Synced' if source_scope_marker == 'synced_local'
+                else 'Local' if source_scope_marker == 'local'
+                else 'Shared' if source_scope_marker == 'shared'
+                else 'Cloud'
+            )
         })
 
     except Exception as e:

@@ -55,6 +55,7 @@ def _build_page_html() -> str:
     window.CASM_TUTORIAL_FLOWS = {{ cloud: [], local: [] }};
     window.API = {{
         getImageUrl: () => '',
+        getReportUrl: () => '',
         getViolations: async () => [
             {{
                 report_id: 'front-gate-001',
@@ -109,11 +110,27 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
         assert "front-gate-001" in page.locator("#assistantMessages").inner_text()
 
+        _submit_prompt(page, "what/how is the latest reports so far, can i have a look?")
+        page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
+
+        _submit_prompt(page, "export 2026-05-15 cloud medium mask reports csv")
+        page.get_by_text("Reports CSV is prepared", exact=False).wait_for(timeout=10000)
+        page.locator(".assistant-action-btn", has_text="Download CSV").last.wait_for(timeout=10000)
+        export_preview = page.locator("#assistantMessages").inner_text()
+        assert "front-gate-001" in export_preview
+        assert "loading-bay-002" not in export_preview.split("export 2026-05-15 cloud medium mask reports csv")[-1]
+
         _submit_prompt(page, "i wanna check reports on front gate")
         page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
         message_text = page.locator("#assistantMessages").inner_text()
         assert "front-gate-001" in message_text
         assert "loading-bay-002" not in message_text.split("i wanna check reports on front gate")[-1]
+
+        page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
+        page.get_by_text("Here is a fuller read of report front-gate-001", exact=False).wait_for(timeout=10000)
+        explanation_text = page.locator("#assistantMessages").inner_text()
+        assert "What happened:" in explanation_text
+        assert "Recommended next step:" in explanation_text
 
         _submit_prompt(page, "i wanna check reports on no-such-zone-999")
         page.get_by_text("I could not find report rows", exact=False).wait_for(timeout=10000)

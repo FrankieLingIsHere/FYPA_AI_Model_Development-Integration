@@ -3912,6 +3912,11 @@ def enqueue_violation(
         )
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         runtime_device_id = 'local_cache' if local_runtime_active else 'webcam_0'
+        capture_sync_source = (
+            'local_pipeline'
+            if local_runtime_active
+            else ('upload_capture' if trigger_source == 'upload' else 'live_capture')
+        )
 
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -3979,7 +3984,8 @@ def enqueue_violation(
             'status': 'pending',
             'source_scope': 'local' if local_runtime_active else 'cloud',
             'source_label': 'Local' if local_runtime_active else 'Cloud',
-            'sync_source': 'local_pipeline' if local_runtime_active else 'live_capture',
+            'sync_source': capture_sync_source,
+            'source': capture_sync_source,
             'has_original': True,
             'has_annotated': annotated_saved,
             'has_caption': False,
@@ -4099,6 +4105,10 @@ def enqueue_violation(
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'
+        else:
+            violation_data['source_scope'] = 'cloud'
+            violation_data['sync_source'] = capture_sync_source
+            violation_data['source'] = capture_sync_source
 
         queue_severity = 'URGENT' if trigger_source == 'upload' else resolved_severity
         queue_expedite = trigger_source == 'upload'
@@ -15369,6 +15379,8 @@ def upload_inference():
         # Encode annotated image to base64
         _, buffer = cv2.imencode('.jpg', annotated)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
+        response_source_scope = 'local' if _is_local_pipeline_runtime_active() else 'cloud'
+        response_source_label = 'Local' if response_source_scope == 'local' else 'Cloud'
 
         return jsonify({
             'success': True,
@@ -15379,7 +15391,10 @@ def upload_inference():
             'violation_count': len(violation_detections),
             'report_queued': report_queued,
             'report_queue_reason': report_queue_reason,
-            'report_id': queued_report_id
+            'report_id': queued_report_id,
+            'source_scope': response_source_scope,
+            'source_label': response_source_label,
+            'local_draft_required': response_source_scope == 'local',
         })
 
     except Exception as e:
@@ -15447,6 +15462,8 @@ def live_frame_inference():
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
             report_queue_reason = 'pipeline_components_unavailable'
 
+        response_source_scope = 'local' if _is_local_pipeline_runtime_active() else 'cloud'
+        response_source_label = 'Local' if response_source_scope == 'local' else 'Cloud'
         return jsonify({
             'success': True,
             'source': 'near_edge_live_frame',
@@ -15456,7 +15473,10 @@ def live_frame_inference():
             'violation_count': len(violation_detections),
             'report_queued': report_queued,
             'report_queue_reason': report_queue_reason,
-            'report_id': queued_report_id
+            'report_id': queued_report_id,
+            'source_scope': response_source_scope,
+            'source_label': response_source_label,
+            'local_draft_required': response_source_scope == 'local',
         })
 
     except Exception as e:

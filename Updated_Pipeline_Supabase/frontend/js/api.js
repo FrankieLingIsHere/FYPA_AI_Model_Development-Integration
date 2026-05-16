@@ -144,6 +144,36 @@ const API = {
         return true;
     },
 
+    shouldPersistLocalReportDraft(result = {}) {
+        if (!result || typeof result !== 'object') return false;
+        if (result.report_queued === false) return false;
+
+        if (result.local_draft_required === true || result.requires_local_draft === true) {
+            return true;
+        }
+        if (result.local_draft_required === false || result.requires_local_draft === false) {
+            return false;
+        }
+
+        const explicitScope = this.inferReportSourceScope(result)
+            || String(result.source_scope || result.report_scope || result.scope || '').trim().toLowerCase();
+        if (explicitScope === 'local') return true;
+        if (['cloud', 'synced_local', 'shared'].includes(explicitScope)) return false;
+
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return true;
+        }
+
+        try {
+            const currentBase = this._normalizeBaseUrl(
+                (typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) || ''
+            );
+            return this.isLocalBackendBase(currentBase || (window.location && window.location.origin) || '');
+        } catch (error) {
+            return false;
+        }
+    },
+
     isExpectedOfflineFetchError(error) {
         const message = String(
             (error && (error.message || error.name || error.toString && error.toString())) || error || ''

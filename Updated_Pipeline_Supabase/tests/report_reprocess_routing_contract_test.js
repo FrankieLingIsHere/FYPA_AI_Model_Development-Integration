@@ -275,12 +275,72 @@ async function testCloudFallbackRepairsStaleLocalReportCaches() {
   assertEqual(staleDetail, null, 'stale per-report detail cache should be removed');
 }
 
+function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
+  const cloudContext = loadApiContext(async () => createResponse(true, 200, {}));
+  const cloudResult = {
+    success: true,
+    report_queued: true,
+    report_id: 'cloud-queued-001',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    local_draft_required: false,
+  };
+  assertEqual(
+    cloudContext.API.shouldPersistLocalReportDraft(cloudResult),
+    false,
+    'cloud queued reports must not be cached as browser local drafts',
+  );
+
+  const localResult = {
+    success: true,
+    report_queued: true,
+    report_id: 'local-queued-001',
+    source_scope: 'local',
+    source_label: 'Local',
+    local_draft_required: true,
+  };
+  assertEqual(
+    cloudContext.API.shouldPersistLocalReportDraft(localResult),
+    true,
+    'explicit local queued reports should keep the browser local draft fallback',
+  );
+
+  const unknownCloudResult = {
+    success: true,
+    report_queued: true,
+    report_id: 'cloud-queued-unknown-scope',
+  };
+  assertEqual(
+    cloudContext.API.shouldPersistLocalReportDraft(unknownCloudResult),
+    false,
+    'deployed cloud pages should not infer local drafts when scope is absent',
+  );
+
+  const localPageContext = loadApiContext(
+    async () => createResponse(true, 200, {}),
+    {
+      location: {
+        origin: 'http://localhost:5000',
+        hostname: 'localhost',
+        protocol: 'http:',
+      },
+    },
+  );
+  localPageContext.API_CONFIG.BASE_URL = '';
+  assertEqual(
+    localPageContext.API.shouldPersistLocalReportDraft(unknownCloudResult),
+    true,
+    'same-origin localhost can keep local report drafts when the backend has not sent a scope yet',
+  );
+}
+
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
     testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists,
     testCloudFallbackPatchOverridesStaleLocalAnchor,
     testCloudFallbackRepairsStaleLocalReportCaches,
+    testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
   ];
   const failures = [];
   for (const testFn of tests) {

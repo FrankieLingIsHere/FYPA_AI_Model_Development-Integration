@@ -8711,12 +8711,26 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     max-width: min(82%, 520px);
 }
 
+.assistant-message-assistant .assistant-message-stack,
+.assistant-message-thinking .assistant-message-stack {
+    align-items: flex-start;
+}
+
 .assistant-message-meta {
     padding-inline: 0.22rem;
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.01em;
     color: #64748b;
+}
+
+.assistant-message-assistant .assistant-message-meta,
+.assistant-message-thinking .assistant-message-meta {
+    text-align: left;
+}
+
+.assistant-message-user .assistant-message-meta {
+    text-align: right;
 }
 
 .assistant-bubble {

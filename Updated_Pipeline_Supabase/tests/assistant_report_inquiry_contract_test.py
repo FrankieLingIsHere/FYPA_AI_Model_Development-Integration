@@ -113,6 +113,12 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         _submit_prompt(page, "what/how is the latest reports so far, can i have a look?")
         page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
 
+        _submit_prompt(page, "i wanna see cloud reports")
+        page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
+        cloud_prompt_text = page.locator("#assistantMessages").inner_text().split("i wanna see cloud reports")[-1]
+        assert "front-gate-001" in cloud_prompt_text
+        assert "loading-bay-002" not in cloud_prompt_text
+
         _submit_prompt(page, "export 2026-05-15 cloud medium mask reports csv")
         page.get_by_text("Reports CSV is prepared", exact=False).wait_for(timeout=10000)
         page.locator(".assistant-action-btn", has_text="Download CSV").last.wait_for(timeout=10000)
@@ -134,4 +140,72 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
 
         _submit_prompt(page, "i wanna check reports on no-such-zone-999")
         page.get_by_text("I could not find report rows", exact=False).wait_for(timeout=10000)
+        browser.close()
+
+
+def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        page.set_content(_build_page_html(), wait_until="domcontentloaded")
+        page.wait_for_selector("#assistantTitle", state="visible")
+        page.locator("#assistantLauncher").click()
+
+        page.evaluate(
+            """
+            const session = window.CASMAssistant.getActiveSession();
+            session.messages = [
+                { id: 'assistant-alias-1', role: 'Mira', text: 'Alias message one' },
+                { id: 'assistant-alias-2', role: 'Moira', text: 'Alias message two' },
+                { id: 'user-message-1', role: 'user', text: 'User message' }
+            ].map((message) => window.CASMAssistant.normalizeMessage(message));
+            window.CASMAssistant.refreshSessionUi();
+            """
+        )
+        assert page.locator(".assistant-message-assistant").count() == 2
+        assert page.locator(".assistant-message-user").count() == 1
+
+        page.evaluate(
+            """
+            window.__resolveViolations = null;
+            window.__violationsPromise = new Promise((resolve) => {
+                window.__resolveViolations = resolve;
+            });
+            window.API.getViolations = async () => window.__violationsPromise;
+            """
+        )
+
+        _submit_prompt(page, "i wanna see cloud reports")
+        page.get_by_text("Finding matching reports", exact=False).wait_for(timeout=10000)
+        assert page.locator("#assistantInput").is_disabled()
+        assert page.locator("#assistantSend").is_disabled()
+
+        page.evaluate("window.CASMAssistant.runSuggestedPrompt('export reports csv')")
+        user_prompts = page.evaluate(
+            "window.CASMAssistant.getActiveSession().messages.filter((message) => message.role === 'user').map((message) => message.text)"
+        )
+        assert user_prompts.count("i wanna see cloud reports") == 1
+        assert "export reports csv" not in user_prompts
+
+        page.evaluate(
+            """
+            window.__resolveViolations([
+                {
+                    report_id: 'cloud-delayed-001',
+                    timestamp: '2026-05-15T09:00:00Z',
+                    status: 'completed',
+                    severity: 'HIGH',
+                    device_id: 'cloud-cam',
+                    violation_count: 1,
+                    missing_ppe: ['Safety Vest'],
+                    source_scope: 'cloud',
+                    source_label: 'Cloud',
+                    violation_summary: 'PPE Violation Detected: Missing Safety Vest'
+                }
+            ]);
+            """
+        )
+        page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
+        assert "cloud-delayed-001" in page.locator("#assistantMessages").inner_text()
+        assert not page.locator("#assistantInput").is_disabled()
         browser.close()

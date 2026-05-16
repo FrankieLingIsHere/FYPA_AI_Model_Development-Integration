@@ -991,16 +991,23 @@ const LivePage = {
                         };
 
                         try {
+                            const shouldPersistLocalDraft = (
+                                typeof API !== 'undefined'
+                                && typeof API.shouldPersistLocalReportDraft === 'function'
+                            )
+                                ? API.shouldPersistLocalReportDraft(result)
+                                : (typeof navigator !== 'undefined' && navigator.onLine === false);
                             if (typeof API !== 'undefined'
                                 && typeof API.upsertLocalReportDraft === 'function'
+                                && shouldPersistLocalDraft
                                 && synthViolation.report_id) {
                                 void API.upsertLocalReportDraft({
                                     ...synthViolation,
                                     original_blob: blob,
                                     has_original: true,
                                     has_annotated: false,
-                                    source_scope: 'local',
-                                    source_label: 'Local',
+                                    source_scope: result.source_scope || 'local',
+                                    source_label: result.source_label || 'Local',
                                     sync_state: 'pending_local_generation',
                                     status: 'pending',
                                     detections: Array.isArray(result.detections) ? result.detections : [],
@@ -1499,7 +1506,15 @@ const LivePage = {
         function persistUploadedViolationDraft(result, file) {
             if (!result || !result.violations_detected || !result.report_id) return;
             try {
-                if (typeof API !== 'undefined' && typeof API.upsertLocalReportDraft === 'function') {
+                const shouldPersistLocalDraft = (
+                    typeof API !== 'undefined'
+                    && typeof API.shouldPersistLocalReportDraft === 'function'
+                )
+                    ? API.shouldPersistLocalReportDraft(result)
+                    : (typeof navigator !== 'undefined' && navigator.onLine === false);
+                if (typeof API !== 'undefined'
+                    && typeof API.upsertLocalReportDraft === 'function'
+                    && shouldPersistLocalDraft) {
                     void API.upsertLocalReportDraft({
                         report_id: result.report_id,
                         timestamp: new Date().toISOString(),
@@ -1508,8 +1523,8 @@ const LivePage = {
                         original_blob: file,
                         has_original: true,
                         has_annotated: false,
-                        source_scope: 'local',
-                        source_label: 'Local',
+                        source_scope: result.source_scope || 'local',
+                        source_label: result.source_label || 'Local',
                         sync_state: 'pending_local_generation',
                         violation_count: Number(result.violation_count || 1),
                         detections: Array.isArray(result.detections) ? result.detections : [],

@@ -20,6 +20,7 @@ const CASMAssistant = {
     syncInFlight: false,
     syncQueued: false,
     isResponding: false,
+    activeResponseJobId: 0,
     responseFeedbackText: 'Thinking...',
     preparedCsvDownloads: {},
     ui: {},
@@ -239,7 +240,7 @@ const CASMAssistant = {
         if (!message || !message.id || !message.role) return null;
         return {
             id: String(message.id),
-            role: message.role === 'assistant' ? 'assistant' : 'user',
+            role: this.normalizeMessageRole(message.role),
             text: String(message.text || ''),
             createdAt: Number(message.createdAt || Date.now()),
             bullets: Array.isArray(message.bullets) ? message.bullets.slice(0, 8) : [],
@@ -249,6 +250,21 @@ const CASMAssistant = {
             reportCarousel: message.reportCarousel && typeof message.reportCarousel === 'object' ? message.reportCarousel : null,
             metrics: Array.isArray(message.metrics) ? message.metrics.slice(0, 6) : []
         };
+    },
+
+    normalizeMessageRole(role) {
+        const normalized = String(role || '').trim().toLowerCase();
+        if (!normalized) return 'assistant';
+        if (['assistant', 'mira', 'moira', 'bot', 'copilot', 'system'].includes(normalized)) {
+            return 'assistant';
+        }
+        if (['user', 'human', 'me', 'you'].includes(normalized)) {
+            return 'user';
+        }
+        if (normalized.includes('user') || normalized.includes('human')) {
+            return 'user';
+        }
+        return 'assistant';
     },
 
     ensureActiveSession() {
@@ -719,7 +735,7 @@ const CASMAssistant = {
         const speakerIcon = message.role === 'assistant' ? 'fa-sparkles' : 'fa-user';
 
         return `
-            <article class="assistant-message assistant-message-${message.role}">
+            <article class="assistant-message assistant-message-${message.role}" data-role="${this.escapeHtml(message.role)}">
                 <div class="assistant-avatar" aria-hidden="true">
                     <i class="fas ${speakerIcon}"></i>
                 </div>
@@ -772,7 +788,8 @@ const CASMAssistant = {
 
     async handleSubmit() {
         const raw = String(this.ui.input.value || '').trim();
-        if (!raw || this.isResponding) return;
+        if (!raw) return;
+        if (this.handleBusyInteraction()) return;
         this.ui.input.value = '';
         this.autosizeInput();
         this.pushMessage({
@@ -788,22 +805,32 @@ const CASMAssistant = {
         }
         this.renderSessionRail();
         this.saveState();
-        this.setResponseFeedback(true, this.pickResponseFeedback(raw));
+        const responseJobId = this.beginResponseFeedback(this.pickResponseFeedback(raw));
         try {
             await this.waitForFeedbackFrame();
             await this.answer(raw);
         } finally {
-            this.setResponseFeedback(false);
+            this.finishResponseFeedback(responseJobId);
         }
     },
 
     pickResponseFeedback(raw) {
         const query = this.normalizeText(raw);
         if (/\b(export|download|csv)\b/.test(query)) return 'Preparing the export...';
+        if (/\b(reports?|report id|violation records?|case records?|evidence|latest reports?|recent reports?|local synced|synced local)\b/.test(query)) return 'Finding matching reports...';
         if (/\b(analytics|metric|metrics|trend|filter|severity|week|month|today)\b/.test(query)) return 'Checking the analytics view...';
         if (/\b(camera|live|monitor|monitoring|supervision|supervise|image|upload)\b/.test(query)) return 'Mapping that to the right workflow...';
         if (/\b(tutorial|guide|handbook|manual|docs)\b/.test(query)) return 'Looking through the guide...';
         return 'Thinking...';
+    },
+
+    pickActionFeedback(action = {}) {
+        const type = String(action.type || '').trim();
+        if (type === 'export') return 'Preparing the export preview...';
+        if (type === 'overview') return 'Checking current metrics...';
+        if (type === 'report-review-explain') return 'Reading the selected report...';
+        if (type === 'open-report') return 'Opening the selected report...';
+        return '';
     },
 
     waitForFeedbackFrame() {
@@ -825,6 +852,35 @@ const CASMAssistant = {
         }
         this.syncResponseControls();
         this.renderMessages();
+    },
+
+    beginResponseFeedback(label = '') {
+        this.activeResponseJobId += 1;
+        const jobId = this.activeResponseJobId;
+        this.setResponseFeedback(true, label || 'Thinking...');
+        return jobId;
+    },
+
+    finishResponseFeedback(jobId) {
+        if (!jobId || jobId === this.activeResponseJobId) {
+            this.setResponseFeedback(false);
+        }
+    },
+
+    updateResponseFeedback(label = '') {
+        const nextLabel = String(label || '').trim();
+        if (!this.isResponding || !nextLabel) return;
+        this.responseFeedbackText = nextLabel;
+        this.renderMessages();
+    },
+
+    handleBusyInteraction() {
+        if (!this.isResponding) return false;
+        const current = String(this.responseFeedbackText || '').trim();
+        this.updateResponseFeedback(current && current !== 'Thinking...'
+            ? current
+            : 'Still working on your last request...');
+        return true;
     },
 
     syncResponseControls() {
@@ -2344,6 +2400,7 @@ const CASMAssistant = {
 
     async handleExportIntent(raw, query) {
         if (/\b(analytics|metrics|overview)\b/.test(query)) {
+            this.updateResponseFeedback('Preparing the analytics export...');
             const outcome = await this.exportAnalyticsCsv();
             this.pushMessage({
                 role: 'assistant',
@@ -2358,6 +2415,7 @@ const CASMAssistant = {
         }
 
         if (/\b(docs|manual|handbook|documentation)\b/.test(query)) {
+            this.updateResponseFeedback('Preparing the handbook export...');
             const outcome = await this.exportDocsCsv(raw);
             this.pushMessage({
                 role: 'assistant',
@@ -2371,6 +2429,7 @@ const CASMAssistant = {
             return;
         }
 
+        this.updateResponseFeedback('Preparing the report export preview...');
         const outcome = await this.exportReportsCsv(raw);
         const previewBullets = outcome.success
             ? [
@@ -2893,7 +2952,9 @@ const CASMAssistant = {
         }
 
         try {
+            this.updateResponseFeedback('Fetching report rows...');
             const rows = await API.getViolations({ limit: 1000 });
+            this.updateResponseFeedback('Filtering matching reports...');
             const filters = intent.filters || this.buildReportFilters(intent.raw || intent.query || '');
             const filtered = (rows || [])
                 .filter((row) => this.matchesReportFilters(row, filters))
@@ -3238,6 +3299,7 @@ const CASMAssistant = {
             return;
         }
         const report = current.report;
+        this.updateResponseFeedback('Reading the selected report...');
         const documentText = await this.fetchReportDocumentText(report);
         this.pushMessage(this.buildDetailedReportExplanation(report, documentText));
     },
@@ -3533,7 +3595,15 @@ const CASMAssistant = {
 
     async performAction(action) {
         if (!action || !action.type) return;
-        switch (action.type) {
+        const feedbackLabel = this.pickActionFeedback(action);
+        const responseJobId = feedbackLabel && !this.isResponding
+            ? this.beginResponseFeedback(feedbackLabel)
+            : 0;
+        if (responseJobId) {
+            await this.waitForFeedbackFrame();
+        }
+        try {
+            switch (action.type) {
             case 'route': {
                 this.performRouteNavigation(action);
                 return;
@@ -3605,10 +3675,21 @@ const CASMAssistant = {
             }
             default:
                 return;
+            }
+        } finally {
+            if (responseJobId) {
+                this.finishResponseFeedback(responseJobId);
+            }
         }
     },
 
     handleActionClick(event) {
+        const guardedButton = event.target.closest('[data-prompt-index], [data-shortcut-index], [data-message-id][data-action-index]');
+        if (guardedButton && this.handleBusyInteraction()) {
+            event.preventDefault();
+            return;
+        }
+
         const promptButton = event.target.closest('[data-prompt-index]');
         if (promptButton) {
             const index = Number(promptButton.dataset.promptIndex || -1);
@@ -3647,6 +3728,7 @@ const CASMAssistant = {
     async runSuggestedPrompt(prompt) {
         const text = String(prompt || '').trim();
         if (!text) return;
+        if (this.handleBusyInteraction()) return;
         this.ui.input.value = text;
         this.autosizeInput();
         await this.handleSubmit();
@@ -3661,10 +3743,6 @@ const CASMAssistant = {
             createdAt: message.createdAt || Date.now()
         });
         if (!normalized) return;
-        if (normalized.role === 'assistant' && this.isResponding) {
-            this.isResponding = false;
-            this.syncResponseControls();
-        }
         session.messages.push(normalized);
         session.messages = session.messages.slice(-this.MAX_MESSAGES);
         session.updatedAt = Date.now();

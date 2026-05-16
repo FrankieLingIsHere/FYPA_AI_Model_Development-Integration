@@ -9,6 +9,8 @@ not return not_found for a local report folder that exists.
 import os
 import sys
 import tempfile
+import json
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -157,6 +159,36 @@ class CaptureUpdateDB:
 
     def update_violation(self, report_id, **kwargs):
         self.calls.append((report_id, kwargs))
+
+
+class CaptureQueue:
+    def __init__(self):
+        self.items = []
+
+    def enqueue(self, violation_data, device_id, report_id, severity, expedite=False):
+        self.items.append({
+            "violation_data": dict(violation_data),
+            "device_id": device_id,
+            "report_id": report_id,
+            "severity": severity,
+            "expedite": expedite,
+        })
+        return True
+
+    def get_stats(self):
+        return {"current_size": len(self.items), "capacity": 100}
+
+
+class CaptureProcessingDB:
+    def __init__(self):
+        self.inserts = []
+        self.status_updates = []
+
+    def insert_detection_event(self, **kwargs):
+        self.inserts.append(dict(kwargs))
+
+    def update_detection_status(self, report_id, status, error_message=None):
+        self.status_updates.append((report_id, status, error_message))
 
 
 def _assert(condition, message):
@@ -529,6 +561,170 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
             casm_app.reset_report_progress()
 
 
+def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        fake_queue = CaptureQueue()
+        fake_db = CaptureProcessingDB()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_violation_queue = casm_app.violation_queue
+        old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
+        old_last_violation_time = casm_app.last_violation_time
+        old_redundant_check = casm_app._is_redundant_live_violation
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        old_backoff_until = casm_app.supabase_offline_backoff_until_epoch
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.supabase_offline_backoff_until_epoch = 0.0
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.violation_queue = fake_queue
+            casm_app.ensure_queue_worker_running = lambda: True
+            casm_app.last_violation_time = 0
+            casm_app._is_redundant_live_violation = lambda *_args, **_kwargs: False
+
+            frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
+            detections = [
+                {"class_name": "person", "confidence": 0.91, "bbox": [0, 0, 4, 7]},
+                {"class_name": "no-mask", "confidence": 0.87, "bbox": [1, 1, 5, 5]},
+            ]
+            report_id = casm_app.enqueue_violation(
+                frame,
+                detections,
+                trigger_source="live",
+                annotated_frame=frame.copy(),
+            )
+
+            _assert(report_id, "Cloud enqueue did not return a report id")
+            _assert(len(fake_queue.items) == 1, f"Expected one queue item, got {fake_queue.items}")
+            item = fake_queue.items[0]
+            payload = item["violation_data"]
+            _assert(item["device_id"] == "webcam_0", f"Cloud queue device drifted: {item}")
+            _assert(payload.get("source_scope") == "cloud", f"Queue payload scope drifted: {payload}")
+            _assert(payload.get("sync_source") == "live_capture", f"Queue payload sync marker drifted: {payload}")
+            _assert(payload.get("source") == "live_capture", f"Queue payload source marker drifted: {payload}")
+            _assert(fake_db.inserts, "Cloud enqueue should still insert a pending DB event through the fake DB")
+
+            metadata_path = root / report_id / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            _assert(metadata.get("source_scope") == "cloud", f"Metadata scope drifted: {metadata}")
+            _assert(metadata.get("source_label") == "Cloud", f"Metadata label drifted: {metadata}")
+            _assert(metadata.get("sync_source") == "live_capture", f"Metadata sync marker drifted: {metadata}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.violation_queue = old_violation_queue
+            casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
+            casm_app.last_violation_time = old_last_violation_time
+            casm_app._is_redundant_live_violation = old_redundant_check
+            casm_app.supabase_offline_backoff_until_epoch = old_backoff_until
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+
+
+def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation():
+    class FakeCaptionGenerator:
+        def generate_caption(self, _image_path):
+            return "Worker is missing a mask in a monitored work area."
+
+    class FakeReportGenerator:
+        def __init__(self):
+            self.calls = []
+
+        def generate_report(self, report_data):
+            self.calls.append(dict(report_data))
+            report_dir = Path(report_data["original_image_path"]).parent
+            (report_dir / "report.html").write_text("<html>cloud report complete</html>", encoding="utf-8")
+            return {
+                "html": "<html>cloud report complete</html>",
+                "storage_keys": {"report_html_key": f"reports/{report_data['report_id']}/report.html"},
+            }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_id = "cloud_queue_contract_001"
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
+        original_path = report_dir / "original.jpg"
+        annotated_path = report_dir / "annotated.jpg"
+        casm_app.cv2.imwrite(str(original_path), frame)
+        casm_app.cv2.imwrite(str(annotated_path), frame)
+
+        fake_db = CaptureProcessingDB()
+        fake_report_generator = FakeReportGenerator()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_caption_generator = casm_app.caption_generator
+        old_report_generator = casm_app.report_generator
+        old_env_validation = casm_app.ENVIRONMENT_VALIDATION_ENABLED
+        old_push_realtime = casm_app._push_realtime_report_event
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.caption_generator = FakeCaptionGenerator()
+            casm_app.report_generator = fake_report_generator
+            casm_app.ENVIRONMENT_VALIDATION_ENABLED = False
+            casm_app._push_realtime_report_event = lambda *_args, **_kwargs: None
+
+            queued = casm_app.QueuedViolation(
+                priority=0,
+                timestamp=time.time(),
+                data={
+                    "report_id": report_id,
+                    "timestamp": datetime.now(timezone.utc),
+                    "detections": [
+                        {"class_name": "person", "confidence": 0.91, "bbox": [0, 0, 4, 7]},
+                        {"class_name": "no-mask", "confidence": 0.87, "bbox": [1, 1, 5, 5]},
+                    ],
+                    "violation_types": ["no-mask"],
+                    "violation_count": 1,
+                    "original_image_path": str(original_path),
+                    "annotated_image_path": str(annotated_path),
+                    "violation_dir": str(report_dir),
+                    "severity": "HIGH",
+                    "source_scope": "cloud",
+                    "sync_source": "live_capture",
+                    "source": "live_capture",
+                },
+                device_id="webcam_0",
+                report_id=report_id,
+            )
+
+            casm_app.process_queued_violation(queued)
+
+            _assert((report_dir / "report.html").exists(), "Queued cloud report did not finish generation")
+            _assert(fake_report_generator.calls, "Report generator was not called")
+            report_call = fake_report_generator.calls[0]
+            _assert(report_call.get("source_scope") == "cloud", f"Generator scope drifted: {report_call}")
+            _assert(report_call.get("sync_source") == "live_capture", f"Generator sync marker drifted: {report_call}")
+            statuses = [status for _rid, status, _err in fake_db.status_updates]
+            _assert("generating" in statuses, f"Generating status missing: {fake_db.status_updates}")
+            _assert("completed" in statuses, f"Completed status missing: {fake_db.status_updates}")
+
+            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
+            _assert(metadata.get("source_scope") == "cloud", f"Generated metadata scope drifted: {metadata}")
+            _assert(metadata.get("source_label") == "Cloud", f"Generated metadata label drifted: {metadata}")
+            _assert(metadata.get("has_report") is True, f"Generated metadata did not mark report ready: {metadata}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.caption_generator = old_caption_generator
+            casm_app.report_generator = old_report_generator
+            casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_env_validation
+            casm_app._push_realtime_report_event = old_push_realtime
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
 def main():
     tests = [
         test_status_endpoint_uses_local_artifacts_during_db_backoff,
@@ -541,6 +737,8 @@ def main():
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
+        test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
+        test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,
     ]
     failures = []
     for test_fn in tests:

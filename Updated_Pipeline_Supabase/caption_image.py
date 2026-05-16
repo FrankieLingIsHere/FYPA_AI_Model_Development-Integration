@@ -78,7 +78,19 @@ GEMINI_VISION_THINKING_BUDGET = _safe_int_env('GEMINI_VISION_THINKING_BUDGET', 0
 
 TIMEOUT = int(os.getenv('VISION_TIMEOUT', '60'))
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, _safe_int_env('OLLAMA_CONNECT_TIMEOUT_SECONDS', 8))
-OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 360)
+OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 60)
+LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS = max(
+    1,
+    _safe_int_env('LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS', 3)
+)
+LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS = max(
+    4,
+    _safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 12)
+)
+LOCAL_OLLAMA_CAPTION_MAX_TOKENS = max(
+    96,
+    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_TOKENS', 220), 512)
+)
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
 OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
 OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
@@ -107,9 +119,21 @@ _ollama_auto_recover_next_allowed_ts = 0.0
 
 def _get_ollama_request_timeout():
     """Use finite connect/read timeouts so a stalled local model cannot wedge routing."""
-    if OLLAMA_VISION_READ_TIMEOUT_SECONDS <= 0:
-        return (OLLAMA_CONNECT_TIMEOUT_SECONDS, 120)
-    return (OLLAMA_CONNECT_TIMEOUT_SECONDS, max(1, OLLAMA_VISION_READ_TIMEOUT_SECONDS))
+    active_profile = str(os.getenv('CASM_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE)).strip().lower()
+    local_profile = active_profile == 'local'
+
+    connect_timeout = OLLAMA_CONNECT_TIMEOUT_SECONDS
+    if local_profile and 'OLLAMA_CONNECT_TIMEOUT_SECONDS' not in os.environ:
+        connect_timeout = LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS
+
+    if local_profile and 'OLLAMA_VISION_READ_TIMEOUT_SECONDS' not in os.environ:
+        read_timeout = LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS
+    elif OLLAMA_VISION_READ_TIMEOUT_SECONDS <= 0:
+        read_timeout = 120
+    else:
+        read_timeout = max(1, OLLAMA_VISION_READ_TIMEOUT_SECONDS)
+
+    return (max(1, connect_timeout), max(1, read_timeout))
 
 
 def _record_provider_failure(provider: str, reason: str):
@@ -1198,7 +1222,7 @@ def caption_image_llava(image_path, prompt=None):
 
 Rules:
 - Use only visible evidence from the image.
-- caption: one descriptive paragraph with 5-7 complete narrative sentences, similar to a safety observer's visual note.
+- caption: one concise descriptive paragraph with 3-4 complete narrative sentences, similar to a safety observer's visual note.
 - In caption, describe indoor/outdoor setting, visible people count, visible body region, posture, gaze direction, clothing, eyewear, held objects, and background objects when clear.
 - In caption, mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.
 - In caption, do not say the scene is safe/unsafe, typical, likely, or suggestive of a condition; describe visible facts only.
@@ -1213,7 +1237,7 @@ Rules:
 - Do not write bullet points, field labels, JSON keys, or activity_context tokens inside caption.
 - Do not guess jobs, hazards, phones, eyewear, gaze, PPE, or hidden objects.
 """
-        default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 4-6 complete sentences.
+        default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 3-4 complete sentences.
 
 Requirements:
 - Start with whether the scene is indoor or outdoor and the total visible people count, including partially visible people at the image edges.
@@ -1268,9 +1292,13 @@ Requirements:
 """
     caption_prompt = str(prompt or '').strip() or default_prompt
 
-    # Encode image to base64
+    # Encode image to base64. In strict local mode, use a smaller JPEG so a
+    # slow local VLM cannot dominate the whole report-generation window.
     try:
-        image_base64 = encode_image_to_base64(image_path)
+        if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
+            image_base64 = _encode_environment_validation_image(image_path)
+        else:
+            image_base64 = encode_image_to_base64(image_path)
     except Exception as e:
         print(f"Error encoding image: {e}")
         return None
@@ -1283,7 +1311,7 @@ Requirements:
                 prompt=structured_prompt,
                 image_base64=image_base64,
                 temperature=0.05,
-                max_tokens=650
+                max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)
@@ -1298,7 +1326,7 @@ Requirements:
             prompt=caption_prompt,
             image_base64=image_base64,
             temperature=0.6,
-            max_tokens=650
+            max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS if strict_local_profile else 650
         )
 
         if caption:

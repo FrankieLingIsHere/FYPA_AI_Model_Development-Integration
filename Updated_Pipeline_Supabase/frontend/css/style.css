@@ -8667,10 +8667,11 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     display: flex;
     align-items: flex-start;
     gap: 0.65rem;
+    width: 100%;
 }
 
 .assistant-message-user {
-    justify-content: flex-end;
+    justify-content: flex-start;
     flex-direction: row-reverse;
 }
 
@@ -8708,12 +8709,14 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
 
 .assistant-message-user .assistant-message-stack {
     align-items: flex-end;
+    margin-left: auto;
     max-width: min(82%, 520px);
 }
 
 .assistant-message-assistant .assistant-message-stack,
 .assistant-message-thinking .assistant-message-stack {
     align-items: flex-start;
+    margin-right: auto;
 }
 
 .assistant-message-meta {
@@ -8752,6 +8755,38 @@ body.mobile-drawer-open .sidebar-voice-group .sidebar-voice-btn span {
     margin: 0;
     color: #334155;
     line-height: 1.65;
+}
+
+.assistant-detail-sections {
+    display: grid;
+    gap: 0.72rem;
+    margin-top: 0.9rem;
+}
+
+.assistant-detail-section {
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    border-radius: 12px;
+    background: #f8fafc;
+    padding: 0.72rem 0.8rem;
+}
+
+.assistant-detail-section h4 {
+    margin: 0 0 0.45rem 0;
+    color: #0f172a;
+    font-size: 0.84rem;
+    font-weight: 800;
+}
+
+.assistant-detail-section ul {
+    margin: 0;
+    padding-left: 1.08rem;
+    display: grid;
+    gap: 0.35rem;
+}
+
+.assistant-detail-section li {
+    color: #334155;
+    line-height: 1.48;
 }
 
 .assistant-action-row {

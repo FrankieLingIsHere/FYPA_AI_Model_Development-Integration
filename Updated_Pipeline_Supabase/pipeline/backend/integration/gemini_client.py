@@ -41,8 +41,8 @@ try:
     from google.genai import types
     GEMINI_AVAILABLE = True
     logger.info(" Google GenAI SDK loaded successfully")
-except ImportError as e:
-    GEMINI_ERROR = f"google-genai not installed: {e}"
+except Exception as e:
+    GEMINI_ERROR = f"google-genai unavailable: {type(e).__name__}: {e}"
     _import_log = logger.error if GEMINI_REQUIRED_BY_DEFAULT else logger.warning
     _import_log(f"Google GenAI import failed: {e}")
     _import_log("Install with: pip install google-genai")
@@ -147,6 +147,21 @@ class GeminiClient:
         self.report_prompt_max_chars = int(prompt_budget) if prompt_budget.isdigit() else 22000
         output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
         self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 8192
+        try:
+            self.report_timeout_ms = int(os.getenv('GEMINI_REPORT_TIMEOUT_MS', '16000') or 16000)
+        except (TypeError, ValueError):
+            self.report_timeout_ms = 16000
+        self.report_timeout_ms = max(5000, min(self.report_timeout_ms, 60000))
+        try:
+            self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '1') or 1)
+        except (TypeError, ValueError):
+            self.report_max_retries = 1
+        self.report_max_retries = max(1, min(self.report_max_retries, max(1, self.max_retries)))
+        try:
+            self.report_thinking_budget = int(os.getenv('GEMINI_REPORT_THINKING_BUDGET', '0') or 0)
+        except (TypeError, ValueError):
+            self.report_thinking_budget = 0
+        self.report_thinking_budget = max(0, min(self.report_thinking_budget, 4096))
         temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
         try:
             self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2
@@ -860,20 +875,33 @@ class GeminiClient:
                 contents.insert(0, image_part)  # Image first, then prompt
 
         # Call Gemini with retry
-        for attempt in range(self.max_retries):
+        for attempt in range(self.report_max_retries):
             try:
                 self._rate_limit()
 
-                logger.info(f"Generating NLP report JSON (attempt {attempt + 1}/{self.max_retries})...")
+                logger.info(
+                    "Generating NLP report JSON (attempt %s/%s, timeout_ms=%s, thinking_budget=%s)...",
+                    attempt + 1,
+                    self.report_max_retries,
+                    self.report_timeout_ms,
+                    self.report_thinking_budget,
+                )
+
+                generation_config = types.GenerateContentConfig(
+                    temperature=min(self.temperature, self.report_temperature_cap),
+                    max_output_tokens=min(self.max_tokens, self.report_output_max_tokens),
+                    response_mime_type="application/json",
+                    http_options=types.HttpOptions(timeout=self.report_timeout_ms),
+                    thinking_config=types.ThinkingConfig(
+                        thinking_budget=self.report_thinking_budget,
+                        include_thoughts=False,
+                    ),
+                )
 
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        temperature=min(self.temperature, self.report_temperature_cap),
-                        max_output_tokens=min(self.max_tokens, self.report_output_max_tokens),
-                        response_mime_type="application/json",
-                    )
+                    config=generation_config,
                 )
 
                 if response and response.text:
@@ -1052,7 +1080,7 @@ class GeminiClient:
                     if quota_or_exhausted:
                         break
 
-                if attempt < self.max_retries - 1:
+                if attempt < self.report_max_retries - 1:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)

@@ -259,6 +259,9 @@ class ReportGenerator:
         self.gemini_cost_per_1m_output_tokens = float(os.getenv('GEMINI_COST_PER_1M_OUTPUT_TOKENS', '2.50') or 2.50)
         self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '1800') or 1800)
         self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192') or 8192)
+        self.gemini_report_include_image = str(
+            os.getenv('GEMINI_REPORT_INCLUDE_IMAGE', 'false')
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
         self.strict_model_report_cells = str(os.getenv('STRICT_MODEL_REPORT_CELLS', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_budget_state_path = Path(
             os.getenv(
@@ -2258,10 +2261,11 @@ Required JSON object:
         if fast_mode:
             max_attempts = 1
             schema_regen_attempts = 0
-            forced_read_timeout = max(
-                30,
-                int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '240') or 240),
-            )
+            try:
+                forced_read_timeout = int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '8') or 8)
+            except (TypeError, ValueError):
+                forced_read_timeout = 8
+            forced_read_timeout = max(4, min(forced_read_timeout, 60))
             connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
             request_timeout = (connect_timeout, forced_read_timeout)
 
@@ -2269,12 +2273,12 @@ Required JSON object:
             local_num_predict = int(
                 os.getenv(
                     'OLLAMA_FORCE_LOCAL_NUM_PREDICT' if fast_mode else 'OLLAMA_REPORT_NUM_PREDICT',
-                    '1400' if fast_mode else '2048',
-                ) or (1400 if fast_mode else 2048)
+                    '512' if fast_mode else '2048',
+                ) or (512 if fast_mode else 2048)
             )
         except (TypeError, ValueError):
-            local_num_predict = 1400 if fast_mode else 2048
-        local_num_predict = max(512, min(local_num_predict, 4096))
+            local_num_predict = 512 if fast_mode else 2048
+        local_num_predict = max(256 if fast_mode else 512, min(local_num_predict, 4096))
         local_keep_alive = os.getenv(
             'OLLAMA_FORCE_LOCAL_KEEP_ALIVE' if fast_mode else 'OLLAMA_REPORT_KEEP_ALIVE',
             '5m' if fast_mode else '0',
@@ -2648,6 +2652,26 @@ Required JSON object:
                 nlp_analysis.setdefault('model', 'mock-fast-mode')
                 nlp_analysis['mock_mode'] = True
 
+        local_rule_based_fast_path = (
+            force_local_nlp
+            and str(os.getenv('LOCAL_REPORT_RULE_BASED_FAST_PATH', 'true')).strip().lower()
+            in ('1', 'true', 'yes', 'on')
+        )
+        if not nlp_analysis and local_rule_based_fast_path:
+            logger.info(
+                "Local report fast path active for %s; using deterministic analysis with VLM/YOLO grounding",
+                report_id,
+            )
+            nlp_analysis = self._generate_fallback_analysis(report_data)
+            self.last_nlp_provider = 'fallback'
+            self.last_nlp_model = 'rule-based-local-fast-path'
+            self.last_nlp_fallback_reason = 'local_rule_based_fast_path'
+            self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
+            if isinstance(nlp_analysis, dict):
+                nlp_analysis.setdefault('provider', 'fallback')
+                nlp_analysis.setdefault('model', 'rule-based-local-fast-path')
+                nlp_analysis['local_fast_path'] = True
+
         effective_provider_order = _resolve_effective_nlp_provider_order(
             self.nlp_provider_order,
             routing_profile=self.routing_profile,
@@ -2656,7 +2680,13 @@ Required JSON object:
 
         if force_local_nlp:
             # Local/offline runtime should stay independent from cloud provider routing.
-            effective_provider_order = ['ollama', 'local']
+            effective_provider_order = ['ollama']
+            if (
+                self.local_llama is not None
+                and str(os.getenv('OLLAMA_FORCE_LOCAL_TRY_LOCAL_LLAMA', 'false')).strip().lower()
+                in ('1', 'true', 'yes', 'on')
+            ):
+                effective_provider_order.append('local')
             logger.info("Forced local NLP route enabled for this report")
         else:
             sticky_provider = str(self.sticky_nlp_provider or '').strip().lower()
@@ -2720,9 +2750,10 @@ Required JSON object:
                         continue
 
                     logger.info("Trying Gemini NLP API...")
+                    gemini_report_image_path = image_path_str if self.gemini_report_include_image else None
                     nlp_analysis = self._call_gemini_api(
                         prompt,
-                        image_path=image_path_str,
+                        image_path=gemini_report_image_path,
                         report_id=str(report_data.get('report_id') or ''),
                     )
                     if self.gemini_client is not None:
@@ -3228,7 +3259,12 @@ Required JSON object:
 
         # Extract violations from detections
         violations = [d.get('class_name', '') for d in detections if d.get('class_name', '').startswith('NO-')]
-        person_count = max(1, sum(1 for d in detections if 'person' in d.get('class_name', '').lower()))
+        detected_person_count = sum(1 for d in detections if 'person' in d.get('class_name', '').lower())
+        try:
+            reported_person_count = int(report_data.get('person_count') or 0)
+        except (TypeError, ValueError):
+            reported_person_count = 0
+        person_count = max(1, reported_person_count, detected_person_count)
 
         # Build PPE status and collect data
         ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
@@ -3294,8 +3330,18 @@ Required JSON object:
         # Check for specific Malaysian context hazards from caption + YOLO
         has_piles = any(kw in caption_lower for kw in ['pile', 'timber', 'log', 'bakau', 'wood'])
         has_slope = any(kw in caption_lower for kw in ['slope', 'incline', 'embankment', 'unstable', 'dirt'])
-        has_roadside = any(kw in caption_lower for kw in ['road', 'roadside', 'traffic', 'highway', 'lorry', 'truck', 'pavement']) or yolo_cones or yolo_vehicle
-        has_lorry = any(kw in caption_lower for kw in ['lorry', 'truck', 'flatbed', 'vehicle']) or yolo_vehicle
+        traffic_terms = [
+            'road', 'roadside', 'traffic', 'highway', 'street', 'sidewalk',
+            'pavement', 'bus', 'public transport', 'vehicle', 'pedestrian',
+        ]
+        work_zone_terms = [
+            'road work', 'roadworks', 'work zone', 'construction', 'site',
+            'cone', 'barrier', 'flagman', 'flagger', 'lane closure',
+        ]
+        has_traffic_interface = any(kw in caption_lower for kw in traffic_terms) or yolo_cones or yolo_vehicle
+        has_work_zone_marker = any(kw in caption_lower for kw in work_zone_terms) or yolo_cones
+        has_roadside = has_traffic_interface and has_work_zone_marker
+        has_lorry = any(kw in caption_lower for kw in ['lorry', 'truck', 'flatbed'])
         has_phone = any(kw in caption_lower for kw in ['phone', 'mobile', 'call', 'device', 'watsapp', 'texting'])
         has_work_height = any(kw in caption_lower for kw in ['scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform'])
 
@@ -3322,6 +3368,9 @@ Required JSON object:
         elif any(kw in caption_lower for kw in ['warehouse', 'factory', 'industrial', 'manufacturing']):
             env_type = 'Industrial Warehouse'
             env_detail = 'Industrial environment with forklift traffic and material handling hazards.'
+        elif has_traffic_interface:
+            env_type = 'Public Area'
+            env_detail = 'Public traffic or pedestrian interface; PPE severity depends on confirmed work-zone/task context.'
         else:
             env_type = 'General Workspace'
             env_detail = 'Work environment identified from visual analysis.'
@@ -3399,11 +3448,21 @@ Required JSON object:
                 hazard += " on an unstable embankment"
             if has_lorry:
                 hazard += " near a flatbed lorry"
+            elif has_traffic_interface:
+                hazard += " near vehicle or pedestrian traffic"
             hazard += f" without {ppe_list}."
-            standard = "Stop Work order recommended per BOWEC 1986."
+            if env_type == 'Public Area' and not has_work_zone_marker:
+                standard = (
+                    "Supervisor review recommended to confirm work-zone status, task context, "
+                    "and whether PPE requirements apply before enforcement action."
+                )
+            else:
+                standard = "Stop Work order recommended per BOWEC 1986."
 
             if 'Safety Vest' in violation_types and has_roadside:
                 risk_desc = "This creates an immediate risk of being struck by the lorry or passing traffic."
+            elif 'Safety Vest' in violation_types and has_traffic_interface:
+                risk_desc = "This creates a visibility risk around vehicle or pedestrian movement if the scene is an active work area."
             elif 'Hardhat' in violation_types and has_piles:
                 risk_desc = "This creates an immediate risk of head injury from falling timber/debris."
             else:

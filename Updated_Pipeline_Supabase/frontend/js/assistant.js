@@ -248,7 +248,8 @@ const CASMAssistant = {
             docs: Array.isArray(message.docs) ? message.docs.slice(0, 4) : [],
             tutorial: message.tutorial && typeof message.tutorial === 'object' ? message.tutorial : null,
             reportCarousel: message.reportCarousel && typeof message.reportCarousel === 'object' ? message.reportCarousel : null,
-            metrics: Array.isArray(message.metrics) ? message.metrics.slice(0, 6) : []
+            metrics: Array.isArray(message.metrics) ? message.metrics.slice(0, 6) : [],
+            sections: Array.isArray(message.sections) ? message.sections.slice(0, 6) : []
         };
     },
 
@@ -683,6 +684,19 @@ const CASMAssistant = {
             ? `<ul class="assistant-bullet-list">${message.bullets.map((item) => `<li>${this.escapeHtml(item)}</li>`).join('')}</ul>`
             : '';
 
+        const sectionsHtml = Array.isArray(message.sections) && message.sections.length
+            ? `<div class="assistant-detail-sections">${message.sections.map((section) => {
+                const items = Array.isArray(section.items) ? section.items : [];
+                if (!items.length) return '';
+                return `
+                    <section class="assistant-detail-section">
+                        <h4>${this.escapeHtml(section.title || 'Detail')}</h4>
+                        <ul>${items.map((item) => `<li>${this.escapeHtml(item)}</li>`).join('')}</ul>
+                    </section>
+                `;
+            }).join('')}</div>`
+            : '';
+
         const docsHtml = Array.isArray(message.docs) && message.docs.length
             ? `<div class="assistant-doc-grid">${message.docs.map((doc, index) => `
                 <article class="assistant-doc-card">
@@ -746,6 +760,7 @@ const CASMAssistant = {
                         ${tutorialHtml}
                         ${reportCarouselHtml}
                         ${metricsHtml}
+                        ${sectionsHtml}
                         ${bulletsHtml}
                         ${docsHtml}
                         ${actionsHtml}
@@ -2914,6 +2929,12 @@ const CASMAssistant = {
         const hasFilters = this.hasActiveReportFilters(filters);
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?reports?\b/.test(normalized);
         const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|look|scan|know|understand|summari[sz]e|explain|interpret|latest|recent|current|so far|have a look|get|main|risk|risks|case|cases)\b/.test(normalized);
+        const pluralLatestCue = /\b(latest|newest|most recent|last|recent)\s+(reports|cases|violations)\b/.test(normalized);
+        const wantsLatestOnly = !pluralLatestCue && ((
+            /\b(latest|newest|most recent|last)\s+(report|case|violation)\b/.test(normalized)
+            && !/\b(latest|newest|most recent|last)\s+(reports|cases|violations)\b/.test(normalized)
+        ) || /\b(explain|summari[sz]e|interpret|open|show|see|view)\s+(the\s+)?(latest|newest|most recent|last)\b/.test(normalized));
+        const wantsExplain = /\b(explain|summari[sz]e|interpret|what happened|tell me about|walk me through|read\s+(the\s+)?report|fuller read)\b/.test(normalized);
         if (directOpen && !hasFilters && !/\b(show|review|check|browse|inspect|slide|slideshow|list|find|filter|view)\b/.test(normalized)) {
             return null;
         }
@@ -2924,7 +2945,9 @@ const CASMAssistant = {
             raw,
             query: normalized,
             filters,
-            filterSummary: this.describeReportFilters(filters)
+            filterSummary: this.describeReportFilters(filters),
+            selection: wantsLatestOnly ? 'latest' : '',
+            autoExplain: wantsExplain
         };
     },
 
@@ -2976,7 +2999,7 @@ const CASMAssistant = {
                 return;
             }
 
-            const maxCarouselReports = filtered.length > 15 ? 12 : 50;
+            const maxCarouselReports = intent.selection === 'latest' ? 1 : (filtered.length > 15 ? 12 : 50);
             const reports = filtered.slice(0, maxCarouselReports).map((row) => this.normalizeReportPreview(row));
             const session = this.getActiveSession();
             if (session) {
@@ -2992,6 +3015,11 @@ const CASMAssistant = {
                 };
             }
             this.upsertReportReviewMessage();
+            if (intent.autoExplain && reports.length) {
+                this.updateResponseFeedback('Reading the selected report...');
+                await this.waitForFeedbackFrame();
+                await this.explainCurrentReportReview();
+            }
         } catch (error) {
             console.error('Assistant report review failed:', error);
             this.pushMessage({
@@ -3197,10 +3225,242 @@ const CASMAssistant = {
         this.upsertReportReviewMessage();
     },
 
-    async fetchReportDocumentText(report = {}) {
+    normalizeReportExtractedText(value = '') {
+        return this.compactText(String(value || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/[•·]/g, ' • ')
+            .replace(/([a-z0-9)])(Mitigation steps|Likelihood|Regulation|Legal consequence|Severity|Category|Evidence|DANGER|LAW|WHO|WHAT|WHY|WHERE|WHEN)\b/g, '$1. $2')
+            .replace(/(steps)([A-Z][A-Z\s]{2,}:)/g, '$1. $2')
+            .replace(/([a-z])([A-Z][a-z]+(?:\s+[a-z]+){1,4}\s+risk\b)/g, '$1. $2'));
+    },
+
+    splitReportListText(value = '', maxItems = 6) {
+        const normalized = this.normalizeReportExtractedText(value);
+        if (!normalized) return [];
+        const prepared = normalized
+            .replace(/\s*•\s*/g, '\n')
+            .replace(/\s+(?=(?:Respiratory|Struck-by|Head injury|Fall|Caught|Direct exposure|Immediate Risk|Core Violation|Critical Action|WEAR|REPLACE|STOP|VERIFY|ESCALATE)\b)/g, '\n');
+        return prepared
+            .split(/\n+|;\s+|\.\s+(?=[A-Z])/)
+            .map((item) => item.trim().replace(/^[-:]+/, '').trim())
+            .filter((item) => item.length >= 3)
+            .slice(0, maxItems);
+    },
+
+    uniqueReportItems(items = [], maxItems = 6) {
+        const output = [];
+        const seen = new Set();
+        (Array.isArray(items) ? items : [items]).forEach((item) => {
+            const text = this.normalizeReportExtractedText(item);
+            if (!text) return;
+            const key = this.normalizeText(text);
+            if (seen.has(key)) return;
+            seen.add(key);
+            output.push(text);
+        });
+        return output.slice(0, maxItems);
+    },
+
+    formatPpeLabel(label = '') {
+        const normalized = String(label || '')
+            .replace(/^NO[-\s]+/i, '')
+            .replace(/^Missing\s+/i, '')
+            .replace(/[-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+        const map = {
+            hardhat: 'Hard Hat',
+            'hard hat': 'Hard Hat',
+            helmet: 'Hard Hat',
+            vest: 'Safety Vest',
+            'safety vest': 'Safety Vest',
+            mask: 'Mask',
+            respirator: 'Mask',
+            gloves: 'Gloves',
+            glove: 'Gloves',
+            goggles: 'Goggles',
+            goggle: 'Goggles',
+            boots: 'Safety Boots',
+            boot: 'Safety Boots',
+            shoes: 'Safety Shoes',
+            shoe: 'Safety Shoes',
+            footwear: 'Safety Footwear'
+        };
+        if (map[normalized]) return map[normalized];
+        return normalized
+            ? normalized.replace(/\b\w/g, (char) => char.toUpperCase())
+            : '';
+    },
+
+    formatCountedLabels(labels = []) {
+        const counts = new Map();
+        (Array.isArray(labels) ? labels : [labels]).forEach((label) => {
+            const formatted = this.formatPpeLabel(label);
+            if (!formatted) return;
+            counts.set(formatted, (counts.get(formatted) || 0) + 1);
+        });
+        return Array.from(counts.entries())
+            .map(([label, count]) => count > 1 ? `${label} (x${count})` : label)
+            .join(', ');
+    },
+
+    parseReportDocumentHtml(html = '') {
+        const raw = String(html || '');
+        const fallbackText = this.normalizeReportExtractedText(raw.replace(/<[^>]+>/g, ' ')).slice(0, 12000);
+        const empty = {
+            text: fallbackText,
+            caption: '',
+            executive: {},
+            dangers: [],
+            regulations: [],
+            persons: [],
+            mitigations: [],
+            actions: []
+        };
+        if (!raw || typeof DOMParser === 'undefined') return empty;
+
+        let doc = null;
+        try {
+            doc = new DOMParser().parseFromString(raw, 'text/html');
+        } catch (_) {
+            return empty;
+        }
+        if (!doc || !doc.documentElement) return empty;
+
+        doc.querySelectorAll('script, style, noscript, svg, canvas').forEach((node) => node.remove());
+        const textOf = (node) => {
+            if (!node) return '';
+            let clone = node;
+            try {
+                clone = node.cloneNode(true);
+                clone.querySelectorAll('br').forEach((br) => br.replaceWith(doc.createTextNode('\n')));
+                clone.querySelectorAll('li').forEach((li) => {
+                    li.insertBefore(doc.createTextNode(' • '), li.firstChild);
+                    li.appendChild(doc.createTextNode('\n'));
+                });
+                clone.querySelectorAll('p, div, tr, th, td, h1, h2, h3, h4, section, article').forEach((block) => {
+                    block.appendChild(doc.createTextNode('\n'));
+                });
+            } catch (_) {
+                clone = node;
+            }
+            return this.normalizeReportExtractedText(clone ? clone.textContent : '');
+        };
+        const listFrom = (nodes, maxItems = 6) => this.uniqueReportItems(
+            Array.from(nodes || []).flatMap((node) => this.splitReportListText(textOf(node), maxItems)),
+            maxItems
+        );
+
+        const evidence = {
+            ...empty,
+            text: textOf(doc.body || doc.documentElement).slice(0, 12000),
+            executive: {},
+            dangers: [],
+            regulations: [],
+            persons: [],
+            mitigations: [],
+            actions: []
+        };
+
+        const sections = Array.from(doc.querySelectorAll('.section, section, .card'));
+        const sceneSection = sections.find((section) => /scene description|ai scene|caption|visual analysis/i.test(textOf(section.querySelector('h1,h2,h3,.section-title,.card-header'))));
+        if (sceneSection) {
+            const contentNode = sceneSection.querySelector('.card-content p, .card-content, p');
+            const titleNode = sceneSection.querySelector('h1,h2,h3,.section-title,.card-header');
+            const titleText = textOf(titleNode);
+            const sceneText = textOf(contentNode || sceneSection).replace(titleText, '').trim();
+            evidence.caption = sceneText;
+        }
+
+        Array.from(doc.querySelectorAll('table tr')).forEach((row) => {
+            const cells = Array.from(row.querySelectorAll('th,td'));
+            if (cells.length < 2) return;
+            const key = textOf(cells[0]).toUpperCase();
+            const value = textOf(cells[1]);
+            if (key === 'WHO') evidence.executive.who = value;
+            if (key === 'WHAT') evidence.executive.what = value;
+            if (key === 'DANGER') {
+                evidence.executive.danger = value;
+                evidence.dangers = this.uniqueReportItems([
+                    ...evidence.dangers,
+                    ...this.splitReportListText(value, 8)
+                ], 8);
+            }
+            if (key === 'LAW') {
+                evidence.executive.law = value;
+                evidence.regulations = this.uniqueReportItems([
+                    ...evidence.regulations,
+                    ...this.splitReportListText(value, 6)
+                ], 6);
+            }
+        });
+
+        const regulationSections = sections.filter((section) => /regulations|standards|law|compliance/i.test(textOf(section.querySelector('h1,h2,h3,.section-title,.card-header'))));
+        regulationSections.forEach((section) => {
+            const cards = Array.from(section.querySelectorAll('.card'));
+            cards.forEach((card) => {
+                const header = textOf(card.querySelector('.card-header, h3, h4'));
+                const requirement = textOf(card.querySelector('.card-content p, p'));
+                if (header && !/summary|executive/i.test(header)) {
+                    evidence.regulations.push(requirement && requirement !== header ? `${header}: ${requirement}` : header);
+                }
+            });
+        });
+        evidence.regulations = this.uniqueReportItems(evidence.regulations, 6);
+
+        Array.from(doc.querySelectorAll('.person-card')).forEach((card, index) => {
+            const title = textOf(card.querySelector('h3')) || `Person ${index + 1}`;
+            const description = textOf(card.querySelector('.person-header p, summary p, p'));
+            const ppeMissing = [];
+            Array.from(card.querySelectorAll('.ppe-item')).forEach((item) => {
+                const label = textOf(item.querySelector('.ppe-label')).replace(/:$/, '');
+                const status = textOf(item.querySelector('.ppe-status'));
+                if (/missing|not worn|absent|non-compliant|no\b/i.test(status)) {
+                    const formatted = this.formatPpeLabel(label);
+                    if (formatted) ppeMissing.push(formatted);
+                }
+            });
+            const hazards = listFrom(card.querySelectorAll('.hazard-chip'), 6);
+            const risks = Array.from(card.querySelectorAll('.risk-item')).flatMap((riskNode) => {
+                const risk = textOf(riskNode.querySelector('.risk-content')) || textOf(riskNode);
+                const likelihood = textOf(riskNode.querySelector('.likelihood-value'));
+                const regulation = textOf(riskNode.querySelector('.risk-meta'));
+                const mitigation = listFrom(riskNode.querySelectorAll('.risk-mitigation li'), 5);
+                evidence.mitigations.push(...mitigation);
+                return this.uniqueReportItems([
+                    likelihood ? `${risk} Likelihood: ${likelihood}` : risk,
+                    regulation
+                ], 4);
+            });
+            const actions = listFrom(card.querySelectorAll('.action-chip'), 6);
+            evidence.actions.push(...actions);
+            evidence.persons.push({
+                title,
+                description,
+                ppeMissing: this.uniqueReportItems(ppeMissing, 6),
+                hazards,
+                risks: this.uniqueReportItems(risks, 6),
+                actions
+            });
+        });
+
+        evidence.mitigations = this.uniqueReportItems(evidence.mitigations, 8);
+        evidence.actions = this.uniqueReportItems(evidence.actions, 8);
+        if (!evidence.dangers.length) {
+            evidence.dangers = listFrom(doc.querySelectorAll('.hazard-chip, .risk-content'), 8);
+        }
+        if (!evidence.mitigations.length) {
+            evidence.mitigations = evidence.actions.slice(0, 8);
+        }
+
+        return evidence;
+    },
+
+    async fetchReportDocumentEvidence(report = {}) {
         const reportId = String(report.reportId || '').trim();
         if (!reportId || !window.API || typeof API.getReportUrl !== 'function' || typeof fetch !== 'function') {
-            return '';
+            return this.parseReportDocumentHtml('');
         }
 
         try {
@@ -3210,21 +3470,31 @@ const CASMAssistant = {
                 source_label: report.sourceLabel
             };
             const url = API.getReportUrl(reportId, sourceHint);
-            if (!url) return '';
-            const response = await fetch(url, { cache: 'no-store' });
-            if (!response.ok) return '';
-            const html = await response.text();
-            if (!html) return '';
-            if (typeof DOMParser === 'undefined') {
-                return this.compactText(html.replace(/<[^>]+>/g, ' ')).slice(0, 12000);
+            if (!url) return this.parseReportDocumentHtml('');
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : 0;
+            let response;
+            try {
+                response = await fetch(url, {
+                    cache: 'no-store',
+                    ...(controller ? { signal: controller.signal } : {})
+                });
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
             }
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            doc.querySelectorAll('script, style, noscript, svg, canvas').forEach((node) => node.remove());
-            return this.compactText((doc.body && (doc.body.innerText || doc.body.textContent)) || doc.documentElement.textContent || '').slice(0, 12000);
+            if (!response.ok) return this.parseReportDocumentHtml('');
+            const html = await response.text();
+            if (!html) return this.parseReportDocumentHtml('');
+            return this.parseReportDocumentHtml(html);
         } catch (error) {
             console.debug('Mira report content fetch skipped:', error);
-            return '';
+            return this.parseReportDocumentHtml('');
         }
+    },
+
+    async fetchReportDocumentText(report = {}) {
+        const evidence = await this.fetchReportDocumentEvidence(report);
+        return evidence && evidence.text ? evidence.text : '';
     },
 
     pickReportSentences(text = '', keywords = [], maxCount = 2) {
@@ -3245,41 +3515,114 @@ const CASMAssistant = {
         return picked;
     },
 
-    buildDetailedReportExplanation(report = {}, documentText = '') {
-        const missing = report.missingPpe.length ? report.missingPpe.join(', ') : 'no PPE labels recorded';
-        const ppeTags = report.ppeTags && report.ppeTags.length ? report.ppeTags.join(', ') : missing;
+    buildDetailedReportExplanation(report = {}, documentEvidence = '') {
+        const evidence = documentEvidence && typeof documentEvidence === 'object'
+            ? {
+                text: '',
+                caption: '',
+                executive: {},
+                dangers: [],
+                regulations: [],
+                persons: [],
+                mitigations: [],
+                actions: [],
+                ...documentEvidence
+            }
+            : {
+                text: String(documentEvidence || ''),
+                caption: '',
+                executive: {},
+                dangers: [],
+                regulations: [],
+                persons: [],
+                mitigations: [],
+                actions: []
+            };
+        const documentText = String(evidence.text || '');
+        const executive = evidence.executive && typeof evidence.executive === 'object' ? evidence.executive : {};
+        const persons = Array.isArray(evidence.persons) ? evidence.persons : [];
+        const missingPpe = Array.isArray(report.missingPpe) ? report.missingPpe : [];
+        const ppeTagList = Array.isArray(report.ppeTags) ? report.ppeTags : [];
+        const personMissingPpe = persons.flatMap((person) => Array.isArray(person.ppeMissing) ? person.ppeMissing : []);
+        const missing = this.formatCountedLabels(personMissingPpe.length ? personMissingPpe : missingPpe) || 'no PPE labels recorded';
+        const ppeTags = this.formatCountedLabels(ppeTagList) || missing;
         const status = String(report.status || 'unknown').toLowerCase();
         const ready = status === 'completed' || status === 'ready';
-        const riskSentences = this.pickReportSentences(documentText, ['risk', 'severity', 'likelihood', 'hazard', 'injury'], 2);
-        const actionSentences = this.pickReportSentences(documentText, ['corrective', 'action', 'recommend', 'control', 'mitigation', 'supervisor'], 2);
-        const evidenceSentences = this.pickReportSentences(documentText, ['visual', 'evidence', 'caption', 'observed', 'detected', 'worker', 'scene'], 2);
-        const complianceSentences = this.pickReportSentences(documentText, ['regulation', 'standard', 'compliance', 'ms', 'iso', 'osha', 'requirement'], 1);
+        const fallbackRiskSentences = this.pickReportSentences(documentText, ['risk', 'severity', 'likelihood', 'hazard', 'injury'], 3);
+        const fallbackActionSentences = this.pickReportSentences(documentText, ['corrective', 'action', 'recommend', 'control', 'mitigation', 'supervisor'], 3);
+        const fallbackEvidenceSentences = this.pickReportSentences(documentText, ['visual', 'evidence', 'caption', 'observed', 'detected', 'worker', 'scene'], 2);
+        const fallbackComplianceSentences = this.pickReportSentences(documentText, ['regulation', 'standard', 'compliance', 'ms', 'iso', 'osha', 'requirement'], 2);
 
-        const riskDetail = riskSentences.length
-            ? riskSentences.join(' ')
-            : `${report.severity || 'Unknown'} severity means this row should be reviewed according to the site risk matrix, especially if the same PPE gap repeats.`;
-        const actionDetail = actionSentences.length
-            ? actionSentences.join(' ')
-            : 'Verify the worker has the missing PPE before continuing the task, record the corrective action, and use the report as evidence for follow-up.';
-        const evidenceDetail = evidenceSentences.length
-            ? evidenceSentences.join(' ')
-            : `Use the ${report.hasAnnotated ? 'annotated and original images' : report.hasOriginal ? 'original image' : 'available report evidence'} to confirm the detection before closing the case.`;
-        const complianceDetail = complianceSentences.length
-            ? complianceSentences.join(' ')
-            : 'Check the report body for any listed Malaysian standards or site policy references before sharing it outside the team.';
+        const caption = this.normalizeReportExtractedText(evidence.caption)
+            || fallbackEvidenceSentences[0]
+            || '';
+        const whatSummary = this.normalizeReportExtractedText(executive.what || report.summary || 'The report row does not include a generated summary yet.');
+        const whoSummary = this.normalizeReportExtractedText(executive.who || (persons.length ? `Report lists ${persons.length} person${persons.length === 1 ? '' : 's'} in the scene.` : 'Person-level detail was not found in the report HTML.'));
+        const whatItems = this.uniqueReportItems([
+            ...this.splitReportListText(whatSummary, 4),
+            ...(whatSummary && !this.splitReportListText(whatSummary, 4).length ? [whatSummary] : [])
+        ], 4);
+        const personItems = persons.map((person, index) => {
+            const title = this.normalizeReportExtractedText(person.title || `Person ${index + 1}`);
+            const description = this.normalizeReportExtractedText(person.description || 'No person description was listed.');
+            const personPpe = this.formatCountedLabels(person.ppeMissing || []) || 'PPE status not clearly listed';
+            const hazards = this.uniqueReportItems(person.hazards || [], 2).join('; ');
+            const risks = this.uniqueReportItems(person.risks || [], 2).join('; ');
+            const actions = this.uniqueReportItems(person.actions || [], 2).join('; ');
+            return [
+                `${title}: ${description}`,
+                `Missing/concern: ${personPpe}`,
+                hazards ? `Hazards: ${hazards}` : '',
+                risks ? `Risk: ${risks}` : '',
+                actions ? `Action: ${actions}` : ''
+            ].filter(Boolean).join('. ');
+        });
+        const riskItems = this.uniqueReportItems([
+            ...(Array.isArray(evidence.dangers) ? evidence.dangers : []),
+            ...persons.flatMap((person) => Array.isArray(person.risks) ? person.risks : []),
+            ...fallbackRiskSentences
+        ], 8);
+        const mitigationItems = this.uniqueReportItems([
+            ...(Array.isArray(evidence.mitigations) ? evidence.mitigations : []),
+            ...(Array.isArray(evidence.actions) ? evidence.actions : []),
+            ...persons.flatMap((person) => Array.isArray(person.actions) ? person.actions : []),
+            ...fallbackActionSentences
+        ], 8);
+        const complianceItems = this.uniqueReportItems([
+            ...(Array.isArray(evidence.regulations) ? evidence.regulations : []),
+            executive.law || '',
+            ...fallbackComplianceSentences
+        ], 6);
+        const recommendedNext = mitigationItems[0]
+            || 'Verify the missing PPE against the image evidence, stop the affected task if the scene is active, and record the corrective action before closing the case.';
+        const riskSummary = riskItems[0]
+            || `${report.severity || 'Unknown'} severity means this row should be reviewed against the site risk matrix and surrounding work environment.`;
+        const evidenceDetail = caption
+            || `Use the ${report.hasAnnotated ? 'annotated and original images' : report.hasOriginal ? 'original image' : 'available report evidence'} to confirm the detection before closing the case.`;
+        const complianceDetail = complianceItems[0]
+            || 'Check the report body for any listed Malaysian standards or site policy references before sharing it outside the team.';
+        const sections = [
+            caption ? { title: 'Scene / Caption', items: [caption] } : null,
+            { title: 'People And PPE', items: personItems.length ? personItems.slice(0, 6) : [whoSummary, `Missing/concern: ${missing}`] },
+            { title: 'What Happened', items: whatItems.length ? whatItems : [whatSummary] },
+            { title: 'Main Hazards / Risk', items: riskItems.length ? riskItems : [riskSummary] },
+            { title: 'Mitigation Steps', items: mitigationItems.length ? mitigationItems : [recommendedNext] },
+            { title: 'Compliance / Traceability', items: complianceItems.length ? complianceItems : [complianceDetail] }
+        ].filter((section) => section && Array.isArray(section.items) && section.items.length);
 
         return {
             role: 'assistant',
             text: `Here is a fuller read of report ${report.reportId}.`,
             bullets: [
-                `What happened: ${report.summary || 'The report row does not include a generated summary yet.'}`,
+                `What happened: ${whatSummary}`,
                 `PPE concern: ${missing}. Detection labels recorded: ${ppeTags}.`,
-                `Risk interpretation: ${riskDetail}`,
+                `Risk interpretation: ${riskSummary}`,
                 `Evidence to check: ${evidenceDetail}`,
-                `Recommended next step: ${actionDetail}`,
+                `Recommended next step: ${recommendedNext}`,
                 `Compliance note: ${complianceDetail}`,
                 `Traceability: ${report.sourceLabel || 'Unknown source'} row, ${report.severity || 'unknown'} severity, ${ready ? 'ready for evidence review' : `currently ${report.status || 'not ready'}`}, timestamp ${report.timestampLabel || 'unknown'}.`
             ],
+            sections,
             actions: [
                 { type: 'open-report', label: 'Open report', reportId: report.reportId },
                 { type: 'report-review-prev', label: 'Previous report' },
@@ -3300,8 +3643,8 @@ const CASMAssistant = {
         }
         const report = current.report;
         this.updateResponseFeedback('Reading the selected report...');
-        const documentText = await this.fetchReportDocumentText(report);
-        this.pushMessage(this.buildDetailedReportExplanation(report, documentText));
+        const documentEvidence = await this.fetchReportDocumentEvidence(report);
+        this.pushMessage(this.buildDetailedReportExplanation(report, documentEvidence));
     },
 
     async openSelectedReport(reportId = '') {
@@ -4081,6 +4424,7 @@ const CASMAssistant = {
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
                     'show', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
                     'slide', 'slideshow', 'carousel', 'look', 'through', 'as', 'tag', 'tags', 'source',
+                    'latest', 'newest', 'recent', 'recently', 'current', 'last', 'so', 'far', 'have', 'a', 'an', 'the', 'i', 'please',
                     'what', 'why', 'how', 'where', 'when', 'which', 'are', 'is', 'was', 'were', 'do', 'does', 'did',
                     'mean', 'means', 'meaning', 'purpose', 'used', 'for', 'explain', 'about', 'on', 'at', 'in', 'of',
                     'main', 'risk', 'risks', 'case', 'cases', 'each', 'likelihood', 'probability', 'chance', 'know', 'understand',

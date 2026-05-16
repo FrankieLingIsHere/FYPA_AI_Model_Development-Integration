@@ -420,6 +420,63 @@ function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
   );
 }
 
+function testSyncedLocalThumbnailRoutesToAvailableBackend() {
+  const syncedLocalRow = {
+    report_id: 'synced-thumb-001',
+    status: 'completed',
+    has_original: true,
+    has_annotated: true,
+    has_report: true,
+    has_cloud_artifacts: true,
+    has_cloud_report_artifact: true,
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    sync_source: 'sync_local_cache',
+  };
+
+  const cloudContext = loadApiContext(async () => createResponse(true, 200, {}));
+  assertEqual(
+    cloudContext.API.inferReportSourceScope(syncedLocalRow),
+    'synced_local',
+    'cloud list row with cloud report artifact evidence should keep Local Synced scope',
+  );
+  assertEqual(
+    cloudContext.API.getImageUrl(syncedLocalRow.report_id, 'annotated.jpg', syncedLocalRow),
+    'https://cloud-api.example.test/image/synced-thumb-001/annotated.jpg',
+    'cloud page should show local-synced thumbnails through the cloud backend',
+  );
+
+  const localContext = loadApiContext(
+    async () => createResponse(true, 200, {}),
+    {
+      location: {
+        origin: 'http://localhost:5000',
+        hostname: 'localhost',
+        protocol: 'http:',
+      },
+    },
+  );
+  localContext.API_CONFIG.BASE_URL = '';
+  assertEqual(
+    localContext.API.getImageUrl(syncedLocalRow.report_id, 'annotated.jpg', {
+      ...syncedLocalRow,
+      has_local_artifacts: true,
+    }),
+    '/image/synced-thumb-001/annotated.jpg',
+    'local page should show local-synced thumbnails through local cached artifacts',
+  );
+
+  assertEqual(
+    cloudContext.API.inferReportSourceScope({
+      ...syncedLocalRow,
+      has_cloud_report_artifact: false,
+      has_report: false,
+    }),
+    'cloud',
+    'stale local-synced rows without report artifact evidence should not keep Local Synced scope',
+  );
+}
+
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
@@ -430,6 +487,7 @@ async function main() {
     testReportsPageMountStartsWithFreshLoad,
     testCloudFallbackRepairsStaleLocalReportCaches,
     testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
+    testSyncedLocalThumbnailRoutesToAvailableBackend,
   ];
   const failures = [];
   for (const testFn of tests) {

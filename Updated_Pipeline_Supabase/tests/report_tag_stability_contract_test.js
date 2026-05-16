@@ -76,6 +76,7 @@ function testMergeMatrix() {
         source_scope: 'synced_local',
         source_label: 'Local Synced',
         sync_source: 'sync_local_cache',
+        report_html_key: 'violations/tag-synced-001/report.html',
       }],
       pending: [{
         report_id: 'tag-synced-001',
@@ -189,7 +190,7 @@ function testRuntimePatchMatrix() {
       expectedLabel: 'Local',
     },
     {
-      name: 'local report becomes local synced only after explicit reconnect sync evidence appears',
+      name: 'local report stays local while reconnect sync is only queued',
       existing: {
         report_id: 'tag-local-sync-transition-001',
         status: 'pending',
@@ -206,6 +207,29 @@ function testRuntimePatchMatrix() {
         source_label: 'Local Synced',
         sync_source: 'sync_local_cache',
         sync_state: 'cloud_sync_queued',
+      },
+      expectedScope: 'local',
+      expectedLabel: 'Local',
+    },
+    {
+      name: 'local report becomes local synced after cloud report artifact exists',
+      existing: {
+        report_id: 'tag-local-sync-complete-001',
+        status: 'completed',
+        has_report: true,
+        source_scope: 'local',
+        source_label: 'Local',
+        device_id: 'offline_local_cache',
+        source: 'offline_local_cache',
+      },
+      patch: {
+        status: 'completed',
+        has_report: true,
+        source_scope: 'synced_local',
+        source_label: 'Local Synced',
+        sync_source: 'sync_local_cache',
+        sync_state: 'cloud_completed',
+        report_html_key: 'violations/tag-local-sync-complete-001/report.html',
       },
       expectedScope: 'synced_local',
       expectedLabel: 'Local Synced',
@@ -238,6 +262,7 @@ function testRuntimePatchMatrix() {
         source_label: 'Local Synced',
         origin: 'local_synced',
         sync_source: 'sync_local_cache',
+        report_html_key: 'violations/tag-synced-runtime-001/report.html',
       },
       patch: {
         status: 'generating',
@@ -311,16 +336,29 @@ function testLocalSyncEventMatrix() {
 
   ReportsPage.applyLocalSyncUpdate({
     success: true,
-    report_ids: ['tag-cloud-sync-event-001', 'tag-local-sync-event-001'],
+    queued_report_ids: ['tag-cloud-sync-event-001', 'tag-local-sync-event-001'],
     sync_source: 'sync_local_cache',
     sync_state: 'cloud_sync_queued',
   });
 
-  const cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
-  const localRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-local-sync-event-001');
+  let cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
+  let localRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-local-sync-event-001');
 
-  assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores local sync event');
-  assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts local sync event');
+  assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores queued local sync event');
+  assertTag(localRecord, 'local', 'Local', 'local report stays local while sync is only queued');
+
+  ReportsPage.applyLocalSyncUpdate({
+    success: true,
+    completed_report_ids: ['tag-cloud-sync-event-001', 'tag-local-sync-event-001'],
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_completed',
+  });
+
+  cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
+  localRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-local-sync-event-001');
+
+  assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores completed local sync event');
+  assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts completed local sync event');
 }
 
 function main() {

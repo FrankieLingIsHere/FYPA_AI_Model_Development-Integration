@@ -384,6 +384,17 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn("requestResult.status || requestResult.device_status", settings_js)
         self.assertIn('request_status', api_js)
 
+    def test_frontend_first_run_checkup_does_not_require_installer_bat(self):
+        root = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        settings_js = (root / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
+        app_js = (root / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+        self.assertIn('setupCheckCompleted', app_js)
+        self.assertIn('First-time setup check passed', settings_js)
+        self.assertIn('First-time setup does not require the installer BAT', settings_js)
+        self.assertIn('without enabling offline auto-setup', settings_js)
+        self.assertIn('autoSetupAllowed: ready', settings_js)
+
     @patch('casm_app.notify_admin')
     def test_re_request_pending_device_respects_notification_cooldown(self, mock_notify_admin):
         machine_id = 'TEST-EDGE-PENDING-COOLDOWN-001'

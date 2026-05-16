@@ -327,7 +327,7 @@ const GlobalSettingsModal = {
                                 </button>
                             </div>
                             <div id="globalLocalModeCheckupStatus" class="global-settings-status" style="margin-top: 0.65rem;">
-                                Local mode checkup not completed yet. Offline auto-setup remains disabled.
+                                Local mode setup check has not run yet. First-time setup does not require the installer BAT.
                             </div>
                             <div id="globalLocalModeHeartbeatBadge" class="global-heartbeat-badge"></div>
                         </div>
@@ -1377,10 +1377,16 @@ const GlobalSettingsModal = {
         const policyApi = window.PPELocalModePolicy;
         const policy = policyApi && typeof policyApi.get === 'function'
             ? policyApi.get()
-            : { checkupCompleted: false, autoSetupAllowed: false };
+            : { setupCheckCompleted: false, checkupCompleted: false, autoSetupAllowed: false };
+
+        if (!policy.checkupCompleted && policy.setupCheckCompleted) {
+            statusEl.textContent = 'First-time setup check completed. Request provisioning, then download and run the installer before local mode can be marked ready.';
+            statusEl.style.color = 'var(--text-secondary)';
+            return;
+        }
 
         if (!policy.checkupCompleted) {
-            statusEl.textContent = 'Local mode checkup not completed yet. Offline auto-setup remains disabled.';
+            statusEl.textContent = 'Local mode setup check has not run yet. First-time setup does not require the installer BAT.';
             statusEl.style.color = 'var(--text-secondary)';
             return;
         }
@@ -1580,6 +1586,10 @@ const GlobalSettingsModal = {
 
             this.setProviderStatus('Local provider profile applied', 'success');
             this.showNotification('Local provider profile applied', 'success');
+            if (window.AdaptivePipelineManager && typeof window.AdaptivePipelineManager === 'object') {
+                window.AdaptivePipelineManager.currentMode = 'local';
+                window.AdaptivePipelineManager.manualProviderProfile = 'local';
+            }
             await this.loadProviderRoutingSettings();
 
             // Redirect API traffic to the local backend now that the profile has switched.
@@ -1631,6 +1641,10 @@ const GlobalSettingsModal = {
 
             this.setProviderStatus('API mode profile applied', 'success');
             this.showNotification('Switched to API mode', 'success');
+            if (window.AdaptivePipelineManager && typeof window.AdaptivePipelineManager === 'object') {
+                window.AdaptivePipelineManager.currentMode = 'cloud';
+                window.AdaptivePipelineManager.manualProviderProfile = '';
+            }
             await this.loadProviderRoutingSettings();
             return { success: true, profile: 'api', message: 'API mode profile applied' };
         } catch (error) {
@@ -1668,6 +1682,12 @@ const GlobalSettingsModal = {
             await this.loadProviderRoutingSettings();
             this.setProviderStatus('Recommended settings applied', 'success');
             this.showNotification('Recommended settings applied', 'success');
+            if (window.AdaptivePipelineManager && typeof window.AdaptivePipelineManager === 'object') {
+                window.AdaptivePipelineManager.manualProviderProfile = '';
+                window.AdaptivePipelineManager.currentMode = String(
+                    (this.RECOMMENDED_SETTINGS.provider_routing || {}).routing_profile || 'cloud'
+                ).trim().toLowerCase() === 'local' ? 'local' : 'cloud';
+            }
             return { success: true, profile: 'recommended', message: 'Recommended settings applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply recommended failed', error);
@@ -1779,20 +1799,16 @@ const GlobalSettingsModal = {
             let ready = useHeartbeatDiagnostics
                 ? !!cloudHeartbeat.localModePossible
                 : !!local.local_mode_possible;
+            let firstRunSetupReady = false;
+            let firstRunSetupMessage = '';
+            let remoteSetupKnown = false;
 
             if (!ready) {
                 if (isLikelyRemoteBackend) {
-                    // Distinguish three cases so the message reflects reality:
-                    //  (a) heartbeat arrived but local mode itself isn't ready yet
-                    //      → genuine local-mode problem, warn.
-                    //  (b) no recent heartbeat AND device was never provisioned
-                    //      → genuine setup problem, warn + show installer hint.
-                    //  (c) no recent heartbeat BUT device IS provisioned
-                    //      → the host PC's local backend simply isn't running
-                    //        right now. That's expected when the user is on
-                    //        cloud mode from another browser/device. Show an
-                    //        info-level inline status only — do NOT toast it
-                    //        as a warning, since nothing is broken.
+                    // Keep first-run onboarding separate from installed-runtime
+                    // readiness. A brand-new cloud user cannot have an installer
+                    // heartbeat yet, so that state should pass setup precheck
+                    // without enabling offline auto-setup.
                     const provisionStatus = String((this.localProvisionState && this.localProvisionState.status) || '').toLowerCase();
                     // Also consult the canonical global tracker, because
                     // settings.localProvisionState lags behind it on first
@@ -1810,6 +1826,19 @@ const GlobalSettingsModal = {
                         || globalProvisionStatus === 'approved'
                         || globalProvisionStatus === 'active'
                     );
+                    const isPendingApproval = (
+                        provisionStatus === 'pending_approval'
+                        || globalProvisionStatus === 'pending_approval'
+                    );
+                    const needsValidation = (
+                        provisionStatus === 'validation_required'
+                        || globalProvisionStatus === 'validation_required'
+                    );
+                    const isRejected = (
+                        provisionStatus === 'rejected'
+                        || globalProvisionStatus === 'rejected'
+                    );
+                    remoteSetupKnown = isProvisioned || isPendingApproval || needsValidation;
 
                     if (heartbeatRecent) {
                         const remoteHint = `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`;
@@ -1819,10 +1848,17 @@ const GlobalSettingsModal = {
                         const idleHint = `Local backend on the host PC is not running right now${heartbeatMachineId ? ` (last paired as ${heartbeatMachineId})` : ''}. Cloud mode continues to work normally. To use local mode, start CASM_LOCALINSTALLER (or start.bat) on the host PC and rerun checkup.`;
                         this.setProviderStatus(idleHint, 'info');
                         // Intentionally no toast — this is a normal state, not an error.
+                    } else if (isPendingApproval) {
+                        this.setProviderStatus('Provisioning request is pending admin approval. The installer is not required until approval and download.', 'warning');
+                    } else if (needsValidation) {
+                        this.setProviderStatus('Provisioning validation needs refresh before installer download. Use "Re-Validate Provisioning" below.', 'warning');
+                    } else if (isRejected) {
+                        this.setProviderStatus('Provisioning request was rejected. Use "Request Provisioning" to re-apply.', 'error');
                     } else {
-                        const remoteHint = `No recent edge heartbeat was received${heartbeatFreshWindow ? ` within ${heartbeatFreshWindow}s` : ''}. Start CASM_LOCALINSTALLER on the host PC, wait for the first sync/provisioning request, then rerun checkup.`;
-                        this.setProviderStatus(remoteHint, 'warning');
-                        this.showNotification(remoteHint, 'warning');
+                        firstRunSetupReady = true;
+                        firstRunSetupMessage = `First-time setup check passed${heartbeatFreshWindow ? `; no installer heartbeat was expected within ${heartbeatFreshWindow}s before download` : ''}. Use "Request Provisioning" to register this browser/device; after admin approval, download and run the installer to complete local runtime readiness.`;
+                        this.setProviderStatus(firstRunSetupMessage, 'success');
+                        this.showNotification('First-time setup check passed. Request provisioning to continue.', 'success');
                     }
                 } else {
                     const configuredWaitSeconds = Number(
@@ -1845,7 +1881,8 @@ const GlobalSettingsModal = {
                         pullTimeoutSeconds
                     });
 
-                    ready = !!(prep && prep.success && prep.local && prep.local.local_mode_possible);
+                    const prepLocal = (prep && (prep.after || prep.local)) || {};
+                    ready = !!(prep && prep.success && prepLocal.local_mode_possible);
                     if (!ready) {
                         const prepError = String((prep && prep.error) || 'Local mode is still not ready after setup attempt.');
                         this.setProviderStatus(prepError, 'warning');
@@ -1856,6 +1893,7 @@ const GlobalSettingsModal = {
 
             if (window.PPELocalModePolicy && typeof window.PPELocalModePolicy.set === 'function') {
                 window.PPELocalModePolicy.set({
+                    setupCheckCompleted: ready || firstRunSetupReady || remoteSetupKnown,
                     checkupCompleted: ready,
                     autoSetupAllowed: ready
                 });
@@ -1904,6 +1942,8 @@ const GlobalSettingsModal = {
                         : 'Health check completed. Use "Request Provisioning" to register this device for cloud sync.',
                     'info'
                 );
+            } else if (firstRunSetupReady) {
+                this.setProviderStatus(firstRunSetupMessage, 'success');
             } else if (this.isCloudEndpointUnreachable(String((provisionResult && provisionResult.error) || ''))) {
                 this.setProviderStatus('Cloud endpoint is unreachable. Local mode remains available.', 'warning');
             }

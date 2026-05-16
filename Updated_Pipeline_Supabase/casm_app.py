@@ -148,11 +148,20 @@ local_report_state_cache: Dict[str, Any] = {'ts': 0.0, 'limit': 0, 'rows': []}
 
 VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS = max(0.0, _env_float('VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS', 0.90))
 STATS_SNAPSHOT_CACHE_TTL_SECONDS = max(0.0, _env_float('STATS_SNAPSHOT_CACHE_TTL_SECONDS', 1.20))
+CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS = max(0.0, _env_float('CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS', 300.0))
+CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS = max(1.0, _env_float('CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS', 4.0))
+CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS = max(50, int(_env_float('CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS', 1500.0)))
+LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS = max(
+    0.10,
+    min(_env_float('LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS', 0.35), 5.0),
+)
 dashboard_snapshot_cache_lock = Lock()
 dashboard_snapshot_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     'violations': {},
     'stats': {},
 }
+cloud_storage_stats_index_cache_lock = Lock()
+cloud_storage_stats_index_cache: Dict[str, Any] = {'ts': 0.0, 'storage_id': '', 'index': None}
 
 
 def _invalidate_queue_context_snapshot_cache() -> None:
@@ -175,6 +184,177 @@ def _invalidate_dashboard_snapshot_cache(bucket: Optional[str] = None) -> None:
         else:
             for cache_bucket in dashboard_snapshot_cache.values():
                 cache_bucket.clear()
+    if bucket is None or bucket == 'stats':
+        _invalidate_cloud_storage_stats_index_cache()
+
+
+def _invalidate_cloud_storage_stats_index_cache() -> None:
+    with cloud_storage_stats_index_cache_lock:
+        cloud_storage_stats_index_cache['ts'] = 0.0
+        cloud_storage_stats_index_cache['storage_id'] = ''
+        cloud_storage_stats_index_cache['index'] = None
+
+
+def _normalize_storage_list_payload(raw_payload: Any) -> List[Dict[str, Any]]:
+    payload = raw_payload
+    if isinstance(payload, dict):
+        payload = payload.get('data') or payload.get('items') or []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _list_storage_entries_metadata_only(bucket_name: str, path: str = '', *, limit: int = 1000) -> List[Dict[str, Any]]:
+    """List Supabase Storage metadata only; this must never download object bytes."""
+    if storage_manager is None:
+        return []
+    bucket = storage_manager.client.storage.from_(bucket_name)
+    normalized_path = str(path or '').strip().strip('/')
+    page_limit = max(1, min(int(limit or 1000), 1000))
+    entries: List[Dict[str, Any]] = []
+    offset = 0
+    while offset < CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS:
+        used_unpaged_fallback = False
+        try:
+            raw_page = bucket.list(
+                path=normalized_path,
+                options={
+                    'limit': page_limit,
+                    'offset': offset,
+                    'sortBy': {'column': 'name', 'order': 'asc'},
+                },
+            )
+        except TypeError:
+            used_unpaged_fallback = True
+            raw_page = bucket.list(path=normalized_path)
+
+        page = _normalize_storage_list_payload(raw_page)
+        if not page:
+            break
+        entries.extend(page)
+        if len(page) < page_limit:
+            break
+        offset += page_limit
+
+        # Older clients that ignore options would return the same page forever.
+        if used_unpaged_fallback:
+            break
+    return entries
+
+
+def _storage_entry_names(entries: List[Dict[str, Any]]) -> List[str]:
+    names: List[str] = []
+    for entry in entries:
+        name = str(entry.get('name') or '').strip().strip('/')
+        if name:
+            names.append(name)
+    return names
+
+
+def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
+    if storage_manager is None:
+        return {'available': False, 'source': 'storage_manager_unavailable'}
+
+    reports_bucket = str(getattr(storage_manager, 'reports_bucket', 'reports') or 'reports').strip()
+    images_bucket = str(getattr(storage_manager, 'images_bucket', 'violation-images') or 'violation-images').strip()
+    report_ids: set = set()
+    image_ids: set = set()
+    scanned_report_folders = 0
+    scanned_image_folders = 0
+
+    report_root_names = _storage_entry_names(_list_storage_entries_metadata_only(reports_bucket, ''))
+    for folder_name in report_root_names[:CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS]:
+        lower_name = folder_name.lower()
+        if lower_name in {'report.html', 'report.pdf'}:
+            continue
+        if '/' in folder_name:
+            report_id, filename = folder_name.split('/', 1)
+            if filename.lower().rsplit('/', 1)[-1] in {'report.html', 'report.pdf'}:
+                report_ids.add(report_id)
+            continue
+        child_names = {
+            child.lower()
+            for child in _storage_entry_names(_list_storage_entries_metadata_only(reports_bucket, folder_name, limit=50))
+        }
+        scanned_report_folders += 1
+        if 'report.html' in child_names or 'report.pdf' in child_names:
+            report_ids.add(folder_name)
+
+    image_root_names = _storage_entry_names(_list_storage_entries_metadata_only(images_bucket, ''))
+    for folder_name in image_root_names[:CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS]:
+        lower_name = folder_name.lower()
+        if lower_name in {'original.jpg', 'annotated.jpg', 'original.jpeg', 'annotated.jpeg', 'original.png', 'annotated.png'}:
+            continue
+        if '/' in folder_name:
+            report_id, filename = folder_name.split('/', 1)
+            if filename.lower().rsplit('/', 1)[-1] in {'original.jpg', 'annotated.jpg', 'original.jpeg', 'annotated.jpeg', 'original.png', 'annotated.png'}:
+                image_ids.add(report_id)
+            continue
+        child_names = {
+            child.lower()
+            for child in _storage_entry_names(_list_storage_entries_metadata_only(images_bucket, folder_name, limit=50))
+        }
+        scanned_image_folders += 1
+        if child_names.intersection({'original.jpg', 'annotated.jpg', 'original.jpeg', 'annotated.jpeg', 'original.png', 'annotated.png'}):
+            image_ids.add(folder_name)
+
+    artifact_ids = set(image_ids) | set(report_ids)
+    return {
+        'available': True,
+        'source': 'supabase_storage_metadata',
+        'reports_bucket': reports_bucket,
+        'images_bucket': images_bucket,
+        'report_ids': sorted(report_ids),
+        'image_ids': sorted(image_ids),
+        'artifact_ids': sorted(artifact_ids),
+        'report_count': len(report_ids),
+        'artifact_count': len(artifact_ids),
+        'scanned_report_folders': scanned_report_folders,
+        'scanned_image_folders': scanned_image_folders,
+        'measured_at': datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _get_cloud_storage_stats_index() -> Optional[Dict[str, Any]]:
+    if storage_manager is None or _is_supabase_offline_backoff_active():
+        return None
+    storage_id = '|'.join([
+        str(getattr(storage_manager, 'supabase_url', '') or ''),
+        str(getattr(storage_manager, 'reports_bucket', '') or ''),
+        str(getattr(storage_manager, 'images_bucket', '') or ''),
+    ])
+    now = time.time()
+    if CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS > 0:
+        with cloud_storage_stats_index_cache_lock:
+            cached_index = cloud_storage_stats_index_cache.get('index')
+            cached_ts = float(cloud_storage_stats_index_cache.get('ts') or 0.0)
+            cached_storage_id = str(cloud_storage_stats_index_cache.get('storage_id') or '')
+            if (
+                isinstance(cached_index, dict)
+                and cached_storage_id == storage_id
+                and (now - cached_ts) < CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS
+            ):
+                return dict(cached_index)
+
+    try:
+        index = _run_with_timeout(
+            _build_cloud_storage_stats_index_uncached,
+            int(CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS),
+            'cloud-storage-stats-index',
+        )
+    except Exception as storage_index_error:
+        logger.warning(f"Cloud storage stats metadata index unavailable: {storage_index_error}")
+        return None
+
+    if not isinstance(index, dict) or not index.get('available'):
+        return None
+
+    if CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS > 0:
+        with cloud_storage_stats_index_cache_lock:
+            cloud_storage_stats_index_cache['ts'] = now
+            cloud_storage_stats_index_cache['storage_id'] = storage_id
+            cloud_storage_stats_index_cache['index'] = dict(index)
+    return index
 
 
 def _get_cached_dashboard_snapshot(bucket: str, cache_key: str, ttl_seconds: float):
@@ -1539,6 +1719,8 @@ queue_worker_watchdog_thread = None
 queue_worker_watchdog_running = False
 queue_worker_watchdog_lock = Lock()
 last_queue_worker_forced_restart_epoch = 0.0
+queue_worker_maintenance_lock = Lock()
+queue_worker_maintenance_running = set()
 QUEUE_WORKER_WATCHDOG_ENABLED = os.getenv(
     'QUEUE_WORKER_WATCHDOG_ENABLED',
     'true'
@@ -3026,6 +3208,33 @@ def _queue_worker_heartbeat_age_seconds(now_epoch: Optional[float] = None) -> Op
     return max(0.0, now_value - last_heartbeat)
 
 
+def _start_queue_worker_maintenance_task(name: str, task_fn) -> bool:
+    """Run slow queue maintenance away from the user-facing dequeue path."""
+    task_name = str(name or 'maintenance').strip() or 'maintenance'
+    with queue_worker_maintenance_lock:
+        if task_name in queue_worker_maintenance_running:
+            return False
+        queue_worker_maintenance_running.add(task_name)
+
+    def _runner():
+        try:
+            task_fn()
+        except Exception as maintenance_error:
+            logger.debug(
+                f"Queue worker maintenance task {task_name} failed: {maintenance_error}"
+            )
+        finally:
+            with queue_worker_maintenance_lock:
+                queue_worker_maintenance_running.discard(task_name)
+
+    Thread(
+        target=_runner,
+        name=f"QueueMaintenance-{task_name}",
+        daemon=True
+    ).start()
+    return True
+
+
 def _is_queue_watchdog_alive() -> bool:
     """Return True only when watchdog flag is set and watchdog thread is alive."""
     return bool(
@@ -3506,7 +3715,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                         f"until adopt_after_epoch={adopt_after_epoch}"
                     )
                     continue
-                handoff_source_scope = 'synced_local'
+                handoff_source_scope = 'cloud'
                 handoff_sync_source = 'cloud_pending_local_handoff'
             _local_sync_sources = {
                 'sync_local_cache', 'local_cache', 'local_cache_sync',
@@ -3877,10 +4086,16 @@ def queue_worker_loop():
         try:
             now_epoch = time.time()
             _mark_queue_worker_heartbeat(now_epoch)
+            queue_has_pending_work = bool(
+                violation_queue is not None
+                and int(violation_queue.get_queue_size() or 0) > 0
+            )
 
-            if now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS:
+            if (
+                not queue_has_pending_work
+                and now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS
+            ):
                 last_supabase_recovery_check_epoch = now_epoch
-                recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
                 # Auto-reconnect local-cache sync is meant for reports captured
                 # while the runtime was forced offline that now need cloud
                 # reconciliation. The candidate scan is source-scoped, so cloud
@@ -3888,48 +4103,64 @@ def queue_worker_loop():
                 # reports that finished after reconnect. Hosted cloud runtimes
                 # have no user-local filesystem to reconcile.
                 worker_skip_local_cache_sync = _is_hosted_runtime_environment()
-                if (
-                    recovery.get('success')
-                    and SUPABASE_AUTO_SYNC_BATCH_SIZE > 0
+                sync_due = (
+                    SUPABASE_AUTO_SYNC_BATCH_SIZE > 0
                     and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
                     and not worker_skip_local_cache_sync
-                ):
-                    queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
-                    if queue_size_now <= 0:
-                        last_supabase_auto_sync_epoch = now_epoch
-                        try:
-                            sync_summary = _sync_local_cache_candidates(
-                                max_items=SUPABASE_AUTO_SYNC_BATCH_SIZE,
-                                dry_run=False,
-                                reconcile_reason='auto_reconnect',
-                                require_worker=False
-                            )
-                            enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
-                            if enqueued_count > 0:
-                                logger.info(
-                                    f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
+                )
+                if sync_due:
+                    last_supabase_auto_sync_epoch = now_epoch
+
+                def _runtime_recovery_and_sync_task():
+                    recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
+                    if recovery.get('success') and sync_due:
+                        queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
+                        if queue_size_now <= 0:
+                            try:
+                                sync_summary = _sync_local_cache_candidates(
+                                    max_items=SUPABASE_AUTO_SYNC_BATCH_SIZE,
+                                    dry_run=False,
+                                    reconcile_reason='auto_reconnect',
+                                    require_worker=False
                                 )
-                            elif not sync_summary.get('success'):
-                                logger.warning(
-                                    "Auto reconnect local-cache sync did not complete: "
-                                    f"{sync_summary.get('error') or 'unknown error'}"
-                                )
-                            elif sync_summary.get('errors') and int(sync_summary.get('candidates', 0) or 0) > 0:
-                                logger.warning(
-                                    "Auto reconnect local-cache sync found candidate errors: "
-                                    f"{sync_summary.get('errors')}"
-                                )
-                        except Exception as sync_err:
-                            logger.warning(f"Auto reconnect local-cache sync failed: {sync_err}")
+                                enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
+                                if enqueued_count > 0:
+                                    logger.info(
+                                        f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
+                                    )
+                                elif not sync_summary.get('success'):
+                                    logger.warning(
+                                        "Auto reconnect local-cache sync did not complete: "
+                                        f"{sync_summary.get('error') or 'unknown error'}"
+                                    )
+                                elif sync_summary.get('errors') and int(sync_summary.get('candidates', 0) or 0) > 0:
+                                    logger.warning(
+                                        "Auto reconnect local-cache sync found candidate errors: "
+                                        f"{sync_summary.get('errors')}"
+                                    )
+                            except Exception as sync_err:
+                                logger.warning(f"Auto reconnect local-cache sync failed: {sync_err}")
+
+                _start_queue_worker_maintenance_task(
+                    'supabase_runtime_recovery',
+                    _runtime_recovery_and_sync_task
+                )
 
             if (
+                not queue_has_pending_work
+                and
                 QUEUE_STUCK_REPORT_SWEEP_ENABLED
                 and now_epoch - last_stuck_report_sweep_epoch >= QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS
             ):
                 last_stuck_report_sweep_epoch = now_epoch
-                _run_queue_stuck_report_sweep(reason='queue_worker')
+                _start_queue_worker_maintenance_task(
+                    'stuck_report_sweep',
+                    lambda: _run_queue_stuck_report_sweep(reason='queue_worker')
+                )
 
             if (
+                not queue_has_pending_work
+                and
                 LOCAL_PENDING_RECOVERY_ENABLED
                 and now_epoch - last_local_pending_recovery_sweep_epoch >= LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
@@ -3941,14 +4172,22 @@ def queue_worker_loop():
                 # produces spurious black-picture reports that confuse the UI.
                 _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
                 if _queue_worker_routing == 'local':
-                    recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
-                    enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
-                    if enqueued_count > 0:
-                        logger.info(
-                            f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
-                        )
+                    def _local_pending_recovery_task():
+                        recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
+                        enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
+                        if enqueued_count > 0:
+                            logger.info(
+                                f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
+                            )
+
+                    _start_queue_worker_maintenance_task(
+                        'local_pending_recovery',
+                        _local_pending_recovery_task
+                    )
 
             if (
+                not queue_has_pending_work
+                and
                 CLOUD_PENDING_RECOVERY_ENABLED
                 and now_epoch - last_cloud_pending_recovery_sweep_epoch >= CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
@@ -3960,12 +4199,18 @@ def queue_worker_loop():
                 # user intervention.
                 _cloud_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
                 if _cloud_routing != 'local':
-                    cloud_recovery_summary = _run_cloud_pending_recovery_sweep(reason='queue_worker')
-                    cloud_enqueued = int(cloud_recovery_summary.get('enqueued', 0) or 0)
-                    if cloud_enqueued > 0:
-                        logger.info(
-                            f"Cloud pending recovery queued {cloud_enqueued} stale cloud report(s) for re-generation"
-                        )
+                    def _cloud_pending_recovery_task():
+                        cloud_recovery_summary = _run_cloud_pending_recovery_sweep(reason='queue_worker')
+                        cloud_enqueued = int(cloud_recovery_summary.get('enqueued', 0) or 0)
+                        if cloud_enqueued > 0:
+                            logger.info(
+                                f"Cloud pending recovery queued {cloud_enqueued} stale cloud report(s) for re-generation"
+                            )
+
+                    _start_queue_worker_maintenance_task(
+                        'cloud_pending_recovery',
+                        _cloud_pending_recovery_task
+                    )
 
             if violation_queue is None:
                 time.sleep(1)
@@ -4424,6 +4669,7 @@ def _has_confirmed_synced_local_evidence(
     device_id: str = '',
     sync_state: str = '',
     has_cloud_artifacts: bool = False,
+    has_cloud_report_artifact: bool = False,
     report_id: str = '',
 ) -> bool:
     """Return True only when Local Synced is backed by a real local->cloud sync signal."""
@@ -4434,12 +4680,13 @@ def _has_confirmed_synced_local_evidence(
         _is_local_artifact_origin_device(device_id)
         or bool(re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', normalized_report_id))
     )
+    cloud_report_synced = bool(has_cloud_artifacts and has_cloud_report_artifact)
 
     if _is_local_cache_sync_job_marker(sync_source=normalized_source, device_id=device_id):
-        return True
+        return cloud_report_synced
     if normalized_source == 'local_synced':
-        return local_artifact_origin and has_cloud_artifacts
-    if normalized_source == 'browser_local_draft_handoff' and local_artifact_origin and has_cloud_artifacts:
+        return local_artifact_origin and cloud_report_synced
+    if normalized_source == 'browser_local_draft_handoff' and local_artifact_origin and cloud_report_synced:
         return True
 
     sync_state_confirmed = (
@@ -4447,7 +4694,7 @@ def _has_confirmed_synced_local_evidence(
         or normalized_state.startswith('cloud_sync_')
         or normalized_state.startswith('sync_')
     )
-    return bool(sync_state_confirmed and local_artifact_origin and has_cloud_artifacts)
+    return bool(sync_state_confirmed and local_artifact_origin and cloud_report_synced)
 
 
 def _should_force_local_artifact_pipeline(sync_source: str = '', device_id: str = '') -> bool:
@@ -4617,7 +4864,7 @@ def _handoff_partial_local_report_to_cloud(
     original_path: Path,
     annotated_path: Path,
     device_id: str,
-    source_scope: str = 'synced_local',
+    source_scope: str = 'cloud',
     sync_source: str = 'sync_local_cache_partial',
     reason: str = 'partial_handoff',
     cloud_adopt_after_epoch: Optional[float] = None,
@@ -4677,6 +4924,7 @@ def _handoff_partial_local_report_to_cloud(
 
     if not storage_keys.get('original_image_key'):
         return {'success': False, 'error': 'original_upload_failed', 'storage_keys': storage_keys}
+    _invalidate_dashboard_snapshot_cache('stats')
 
     try:
         ts_value = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
@@ -4714,7 +4962,7 @@ def _handoff_partial_local_report_to_cloud(
         ])
     )
 
-    source_scope_marker = str(source_scope or 'synced_local').strip().lower() or 'synced_local'
+    source_scope_marker = str(source_scope or 'cloud').strip().lower() or 'cloud'
     sync_source_marker = str(sync_source or 'sync_local_cache_partial').strip().lower() or 'sync_local_cache_partial'
     resolved_severity = _classify_violation_severity(
         violation_types=violation_types_raw,
@@ -4891,6 +5139,7 @@ def _handle_local_cache_sync_job(
         storage_keys = {}
 
     if storage_keys:
+        _invalidate_dashboard_snapshot_cache('stats')
         logger.info(
             f"Local-cache cloud upload result for {report_id}: "
             f"original={bool(storage_keys.get('original_image_key'))}, "
@@ -4952,10 +5201,15 @@ def _handle_local_cache_sync_job(
         violation_summary=violation_summary_text,
     )
 
+    local_has_annotated = annotated_path.exists()
+    cloud_artifacts_complete = _local_sync_has_complete_cloud_artifacts(
+        storage_keys,
+        local_has_annotated=local_has_annotated,
+        local_has_report=True,
+    )
+
     sync_source_marker = str(queued_sync_source or 'sync_local_cache').strip().lower() or 'sync_local_cache'
-    source_scope_marker = str(queued_source_scope or 'synced_local').strip().lower() or 'synced_local'
-    if _is_local_cache_sync_job_marker(sync_source=sync_source_marker, device_id=queue_device_id):
-        source_scope_marker = 'synced_local'
+    source_scope_marker = 'synced_local' if cloud_artifacts_complete else 'local'
 
     metadata: Dict[str, Any] = {
         'detections': detections,
@@ -4965,18 +5219,12 @@ def _handle_local_cache_sync_job(
         'violation_summary': violation_summary_text,
         'source_scope': source_scope_marker,
         'sync_source': sync_source_marker,
-        'source': sync_source_marker,
-        'origin': 'local_synced',
+        'source': sync_source_marker if cloud_artifacts_complete else 'local_pipeline',
+        'origin': 'local_synced' if cloud_artifacts_complete else 'local',
         'device_id': queue_device_id,
         'severity': resolved_severity,
+        'sync_state': 'cloud_completed' if cloud_artifacts_complete else 'local_sync_pending_retry',
     }
-
-    local_has_annotated = annotated_path.exists()
-    cloud_artifacts_complete = _local_sync_has_complete_cloud_artifacts(
-        storage_keys,
-        local_has_annotated=local_has_annotated,
-        local_has_report=True,
-    )
 
     db_reconciled = False
 
@@ -5071,10 +5319,13 @@ def _handle_local_cache_sync_job(
                     'ppe_tags': violation_types_raw,
                     'violation_summary': violation_summary_text,
                     'device_id': queue_device_id,
-                    'source_scope': 'synced_local',
-                    'source_label': 'Local Synced',
-                    'origin': 'local_synced',
-                }, event_type='local_cache_synced')
+                    'source_scope': source_scope_marker,
+                    'source_label': 'Local Synced' if cloud_artifacts_complete else 'Local',
+                    'origin': 'local_synced' if cloud_artifacts_complete else 'local',
+                    'sync_source': sync_source_marker,
+                    'completed': bool(cloud_artifacts_complete),
+                    'completed_report_ids': [report_id] if cloud_artifacts_complete else [],
+                }, event_type='local_cache_synced' if cloud_artifacts_complete else 'report_status')
             except Exception as realtime_err:
                 logger.debug(f"Could not push local-cache sync realtime row for {report_id}: {realtime_err}")
         except Exception as db_sync_err:
@@ -5170,6 +5421,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
     generation_started_at = time.perf_counter()
     generation_timings_seconds: Dict[str, float] = {}
+    should_update_cloud_status = bool(db_manager and not force_local_artifact_pipeline)
 
     def _record_generation_timing(stage_name: str, started_at: float) -> None:
         try:
@@ -5250,7 +5502,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 logger.warning(f"   Reason: {env_result['reason']}")
 
                 # Update status to 'skipped' and clean up
-                if db_manager:
+                if should_update_cloud_status:
                     try:
                         db_manager.update_detection_status(
                             report_id,
@@ -5279,7 +5531,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             _record_generation_timing('environment_validation', environment_started_at)
 
     # Update status to generating
-    if db_manager:
+    if should_update_cloud_status:
         try:
             db_manager.update_detection_status(report_id, 'generating')
             logger.info(f" Status updated to GENERATING: {report_id}")
@@ -5487,6 +5739,17 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 30,
                 int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '300') or 300)
             )
+            if force_local_artifact_pipeline:
+                try:
+                    _report_gen_timeout_seconds = max(
+                        12,
+                        min(
+                            _report_gen_timeout_seconds,
+                            int(os.getenv('LOCAL_REPORT_GENERATION_TIMEOUT_SECONDS', '25') or 25),
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    _report_gen_timeout_seconds = min(_report_gen_timeout_seconds, 25)
             active_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
             cloud_retry_allowed = bool(
                 active_routing_profile == 'cloud'
@@ -5544,6 +5807,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     cloud_upload_skipped = bool(result.get('cloud_upload_skipped'))
                     if isinstance(result.get('storage_keys'), dict):
                         result_storage_keys = result.get('storage_keys') or {}
+                        if any(result_storage_keys.get(key) for key in ('original_image_key', 'annotated_image_key', 'report_html_key', 'report_pdf_key')):
+                            _invalidate_dashboard_snapshot_cache('stats')
 
                 if result and result.get('html'):
                     target_html = violation_dir / 'report.html'
@@ -5552,7 +5817,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         report_created = True
 
                         # Update status to completed
-                        if db_manager:
+                        if should_update_cloud_status:
                             try:
                                 db_manager.update_detection_status(report_id, 'completed')
                                 logger.info(f" Status updated to COMPLETED: {report_id}")
@@ -5580,6 +5845,26 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             failure_reason = f"{type(e).__name__}: {e}"
     _record_generation_timing('report_generation', report_generation_started_at)
 
+    if not report_created and (violation_dir / 'report.html').exists():
+        logger.warning(
+            f"Report artifact exists for {report_id} despite missing generator result; "
+            "treating the report as completed to keep local status consistent"
+        )
+        report_created = True
+        failure_reason = None
+        failure_path = violation_dir / 'generation_failure.txt'
+        try:
+            if failure_path.exists():
+                failure_path.unlink()
+        except Exception as cleanup_err:
+            logger.debug(f"Could not remove stale generation failure file for {report_id}: {cleanup_err}")
+        if should_update_cloud_status:
+            try:
+                db_manager.update_detection_status(report_id, 'completed')
+            except Exception as status_err:
+                _activate_local_offline_runtime('process_queued_violation.artifact_completed', status_err)
+                logger.warning(f"Could not update completed status after report artifact detection: {status_err}")
+
     if not report_created and allow_placeholder_report and force_reprocess_requested:
         try:
             logger.warning(
@@ -5594,7 +5879,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     failure_reason = fallback_message
                 else:
                     failure_reason = f"{failure_reason}; placeholder report fallback applied"
-                if db_manager:
+                if should_update_cloud_status:
                     try:
                         db_manager.update_detection_status(
                             report_id,
@@ -5621,7 +5906,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception as e:
             logger.warning(f"Could not persist generation failure details: {e}")
 
-        if db_manager:
+        if should_update_cloud_status:
             try:
                 db_manager.update_detection_status(
                     report_id,
@@ -6276,6 +6561,7 @@ def api_violations():
         *,
         device_id: Any,
         has_cloud_artifacts: bool,
+        has_cloud_report_artifact: bool,
         has_local_artifacts: bool,
         detection_data: Optional[Dict[str, Any]],
         local_only: bool = False,
@@ -6322,6 +6608,7 @@ def api_violations():
             device_id=device_key,
             sync_state=sync_state,
             has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
             report_id='',
         )
 
@@ -6512,6 +6799,7 @@ def api_violations():
             local_has_report = (local_violation_dir / 'report.html').exists()
             has_local_artifacts = local_has_original or local_has_annotated or local_has_report
             has_cloud_artifacts = bool(v.get('original_image_key')) or bool(v.get('annotated_image_key')) or bool(v.get('report_html_key'))
+            has_cloud_report_artifact = bool(v.get('report_html_key') or v.get('report_pdf_key'))
 
             detection_data_parsed = v.get('detection_data')
             if isinstance(detection_data_parsed, str):
@@ -6654,6 +6942,7 @@ def api_violations():
             source_scope, source_reason = _infer_report_source_scope(
                 device_id=v.get('device_id'),
                 has_cloud_artifacts=has_cloud_artifacts,
+                has_cloud_report_artifact=has_cloud_report_artifact,
                 has_local_artifacts=has_local_artifacts,
                 detection_data=detection_data_parsed,
                 local_only=False,
@@ -6695,6 +6984,7 @@ def api_violations():
                 'has_local_report': local_has_report,
                 'has_local_artifacts': has_local_artifacts,
                 'has_cloud_artifacts': has_cloud_artifacts,
+                'has_cloud_report_artifact': has_cloud_report_artifact,
                 'origin': detection_data_parsed.get('origin'),
                 'sync_source': detection_data_parsed.get('sync_source') or detection_data_parsed.get('source'),
                 'detection_data': {
@@ -6806,6 +7096,7 @@ def api_violations():
                     local_row.get('has_original') or local_row.get('has_annotated') or local_row.get('has_report')
                 ),
                 'has_cloud_artifacts': False,
+                'has_cloud_report_artifact': False,
                 'origin': 'local',
                 'sync_source': None,
                 'detection_data': None,
@@ -6935,6 +7226,7 @@ def api_stats():
             or row.get('report_html_key')
             or row.get('report_pdf_key')
         )
+        has_cloud_report_artifact = bool(row.get('report_html_key') or row.get('report_pdf_key'))
         source_marker_for_repair = str(
             detection_payload.get('origin')
             or detection_payload.get('source')
@@ -6952,6 +7244,7 @@ def api_stats():
             device_id=device_key,
             sync_state=sync_state_for_repair,
             has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
             report_id=str(row.get('report_id') or ''),
         )
 
@@ -6984,9 +7277,9 @@ def api_stats():
         }
 
         if source_marker in local_markers:
-            return 'synced_local' if has_cloud_artifacts else 'local'
+            return 'synced_local' if confirmed_synced_local else 'local'
 
-        if has_cloud_artifacts and is_local_device:
+        if has_cloud_artifacts and is_local_device and confirmed_synced_local:
             return 'synced_local'
         if has_cloud_artifacts:
             return 'cloud'
@@ -7052,6 +7345,12 @@ def api_stats():
 
     try:
         by_report: Dict[str, Dict[str, Any]] = {}
+        active_stats_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        storage_index = _get_cloud_storage_stats_index()
+        storage_report_ids = set(storage_index.get('report_ids') or []) if isinstance(storage_index, dict) else set()
+        storage_image_ids = set(storage_index.get('image_ids') or []) if isinstance(storage_index, dict) else set()
+        storage_artifact_ids = set(storage_index.get('artifact_ids') or []) if isinstance(storage_index, dict) else set()
+        cloud_storage_authoritative = bool(storage_index and storage_index.get('available'))
 
         db_rows: List[Dict[str, Any]] = []
         if db_manager is not None:
@@ -7072,6 +7371,24 @@ def api_stats():
 
             local_dir = VIOLATIONS_DIR / report_id
             has_local_artifacts = local_dir.exists()
+            storage_has_artifact = report_id in storage_artifact_ids
+            storage_has_report = report_id in storage_report_ids
+            if cloud_storage_authoritative and not storage_has_artifact:
+                continue
+
+            scoped_row = dict(row)
+            if cloud_storage_authoritative:
+                if report_id not in storage_image_ids:
+                    scoped_row['original_image_key'] = None
+                    scoped_row['annotated_image_key'] = None
+                if not storage_has_report:
+                    scoped_row['report_html_key'] = None
+                    scoped_row['report_pdf_key'] = None
+            if report_id in storage_image_ids and not scoped_row.get('original_image_key'):
+                scoped_row['original_image_key'] = f"{getattr(storage_manager, 'images_bucket', 'violation-images')}/{report_id}/original.jpg"
+            if storage_has_report and not scoped_row.get('report_html_key'):
+                scoped_row['report_html_key'] = f"{getattr(storage_manager, 'reports_bucket', 'reports')}/{report_id}/report.html"
+
             timestamp_value = _safe_parse_timestamp(
                 row.get('timestamp'),
                 report_id=report_id,
@@ -7080,7 +7397,11 @@ def api_stats():
 
             status_value = str(row.get('status') or '').strip().lower()
             if not status_value:
-                status_value = 'completed' if row.get('report_html_key') else 'pending'
+                status_value = 'completed' if (row.get('report_html_key') or storage_has_report) else 'pending'
+            if storage_has_report:
+                status_value = 'completed'
+            elif cloud_storage_authoritative and status_value in {'completed', 'ready'}:
+                status_value = 'pending'
 
             severity_value = str(row.get('severity') or '').strip().upper()
             if severity_value not in ('HIGH', 'MEDIUM', 'LOW'):
@@ -7091,8 +7412,19 @@ def api_stats():
                 'timestamp': timestamp_value,
                 'severity': severity_value,
                 'status': status_value,
-                'source_scope': _infer_source_scope(row, has_local_artifacts),
+                'source_scope': _infer_source_scope(scoped_row, has_local_artifacts),
             }
+
+        if cloud_storage_authoritative:
+            for report_id in sorted(storage_artifact_ids - set(by_report.keys()), reverse=True):
+                timestamp_value = _safe_parse_timestamp(None, report_id=report_id)
+                by_report[report_id] = {
+                    'report_id': report_id,
+                    'timestamp': timestamp_value,
+                    'severity': 'MEDIUM',
+                    'status': 'completed' if report_id in storage_report_ids else 'pending',
+                    'source_scope': 'cloud',
+                }
 
         local_rows = _collect_local_report_state_rows(
             limit=max(500, len(by_report) + 600)
@@ -7100,6 +7432,8 @@ def api_stats():
         for local_row in local_rows:
             report_id = str(local_row.get('report_id') or '').strip()
             if not report_id:
+                continue
+            if cloud_storage_authoritative and active_stats_profile != 'local' and report_id not in storage_artifact_ids:
                 continue
 
             local_dir = VIOLATIONS_DIR / report_id
@@ -7117,11 +7451,13 @@ def api_stats():
                     'timestamp': timestamp_value,
                     'severity': 'MEDIUM',
                     'status': local_status or 'pending',
-                    'source_scope': 'local',
+                    'source_scope': 'cloud' if (cloud_storage_authoritative and report_id in storage_artifact_ids) else 'local',
                 }
                 continue
 
-            if local_status == 'completed':
+            if cloud_storage_authoritative and report_id in storage_report_ids:
+                existing['status'] = 'completed'
+            elif local_status == 'completed' and not cloud_storage_authoritative:
                 existing['status'] = 'completed'
             elif existing.get('status') in ('pending', 'generating', 'queued', 'processing'):
                 if local_status in ('failed', 'skipped'):
@@ -7134,6 +7470,19 @@ def api_stats():
                 existing['source_scope'] = 'cloud'
 
         stats = _build_stats_payload(list(by_report.values()))
+        if isinstance(storage_index, dict):
+            stats.update({
+                'stats_source': 'cloud_storage_metadata',
+                'cloudStorageIndexed': True,
+                'cloudStorageReports': len(storage_report_ids),
+                'cloudStorageArtifacts': len(storage_artifact_ids),
+                'cloudStorageIndexTtlSeconds': CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS,
+            })
+        else:
+            stats.update({
+                'stats_source': 'database_and_local_cache',
+                'cloudStorageIndexed': False,
+            })
         _set_cached_dashboard_snapshot(
             'stats',
             cache_key,
@@ -7679,6 +8028,10 @@ def api_report_status(report_id):
             or (violation_row or {}).get('annotated_image_key')
             or (violation_row or {}).get('report_html_key')
         )
+        has_cloud_report_artifact = bool(
+            (violation_row or {}).get('report_html_key')
+            or (violation_row or {}).get('report_pdf_key')
+        )
         has_local_artifacts = bool(
             local_status
             and (
@@ -7716,6 +8069,7 @@ def api_report_status(report_id):
             device_id=device_key,
             sync_state=sync_state,
             has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
             report_id=(
                 (event_row or {}).get('report_id')
                 or (violation_row or {}).get('report_id')
@@ -7787,6 +8141,16 @@ def api_report_status(report_id):
                     'has_report': has_report,
                     'has_original': bool((violation or {}).get('original_image_key')),
                     'has_annotated': bool((violation or {}).get('annotated_image_key')),
+                    'has_cloud_artifacts': bool(
+                        (violation or {}).get('original_image_key')
+                        or (violation or {}).get('annotated_image_key')
+                        or (violation or {}).get('report_html_key')
+                        or (violation or {}).get('report_pdf_key')
+                    ),
+                    'has_cloud_report_artifact': bool(
+                        (violation or {}).get('report_html_key')
+                        or (violation or {}).get('report_pdf_key')
+                    ),
                     'device_id': (event or {}).get('device_id'),
                     'error_message': (event or {}).get('error_message'),
                     'timestamp': (event or {}).get('timestamp'),
@@ -7933,6 +8297,8 @@ def api_report_status(report_id):
             'has_report': status_info.get('has_report', False),
             'has_original': status_info.get('has_original', False),
             'has_annotated': status_info.get('has_annotated', False),
+            'has_cloud_artifacts': status_info.get('has_cloud_artifacts', False),
+            'has_cloud_report_artifact': status_info.get('has_cloud_report_artifact', False),
             'device_id': status_info.get('device_id'),
             'error_message': status_info.get('error_message'),
             'alert_message': status_info.get('alert_message'),
@@ -9189,7 +9555,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     probe_error = None
 
     try:
-        resp = requests.get(tags_url, timeout=4)
+        resp = requests.get(tags_url, timeout=LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS)
         ollama_running = resp.ok
         if resp.ok:
             payload = resp.json() if resp.content else {}
@@ -12294,7 +12660,8 @@ def _sync_local_cache_candidates(
     dry_run: bool = False,
     reconcile_reason: str = 'manual_api',
     require_worker: bool = True,
-    origin: str = 'local_synced'
+    origin: str = 'local_synced',
+    allow_local_mode_sync: bool = False,
 ) -> Dict[str, Any]:
     """Scan local violation folders and enqueue unsynced local-origin items for Supabase reconciliation."""
     global db_manager, storage_manager
@@ -12317,6 +12684,26 @@ def _sync_local_cache_candidates(
     # before their cloud artifact upload completes.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     cloud_mode_orphans_only = (active_profile != 'local')
+    if active_profile == 'local' and not dry_run and not allow_local_mode_sync:
+        return {
+            'success': True,
+            'reconcile_reason': reason,
+            'origin': sync_origin,
+            'dry_run': False,
+            'scanned': 0,
+            'candidates': 0,
+            'enqueued': 0,
+            'skipped': 0,
+            'queued_report_ids': [],
+            'partial_handoff_report_ids': [],
+            'synced_report_ids': [],
+            'completed_report_ids': [],
+            'errors': [],
+            'worker_running': _is_queue_worker_alive(),
+            'deferred': True,
+            'deferred_reason': 'routing_profile_local',
+            'message': 'Local-mode reports remain local until the runtime switches back to cloud/reconnect sync.',
+        }
 
     def _load_local_metadata(violation_dir: Path) -> Dict[str, Any]:
         metadata_path = violation_dir / 'metadata.json'
@@ -12882,6 +13269,7 @@ def api_sync_local_cache_to_supabase():
             reconcile_reason=sync_reason,
             require_worker=True,
             origin=sync_origin,
+            allow_local_mode_sync=bool(payload.get('allow_local_mode_sync', False)),
         )
     except Exception as sync_err:
         logger.error(f"Local-cache sync endpoint failed: {sync_err}", exc_info=True)
@@ -13010,7 +13398,7 @@ def api_report_local_draft_handoff():
             original_path=original_path,
             annotated_path=annotated_path,
             device_id=device_id,
-            source_scope='synced_local',
+            source_scope='cloud',
             sync_source='browser_local_draft_handoff',
             reason=str(request.form.get('reason') or metadata.get('handoff_reason') or 'browser_reconnect'),
             cloud_adopt_after_epoch=time.time(),
@@ -13062,7 +13450,7 @@ def api_report_local_draft_handoff():
                         'original_image_path': str(original_path),
                         'annotated_image_path': str(annotated_path),
                         'violation_dir': str(violation_dir),
-                        'source_scope': 'synced_local',
+                        'source_scope': 'cloud',
                         'sync_source': 'browser_local_draft_handoff',
                         'source': 'browser_local_draft_handoff',
                         'severity': resolved_severity,
@@ -13099,7 +13487,8 @@ def api_report_local_draft_handoff():
             'queue_unavailable': queue_unavailable,
             'partial_handoff': True,
             'cloud_adopt_after_epoch': handoff_summary.get('cloud_adopt_after_epoch'),
-            'source_scope': 'synced_local',
+            'source_scope': 'cloud',
+            'source_label': 'Cloud',
             'sync_source': 'browser_local_draft_handoff',
         })
 
@@ -13170,6 +13559,7 @@ def api_pending_reports():
         sync_source: Any = '',
         sync_state: Any = '',
         has_cloud_artifacts: bool = False,
+        has_cloud_report_artifact: bool = False,
         report_id: Any = '',
     ) -> str:
         normalized_scope = str(scope or '').strip().lower()
@@ -13180,6 +13570,7 @@ def api_pending_reports():
                 device_id=device_key,
                 sync_state=str(sync_state or ''),
                 has_cloud_artifacts=has_cloud_artifacts,
+                has_cloud_report_artifact=has_cloud_report_artifact,
                 report_id=str(report_id or ''),
             ):
                 return 'local' if active_profile == 'local' and _is_local_pipeline_origin_marker(
@@ -13189,7 +13580,14 @@ def api_pending_reports():
                 ) else 'cloud'
             return normalized_scope
 
-        if device_key in ('local_cache_sync', 'sync_local_cache'):
+        if device_key in ('local_cache_sync', 'sync_local_cache') and _has_confirmed_synced_local_evidence(
+            sync_source=str(sync_source or ''),
+            device_id=device_key,
+            sync_state=str(sync_state or ''),
+            has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
+            report_id=str(report_id or ''),
+        ):
             return 'synced_local'
         if (
             device_key in ('local_cache', 'offline_local_cache')
@@ -13284,6 +13682,10 @@ def api_pending_reports():
                     or (p or {}).get('annotated_image_key')
                     or (p or {}).get('report_html_key')
                 )
+                has_cloud_report_artifact = bool(
+                    (p or {}).get('report_html_key')
+                    or (p or {}).get('report_pdf_key')
+                )
                 source_scope_value = (
                     (p or {}).get('source_scope')
                     or detection_payload.get('source_scope')
@@ -13318,6 +13720,7 @@ def api_pending_reports():
                     sync_source=source_marker,
                     sync_state=sync_state_value,
                     has_cloud_artifacts=has_cloud_artifacts,
+                    has_cloud_report_artifact=has_cloud_report_artifact,
                     report_id=report_id,
                 )
                 explicit_source_scope = str(source_scope_value or '').strip().lower()
@@ -13611,11 +14014,19 @@ def api_generate_report_now(report_id):
                 or violation.get('report_html_key')
             )
         )
+        has_cloud_report_artifact_for_scope = bool(
+            isinstance(violation, dict)
+            and (
+                violation.get('report_html_key')
+                or violation.get('report_pdf_key')
+            )
+        )
         confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=sync_source_marker,
             device_id=device_key,
             sync_state=sync_state_marker,
             has_cloud_artifacts=has_cloud_artifacts_for_scope,
+            has_cloud_report_artifact=has_cloud_report_artifact_for_scope,
             report_id=report_id,
         )
         if source_scope_marker == 'synced_local' and not confirmed_synced_local:
@@ -13851,6 +14262,22 @@ def view_report(report_id):
 
     local_violation_dir = VIOLATIONS_DIR / report_id
     local_report_html = local_violation_dir / 'report.html'
+
+    if local_report_html.exists() and not failed_view:
+        try:
+            trace_payload = _build_traceability_payload(
+                report_id=report_id,
+                violation={},
+                event={},
+                source='local_filesystem_fast_cache',
+                failed_view_requested=failed_view,
+            )
+            local_html, _layer = _render_local_report_html_for_view(local_report_html, trace_payload)
+            return _report_html_response(local_html)
+        except FallbackReportTemplateError:
+            logger.warning(f"Local fast-cache report HTML is fallback-template output for {report_id}; checking cloud copy.")
+        except Exception as local_fast_err:
+            logger.debug(f"Local fast-cache report read skipped for {report_id}: {local_fast_err}")
 
     # Use Supabase
     try:
@@ -16495,9 +16922,14 @@ _atexit.register(cleanup)
 # ZERO-TOUCH DEVICE PROVISIONING & NOTIFICATIONS
 # =========================================================================
 
-PENDING_DEVICES_FILE = APP_DIR / 'pending_devices.json'
-BOOTSTRAP_TOKEN_STATE_FILE = APP_DIR / 'bootstrap_tokens.json'
-LOCAL_MODE_HEARTBEAT_FILE = APP_DIR / 'local_mode_heartbeats.json'
+PROVISIONING_FILE_STATE_DIR = (
+    LOCAL_MODE_STATE_DIR
+    if str(os.getenv('CASM_STATE_DIR') or '').strip()
+    else APP_DIR
+)
+PENDING_DEVICES_FILE = PROVISIONING_FILE_STATE_DIR / 'pending_devices.json'
+BOOTSTRAP_TOKEN_STATE_FILE = PROVISIONING_FILE_STATE_DIR / 'bootstrap_tokens.json'
+LOCAL_MODE_HEARTBEAT_FILE = PROVISIONING_FILE_STATE_DIR / 'local_mode_heartbeats.json'
 PENDING_DEVICES_LOCK = Lock()
 BOOTSTRAP_TOKEN_STATE_LOCK = Lock()
 LOCAL_MODE_HEARTBEAT_LOCK = Lock()

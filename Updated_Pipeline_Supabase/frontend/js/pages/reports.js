@@ -288,10 +288,9 @@ const ReportsPage = {
 
     applyLocalSyncUpdate(detail = {}) {
         const reportIds = Array.from(new Set([
-            ...(Array.isArray(detail.report_ids) ? detail.report_ids : []),
-            ...(Array.isArray(detail.queued_report_ids) ? detail.queued_report_ids : []),
+            ...(Array.isArray(detail.synced_report_ids) ? detail.synced_report_ids : []),
             ...(Array.isArray(detail.completed_report_ids) ? detail.completed_report_ids : []),
-            ...(detail.report_id ? [detail.report_id] : [])
+            ...(detail.completed === true && detail.report_id ? [detail.report_id] : [])
         ].map((id) => String(id || '').trim()).filter(Boolean)));
 
         if (!reportIds.length) {
@@ -331,7 +330,7 @@ const ReportsPage = {
 
         if (changed) {
             this.renderReports();
-            this.notify(`${changedCount} local report${changedCount === 1 ? '' : 's'} queued for cloud sync.`, 'success', {
+            this.notify(`${changedCount} local report${changedCount === 1 ? '' : 's'} synced to cloud storage.`, 'success', {
                 dedupeKey: `local-sync-${changedReportIds.join('-')}`,
                 dedupeTtlMs: 12000
             });
@@ -1004,7 +1003,8 @@ const ReportsPage = {
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
         ) {
-            return 'synced_local';
+            if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
         if (sourceMarker === 'local_synced') {
             if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
@@ -1017,7 +1017,8 @@ const ReportsPage = {
 
         const deviceId = this.getDeviceKey(violation);
         if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') {
-            return 'synced_local';
+            if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
 
         return this.hasLocalOriginEvidence(violation) ? 'local' : 'cloud';
@@ -1099,6 +1100,19 @@ const ReportsPage = {
         );
     },
 
+    hasCloudReportArtifactEvidence(record = {}) {
+        return !!(
+            record
+            && (
+                record.has_cloud_report_artifact
+                || record.has_cloud_report
+                || record.report_html_key
+                || record.report_pdf_key
+                || record.cloud_report_url
+            )
+        );
+    },
+
     hasLocalOriginMarkerEvidence(record = {}) {
         const sourceMarker = this.getSourceMarker(record);
         const handoffOnlyMarker = sourceMarker === 'browser_local_draft_handoff'
@@ -1170,15 +1184,15 @@ const ReportsPage = {
             || deviceId === 'sync_local_cache'
         );
         if (syncMarker) {
-            return true;
+            return this.hasCloudReportArtifactEvidence(record);
         }
 
         const strictLocalOrigin = this.hasStrictLocalArtifactOrigin(record);
         if (hasMarker('local_synced')) {
-            return strictLocalOrigin && this.hasCloudArtifactEvidence(record);
+            return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
         if (hasMarker('browser_local_draft_handoff')) {
-            return strictLocalOrigin && this.hasCloudArtifactEvidence(record);
+            return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
 
         const syncStateConfirmed = (
@@ -1188,7 +1202,7 @@ const ReportsPage = {
             || syncState.startsWith('cloud_sync_')
             || syncState.startsWith('sync_')
         );
-        if (syncStateConfirmed && strictLocalOrigin && this.hasCloudArtifactEvidence(record)) {
+        if (syncStateConfirmed && strictLocalOrigin && this.hasCloudReportArtifactEvidence(record)) {
             return true;
         }
 
@@ -1211,6 +1225,18 @@ const ReportsPage = {
 
         if (forceCloudRuntime && normalizedCandidate === 'cloud') {
             return 'cloud';
+        }
+
+        if (
+            normalizedCandidate === 'synced_local'
+            && !(
+                this.hasSyncedLocalEvidence(existing)
+                || this.hasSyncedLocalEvidence(sourceRecord)
+                || this.hasSyncedLocalEvidence(patch)
+            )
+        ) {
+            const mergedForUnsyncedLocal = { ...sourceRecord, ...existing, ...patch };
+            return this.hasLocalOriginMarkerEvidence(mergedForUnsyncedLocal) ? 'local' : 'cloud';
         }
 
         if (
@@ -1332,6 +1358,24 @@ const ReportsPage = {
                 dedupeTtlMs: 10000
             });
             return;
+        }
+
+        const readyForCachedOpen = resolvedSourceHint && this.isReportReady(resolvedSourceHint);
+        if (
+            !offline
+            && readyForCachedOpen
+            && typeof API !== 'undefined'
+            && typeof API.getCachedReportUrl === 'function'
+        ) {
+            const cachedUrl = await API.getCachedReportUrl(rid, resolvedSourceHint);
+            if (cachedUrl) {
+                window.open(cachedUrl, '_blank');
+                this.notify(`Opening cached report ${rid}`, 'info');
+                if (typeof this.prefetchReport === 'function') {
+                    this.prefetchReport(rid, resolvedSourceHint).catch(() => {});
+                }
+                return;
+            }
         }
 
         try {

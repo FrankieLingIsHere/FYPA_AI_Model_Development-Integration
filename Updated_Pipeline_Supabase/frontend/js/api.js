@@ -267,6 +267,19 @@ const API = {
         );
     },
 
+    hasCloudReportArtifactEvidence(record = {}) {
+        return !!(
+            record
+            && (
+                record.has_cloud_report_artifact
+                || record.has_cloud_report
+                || record.report_html_key
+                || record.report_pdf_key
+                || record.cloud_report_url
+            )
+        );
+    },
+
     hasLocalOriginMarkers(record = {}) {
         if (!record || typeof record !== 'object') return false;
         if (this.hasLocalReportIdPrefix(record.report_id || record.id)) return true;
@@ -326,14 +339,16 @@ const API = {
             || deviceId === 'local_cache_sync'
             || deviceId === 'sync_local_cache'
         );
-        if (syncMarker) return true;
+        if (syncMarker) {
+            return this.hasCloudReportArtifactEvidence(record);
+        }
 
         const strictLocalOrigin = this.hasStrictLocalArtifactOrigin(record);
         if (hasMarker('local_synced')) {
-            return strictLocalOrigin && this.hasCloudReportArtifacts(record);
+            return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
         if (hasMarker('browser_local_draft_handoff')) {
-            return strictLocalOrigin && this.hasCloudReportArtifacts(record);
+            return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
 
         const syncStateConfirmed = (
@@ -343,7 +358,7 @@ const API = {
             || syncState.startsWith('cloud_sync_')
             || syncState.startsWith('sync_')
         );
-        if (syncStateConfirmed && strictLocalOrigin && this.hasCloudReportArtifacts(record)) {
+        if (syncStateConfirmed && strictLocalOrigin && this.hasCloudReportArtifactEvidence(record)) {
             return true;
         }
 
@@ -379,7 +394,8 @@ const API = {
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
         ) {
-            return 'synced_local';
+            if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
         }
         if (sourceMarker === 'local_synced') {
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
@@ -399,7 +415,10 @@ const API = {
         if (label.includes('local')) return 'local';
 
         const deviceId = this.getReportDeviceKey(record);
-        if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') return 'synced_local';
+        if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') {
+            if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
+            return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
+        }
         if (this.hasLocalOriginMarkers(record)) return 'local';
         return '';
     },
@@ -436,6 +455,26 @@ const API = {
         const localDevice = this.hasLocalArtifactOriginDevice(deviceId);
 
         return scope === 'synced_local' && (localSyncMarker || localDevice);
+    },
+
+    hasConcreteLocalReportArtifacts(sourceHint = null) {
+        const record = sourceHint && typeof sourceHint === 'object' ? sourceHint : {};
+        const truthyLocalFlag = [
+            record.has_local_report,
+            record.has_local_artifacts,
+            record.local_report_available,
+            record.local_cache_available
+        ].some((value) => value === true || value === 1 || String(value || '').toLowerCase() === 'true');
+
+        return !!(
+            truthyLocalFlag
+            || record.local_image_url
+            || record.local_report_url
+            || record.original_blob
+            || record.annotated_blob
+            || record.report_html_blob
+            || record.cached_report_html
+        );
     },
 
     hasLocalReportIdPrefix(reportId) {
@@ -580,7 +619,15 @@ const API = {
             scope === 'synced_local'
             && typeof navigator !== 'undefined'
             && navigator.onLine === false
-            && this.hasLocalReportArtifacts(sourceHint)
+            && this.hasConcreteLocalReportArtifacts(sourceHint)
+        ) {
+            return localBase || currentBase;
+        }
+
+        if (
+            scope === 'synced_local'
+            && this.isPageServedFromLocalHost()
+            && this.hasConcreteLocalReportArtifacts(sourceHint)
         ) {
             return localBase || currentBase;
         }
@@ -624,7 +671,7 @@ const API = {
     isCloudReportUnavailableOffline(sourceHint = null) {
         if (typeof navigator === 'undefined' || navigator.onLine !== false) return false;
         const scope = this.inferReportSourceScope(sourceHint);
-        if (scope === 'synced_local' && this.hasLocalReportArtifacts(sourceHint)) return false;
+        if (scope === 'synced_local' && this.hasConcreteLocalReportArtifacts(sourceHint)) return false;
         return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
     },
 
@@ -998,10 +1045,11 @@ const API = {
         }
     },
 
-    async cacheReportHtml(reportId, sourceHint = null) {
+    async cacheReportHtml(reportId, sourceHint = null, options = {}) {
         const rid = String(reportId || '').trim();
         if (!rid) return false;
         if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+        const inlineImages = !!(options && options.inlineImages === true);
 
         const sourceScope = this.inferReportSourceScope(sourceHint);
         const cloudBase = this.getCloudBackendBaseUrl();
@@ -1031,7 +1079,9 @@ const API = {
                 return false;
             }
             const preparedHtml = this.prepareCachedReportHtml(html, url);
-            const cachedHtml = await this.inlineCachedReportImages(preparedHtml, rid, sourceHint, url);
+            const cachedHtml = inlineImages
+                ? await this.inlineCachedReportImages(preparedHtml, rid, sourceHint, url)
+                : preparedHtml;
 
             await this.writeJsonCache(this.reportHtmlCacheScope(rid, sourceHint), {
                 report_id: rid,
@@ -1169,7 +1219,7 @@ const API = {
         return null;
     },
 
-    async getOfflineCachedReportUrl(reportId, sourceHint = null) {
+    async getCachedReportUrl(reportId, sourceHint = null) {
         const cached = await this.getCachedReportHtml(reportId, sourceHint);
         if (!cached || !cached.html) return null;
 
@@ -1184,6 +1234,10 @@ const API = {
         const objectUrl = URL.createObjectURL(blob);
         this.reportHtmlObjectUrls.set(rid, objectUrl);
         return objectUrl;
+    },
+
+    async getOfflineCachedReportUrl(reportId, sourceHint = null) {
+        return this.getCachedReportUrl(reportId, sourceHint);
     },
 
     prefetchReportHtmlFromList(list = [], options = {}) {
@@ -1543,6 +1597,29 @@ const API = {
         };
     },
 
+    isCompletedLocalReportDraftForCloudSync(draft = {}) {
+        if (!draft || typeof draft !== 'object') return false;
+        const status = String(draft.status || '').trim().toLowerCase();
+        const syncState = String(draft.sync_state || '').trim().toLowerCase();
+        const completed = (
+            status === 'completed'
+            || status === 'ready'
+            || syncState === 'completed'
+            || syncState === 'ready_for_sync'
+            || syncState === 'local_report_ready'
+        );
+        const hasReportArtifact = !!(
+            draft.has_report === true
+            || draft.has_local_report === true
+            || draft.local_report_url
+            || draft.report_html_key
+            || draft.report_html
+            || draft.report_html_blob
+            || draft.report_blob
+        );
+        return completed && hasReportArtifact;
+    },
+
     async upsertLocalReportDraft(draft) {
         const normalized = this.normalizeLocalReportDraft(draft);
         if (!normalized) return null;
@@ -1627,9 +1704,16 @@ const API = {
             const sourceScope = String((current && current.source_scope) || '').trim().toLowerCase();
             const syncSource = String((current && (current.sync_source || current.source)) || '').trim().toLowerCase();
             const status = String((current && current.status) || '').trim().toLowerCase();
-            const synced = sourceScope === 'synced_local'
-                || syncSource === 'sync_local_cache'
-                || (current && current.has_report && status === 'completed' && sourceScope !== 'local');
+            const synced = (
+                this.hasConfirmedSyncedLocalReport(current || {})
+                || (current && current.has_report && status === 'completed' && sourceScope !== 'local')
+                || (
+                    syncSource === 'sync_local_cache'
+                    && current
+                    && current.has_report
+                    && this.hasCloudReportArtifactEvidence(current)
+                )
+            );
             if (synced) {
                 this.revokeLocalDraftObjectUrl(draft.report_id);
                 continue;
@@ -1797,10 +1881,15 @@ const API = {
         const incomingScope = this.inferReportSourceScope(incoming);
         const existingLabel = String(existing.source_label || '').trim().toLowerCase();
         const incomingLabel = String(incoming.source_label || '').trim().toLowerCase();
-        const syncedLocal = existingScope === 'synced_local'
+        const syncedLocal = (
+            existingScope === 'synced_local'
             || incomingScope === 'synced_local'
             || existingLabel.includes('local synced')
-            || incomingLabel.includes('local synced');
+            || incomingLabel.includes('local synced')
+        ) && (
+            this.hasConfirmedSyncedLocalReport(existing)
+            || this.hasConfirmedSyncedLocalReport(incoming)
+        );
 
         if (syncedLocal) {
             const existingStrictLocal = this.isStrictLocalOriginReport(existing);
@@ -2160,7 +2249,15 @@ const API = {
             return `${localBase || currentBase || ''}${path}`;
         }
 
-        if (scope === 'synced_local' && offline && this.hasLocalReportArtifacts(sourceHint)) {
+        if (scope === 'synced_local' && offline && this.hasConcreteLocalReportArtifacts(sourceHint)) {
+            return `${localBase || currentBase || ''}${path}`;
+        }
+
+        if (
+            scope === 'synced_local'
+            && this.isPageServedFromLocalHost()
+            && this.hasConcreteLocalReportArtifacts(sourceHint)
+        ) {
             return `${localBase || currentBase || ''}${path}`;
         }
 
@@ -2830,8 +2927,8 @@ const API = {
                 };
             }
             const reportIds = [
-                ...(Array.isArray(data.queued_report_ids) ? data.queued_report_ids : []),
-                ...(Array.isArray(data.synced_report_ids) ? data.synced_report_ids : [])
+                ...(Array.isArray(data.synced_report_ids) ? data.synced_report_ids : []),
+                ...(Array.isArray(data.completed_report_ids) ? data.completed_report_ids : [])
             ];
             const strictReportIds = await this.filterStrictLocalSyncReportIds(reportIds);
             if (strictReportIds.length) {
@@ -2875,8 +2972,13 @@ const API = {
                 continue;
             }
 
+            if (!this.isCompletedLocalReportDraftForCloudSync(draft)) {
+                skipped += 1;
+                continue;
+            }
+
             const syncState = String(draft.sync_state || '').toLowerCase();
-            if (['synced', 'completed', 'cloud_completed'].includes(syncState)) {
+            if (['synced', 'cloud_completed'].includes(syncState)) {
                 skipped += 1;
                 continue;
             }
@@ -2934,9 +3036,9 @@ const API = {
                 }
                 await this.upsertLocalReportDraft({
                     ...draft,
-                    source_scope: data.source_scope || 'synced_local',
-                    source_label: 'Local Synced',
-                    origin: 'local_synced',
+                    source_scope: data.source_scope || 'cloud',
+                    source_label: data.source_label || (data.source_scope === 'synced_local' ? 'Local Synced' : 'Cloud'),
+                    origin: data.source_scope === 'synced_local' ? 'local_synced' : (draft.origin || ''),
                     sync_source: data.sync_source || 'browser_local_draft_handoff',
                     sync_state: data.queued ? 'cloud_generation_queued' : 'cloud_handoff_uploaded',
                     cloud_handoff_at: new Date().toISOString(),
@@ -2960,9 +3062,8 @@ const API = {
             }
         }
 
-        const reportIds = [...queuedReportIds, ...completedReportIds];
-        if (reportIds.length) {
-            await this.markReportsAsLocalSynced(reportIds, {
+        if (completedReportIds.length) {
+            await this.markReportsAsLocalSynced(completedReportIds, {
                 origin: 'local_synced',
                 source_scope: 'synced_local',
                 source_label: 'Local Synced',

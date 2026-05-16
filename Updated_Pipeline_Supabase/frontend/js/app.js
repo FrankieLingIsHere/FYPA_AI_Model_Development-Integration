@@ -107,6 +107,7 @@ const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
 // reload race without risking long-lived stale state.
 const LOCAL_MODE_PROVISIONING_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 let localModePolicyState = {
+    setupCheckCompleted: false,
     checkupCompleted: false,
     autoSetupAllowed: false
 };
@@ -160,6 +161,7 @@ function loadPersistedLocalModePolicy() {
         if (!parsed || typeof parsed !== 'object') return null;
 
         return {
+            setupCheckCompleted: !!parsed.setupCheckCompleted,
             checkupCompleted: !!parsed.checkupCompleted,
             autoSetupAllowed: !!parsed.autoSetupAllowed
         };
@@ -174,6 +176,7 @@ function persistLocalModePolicy(state) {
             LOCAL_MODE_POLICY_STATE_KEY,
             JSON.stringify({
                 checkupCompleted: !!(state && state.checkupCompleted),
+                setupCheckCompleted: !!(state && (state.setupCheckCompleted || state.checkupCompleted)),
                 autoSetupAllowed: !!(state && state.autoSetupAllowed),
                 measuredAt: Date.now()
             })
@@ -245,14 +248,21 @@ function persistProvisioningState(state) {
 
 function getLocalModePolicy() {
     return {
+        setupCheckCompleted: !!(localModePolicyState.setupCheckCompleted || localModePolicyState.checkupCompleted),
         checkupCompleted: !!localModePolicyState.checkupCompleted,
         autoSetupAllowed: !!localModePolicyState.autoSetupAllowed
     };
 }
 
-function setLocalModePolicy({ checkupCompleted, autoSetupAllowed } = {}) {
+function setLocalModePolicy({ setupCheckCompleted, checkupCompleted, autoSetupAllowed } = {}) {
+    if (setupCheckCompleted !== undefined) {
+        localModePolicyState.setupCheckCompleted = !!setupCheckCompleted;
+    }
     if (checkupCompleted !== undefined) {
         localModePolicyState.checkupCompleted = !!checkupCompleted;
+        if (checkupCompleted) {
+            localModePolicyState.setupCheckCompleted = true;
+        }
     }
     if (autoSetupAllowed !== undefined) {
         localModePolicyState.autoSetupAllowed = !!autoSetupAllowed;
@@ -1248,6 +1258,7 @@ function initializeAdaptivePipelineModeManager() {
         localUnavailableNotified: false,
         evaluationTimer: null,
         offlineBootstrapAttempted: false,
+        manualProviderProfile: '',
 
         notify(message, type = 'info', options = {}) {
             if (typeof NotificationManager !== 'undefined') {
@@ -1292,6 +1303,16 @@ function initializeAdaptivePipelineModeManager() {
 
         async handoffBrowserLocalDrafts(reason, options = {}) {
             const force = !!options.force;
+            const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+                return {
+                    success: true,
+                    skipped_local_profile: true,
+                    queued: 0,
+                    attempted: 0,
+                    reason: reason || 'local_profile_hold'
+                };
+            }
             if (navigator.onLine === false) {
                 return null;
             }
@@ -1337,6 +1358,15 @@ function initializeAdaptivePipelineModeManager() {
         async directReconnectSync(reason, options = {}) {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
+            const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+                return {
+                    success: true,
+                    skipped_local_profile: true,
+                    reconcile_reason: reason || 'reconnect_auto',
+                    enqueued: 0
+                };
+            }
             if (navigator.onLine === false) {
                 return null;
             }
@@ -1381,6 +1411,15 @@ function initializeAdaptivePipelineModeManager() {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             const deferIfInFlight = options.deferIfInFlight !== false;
+            const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+                return {
+                    success: true,
+                    skipped_local_profile: true,
+                    reconcile_reason: reason || 'reconnect_auto',
+                    enqueued: 0
+                };
+            }
             if (navigator.onLine === false) {
                 return null;
             }
@@ -1461,6 +1500,11 @@ function initializeAdaptivePipelineModeManager() {
 
         async evaluate(networkState, options = {}) {
             const force = !!options.force;
+            const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            if (manualProfile === 'local' && options.overrideManualProfile !== true && options.allowWhileLocal !== true) {
+                this.currentMode = 'local';
+                return;
+            }
             const weakSignalOnline = (networkState === 'network-weak' || networkState === 'network-fair') && navigator.onLine !== false;
 
             const shouldPreferCloudNow = !this.shouldUseLocal(networkState) && navigator.onLine !== false;
@@ -1607,6 +1651,14 @@ function initializeAdaptivePipelineModeManager() {
         },
 
         async switchToCloudAndSync(reason, options = {}) {
+            const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            if (manualProfile === 'local' && !(options && options.overrideManualProfile)) {
+                return {
+                    success: true,
+                    skipped_manual_local_profile: true,
+                    reason
+                };
+            }
             this.switchInFlight = true;
             this.lastSwitchAttemptAt = Date.now();
             const skipBacklogSync = !!(options && options.skipBacklogSync);
@@ -1660,6 +1712,46 @@ function initializeAdaptivePipelineModeManager() {
                 const state = !navigator.onLine ? 'network-offline' : 'network-good';
                 this.evaluate(state, { force: false });
             }, 12000);
+        },
+
+        async hydrateStartupProviderProfile(reason = 'startup') {
+            if (typeof API === 'undefined') {
+                return '';
+            }
+
+            try {
+                let settings = null;
+                if (typeof API.getProviderRuntimeStatus === 'function') {
+                    const runtime = await API.getProviderRuntimeStatus();
+                    settings = runtime && runtime.settings ? runtime.settings : null;
+                }
+                if (!settings && typeof API.getProviderRoutingSettings === 'function') {
+                    settings = await API.getProviderRoutingSettings();
+                }
+
+                const profile = String((settings && settings.routing_profile) || '').trim().toLowerCase();
+                if (profile === 'local') {
+                    this.currentMode = 'local';
+                    this.manualProviderProfile = 'local';
+                    this.localUnavailableNotified = false;
+                    this.lastEvaluatedNetworkState = null;
+                    this.notify('Local mode ready. Reports will stay local until you switch provider mode.', 'success', {
+                        dedupeKey: `adaptive-startup-local-ready-${reason}`,
+                        dedupeTtlMs: 30000
+                    });
+                    return 'local';
+                }
+
+                if (profile === 'cloud') {
+                    this.currentMode = 'cloud';
+                    this.manualProviderProfile = '';
+                    return 'cloud';
+                }
+            } catch (error) {
+                console.warn('Adaptive startup provider profile hydration failed:', error);
+            }
+
+            return '';
         }
     };
 
@@ -1717,8 +1809,11 @@ function initializeAdaptivePipelineModeManager() {
     });
 
     const bootState = !navigator.onLine ? 'network-offline' : 'network-good';
-    manager.startPeriodicEvaluation();
-    manager.evaluate(bootState, { force: true });
+    (async () => {
+        await manager.hydrateStartupProviderProfile('initial-boot');
+        manager.startPeriodicEvaluation();
+        await manager.evaluate(bootState, { force: true });
+    })();
 }
 
 function bindTimezoneSelectorVisibilityGuard() {

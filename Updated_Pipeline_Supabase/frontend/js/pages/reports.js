@@ -132,11 +132,11 @@ const ReportsPage = {
         this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
         this.syncFallbackPolling();
 
-        this.realtimeHandler = () => {
+        this.realtimeHandler = (event) => {
             if (this.realtimeRefreshTimer) return;
             this.realtimeRefreshTimer = setTimeout(async () => {
                 this.realtimeRefreshTimer = null;
-                await this.loadReports({ noCache: true });
+                this.applyRealtimePayload((event && event.detail) || {});
             }, 700);
         };
         window.addEventListener('ppe-realtime:update', this.realtimeHandler);
@@ -232,9 +232,6 @@ const ReportsPage = {
                 if (!monitorWatchingInFlight && (this.autoRefreshTick % 2) === 0) {
                     await this.pollInFlightReportStatuses();
                 }
-                if (!realtimeConnected) {
-                    await this.loadReports({ noCache: true });
-                }
             } else if (periodicReconcile) {
                 await this.loadReports({ noCache: false });
             }
@@ -265,6 +262,32 @@ const ReportsPage = {
         this.renderReports();
         this.scheduleReportPrefetch({ reason: noCache ? 'fresh-load' : 'cached-load' });
         this.applyPendingFocusRequest();
+    },
+
+    applyRealtimePayload(payload = {}) {
+        const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        if (reports.length) {
+            this.applyReportQueueUpdate({ reports, realtime: true });
+        }
+
+        const progress = payload && typeof payload === 'object' ? (payload.progress || {}) : {};
+        const reportId = String((progress && progress.current) || '').trim();
+        const progressStatus = this.normalizeStatusValue(progress && progress.status, false);
+        if (!reportId || !progressStatus || progressStatus === 'idle' || progressStatus === 'unknown') {
+            return;
+        }
+
+        const hasReport = progressStatus === 'completed';
+        this.applyReportStatusUpdate({
+            report_id: reportId,
+            status: progressStatus,
+            has_report: hasReport,
+            active_step: progress.current_step || '',
+            active_status: progress.status || '',
+            updated_at: progress.updated_at || new Date().toISOString(),
+            source_scope: 'cloud',
+            source_label: 'Cloud',
+        });
     },
 
     async pollInFlightReportStatuses() {
@@ -368,10 +391,8 @@ const ReportsPage = {
             }, row);
         });
 
-        if (seen.size) {
-            setTimeout(() => this.loadReports({ noCache: true }), 1200);
-        } else if (detail && detail.success) {
-            setTimeout(() => this.loadReports({ noCache: true }), 700);
+        if (!seen.size && detail && detail.success) {
+            setTimeout(() => this.loadReports({ noCache: false }), 700);
         }
     },
 
@@ -384,7 +405,7 @@ const ReportsPage = {
 
         if (!reportIds.length) {
             if (detail && detail.success) {
-                setTimeout(() => this.loadReports({ noCache: true }), 1200);
+                setTimeout(() => this.loadReports({ noCache: false }), 1200);
             }
             return;
         }
@@ -441,7 +462,7 @@ const ReportsPage = {
             setTimeout(() => warmCache(1), 1000 + (index * 600));
         });
 
-        setTimeout(() => this.loadReports({ noCache: true }), 1800);
+        setTimeout(() => this.loadReports({ noCache: false }), 1800);
     },
 
     hasReportInList(reportId) {

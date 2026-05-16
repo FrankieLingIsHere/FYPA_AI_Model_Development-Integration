@@ -5423,6 +5423,50 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     generation_timings_seconds: Dict[str, float] = {}
     should_update_cloud_status = bool(db_manager and not force_local_artifact_pipeline)
 
+    def _push_processing_status(status: str, error_message: str = None, has_report: bool = False) -> None:
+        try:
+            formatted_types = [format_violation_type(vt) for vt in violation_types] if isinstance(violation_types, list) else []
+            missing_ppe = data.get('missing_ppe') if isinstance(data.get('missing_ppe'), list) else []
+            if not missing_ppe:
+                missing_ppe = [
+                    str(label or '').replace('Missing ', '').replace('NO-', '').replace('No-', '').strip()
+                    for label in formatted_types
+                    if str(label or '').strip()
+                ]
+            ppe_tags = data.get('ppe_tags') if isinstance(data.get('ppe_tags'), list) else []
+            if not ppe_tags:
+                ppe_tags = [str(label or '').replace(' ', '-').upper() for label in missing_ppe if str(label or '').strip()]
+            source_scope = queued_source_scope or ('local' if force_local_artifact_pipeline else 'cloud')
+            _push_realtime_report_event({
+                'report_id': report_id,
+                'status': str(status or '').strip().lower() or 'generating',
+                'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'has_original': original_path.exists(),
+                'has_annotated': annotated_path.exists(),
+                'has_report': bool(has_report),
+                'violation_count': queued_violation_count or len(formatted_types) or len(missing_ppe) or 1,
+                'person_count': data.get('person_count'),
+                'missing_ppe': missing_ppe,
+                'ppe_tags': ppe_tags,
+                'violation_summary': data.get('violation_summary') or (
+                    f"PPE Violation Detected: {', '.join(formatted_types)}"
+                    if formatted_types else 'PPE Violation Detected'
+                ),
+                'violation_type': formatted_types[0] if formatted_types else data.get('violation_type') or 'PPE Violation',
+                'device_id': queue_device_id,
+                'severity': resolved_report_severity,
+                'source_scope': source_scope,
+                'source_label': 'Local' if source_scope == 'local' else (
+                    'Local Synced' if source_scope == 'synced_local' else 'Cloud'
+                ),
+                'origin': data.get('origin'),
+                'sync_source': queued_sync_source,
+                'error_message': error_message,
+            }, event_type='report_status')
+        except Exception as realtime_err:
+            logger.debug(f"Could not push processing realtime status for {report_id}: {realtime_err}")
+
     def _record_generation_timing(stage_name: str, started_at: float) -> None:
         try:
             elapsed = round(max(0.0, time.perf_counter() - float(started_at)), 2)
@@ -5432,6 +5476,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             pass
 
     logger.info(f" Processing queued violation: {report_id}")
+    _push_processing_status('generating')
 
     if is_local_cache_sync_job:
         handled_sync_job = _handle_local_cache_sync_job(
@@ -5521,6 +5566,10 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     f.write(f"This does not appear to be a construction/industrial environment.\n")
                     f.write(f"Raw result: {env_result['reason']}\n")
 
+                _push_processing_status(
+                    'skipped',
+                    f"Not a work environment: {env_result['environment_type']}"
+                )
                 return  # Skip processing this violation
 
         except ImportError:
@@ -5542,7 +5591,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     # Update progress
     update_report_progress(
         current=report_id,
-        current_step='Generating image caption'
+        current_step='Generating image caption',
+        status='generating'
     )
 
     # Generate caption (with semaphore to prevent concurrent Ollama calls)
@@ -5665,7 +5715,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             # Update progress
             update_report_progress(
                 current=report_id,
-                current_step='Generating analysis report'
+                current_step='Generating analysis report',
+                status='generating'
             )
 
             logger.info(f" Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")

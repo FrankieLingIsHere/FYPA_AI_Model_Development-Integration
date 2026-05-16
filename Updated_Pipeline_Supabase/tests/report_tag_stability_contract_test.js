@@ -395,12 +395,43 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   assertEqual(prefetchCalls, 1, 'status probe warms only the completed report');
 }
 
+function testRealtimePayloadDoesNotForceFullListRefresh() {
+  const ReportsPage = loadReportsPage();
+  let loadCalls = 0;
+  let prefetchCalls = 0;
+
+  ReportsPage.violations = [];
+  ReportsPage.loadReports = async () => { loadCalls += 1; };
+  ReportsPage.prefetchReport = async () => { prefetchCalls += 1; };
+  ReportsPage.renderReports = () => {};
+
+  ReportsPage.applyRealtimePayload({
+    reports: [{
+      report_id: 'tag-realtime-status-001',
+      timestamp: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      event_type: 'report_status',
+      status: 'generating',
+      has_report: false,
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    }]
+  });
+
+  const record = ReportsPage.violations.find((item) => item.report_id === 'tag-realtime-status-001');
+  assertEqual(record.status, 'generating', 'realtime payload updates processing status');
+  assertTag(record, 'cloud', 'Cloud', 'realtime payload preserves cloud tag');
+  assertEqual(loadCalls, 0, 'realtime payload must not force full list refresh');
+  assertEqual(prefetchCalls, 0, 'generating realtime payload must not warm report HTML');
+}
+
 function main() {
   const tests = [
     testMergeMatrix,
     testRuntimePatchMatrix,
     testLocalSyncEventMatrix,
     testReportStatusProbeDoesNotForceFullListRefresh,
+    testRealtimePayloadDoesNotForceFullListRefresh,
   ];
   const failures = [];
   tests.forEach((testFn) => {

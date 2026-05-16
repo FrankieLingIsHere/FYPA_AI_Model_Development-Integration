@@ -69,7 +69,7 @@ const ViolationMonitor = {
         this._pollAdjustHandler = () => {
             armPolling();
             if (typeof document === 'undefined' || !document.hidden) {
-                this.checkForNewViolations({ noCache: true, reason: 'visibility-or-realtime-connection' });
+                this.checkForNewViolations({ reason: 'visibility-or-realtime-connection' });
             }
         };
         window.addEventListener('ppe-realtime:connection', this._pollAdjustHandler);
@@ -254,6 +254,84 @@ const ViolationMonitor = {
         }
     },
 
+    applyRealtimePayload(payload = {}) {
+        const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        if (!reports.length) return;
+        this.processViolationRows(reports, { reason: 'realtime-payload' });
+    },
+
+    processViolationRows(violations = [], options = {}) {
+        const reason = String((options && options.reason) || '').trim();
+
+        for (const violation of violations) {
+            const reportId = violation && violation.report_id;
+            if (!reportId) continue;
+
+            const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
+            const violationTime = this.parseEventDate(violation.updated_at)
+                || this.parseEventDate(violation.timestamp)
+                || this.getLifecycleEventDate(violation)
+                || new Date(0);
+            const eventType = String((violation && violation.event_type) || '').trim().toLowerCase();
+            const previousData = this.knownViolations.get(reportId);
+            const happenedDuringSession = violationTime >= this.sessionStartTime;
+            const watchStatus = (status === 'pending' || status === 'generating')
+                && (happenedDuringSession || eventType === 'violation_detected' || (previousData && previousData.watchStatus === true));
+
+            if (!previousData) {
+                if (happenedDuringSession) {
+                    console.log(`[ViolationMonitor] realtime/poll row: ${reportId} ${status} (${reason || 'unknown'})`);
+                    if (eventType === 'violation_detected') {
+                        this._notifyViolationDetected(violation);
+                    }
+                    if (status === 'generating') {
+                        this._notifyReportGenerating(violation);
+                    } else if (status === 'completed') {
+                        this._notifyReportReady(violation);
+                    } else if (status === 'failed' || status === 'partial' || status === 'skipped') {
+                        this._notifyReportFailed(violation);
+                    }
+                }
+
+                this.knownViolations.set(reportId, {
+                    status,
+                    timestamp: violationTime,
+                    watchStatus
+                });
+                continue;
+            }
+
+            if (previousData.status !== status) {
+                console.log(`[ViolationMonitor] Status change: ${reportId} ${previousData.status} -> ${status}`);
+                const shouldNotify = previousData.watchStatus === true || happenedDuringSession;
+                if (shouldNotify) {
+                    if (status === 'generating' && previousData.status === 'pending') {
+                        this._notifyReportGenerating(violation);
+                    } else if (status === 'completed') {
+                        this._notifyReportReady(violation);
+                    } else if (status === 'failed' || status === 'partial' || status === 'skipped') {
+                        this._notifyReportFailed(violation);
+                    }
+                } else {
+                    console.log(`[ViolationMonitor] Historical status change hydrated without toast: ${reportId}`);
+                }
+
+                this.knownViolations.set(reportId, {
+                    status,
+                    timestamp: previousData.timestamp,
+                    watchStatus: previousData.watchStatus === true && (status === 'pending' || status === 'generating')
+                });
+            }
+
+            const isRealtime = this.knownViolations.get(reportId)?.timestamp > this.sessionStartTime;
+            if (isRealtime) {
+                this._checkValidationWarnings(violation);
+            }
+        }
+
+        this.syncInFlightStatusFallback();
+    },
+
     async _runViolationCheck(options = {}) {
         try {
             const violations = await this.fetchMonitorViolations(options);
@@ -265,6 +343,9 @@ const ViolationMonitor = {
                 this.syncInFlightStatusFallback();
                 return;
             }
+
+            this.processViolationRows(violations, { reason: options && options.reason });
+            return;
 
             // REAL-TIME MODE: Only notify for violations detected AFTER session started
             for (const violation of violations) {

@@ -44,6 +44,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('return false;', realtime_js)
         self.assertIn('_push_realtime_report_event(preliminary_metadata', casm_app)
         self.assertIn("_push_realtime_report_event(realtime_metadata, event_type='report_status')", casm_app)
+        self.assertIn("_push_processing_status('generating')", casm_app)
         self.assertIn("existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))", casm_app)
         self.assertIn('realtime_report_events = deque', casm_app)
 
@@ -62,6 +63,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('statusNotificationsHydrated', realtime_js)
         self.assertNotIn('isFreshLocalLifecycleRow', realtime_js)
         self.assertIn('ViolationMonitor._notifyViolationDetected(violation)', realtime_js)
+        self.assertIn('ViolationMonitor.applyRealtimePayload(payload)', realtime_js)
+        self.assertNotIn("ViolationMonitor.checkForNewViolations({ noCache: true, reason: 'realtime-update' })", realtime_js)
         self.assertIn('rowNeedsLifecycleFallback', realtime_js)
         self.assertIn("progressStatus === 'generating'", realtime_js)
         self.assertIn('!progressRowHasReport', realtime_js)
@@ -70,7 +73,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
 
-        self.assertIn('is_local_sync_marker_for_repair', casm_app)
+        self.assertIn('confirmed_synced_local = _has_confirmed_synced_local_evidence', casm_app)
         self.assertIn("source_scope_marker = 'synced_local'", casm_app)
         self.assertIn("'browser_local_draft_handoff'", casm_app)
         self.assertIn('resolveStableRuntimeSourceScope', reports_js)
@@ -81,8 +84,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         caption_image = (ROOT / 'caption_image.py').read_text(encoding='utf-8')
 
-        self.assertIn("OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 360)", caption_image)
-        self.assertIn('max_tokens=650', caption_image)
+        self.assertIn("OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 60)", caption_image)
+        self.assertIn('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS = max(', caption_image)
+        self.assertIn("_safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 12)", caption_image)
+        self.assertIn('max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS if strict_local_profile else 650', caption_image)
         self.assertIn('max_tokens=750', caption_image)
         self.assertIn('Do not answer with only one sentence.', caption_image)
         self.assertIn('no "Here is a description" preamble', caption_image)

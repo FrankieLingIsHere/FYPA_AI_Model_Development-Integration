@@ -15,6 +15,9 @@ const ViolationMonitor = {
     lastVisitTime: null,              // From localStorage
     isChecking: false,
     pendingCheckOptions: null,
+    inFlightStatusTimer: null,
+    inFlightStatusInProgress: false,
+    inFlightStatusIntervalMs: 15000,
 
     // LocalStorage key for tracking last visit
     STORAGE_KEY: 'casm_last_visit_time',
@@ -58,7 +61,7 @@ const ViolationMonitor = {
             const intervalMs = computePollInterval();
             if (!intervalMs) return;
             this.checkInterval = setInterval(() => {
-                this.checkForNewViolations();
+                this.checkForNewViolations({ reason: 'poll' });
             }, intervalMs);
         };
         armPolling();
@@ -100,8 +103,110 @@ const ViolationMonitor = {
             }
             this._pollAdjustHandler = null;
         }
+        if (this.inFlightStatusTimer) {
+            clearInterval(this.inFlightStatusTimer);
+            this.inFlightStatusTimer = null;
+        }
 
         console.log('[ViolationMonitor] Stopped monitoring');
+    },
+
+    hasTrackedInFlightReports() {
+        for (const item of this.knownViolations.values()) {
+            if (!item || item.watchStatus !== true) continue;
+            const status = this.normalizeStatusValue(item && item.status);
+            if (status === 'pending' || status === 'generating') {
+                return true;
+            }
+        }
+        return false;
+    },
+
+    syncInFlightStatusFallback() {
+        if (!this.isMonitoring) return;
+        if (!this.hasTrackedInFlightReports()) {
+            if (this.inFlightStatusTimer) {
+                clearInterval(this.inFlightStatusTimer);
+                this.inFlightStatusTimer = null;
+            }
+            return;
+        }
+
+        if (this.inFlightStatusTimer) return;
+        this.inFlightStatusTimer = setInterval(() => {
+            this.pollInFlightReportStatuses();
+        }, this.inFlightStatusIntervalMs);
+    },
+
+    async pollInFlightReportStatuses() {
+        if (this.inFlightStatusInProgress) return;
+        if (typeof API === 'undefined' || typeof API.getReportStatus !== 'function') return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+
+        const candidates = Array.from(this.knownViolations.entries())
+            .filter(([, item]) => {
+                if (!item || item.watchStatus !== true) return false;
+                const status = this.normalizeStatusValue(item && item.status);
+                return status === 'pending' || status === 'generating';
+            })
+            .slice(0, 3);
+        if (!candidates.length) {
+            this.syncInFlightStatusFallback();
+            return;
+        }
+
+        this.inFlightStatusInProgress = true;
+        try {
+            await Promise.allSettled(candidates.map(async ([reportId, tracked]) => {
+                const data = await API.getReportStatus(reportId, {
+                    source: { report_id: reportId, source_scope: 'cloud' },
+                    noCache: true,
+                    timeoutMs: 6000
+                });
+                if (!data || typeof data !== 'object') return;
+
+                const previousStatus = this.normalizeStatusValue(tracked && tracked.status);
+                const nextStatus = this.normalizeStatusValue(data.status, !!data.has_report);
+                if (!nextStatus || nextStatus === previousStatus) return;
+
+                const previousTimestamp = tracked && tracked.timestamp instanceof Date
+                    ? tracked.timestamp
+                    : this.parseEventDate(tracked && tracked.timestamp);
+                const violation = {
+                    ...data,
+                    report_id: reportId,
+                    status: nextStatus,
+                    has_report: !!data.has_report,
+                    timestamp: previousTimestamp || new Date()
+                };
+                const shouldNotify = this.isLifecycleEventDuringSession(violation)
+                    || (previousTimestamp && this.sessionStartTime && previousTimestamp >= this.sessionStartTime);
+
+                this.knownViolations.set(reportId, {
+                    status: nextStatus,
+                    timestamp: previousTimestamp || new Date(),
+                    watchStatus: nextStatus === 'pending' || nextStatus === 'generating'
+                });
+
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('ppe-report-status:update', {
+                        detail: violation
+                    }));
+                }
+
+                if (!shouldNotify) return;
+                if (nextStatus === 'generating' && previousStatus === 'pending') {
+                    this._notifyReportGenerating(violation);
+                } else if (nextStatus === 'completed' && data.has_report) {
+                    this._notifyReportReady(violation);
+                } else if (nextStatus === 'failed' || nextStatus === 'partial' || nextStatus === 'skipped') {
+                    this._notifyReportFailed(violation);
+                }
+            }));
+        } finally {
+            this.inFlightStatusInProgress = false;
+            this.syncInFlightStatusFallback();
+        }
     },
 
     _getLastVisitTime() {
@@ -157,6 +262,7 @@ const ViolationMonitor = {
                 // INITIAL LOAD: hydrate baseline state without replaying historical toasts.
                 this._handleInitialLoad(violations);
                 this.isInitialLoad = false;
+                this.syncInFlightStatusFallback();
                 return;
             }
 
@@ -193,7 +299,11 @@ const ViolationMonitor = {
                     }
 
                     // Track this violation
-                    this.knownViolations.set(reportId, { status, timestamp: violationTime });
+                    this.knownViolations.set(reportId, {
+                        status,
+                        timestamp: violationTime,
+                        watchStatus: isNewDuringSession && (status === 'pending' || status === 'generating')
+                    });
                 }
                 // Check for STATUS CHANGES on violations we're tracking
                 else if (previousData.status !== status) {
@@ -216,7 +326,11 @@ const ViolationMonitor = {
                     }
 
                     // Update tracked status
-                    this.knownViolations.set(reportId, { status, timestamp: previousData.timestamp });
+                    this.knownViolations.set(reportId, {
+                        status,
+                        timestamp: previousData.timestamp,
+                        watchStatus: previousData.watchStatus === true && (status === 'pending' || status === 'generating')
+                    });
                 }
 
                 // Check for validation warnings (only for real-time violations)
@@ -225,6 +339,8 @@ const ViolationMonitor = {
                     this._checkValidationWarnings(violation);
                 }
             }
+
+            this.syncInFlightStatusFallback();
         } catch (error) {
             console.error('[ViolationMonitor] Error checking violations:', error);
         }
@@ -434,7 +550,7 @@ const ViolationMonitor = {
             const violationTime = this.parseEventDate(v.timestamp) || this.getLifecycleEventDate(v) || new Date(0);
             const status = this.normalizeStatusValue(v.status, !!v.has_report);
 
-            this.knownViolations.set(reportId, { status, timestamp: violationTime });
+            this.knownViolations.set(reportId, { status, timestamp: violationTime, watchStatus: false });
         }
 
         console.log(`[ViolationMonitor] Initial load hydrated ${violations.length} violation(s); startup notifications suppressed`);
@@ -486,6 +602,21 @@ const ViolationMonitor = {
         const severity = violation.severity || 'HIGH';
         const timestamp = new Date(violation.timestamp).toLocaleTimeString();
         const reportId = violation.report_id;
+        const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
+        const violationTime = this.parseEventDate(violation.timestamp) || this.getLifecycleEventDate(violation) || new Date();
+        if (reportId) {
+            const previous = this.knownViolations.get(reportId);
+            if (!previous || this.getStatusPriority(status) >= this.getStatusPriority(previous.status)) {
+                this.knownViolations.set(reportId, {
+                    status,
+                    timestamp: violationTime,
+                    watchStatus: status === 'pending' || status === 'generating'
+                });
+                if (status === 'pending' || status === 'generating') {
+                    this.syncInFlightStatusFallback();
+                }
+            }
+        }
 
         // Derive a human-friendly type string: prefer explicit type, else missing PPE, else try parsing summary
         let derivedType = null;

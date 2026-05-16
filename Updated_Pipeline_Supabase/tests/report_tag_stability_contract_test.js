@@ -361,11 +361,46 @@ function testLocalSyncEventMatrix() {
   assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts completed local sync event');
 }
 
+function testReportStatusProbeDoesNotForceFullListRefresh() {
+  const ReportsPage = loadReportsPage();
+  let loadCalls = 0;
+  let prefetchCalls = 0;
+
+  ReportsPage.violations = [{
+    report_id: 'tag-status-probe-001',
+    timestamp: new Date().toISOString(),
+    status: 'pending',
+    has_report: false,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    device_id: 'webcam_0',
+  }];
+  ReportsPage.loadReports = async () => { loadCalls += 1; };
+  ReportsPage.prefetchReport = async () => { prefetchCalls += 1; };
+
+  ReportsPage.applyReportStatusUpdate({
+    report_id: 'tag-status-probe-001',
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  });
+
+  const record = ReportsPage.violations.find((item) => item.report_id === 'tag-status-probe-001');
+  assertEqual(record.status, 'completed', 'status probe marks report completed');
+  assertEqual(record.has_report, true, 'status probe marks report ready');
+  assertTag(record, 'cloud', 'Cloud', 'status probe preserves cloud tag');
+  assertEqual(loadCalls, 0, 'status probe must not force full list refresh');
+  assertEqual(prefetchCalls, 1, 'status probe warms only the completed report');
+}
+
 function main() {
   const tests = [
     testMergeMatrix,
     testRuntimePatchMatrix,
     testLocalSyncEventMatrix,
+    testReportStatusProbeDoesNotForceFullListRefresh,
   ];
   const failures = [];
   tests.forEach((testFn) => {

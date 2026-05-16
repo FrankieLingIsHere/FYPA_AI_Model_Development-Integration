@@ -5,6 +5,7 @@ const ReportsPage = {
     realtimeHandler: null,
     realtimeConnectionHandler: null,
     localSyncHandler: null,
+    reportStatusHandler: null,
     timezoneChangeHandler: null,
     realtimeRefreshTimer: null,
     pendingFocusRequest: null,
@@ -17,6 +18,7 @@ const ReportsPage = {
     },
     refreshInterval: null,
     autoRefreshTick: 0,
+    inFlightStatusPollRunning: false,
     prefetchState: {
         completed: new Set(),
         inFlight: new Set()
@@ -147,6 +149,9 @@ const ReportsPage = {
 
         this.reportQueueHandler = (event) => this.applyReportQueueUpdate((event && event.detail) || {});
         window.addEventListener('ppe-report-queue:update', this.reportQueueHandler);
+
+        this.reportStatusHandler = (event) => this.applyReportStatusUpdate((event && event.detail) || {});
+        window.addEventListener('ppe-report-status:update', this.reportStatusHandler);
     },
 
     unmount() {
@@ -186,6 +191,10 @@ const ReportsPage = {
             window.removeEventListener('ppe-report-queue:update', this.reportQueueHandler);
             this.reportQueueHandler = null;
         }
+        if (this.reportStatusHandler) {
+            window.removeEventListener('ppe-report-status:update', this.reportStatusHandler);
+            this.reportStatusHandler = null;
+        }
         if (this.timezoneChangeHandler) {
             window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
             this.timezoneChangeHandler = null;
@@ -203,11 +212,8 @@ const ReportsPage = {
 
         // Egress guard:
         //  - Reconcile only when there are pending/generating reports (real work).
-        //  - When Realtime is connected, the server already pushes status updates,
-        //    so we drop the blind 60s `periodicReconcile` AND we let the response
-        //    come from cache (noCache:false) instead of forcing a fresh DB query
-        //    every tick. The previous code had this inverted: noCache:true while
-        //    realtime was connected, which actively defeated caching.
+        //  - In-flight reports use tiny per-report status reads so a missed
+        //    realtime push cannot leave the card stuck behind stale list cache.
         //  - Periodic reconcile only runs when Realtime is NOT connected, every
         //    ~120s, to heal rare drift on pure-polling clients.
         this.refreshInterval = setInterval(async () => {
@@ -218,8 +224,19 @@ const ReportsPage = {
             });
             const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
             const periodicReconcile = !realtimeConnected && (this.autoRefreshTick % 12) === 0;
-            if (hasPending || periodicReconcile) {
-                await this.loadReports({ noCache: hasPending && !realtimeConnected });
+            const monitorWatchingInFlight = typeof ViolationMonitor !== 'undefined'
+                && ViolationMonitor.isMonitoring
+                && typeof ViolationMonitor.hasTrackedInFlightReports === 'function'
+                && ViolationMonitor.hasTrackedInFlightReports();
+            if (hasPending) {
+                if (!monitorWatchingInFlight && (this.autoRefreshTick % 2) === 0) {
+                    await this.pollInFlightReportStatuses();
+                }
+                if (!realtimeConnected) {
+                    await this.loadReports({ noCache: true });
+                }
+            } else if (periodicReconcile) {
+                await this.loadReports({ noCache: false });
             }
         }, 10000);
     },
@@ -248,6 +265,78 @@ const ReportsPage = {
         this.renderReports();
         this.scheduleReportPrefetch({ reason: noCache ? 'fresh-load' : 'cached-load' });
         this.applyPendingFocusRequest();
+    },
+
+    async pollInFlightReportStatuses() {
+        if (this.inFlightStatusPollRunning) return false;
+        if (typeof API === 'undefined' || typeof API.getReportStatus !== 'function') return false;
+
+        const candidates = this.violations
+            .filter((violation) => {
+                const status = this.normalizeStatus(violation);
+                return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
+            })
+            .slice(0, 3);
+        if (!candidates.length) return false;
+
+        this.inFlightStatusPollRunning = true;
+        let changed = false;
+        try {
+            await Promise.allSettled(candidates.map(async (violation) => {
+                const reportId = String((violation && violation.report_id) || '').trim();
+                if (!reportId) return;
+
+                const data = await API.getReportStatus(reportId, {
+                    source: violation,
+                    noCache: true,
+                    timeoutMs: 6000
+                });
+                if (!data || typeof data !== 'object') return;
+
+                const currentStatus = this.normalizeStatus(violation);
+                const nextStatus = this.normalizeStatusValue(data.status, !!data.has_report);
+                const nextHasReport = !!data.has_report;
+                const statusChanged = nextStatus && nextStatus !== currentStatus;
+                const reportReadyChanged = nextHasReport !== !!violation.has_report;
+                if (!statusChanged && !reportReadyChanged) return;
+
+                const updated = this.upsertReportRuntimeState(reportId, {
+                    ...data,
+                    status: nextStatus || currentStatus,
+                    has_report: nextHasReport,
+                    source_scope: data.source_scope || violation.source_scope || '',
+                    source_label: data.source_label || violation.source_label || ''
+                }, violation);
+                changed = true;
+
+                if (updated && nextStatus === 'completed' && nextHasReport) {
+                    this.prefetchReport(reportId, updated).catch(() => {});
+                }
+            }));
+        } finally {
+            this.inFlightStatusPollRunning = false;
+        }
+        return changed;
+    },
+
+    applyReportStatusUpdate(detail = {}) {
+        const reportId = String((detail && detail.report_id) || '').trim();
+        if (!reportId) return;
+
+        const existing = this.violations.find((v) => String((v && v.report_id) || '').trim() === reportId) || null;
+        const status = this.normalizeStatusValue(detail.status || (existing && existing.status), !!detail.has_report);
+        const sourceScope = this.inferSourceScope(detail) || (existing && existing.source_scope) || 'cloud';
+        const updated = this.upsertReportRuntimeState(reportId, {
+            ...detail,
+            status,
+            has_report: !!detail.has_report,
+            source_scope: sourceScope,
+            source_label: String(detail.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
+        }, existing || detail);
+
+        if (updated && status === 'completed' && updated.has_report) {
+            this.prefetchReport(reportId, updated).catch(() => {});
+        }
     },
 
     applyReportQueueUpdate(detail = {}) {

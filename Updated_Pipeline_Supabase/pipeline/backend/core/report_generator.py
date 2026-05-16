@@ -3959,6 +3959,90 @@ Required JSON object:
             padding: 0;
         }}
 
+        .summary-card {{
+            border-left: 5px solid #e74c3c;
+            overflow: hidden;
+        }}
+
+        .summary-card-header {{
+            align-items: center;
+            background: #c0392b;
+            color: #ffffff;
+            display: flex;
+            gap: 0.75rem;
+            justify-content: space-between;
+        }}
+
+        .summary-card .card-content {{
+            background: #fff7f7;
+            padding: 0.75rem;
+        }}
+
+        .summary-table {{
+            border-collapse: separate;
+            border-spacing: 0 0.65rem;
+            table-layout: fixed;
+            width: 100%;
+        }}
+
+        .summary-row {{
+            border-bottom: 0;
+        }}
+
+        .summary-label {{
+            background: #fff1f2;
+            border: 1px solid #fecdd3;
+            border-right: 0;
+            border-radius: 10px 0 0 10px;
+            color: #991b1b;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            padding: 1.05rem 1rem;
+            text-transform: uppercase;
+            vertical-align: top;
+            white-space: nowrap;
+            width: 118px;
+        }}
+
+        .summary-value {{
+            background: #ffffff;
+            border: 1px solid #fecdd3;
+            border-left: 0;
+            border-radius: 0 10px 10px 0;
+            color: #1f2937;
+            font-size: 0.95rem;
+            line-height: 1.65;
+            overflow-wrap: anywhere;
+            padding: 1rem 1.15rem 1.1rem;
+            vertical-align: top;
+            word-break: normal;
+        }}
+
+        .summary-value-danger {{
+            color: #b91c1c;
+            font-weight: 600;
+        }}
+
+        .summary-cell-copy {{
+            max-width: 88ch;
+        }}
+
+        .summary-cell-copy br {{
+            content: "";
+            display: block;
+            margin: 0.28rem 0;
+        }}
+
+        .summary-cell-copy ul {{
+            margin: 0;
+            padding-left: 1.1rem;
+        }}
+
+        .summary-cell-copy li {{
+            margin-bottom: 0.45rem;
+        }}
+
 
 
         /* Environment Badge */
@@ -4358,6 +4442,44 @@ Required JSON object:
             .likelihood-badge {{
                 justify-self: start;
                 width: min(100%, 148px);
+            }}
+
+            .summary-card .card-content {{
+                padding: 0.6rem;
+            }}
+
+            .summary-table,
+            .summary-table tbody,
+            .summary-table tr,
+            .summary-table td {{
+                display: block;
+                width: 100%;
+            }}
+
+            .summary-table {{
+                border-spacing: 0;
+            }}
+
+            .summary-row {{
+                background: #ffffff;
+                border: 1px solid #fecdd3;
+                border-radius: 10px;
+                margin-bottom: 0.75rem;
+                overflow: hidden;
+            }}
+
+            .summary-label {{
+                border: 0;
+                border-bottom: 1px solid #fecdd3;
+                border-radius: 0;
+                padding: 0.75rem 0.95rem;
+                width: 100%;
+            }}
+
+            .summary-value {{
+                border: 0;
+                border-radius: 0;
+                padding: 0.9rem 0.95rem 1rem;
             }}
 
             .report-expand-toggle {{
@@ -4883,30 +5005,28 @@ Required JSON object:
 
 
         return f"""
-        <div class="card" style="border-left: 5px solid #e74c3c;">
-            <div class="card-header" style="background: #c0392b; color: white; display: flex; justify-content: space-between;">
+        <div class="card summary-card">
+            <div class="card-header summary-card-header">
                 <strong><i class="fas fa-exclamation-circle"></i> EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</strong>
                 <span class="badge" style="background: white; color: #c0392b;">{env_type}</span>
             </div>
-            <div class="card-content" style="padding: 0;">
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 12px; font-weight: bold; width: 15%; background: #f9f9f9;">WHO</td>
-                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{count_display}</td>
+            <div class="card-content">
+                <table class="summary-table">
+                    <tr class="summary-row">
+                        <td class="summary-label">WHO</td>
+                        <td class="summary-value"><div class="summary-cell-copy">{count_display}</div></td>
                     </tr>
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">WHAT</td>
-                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{self._inject_interactive_tooltips(parsed_summary)}</td>
+                    <tr class="summary-row">
+                        <td class="summary-label">WHAT</td>
+                        <td class="summary-value"><div class="summary-cell-copy">{self._inject_interactive_tooltips(parsed_summary)}</div></td>
                     </tr>
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">DANGER</td>
-                        <td style="padding: 12px; color: #c0392b; font-weight: 500; white-space: normal; word-break: break-word;">
-                            {hazard_text}
-                        </td>
+                    <tr class="summary-row">
+                        <td class="summary-label">DANGER</td>
+                        <td class="summary-value summary-value-danger"><div class="summary-cell-copy">{hazard_text}</div></td>
                     </tr>
-                    <tr>
-                        <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">LAW</td>
-                        <td style="padding: 12px; white-space: normal; word-break: break-word;">{reg_text}</td>
+                    <tr class="summary-row">
+                        <td class="summary-label">LAW</td>
+                        <td class="summary-value"><div class="summary-cell-copy">{reg_text}</div></td>
                     </tr>
                 </table>
             </div>

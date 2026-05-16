@@ -14440,7 +14440,169 @@ class FallbackReportTemplateError(Exception):
     """Raised when a stored report HTML is only the disabled fallback template."""
 
 
+def _inject_report_summary_readability_styles(html_content: str) -> str:
+    """Add breathable summary-table styling to generated and legacy reports."""
+    if not html_content or not isinstance(html_content, str):
+        return html_content
+    if 'id="casm-summary-readability-overrides"' in html_content:
+        return html_content
+    if 'EXECUTIVE SAFETY SUMMARY' not in html_content and 'AT A GLANCE' not in html_content:
+        return html_content
+    if 'class="summary-table"' in html_content and '.summary-table' in html_content:
+        return html_content
+
+    style_block = """
+<style id="casm-summary-readability-overrides">
+    .summary-card,
+    .card[style*="border-left: 5px solid #e74c3c"] {
+        overflow: hidden !important;
+    }
+
+    .summary-card-header,
+    .card[style*="border-left: 5px solid #e74c3c"] > .card-header {
+        align-items: center !important;
+        display: flex !important;
+        gap: 0.75rem !important;
+        justify-content: space-between !important;
+    }
+
+    .summary-card > .card-content,
+    .card[style*="border-left: 5px solid #e74c3c"] > .card-content {
+        background: #fff7f7 !important;
+        padding: 0.75rem !important;
+    }
+
+    .summary-table,
+    .card[style*="border-left: 5px solid #e74c3c"] table {
+        border-collapse: separate !important;
+        border-spacing: 0 0.65rem !important;
+        table-layout: fixed !important;
+        width: 100% !important;
+    }
+
+    .summary-row,
+    .card[style*="border-left: 5px solid #e74c3c"] table tr {
+        border-bottom: 0 !important;
+    }
+
+    .summary-label,
+    .card[style*="border-left: 5px solid #e74c3c"] table td:first-child {
+        background: #fff1f2 !important;
+        border: 1px solid #fecdd3 !important;
+        border-right: 0 !important;
+        border-radius: 10px 0 0 10px !important;
+        color: #991b1b !important;
+        font-size: 0.78rem !important;
+        font-weight: 800 !important;
+        letter-spacing: 0 !important;
+        padding: 1.05rem 1rem !important;
+        text-transform: uppercase !important;
+        vertical-align: top !important;
+        white-space: nowrap !important;
+        width: 118px !important;
+    }
+
+    .summary-value,
+    .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) {
+        background: #ffffff !important;
+        border: 1px solid #fecdd3 !important;
+        border-left: 0 !important;
+        border-radius: 0 10px 10px 0 !important;
+        color: #1f2937 !important;
+        font-size: 0.95rem !important;
+        line-height: 1.65 !important;
+        overflow-wrap: anywhere !important;
+        padding: 1rem 1.15rem 1.1rem !important;
+        vertical-align: top !important;
+        word-break: normal !important;
+    }
+
+    .summary-value-danger,
+    .card[style*="border-left: 5px solid #e74c3c"] table tr:nth-child(3) td:not(:first-child) {
+        color: #b91c1c !important;
+        font-weight: 600 !important;
+    }
+
+    .summary-cell-copy {
+        max-width: 88ch;
+    }
+
+    .summary-cell-copy br,
+    .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) br {
+        content: "" !important;
+        display: block !important;
+        margin: 0.28rem 0 !important;
+    }
+
+    .summary-cell-copy ul,
+    .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) ul {
+        margin: 0 !important;
+        padding-left: 1.1rem !important;
+    }
+
+    .summary-cell-copy li,
+    .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) li {
+        margin-bottom: 0.45rem !important;
+    }
+
+    @media (max-width: 680px) {
+        .summary-card > .card-content,
+        .card[style*="border-left: 5px solid #e74c3c"] > .card-content {
+            padding: 0.6rem !important;
+        }
+
+        .summary-table,
+        .summary-table tbody,
+        .summary-table tr,
+        .summary-table td,
+        .card[style*="border-left: 5px solid #e74c3c"] table,
+        .card[style*="border-left: 5px solid #e74c3c"] table tbody,
+        .card[style*="border-left: 5px solid #e74c3c"] table tr,
+        .card[style*="border-left: 5px solid #e74c3c"] table td {
+            display: block !important;
+            width: 100% !important;
+        }
+
+        .summary-table,
+        .card[style*="border-left: 5px solid #e74c3c"] table {
+            border-spacing: 0 !important;
+        }
+
+        .summary-row,
+        .card[style*="border-left: 5px solid #e74c3c"] table tr {
+            background: #ffffff !important;
+            border: 1px solid #fecdd3 !important;
+            border-radius: 10px !important;
+            margin-bottom: 0.75rem !important;
+            overflow: hidden !important;
+        }
+
+        .summary-label,
+        .card[style*="border-left: 5px solid #e74c3c"] table td:first-child {
+            border: 0 !important;
+            border-bottom: 1px solid #fecdd3 !important;
+            border-radius: 0 !important;
+            padding: 0.75rem 0.95rem !important;
+            width: 100% !important;
+        }
+
+        .summary-value,
+        .card[style*="border-left: 5px solid #e74c3c"] table td:not(:first-child) {
+            border: 0 !important;
+            border-radius: 0 !important;
+            padding: 0.9rem 0.95rem 1rem !important;
+        }
+    }
+</style>
+"""
+
+    if re.search(r'</head\s*>', html_content, flags=re.IGNORECASE):
+        return re.sub(r'</head\s*>', style_block + '\n</head>', html_content, count=1, flags=re.IGNORECASE)
+    return style_block + html_content
+
+
 def _report_html_response(html_content: str):
+    html_content = _inject_report_summary_readability_styles(html_content)
     return html_content, 200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',

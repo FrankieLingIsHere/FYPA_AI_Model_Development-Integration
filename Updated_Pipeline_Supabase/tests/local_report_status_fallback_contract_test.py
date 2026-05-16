@@ -416,6 +416,42 @@ def test_manual_cloud_reprocess_persists_source_scope_repair():
     _assert(detection_data.get("caption_validation") == {"is_valid": True}, "Persisted repair lost detection details")
 
 
+def test_report_response_injects_summary_readability_styles_for_legacy_reports():
+    legacy_html = """
+    <html>
+      <head><title>Legacy report</title></head>
+      <body>
+        <div class="card" style="border-left: 5px solid #e74c3c;">
+          <div class="card-header">EXECUTIVE SAFETY SUMMARY (AT A GLANCE)</div>
+          <div class="card-content" style="padding: 0;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px; font-weight: bold; background: #f9f9f9;">WHAT</td>
+                <td style="padding: 12px; white-space: normal; word-break: break-word;">Long summary text</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    response_html, status_code, _headers = casm_app._report_html_response(legacy_html)
+
+    _assert(status_code == 200, f"Unexpected report response status: {status_code}")
+    _assert(
+        'id="casm-summary-readability-overrides"' in response_html,
+        "Legacy report response did not inject summary readability CSS",
+    )
+    _assert(
+        '.card[style*="border-left: 5px solid #e74c3c"] table' in response_html,
+        "Legacy summary table selector missing from readability CSS",
+    )
+    _assert(
+        response_html.count('id="casm-summary-readability-overrides"') == 1,
+        "Summary readability CSS should be injected once",
+    )
+
+
 def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
     report_id = "20260513_181500"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -494,6 +530,7 @@ def main():
         test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud,
         test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers,
         test_manual_cloud_reprocess_persists_source_scope_repair,
+        test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
     ]

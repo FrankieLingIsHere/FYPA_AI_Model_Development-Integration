@@ -161,6 +161,9 @@ def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
         "Report lists 2 person(s); 2 with detector-confirmed PPE conditions: Hardhat, Safety Vest." in summary,
         "Summary WHO row must tally with the normalized person cards",
     )
+    _assert('class="summary-table"' in summary, "Executive summary should use the breathable summary table layout")
+    _assert('class="summary-label">WHAT</td>' in summary, "Executive summary WHAT label should use layout class")
+    _assert('class="summary-cell-copy"' in summary, "Executive summary cells should wrap copy for readable spacing")
 
 
 def test_scene_description_does_not_duplicate_caption_yolo_addendum():

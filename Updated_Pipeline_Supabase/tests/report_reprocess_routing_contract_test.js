@@ -305,6 +305,20 @@ function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
     'explicit local queued reports should keep the browser local draft fallback',
   );
 
+  const syncedLocalResult = {
+    success: true,
+    report_queued: true,
+    report_id: 'synced-local-queued-001',
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    sync_source: 'sync_local_cache',
+  };
+  assertEqual(
+    cloudContext.API.shouldPersistLocalReportDraft(syncedLocalResult),
+    false,
+    'local-synced rows already handed to cloud storage should not be re-cached as unsynced local drafts',
+  );
+
   const unknownCloudResult = {
     success: true,
     report_queued: true,

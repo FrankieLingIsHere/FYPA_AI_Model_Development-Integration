@@ -153,6 +153,46 @@ class CloudStaleSyncedLocalDB:
         }]
 
 
+class TagMatrixDB:
+    def __init__(self, records):
+        self.records = {record["report_id"]: record for record in records}
+
+    def get_detection_event(self, report_id):
+        record = self.records[report_id]
+        return {
+            "report_id": report_id,
+            "status": record["status"],
+            "device_id": record["device_id"],
+            "sync_state": record.get("sync_state"),
+            "timestamp": record.get("timestamp") or datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    def get_violation(self, report_id):
+        record = self.records[report_id]
+        return {
+            "report_id": report_id,
+            "original_image_key": record.get("original_image_key"),
+            "annotated_image_key": record.get("annotated_image_key"),
+            "report_html_key": record.get("report_html_key"),
+            "detection_data": dict(record.get("detection_data") or {}),
+        }
+
+    def get_all_violations_with_status(self, limit=100):
+        rows = []
+        for report_id, record in self.records.items():
+            rows.append({
+                **self.get_detection_event(report_id),
+                **self.get_violation(report_id),
+                "person_count": record.get("person_count", 1),
+                "violation_count": record.get("violation_count", 1),
+                "severity": record.get("severity", "MEDIUM"),
+                "violation_summary": record.get("violation_summary", "PPE violation"),
+                "missing_ppe": record.get("missing_ppe", ["Mask"]),
+            })
+        return rows[:limit]
+
+
 class CaptureUpdateDB:
     def __init__(self):
         self.calls = []
@@ -561,6 +601,142 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
             casm_app.reset_report_progress()
 
 
+def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
+    cases = [
+        {
+            "report_id": "tag_cloud_inflight",
+            "status": "generating",
+            "device_id": "webcam_0",
+            "source_scope": "cloud",
+            "source_label": "Cloud",
+            "original_image_key": "violations/tag_cloud_inflight/original.jpg",
+            "detection_data": {
+                "source_scope": "cloud",
+                "source": "live_capture",
+                "device_id": "webcam_0",
+            },
+            "local_files": ["original.jpg", "caption.txt"],
+        },
+        {
+            "report_id": "tag_local_unsynced",
+            "status": "generating",
+            "device_id": "offline_local_cache",
+            "source_scope": "local",
+            "source_label": "Local",
+            "detection_data": {
+                "source_scope": "local",
+                "source": "offline_local_cache",
+                "device_id": "offline_local_cache",
+            },
+            "local_files": ["original.jpg", "metadata.json"],
+        },
+        {
+            "report_id": "tag_local_synced",
+            "status": "completed",
+            "device_id": "offline_local_cache",
+            "sync_state": "cloud_sync_queued",
+            "source_scope": "synced_local",
+            "source_label": "Local Synced",
+            "original_image_key": "violations/tag_local_synced/original.jpg",
+            "report_html_key": "reports/tag_local_synced/report.html",
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "sync_local_cache",
+                "sync_source": "sync_local_cache",
+                "device_id": "offline_local_cache",
+                "sync_state": "cloud_sync_queued",
+            },
+            "local_files": ["original.jpg", "report.html"],
+        },
+        {
+            "report_id": "tag_stale_fake_synced",
+            "status": "completed",
+            "device_id": "webcam_0",
+            "source_scope": "cloud",
+            "source_label": "Cloud",
+            "original_image_key": "violations/tag_stale_fake_synced/original.jpg",
+            "annotated_image_key": "violations/tag_stale_fake_synced/annotated.jpg",
+            "report_html_key": "reports/tag_stale_fake_synced/report.html",
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "cloud_pending_local_handoff",
+                "device_id": "webcam_0",
+            },
+            "local_files": ["original.jpg", "report.html"],
+        },
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        for case in cases:
+            report_dir = root / case["report_id"]
+            report_dir.mkdir(parents=True, exist_ok=True)
+            for filename in case.get("local_files", []):
+                target = report_dir / filename
+                if filename == "metadata.json":
+                    target.write_text(json.dumps(case.get("detection_data") or {}), encoding="utf-8")
+                else:
+                    target.write_text(f"fixture for {case['report_id']} {filename}", encoding="utf-8")
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = TagMatrixDB(cases)
+            casm_app._invalidate_dashboard_snapshot_cache()
+
+            with casm_app.app.test_client() as client:
+                status_payloads = {}
+                for case in cases:
+                    response = client.get(f"/api/report/{case['report_id']}/status")
+                    payload = response.get_json() or {}
+                    _assert(response.status_code == 200, f"Unexpected status for {case['report_id']}: {payload}")
+                    status_payloads[case["report_id"]] = payload
+
+                list_response = client.get("/api/violations?limit=77")
+                list_payload = list_response.get_json() or []
+
+            list_by_id = {
+                row.get("report_id"): row
+                for row in list_payload
+                if isinstance(row, dict) and row.get("report_id")
+            }
+            for case in cases:
+                report_id = case["report_id"]
+                expected_scope = case["source_scope"]
+                expected_label = case["source_label"]
+                status_payload = status_payloads[report_id]
+                list_row = list_by_id.get(report_id)
+                _assert(list_row is not None, f"Missing matrix row in /api/violations: {report_id}")
+                _assert(
+                    status_payload.get("source_scope") == expected_scope,
+                    f"Status tag drifted for {report_id}: {status_payload}",
+                )
+                _assert(
+                    status_payload.get("source_label") == expected_label,
+                    f"Status label drifted for {report_id}: {status_payload}",
+                )
+                _assert(
+                    list_row.get("source_scope") == expected_scope,
+                    f"List tag drifted for {report_id}: {list_row}",
+                )
+                _assert(
+                    list_row.get("source_label") == expected_label,
+                    f"List label drifted for {report_id}: {list_row}",
+                )
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app._invalidate_dashboard_snapshot_cache()
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
 def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -737,6 +913,7 @@ def main():
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
+        test_report_source_tag_matrix_preserves_local_and_synced_local_cases,
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,
     ]

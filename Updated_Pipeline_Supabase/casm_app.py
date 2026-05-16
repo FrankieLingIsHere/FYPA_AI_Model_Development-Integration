@@ -959,6 +959,56 @@ def _resolve_violation_types_and_count(
 
 _REPORT_SEVERITY_RANK = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
 
+_LOW_RISK_CONTEXT_TERMS = {
+    'office', 'indoor office', 'desk', 'administrative', 'meeting room', 'classroom',
+    'lobby', 'reception', 'control room', 'training room', 'break room'
+}
+
+_HIGH_RISK_CONTEXT_TERMS = {
+    'construction', 'worksite', 'industrial', 'factory', 'warehouse', 'loading bay',
+    'loading dock', 'forklift', 'truck', 'vehicle', 'traffic', 'road', 'highway',
+    'crane', 'excavator', 'loader', 'machinery', 'machine', 'conveyor', 'saw',
+    'blade', 'grinder', 'cutting', 'welding', 'hot work', 'chemical', 'solvent',
+    'toxic', 'gas', 'dust', 'silica', 'asbestos', 'fume', 'smoke', 'respiratory',
+    'scaffold', 'ladder', 'height', 'roof', 'edge', 'trench', 'excavation',
+    'confined space', 'electrical', 'energized', 'high voltage', 'falling object',
+    'overhead', 'struck-by', 'struck by', 'moving equipment', 'mobile equipment'
+}
+
+_PPE_HIGH_RISK_CONTEXT_TERMS = {
+    'NO-Hardhat': {
+        'construction', 'worksite', 'industrial', 'warehouse', 'scaffold', 'ladder',
+        'height', 'roof', 'edge', 'crane', 'excavator', 'falling object',
+        'overhead', 'struck-by', 'struck by', 'trench', 'excavation', 'loading bay',
+        'loading dock', 'machinery', 'factory'
+    },
+    'NO-Safety Vest': {
+        'forklift', 'truck', 'vehicle', 'traffic', 'road', 'highway', 'loading bay',
+        'loading dock', 'warehouse', 'construction', 'worksite', 'mobile equipment',
+        'moving equipment', 'crane', 'excavator', 'low visibility', 'struck-by',
+        'struck by'
+    },
+    'NO-Mask': {
+        'dust', 'silica', 'asbestos', 'fume', 'smoke', 'chemical', 'solvent',
+        'toxic', 'gas', 'respiratory', 'spray', 'paint', 'confined space',
+        'airborne', 'contaminant'
+    },
+    'NO-Gloves': {
+        'chemical', 'solvent', 'toxic', 'sharp', 'cutting', 'saw', 'blade',
+        'grinder', 'welding', 'hot work', 'burn', 'abrasive', 'handling',
+        'glass', 'metal', 'machinery'
+    },
+    'NO-Goggles': {
+        'chemical', 'solvent', 'splash', 'spray', 'dust', 'silica', 'grinder',
+        'cutting', 'saw', 'welding', 'hot work', 'flying particles', 'debris'
+    },
+    'NO-Safety Shoes': {
+        'construction', 'warehouse', 'loading bay', 'loading dock', 'forklift',
+        'truck', 'vehicle', 'heavy material', 'falling object', 'machinery',
+        'factory', 'worksite', 'crane', 'excavator'
+    },
+}
+
 
 def _normalize_report_severity(value: Any, default: str = 'MEDIUM') -> str:
     """Normalize persisted report severity to the user-facing report levels."""
@@ -1003,30 +1053,132 @@ def _severity_from_violation_label(label: Any) -> str:
     return ''
 
 
+def _build_severity_context_text(
+    *,
+    detections: Optional[List[Dict[str, Any]]] = None,
+    violation_summary: Optional[str] = None,
+    context_text: Optional[str] = None,
+    caption: Optional[str] = None,
+) -> str:
+    parts: List[str] = []
+    for value in (violation_summary, context_text, caption):
+        if value:
+            parts.append(str(value))
+    for item in detections or []:
+        if not isinstance(item, dict):
+            continue
+        for key in ('class_name', 'class', 'label', 'name', 'description'):
+            value = item.get(key)
+            if value:
+                parts.append(str(value))
+    normalized = _normalize_label(' '.join(parts)).replace('-', ' ')
+    return re.sub(r'[^a-z0-9]+', ' ', normalized).strip()
+
+
+def _context_has_any(context_text: str, terms: Any) -> bool:
+    normalized_context = f" {str(context_text or '').lower()} "
+    for term in terms or []:
+        normalized_term = str(term or '').strip().lower().replace('_', ' ').replace('-', ' ')
+        if not normalized_term:
+            continue
+        term_pattern = re.escape(normalized_term).replace(r'\ ', r'\s+')
+        for match in re.finditer(rf'\b{term_pattern}\b', normalized_context):
+            window_start = max(0, match.start() - 80)
+            window_end = min(len(normalized_context), match.end() + 36)
+            window = normalized_context[window_start:window_end]
+            negated_before = re.search(
+                rf'\b(no|not|without|absence\s+of|free\s+of|lack\s+of|lacking|not\s+visible|no\s+visible)\b'
+                rf'(?:\s+\w+){{0,6}}\s+{term_pattern}\b',
+                window,
+            )
+            negated_after = re.search(
+                rf'\b{term_pattern}\b(?:\s+\w+){{0,4}}\s+\b(absent|not\s+visible|not\s+present)\b',
+                window,
+            )
+            if not negated_before and not negated_after:
+                return True
+    return False
+
+
+def _contextual_severity_for_label(label: str, base_severity: str, context_text: str) -> str:
+    normalized_label = _normalize_violation_type_label(label)
+    if not normalized_label:
+        return ''
+
+    high_for_label = _context_has_any(
+        context_text,
+        _PPE_HIGH_RISK_CONTEXT_TERMS.get(normalized_label, set()),
+    )
+    broad_high = _context_has_any(context_text, _HIGH_RISK_CONTEXT_TERMS)
+    low_context = _context_has_any(context_text, _LOW_RISK_CONTEXT_TERMS) and not broad_high
+
+    if high_for_label:
+        return 'HIGH'
+
+    # Hard hats and hi-vis vests can be high-consequence controls, but in a
+    # clearly low-hazard office/admin scene they should not dominate the risk
+    # score without surrounding struck-by, overhead, traffic, or worksite cues.
+    if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and low_context:
+        return 'MEDIUM'
+
+    # Respiratory, hand, eye, and footwear PPE become high only when the scene
+    # or caption names the matching exposure. Otherwise their configured medium
+    # base remains a review-worthy but not automatically high-severity finding.
+    if normalized_label in {'NO-Mask', 'NO-Gloves', 'NO-Goggles', 'NO-Safety Shoes'}:
+        if high_for_label:
+            return 'HIGH'
+        return 'MEDIUM' if base_severity in {'HIGH', 'MEDIUM'} else base_severity
+
+    return base_severity
+
+
 def _classify_violation_severity(
     *,
     violation_types: Optional[List[str]] = None,
     detections: Optional[List[Dict[str, Any]]] = None,
     violation_count: Optional[Any] = None,
     violation_summary: Optional[str] = None,
+    context_text: Optional[str] = None,
+    caption: Optional[str] = None,
 ) -> str:
-    """Classify report severity from observed PPE evidence instead of defaulting to HIGH."""
+    """Classify report severity from PPE evidence and surrounding scene context."""
     labels = _normalize_violation_type_list(
         violation_types,
         _extract_violation_types_from_detections(detections or []),
         _extract_violation_types_from_summary(violation_summary or ''),
     )
+    severity_context = _build_severity_context_text(
+        detections=detections,
+        violation_summary=violation_summary,
+        context_text=context_text,
+        caption=caption,
+    )
 
-    severities = [_severity_from_violation_label(label) for label in labels]
+    severities = [
+        _contextual_severity_for_label(
+            label,
+            _severity_from_violation_label(label),
+            severity_context,
+        )
+        for label in labels
+    ]
     severities = [severity for severity in severities if severity]
     if severities:
         distinct_medium = {
             label.lower()
             for label in labels
-            if _severity_from_violation_label(label) == 'MEDIUM'
+            if _contextual_severity_for_label(
+                label,
+                _severity_from_violation_label(label),
+                severity_context,
+            ) == 'MEDIUM'
         }
         highest = max(severities, key=lambda value: _REPORT_SEVERITY_RANK.get(value, 2))
-        if highest == 'MEDIUM' and len(distinct_medium) >= 3:
+        low_context = _context_has_any(severity_context, _LOW_RISK_CONTEXT_TERMS) and not _context_has_any(
+            severity_context,
+            _HIGH_RISK_CONTEXT_TERMS,
+        )
+        if highest == 'MEDIUM' and len(distinct_medium) >= 3 and not low_context:
             return 'HIGH'
         return highest
 
@@ -5092,6 +5244,23 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             )
     except Exception as caption_write_error:
         logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
+
+    context_adjusted_severity = _classify_violation_severity(
+        violation_types=violation_types if isinstance(violation_types, list) else [],
+        detections=detections if isinstance(detections, list) else [],
+        violation_count=queued_violation_count,
+        violation_summary=data.get('violation_summary'),
+        context_text=caption,
+        caption=caption,
+    )
+    if context_adjusted_severity != resolved_report_severity:
+        logger.info(
+            "Adjusted report severity from %s to %s based on caption/environment context for %s",
+            resolved_report_severity,
+            context_adjusted_severity,
+            report_id,
+        )
+    resolved_report_severity = context_adjusted_severity
 
     # Generate report
     report_created = False

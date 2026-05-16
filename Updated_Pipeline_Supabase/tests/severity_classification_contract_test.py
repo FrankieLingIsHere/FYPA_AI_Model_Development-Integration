@@ -20,6 +20,52 @@ def test_report_severity_uses_config_for_single_ppe_violations():
     assert casm_app._classify_violation_severity(violation_types=["NO-Safety Shoes"]) == "MEDIUM"
 
 
+def test_report_severity_uses_environment_context_for_ppe_risk():
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Safety Vest"],
+        context_text="Indoor office desk area with employees seated at workstations.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Safety Vest"],
+        context_text="Indoor office desk area with no visible vehicles or mobile equipment.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Safety Vest"],
+        context_text="Loading bay with forklift traffic and moving trucks.",
+    ) == "HIGH"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Hardhat"],
+        context_text="Administrative office meeting room.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Hardhat"],
+        context_text="Construction worksite below overhead crane activity.",
+    ) == "HIGH"
+
+
+def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists():
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Mask"],
+        context_text="Indoor office scene with normal administrative workstations.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Mask"],
+        context_text="Indoor office scene with no visible dust, smoke, fumes, or airborne contaminants.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Mask"],
+        context_text="Worker exposed to silica dust and airborne respiratory contaminants.",
+    ) == "HIGH"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Goggles"],
+        context_text="Grinding and cutting work producing flying particles and debris.",
+    ) == "HIGH"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Mask", "NO-Gloves", "NO-Safety Shoes"],
+        context_text="Administrative office room.",
+    ) == "MEDIUM"
+
+
 def test_report_severity_uses_detection_and_summary_fallbacks():
     assert casm_app._classify_violation_severity(
         detections=[{"class_name": "Person"}, {"class_name": "NO-Mask"}],

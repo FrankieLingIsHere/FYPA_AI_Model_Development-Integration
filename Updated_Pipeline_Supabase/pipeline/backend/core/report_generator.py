@@ -227,6 +227,7 @@ class ReportGenerator:
         self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
         self.allow_nlp_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
+        self.cloud_report_fallback_enabled = str(os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
@@ -1705,6 +1706,16 @@ RESPONSE FORMAT (JSON):
             result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
 
             if result:
+                if isinstance(result, dict) and result.get('_schema_incomplete'):
+                    missing = result.get('_missing_required_report_keys') or []
+                    detail = (
+                        "Gemini returned usable partial JSON; downstream report sanitizer "
+                        f"will fill missing keys: {', '.join(missing) if missing else 'unknown'}"
+                    )
+                    self.last_nlp_fallback_reason = detail
+                    logger.warning(detail)
+                    return result
+
                 missing_fields = self._missing_required_nlp_fields(result)
                 if missing_fields:
                     logger.warning(
@@ -1753,7 +1764,9 @@ RESPONSE FORMAT (JSON):
                             "Gemini output still missing fields after regeneration (%s); continuing with best-effort Gemini output for downstream sanitization",
                             ', '.join(best_effort_missing),
                         )
-                        result = best_effort_result
+                        result = dict(best_effort_result)
+                        result['_schema_incomplete'] = True
+                        result['_missing_required_report_keys'] = list(best_effort_missing)
                     else:
                         detail = (
                             "Gemini output missing required fields after regeneration: "
@@ -2782,7 +2795,17 @@ Required JSON object:
 
         if not nlp_analysis:
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
-            allow_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
+            cloud_degraded_fallback = bool(
+                self.cloud_report_fallback_enabled
+                and not force_local_nlp
+                and not self.strict_local_profile
+                and str(self.routing_profile or '').strip().lower() != 'local'
+            )
+            allow_fallback = bool(
+                self.allow_nlp_fallback
+                or (force_local_nlp and allow_forced_local_fallback)
+                or cloud_degraded_fallback
+            )
             if self.strict_report_generation and not allow_fallback:
                 self.last_nlp_fallback_reason = detail
                 logger.error(
@@ -2798,11 +2821,12 @@ Required JSON object:
                 _record_timing('report_total_seconds', generation_started)
                 raise RuntimeError(f"NLP analysis failed: {detail}")
             logger.warning(
-                "[NLP_FALLBACK_APPLIED] report=%s allow_nlp_fallback=%s force_local_nlp=%s "
-                "allow_forced_local_fallback=%s strict_report_generation=%s routing_profile=%s "
+                "[NLP_FALLBACK_APPLIED] report=%s allow_nlp_fallback=%s cloud_degraded_fallback=%s "
+                "force_local_nlp=%s allow_forced_local_fallback=%s strict_report_generation=%s routing_profile=%s "
                 "providers=%s reason=%s",
                 report_id,
                 self.allow_nlp_fallback,
+                cloud_degraded_fallback,
                 force_local_nlp,
                 allow_forced_local_fallback,
                 self.strict_report_generation,
@@ -2811,8 +2835,8 @@ Required JSON object:
                 detail,
             )
             nlp_analysis = self._generate_fallback_analysis(report_data)
-            self.last_nlp_provider = 'fallback'
-            self.last_nlp_model = 'rule-based-fallback'
+            self.last_nlp_provider = 'cloud_fallback' if cloud_degraded_fallback else 'fallback'
+            self.last_nlp_model = 'rule-based-cloud-fallback' if cloud_degraded_fallback else 'rule-based-fallback'
             self.last_nlp_fallback_reason = detail
             self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
         else:
@@ -2853,7 +2877,24 @@ Required JSON object:
                     missing_model_cells.append('persons[].corrective_actions')
 
                 provider_is_model = str(self.last_nlp_provider or '').strip().lower() not in ('', 'fallback', 'mock')
-                allow_cell_fallback = bool(self.allow_nlp_fallback or (force_local_nlp and allow_forced_local_fallback))
+                schema_incomplete_payload = bool(
+                    isinstance(nlp_analysis, dict)
+                    and (
+                        nlp_analysis.get('_schema_incomplete')
+                        or nlp_analysis.get('_missing_required_report_keys')
+                    )
+                )
+                allow_cell_fallback = bool(
+                    self.allow_nlp_fallback
+                    or (force_local_nlp and allow_forced_local_fallback)
+                    or schema_incomplete_payload
+                    or (
+                        self.cloud_report_fallback_enabled
+                        and not force_local_nlp
+                        and not self.strict_local_profile
+                        and str(self.routing_profile or '').strip().lower() != 'local'
+                    )
+                )
                 if (
                     missing_model_cells
                     and provider_is_model
@@ -2877,7 +2918,7 @@ Required JSON object:
                     _record_timing('report_total_seconds', generation_started)
                     raise RuntimeError(detail)
 
-                if needs_persons or needs_regulation or needs_environment:
+                if needs_persons or needs_regulation or needs_environment or needs_risk_cells or needs_action_cells:
                     fallback = self._generate_fallback_analysis(report_data)
 
                 if needs_regulation and fallback is not None:
@@ -2892,6 +2933,23 @@ Required JSON object:
                 if needs_persons and fallback is not None:
                     logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
+                    persons_list = nlp_analysis.get('persons') if isinstance(nlp_analysis.get('persons'), list) else []
+                    needs_risk_cells = False
+                    needs_action_cells = False
+
+                if (needs_risk_cells or needs_action_cells) and fallback is not None:
+                    fallback_persons = fallback.get('persons', []) if isinstance(fallback.get('persons'), list) else []
+                    if isinstance(nlp_analysis.get('persons'), list):
+                        for idx, person in enumerate(nlp_analysis.get('persons') or []):
+                            if not isinstance(person, dict):
+                                continue
+                            fallback_person = fallback_persons[idx] if idx < len(fallback_persons) and isinstance(fallback_persons[idx], dict) else {}
+                            if needs_risk_cells and not person.get('risks'):
+                                person['risks'] = fallback_person.get('risks', [])
+                            if needs_action_cells and not (person.get('corrective_actions') or person.get('actions')):
+                                person['corrective_actions'] = fallback_person.get('corrective_actions') or fallback_person.get('actions') or []
+                    else:
+                        nlp_analysis['persons'] = fallback_persons
 
             if not str(nlp_analysis.get('summary', '')).strip():
                 logger.info("NLP output missing summary; synthesizing grounded summary")

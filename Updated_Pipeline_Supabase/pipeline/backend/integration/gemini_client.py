@@ -400,14 +400,52 @@ class GeminiClient:
 
         max_chars = max(4000, self.report_prompt_max_chars)
         if len(compact) > max_chars:
-            compact = compact[:max_chars]
+            truncation_marker = "\n\n...[middle prompt content truncated; output schema preserved below]...\n\n"
+            contract_markers = (
+                "Return exactly one valid JSON object",
+                '"environment_type"',
+                '"persons"',
+                '"dosh_regulations_cited"',
+            )
+            contract_positions = [compact.rfind(marker) for marker in contract_markers]
+            contract_positions = [pos for pos in contract_positions if pos >= 0]
+            contract_start = min(contract_positions) if contract_positions else -1
+
+            if contract_start >= 0 and len(compact) - contract_start <= max_chars:
+                contract = compact[contract_start:]
+                head_budget = max(1000, max_chars - len(contract) - len(truncation_marker))
+                compact = compact[:head_budget].rstrip() + truncation_marker + contract.lstrip()
+            else:
+                tail_budget = min(7000, max_chars // 2)
+                head_budget = max(1000, max_chars - tail_budget - len(truncation_marker))
+                compact = compact[:head_budget].rstrip() + truncation_marker + compact[-tail_budget:].lstrip()
 
         compact += (
-            "\\n\\nFINAL RESPONSE RULES:\\n"
-            "- Return exactly one valid JSON object and no markdown fences.\\n"
-            "- Keep each description concise while preserving factual grounding.\\n"
+            "\n\nFINAL RESPONSE RULES:\n"
+            "- Return exactly one valid JSON object and no markdown fences.\n"
+            "- The object must include non-empty keys: environment_type, visual_evidence, persons, summary, dosh_regulations_cited.\n"
+            "- If a detail is uncertain, still include the key with a conservative evidence-based value instead of omitting it.\n"
+            "- Keep each description concise while preserving factual grounding.\n"
         )
         return compact
+
+    def _mark_schema_incomplete_payload(self, payload: Dict[str, Any], missing_keys: List[str]) -> Dict[str, Any]:
+        """Annotate a usable but incomplete Gemini payload for downstream deterministic completion."""
+        marked = dict(payload)
+        marked['_schema_incomplete'] = True
+        marked['_missing_required_report_keys'] = list(missing_keys or [])
+        return marked
+
+    def _is_usable_schema_incomplete_payload(self, payload: Optional[Dict[str, Any]]) -> bool:
+        """Return True when partial model output has enough grounding to finish locally."""
+        if not isinstance(payload, dict) or not payload:
+            return False
+        grounding_fields = (
+            payload.get('environment_type'),
+            payload.get('visual_evidence'),
+            payload.get('summary'),
+        )
+        return any(str(value or '').strip() for value in grounding_fields)
 
     def _parse_json_from_response_text(self, raw_text: str) -> Optional[Dict[str, Any]]:
         """Parse model output into JSON dict using progressive recovery strategies."""
@@ -809,6 +847,8 @@ class GeminiClient:
         self.last_model_switch_reason = None
 
         tight_prompt = self._tighten_prompt_for_json(prompt)
+        best_effort_result: Optional[Dict[str, Any]] = None
+        best_effort_missing: List[str] = []
 
         # Build content parts
         contents = [tight_prompt]
@@ -847,6 +887,13 @@ class GeminiClient:
                                 + ", ".join(missing_keys)
                             )
                             logger.warning(self.last_error)
+                            if self._is_usable_schema_incomplete_payload(result):
+                                if (
+                                    best_effort_result is None
+                                    or len(missing_keys) < len(best_effort_missing)
+                                ):
+                                    best_effort_result = result
+                                    best_effort_missing = list(missing_keys)
                             self._capture_nlp_debug(
                                 report_id=report_id,
                                 attempt=attempt + 1,
@@ -857,8 +904,17 @@ class GeminiClient:
                                 success=False,
                                 error=self.last_error,
                             )
-                            if attempt < self.max_retries - 1:
-                                continue
+                            if best_effort_result is not None:
+                                logger.warning(
+                                    "Proceeding with best-effort Gemini JSON for report %s; "
+                                    "downstream sanitizer will fill missing keys: %s",
+                                    report_id or 'unknown',
+                                    ", ".join(best_effort_missing),
+                                )
+                                return self._mark_schema_incomplete_payload(
+                                    best_effort_result,
+                                    best_effort_missing,
+                                )
                             break
 
                         logger.info(" NLP report JSON generated successfully")
@@ -883,6 +939,13 @@ class GeminiClient:
                                 + ", ".join(missing_keys)
                             )
                             logger.warning(self.last_error)
+                            if self._is_usable_schema_incomplete_payload(repaired):
+                                if (
+                                    best_effort_result is None
+                                    or len(missing_keys) < len(best_effort_missing)
+                                ):
+                                    best_effort_result = repaired
+                                    best_effort_missing = list(missing_keys)
                             self._capture_nlp_debug(
                                 report_id=report_id,
                                 attempt=attempt + 1,
@@ -894,8 +957,17 @@ class GeminiClient:
                                 error=self.last_error,
                                 repaired=True,
                             )
-                            if attempt < self.max_retries - 1:
-                                continue
+                            if best_effort_result is not None:
+                                logger.warning(
+                                    "Proceeding with best-effort repaired Gemini JSON for report %s; "
+                                    "downstream sanitizer will fill missing keys: %s",
+                                    report_id or 'unknown',
+                                    ", ".join(best_effort_missing),
+                                )
+                                return self._mark_schema_incomplete_payload(
+                                    best_effort_result,
+                                    best_effort_missing,
+                                )
                             break
 
                         logger.info(" NLP report JSON repaired successfully")
@@ -986,6 +1058,13 @@ class GeminiClient:
                     time.sleep(wait)
 
         logger.error("Failed to generate NLP report after all retries")
+        if best_effort_result is not None:
+            logger.warning(
+                "Using best-effort Gemini JSON after retries for report %s; missing keys: %s",
+                report_id or 'unknown',
+                ", ".join(best_effort_missing),
+            )
+            return self._mark_schema_incomplete_payload(best_effort_result, best_effort_missing)
         if not self.last_error:
             self.last_error = "Failed to generate NLP report after all retries"
         return None

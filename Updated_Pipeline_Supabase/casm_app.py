@@ -5565,7 +5565,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         "report.html was not found in violation directory after generation"
                     )
                 else:
-                    attempt_failure_reason = "Report generator returned empty or missing HTML output"
+                    if not attempt_failure_reason:
+                        attempt_failure_reason = "Report generator returned empty or missing HTML output"
 
                 failure_reason = attempt_failure_reason
                 if report_attempt < max_report_attempts:
@@ -11622,7 +11623,7 @@ def _current_provider_settings():
         'gemini_enabled': bool(GEMINI_CONFIG.get('enabled', True)),
         'gemini_daily_budget_usd': float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0),
         'gemini_monthly_budget_usd': float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0),
-        'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900),
+        'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200),
         'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', nlp_default_order),
         'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', embedding_default_order),
         'vision_provider_order': vision_settings.get('vision_provider_order', vision_default_order),
@@ -11662,7 +11663,7 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
             'daily_calls': 0,
             'monthly_calls': 0,
             'last_block_reason': None,
-            'enforced_max_output_tokens': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900') or 900),
+            'enforced_max_output_tokens': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200),
         },
     }
 
@@ -11809,7 +11810,7 @@ def api_provider_routing_settings():
         gemini_enabled = bool(data.get('gemini_enabled', GEMINI_CONFIG.get('enabled', True)))
         gemini_daily_budget_usd = max(0.0, _to_float(data.get('gemini_daily_budget_usd', os.getenv('GEMINI_DAILY_BUDGET_USD', '0')), 0.0))
         gemini_monthly_budget_usd = max(0.0, _to_float(data.get('gemini_monthly_budget_usd', os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0')), 0.0))
-        gemini_max_output_tokens_per_report = max(1, _to_int(data.get('gemini_max_output_tokens_per_report', os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '900')), 900))
+        gemini_max_output_tokens_per_report = max(1, _to_int(data.get('gemini_max_output_tokens_per_report', os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200')), 2200))
 
         nlp_provider_order = _normalize_provider_order(
             data.get('nlp_provider_order'),

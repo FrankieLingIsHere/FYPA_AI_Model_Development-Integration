@@ -103,11 +103,29 @@ def test_schema_no_regen_when_valid():
     _assert(len(fake.calls) == 1, "Expected only one Gemini call when payload is already valid")
 
 
+def test_schema_incomplete_payload_skips_regen_for_downstream_completion():
+    partial_payload = {
+        "environment_type": "Indoor / Office",
+        "visual_evidence": "The image shows people in an office-like indoor setting.",
+        "_schema_incomplete": True,
+        "_missing_required_report_keys": ["persons", "summary", "dosh_regulations_cited"],
+    }
+    fake = _FakeGeminiClient([partial_payload])
+    subject = _new_subject(fake, regen_attempts=2)
+
+    result = subject._call_gemini_api("base prompt", image_path="img.jpg", report_id="r4")
+
+    _assert(result is not None, "Expected usable partial payload to be returned")
+    _assert(result.get("_schema_incomplete") is True, "Expected schema-incomplete marker to be preserved")
+    _assert(len(fake.calls) == 1, "Expected no schema-regeneration call for marked partial payload")
+
+
 def main():
     tests = [
         test_schema_regen_success,
         test_schema_regen_failure_returns_best_effort,
         test_schema_no_regen_when_valid,
+        test_schema_incomplete_payload_skips_regen_for_downstream_completion,
     ]
     failures = []
 

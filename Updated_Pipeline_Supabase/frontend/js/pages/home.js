@@ -205,10 +205,11 @@ const HomePage = {
     },
 
     async mount() {
-        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
-            await API.waitForDashboardWarmup(['stats', 'pending'], 700);
+        const cachedRendered = await this.renderCachedDataIfAvailable();
+        if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+            API.warmDashboardCaches({ reason: 'home-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
-        await this.refreshData();
+        await this.refreshData({ skipInitialCache: cachedRendered });
 
         this._realtimeHandler = () => {
             if (this._realtimeRefreshTimer) return;
@@ -428,8 +429,8 @@ const HomePage = {
         }
     },
 
-    async refreshData() {
-        const cachedRendered = await this.renderCachedDataIfAvailable();
+    async refreshData(options = {}) {
+        const cachedRendered = options.skipInitialCache ? false : await this.renderCachedDataIfAvailable();
         const [stats, pendingReports] = await Promise.all([
             API.getStats(),
             API.getPendingReports()

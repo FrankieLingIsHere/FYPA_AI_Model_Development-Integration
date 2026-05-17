@@ -25,6 +25,7 @@ const ReportsPage = {
     },
     visualStatusTimers: new Map(),
     cacheWarmTimer: null,
+    hasLoadedOnce: false,
     modalRuntime: {
         reportId: null,
         pollTimer: null,
@@ -115,7 +116,7 @@ const ReportsPage = {
 
                         <!-- Reports List -->
                         <div id="reports-list">
-                            <div class="spinner"></div>
+                            ${this.renderReportsListMarkup()}
                         </div>
                     </div>
                 </div>
@@ -130,14 +131,10 @@ const ReportsPage = {
         this.timezoneChangeHandler = () => this.renderReports();
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
 
-        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
-            await API.waitForDashboardWarmup(['violations', 'pending'], 900);
+        await this.loadReports({ noCache: false });
+        if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+            API.warmDashboardCaches({ reason: 'reports-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
-        const warmReportsCache = typeof API !== 'undefined'
-            && typeof API.isDashboardWarm === 'function'
-            && API.isDashboardWarm('violations')
-            && API.isDashboardWarm('pending');
-        await this.loadReports({ noCache: !warmReportsCache });
         await this.updateProviderRuntimeBadge();
         this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
         this.syncFallbackPolling();
@@ -279,6 +276,7 @@ const ReportsPage = {
                 item,
                 previousById.get(String((item && item.report_id) || '').trim())
             ));
+        this.hasLoadedOnce = true;
         if (targetedReportId) {
             await this.hydrateFocusedReport(targetedReportId, { noCache: true });
         }
@@ -1869,20 +1867,26 @@ const ReportsPage = {
 
     renderReports() {
         const list = document.getElementById('reports-list');
-        const filtered = this.getFilteredViolations();
+        if (!list) return;
+        list.innerHTML = this.renderReportsListMarkup();
+    },
 
+    renderReportsListMarkup() {
+        const filtered = this.getFilteredViolations();
+        if (!this.hasLoadedOnce && filtered.length === 0) {
+            return '<div class="spinner"></div>';
+        }
         if (filtered.length === 0) {
-            list.innerHTML = `
+            return `
                 <div class="alert alert-info">
                     <i class="fas fa-info-circle"></i>
                     <span>No reports found. Try adjusting your filters or run the live demo to generate violations.</span>
                 </div>
             `;
-            return;
         }
 
         // Show ALL reports including in-progress ones (Pipeline_CASM behavior)
-        list.innerHTML = `
+        return `
             <div class="grid">
                 ${filtered.map(v => this.renderReportCard(v)).join('')}
             </div>

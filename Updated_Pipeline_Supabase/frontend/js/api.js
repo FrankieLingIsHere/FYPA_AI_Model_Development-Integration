@@ -17,7 +17,8 @@ const API = {
         promise: null,
         startedAt: 0,
         completedAt: 0,
-        results: {}
+        results: {},
+        forceQueued: false
     },
 
     /**
@@ -1024,7 +1025,21 @@ const API = {
         const now = Date.now();
         const force = !!options.force;
         const minIntervalMs = Math.max(5000, Number(options.minIntervalMs || 90000));
-        if (state.promise) return state.promise;
+        if (state.promise) {
+            if (!force) return state.promise;
+            if (state.forceQueued) return state.promise;
+            state.forceQueued = true;
+            return state.promise
+                .catch(() => null)
+                .then(() => {
+                    state.forceQueued = false;
+                    return this.warmDashboardCaches({
+                        ...options,
+                        force: true,
+                        minIntervalMs: 5000
+                    });
+                });
+        }
         if (!force && state.completedAt && (now - state.completedAt) < minIntervalMs) {
             return Promise.resolve(state.results || {});
         }

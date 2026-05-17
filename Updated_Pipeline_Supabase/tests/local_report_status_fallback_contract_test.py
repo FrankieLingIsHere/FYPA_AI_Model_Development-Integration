@@ -1088,6 +1088,124 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
             casm_app.reset_report_progress()
 
 
+def test_strict_local_augmented_caption_allows_model_report():
+    class RealCaptionGenerator:
+        def generate_caption(self, _image_path):
+            return (
+                "One individual is visible in a bright indoor workspace near stored materials. "
+                "The person is facing the camera, and the visual scene does not clearly show "
+                "compliant construction PPE from this angle."
+            )
+
+    class FakeReportGenerator:
+        def __init__(self):
+            self.calls = []
+
+        def generate_report(self, report_data):
+            self.calls.append(dict(report_data))
+            report_dir = Path(report_data["original_image_path"]).parent
+            (report_dir / "report.html").write_text("<html>local report complete</html>", encoding="utf-8")
+            return {
+                "html": "<html>local report complete</html>",
+                "storage_keys": {},
+            }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_id = "local_caption_augmented_contract_001"
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
+        original_path = report_dir / "original.jpg"
+        annotated_path = report_dir / "annotated.jpg"
+        casm_app.cv2.imwrite(str(original_path), frame)
+        casm_app.cv2.imwrite(str(annotated_path), frame)
+
+        fake_db = CaptureProcessingDB()
+        fake_report_generator = FakeReportGenerator()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_caption_generator = casm_app.caption_generator
+        old_report_generator = casm_app.report_generator
+        old_env_validation = casm_app.ENVIRONMENT_VALIDATION_ENABLED
+        old_push_realtime = casm_app._push_realtime_report_event
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        old_require_caption = os.environ.get("LOCAL_REPORT_REQUIRE_MODEL_CAPTION")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            os.environ["LOCAL_REPORT_REQUIRE_MODEL_CAPTION"] = "true"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.caption_generator = RealCaptionGenerator()
+            casm_app.report_generator = fake_report_generator
+            casm_app.ENVIRONMENT_VALIDATION_ENABLED = False
+            casm_app._push_realtime_report_event = lambda *_args, **_kwargs: None
+
+            queued = casm_app.QueuedViolation(
+                priority=0,
+                timestamp=time.time(),
+                data={
+                    "report_id": report_id,
+                    "timestamp": datetime.now(timezone.utc),
+                    "detections": [
+                        {"class_name": "person", "confidence": 0.91, "bbox": [0, 0, 4, 7]},
+                        {"class_name": "no-hardhat", "confidence": 0.87, "bbox": [1, 1, 5, 5]},
+                    ],
+                    "violation_types": ["no-hardhat"],
+                    "violation_count": 1,
+                    "original_image_path": str(original_path),
+                    "annotated_image_path": str(annotated_path),
+                    "violation_dir": str(report_dir),
+                    "severity": "HIGH",
+                    "source_scope": "local",
+                    "sync_source": "local_pipeline",
+                    "source": "local_pipeline",
+                },
+                device_id="offline_local_cache",
+                report_id=report_id,
+            )
+
+            casm_app.process_queued_violation(queued)
+
+            _assert(fake_report_generator.calls, "Local report generator should run for augmented real caption")
+            report_call = fake_report_generator.calls[0]
+            _assert(
+                report_call.get("caption_quality_reason") == "augmented_yolo_context",
+                f"Expected augmented context reason, got {report_call}",
+            )
+            _assert(
+                report_call.get("caption_quality_fallback_applied") is True,
+                f"Expected augmentation marker to remain available for provenance: {report_call}",
+            )
+            _assert(
+                "YOLO detection identified" in str(report_call.get("caption") or ""),
+                f"Expected YOLO context in report caption: {report_call}",
+            )
+            _assert((report_dir / "report.html").exists(), "Local augmented-caption report did not finish")
+            metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
+            _assert(metadata.get("has_report") is True, f"Metadata should mark augmented report ready: {metadata}")
+            _assert(
+                metadata.get("caption_quality_reason") == "augmented_yolo_context",
+                f"Metadata lost augmentation reason: {metadata}",
+            )
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.caption_generator = old_caption_generator
+            casm_app.report_generator = old_report_generator
+            casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_env_validation
+            casm_app._push_realtime_report_event = old_push_realtime
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            if old_require_caption is None:
+                os.environ.pop("LOCAL_REPORT_REQUIRE_MODEL_CAPTION", None)
+            else:
+                os.environ["LOCAL_REPORT_REQUIRE_MODEL_CAPTION"] = old_require_caption
+            casm_app.reset_report_progress()
+
+
 def test_strict_local_caption_failure_blocks_detection_only_report():
     class FailingCaptionGenerator:
         def generate_caption(self, _image_path):
@@ -1199,6 +1317,7 @@ def main():
         test_report_source_tag_matrix_preserves_local_and_synced_local_cases,
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,
+        test_strict_local_augmented_caption_allows_model_report,
         test_strict_local_caption_failure_blocks_detection_only_report,
     ]
     failures = []

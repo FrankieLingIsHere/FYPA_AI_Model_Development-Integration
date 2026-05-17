@@ -1445,6 +1445,23 @@ def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
     return False, ''
 
 
+def _caption_quality_reason_is_augmented(reason: Any) -> bool:
+    """Return true when model text was preserved and only YOLO context was appended."""
+    return str(reason or '').strip().lower().startswith('augmented_')
+
+
+def _caption_quality_reason_blocks_model_report(reason: Any) -> bool:
+    """Return true only for hard caption failures that would create detection-only output."""
+    normalized = str(reason or '').strip().lower()
+    if not normalized:
+        return False
+    if _caption_quality_reason_is_augmented(normalized):
+        return False
+    if normalized == 'empty_caption':
+        return True
+    return any(marker in normalized for marker in _CAPTION_HARD_FAILURE_MARKERS)
+
+
 def _build_detection_grounded_caption(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
@@ -5752,9 +5769,15 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(caption)
         if caption_quality_fallback_applied:
-            logger.warning(
-                f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
-            )
+            if _caption_quality_reason_is_augmented(caption_quality_reason):
+                logger.info(
+                    f"Caption quality YOLO context augmentation applied for {report_id} "
+                    f"(reason={caption_quality_reason})"
+                )
+            else:
+                logger.warning(
+                    f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
+                )
     except Exception as caption_write_error:
         logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
     _record_generation_timing('caption_generation', caption_started_at)
@@ -5801,9 +5824,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
         in ('1', 'true', 'yes', 'on')
     )
+    caption_quality_blocks_model_report = _caption_quality_reason_blocks_model_report(
+        caption_quality_reason
+    )
     caption_blocks_model_report = bool(
         local_requires_model_caption
-        and (caption_failure_reason or caption_quality_fallback_applied)
+        and (caption_failure_reason or caption_quality_blocks_model_report)
     )
     if caption_blocks_model_report:
         failure_reason = (
@@ -6430,9 +6456,15 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             with open(caption_path, 'w', encoding='utf-8') as f:
                 f.write(caption)
             if caption_quality_fallback_applied:
-                logger.warning(
-                    f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
-                )
+                if _caption_quality_reason_is_augmented(caption_quality_reason):
+                    logger.info(
+                        f"Caption quality YOLO context augmentation applied for {report_id} "
+                        f"(reason={caption_quality_reason})"
+                    )
+                else:
+                    logger.warning(
+                        f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
+                    )
         except Exception as caption_write_error:
             logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
 
@@ -6463,9 +6495,12 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
             in ('1', 'true', 'yes', 'on')
         )
+        caption_quality_blocks_model_report = _caption_quality_reason_blocks_model_report(
+            caption_quality_reason
+        )
         caption_blocks_model_report = bool(
             local_requires_model_caption
-            and (caption_failure_reason or caption_quality_fallback_applied)
+            and (caption_failure_reason or caption_quality_blocks_model_report)
         )
         if caption_blocks_model_report:
             generation_failure_reason = (

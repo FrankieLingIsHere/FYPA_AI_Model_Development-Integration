@@ -799,11 +799,27 @@ function initializeProvisioningStatusTracker() {
     window.addEventListener('online', () => {
         refreshProvisioningStatus({ source: 'online', force: true });
         scheduleProvisioningHeartbeatRefreshBurst('online-heartbeat-followup');
+        if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+            API.warmDashboardCaches({
+                reason: 'online-reconnect',
+                force: true,
+                timeoutMs: 12000,
+                minIntervalMs: 5000
+            });
+        }
     });
 
     window.addEventListener('ppe-backend:resolved', () => {
         refreshProvisioningStatus({ source: 'backend-resolved', force: true });
         scheduleProvisioningHeartbeatRefreshBurst('backend-resolved-heartbeat-followup');
+        if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+            API.warmDashboardCaches({
+                reason: 'backend-resolved',
+                force: true,
+                timeoutMs: 12000,
+                minIntervalMs: 5000
+            });
+        }
     });
 
     document.addEventListener('visibilitychange', () => {

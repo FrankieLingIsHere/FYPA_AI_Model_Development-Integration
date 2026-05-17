@@ -28,7 +28,7 @@ os.environ.setdefault("SUPABASE_DB_URL", "postgres://test:test@localhost:5432/te
 os.environ.setdefault("SUPABASE_URL", "https://projtest123.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "service-role-test-key")
 
-from casm_app import _enforce_caption_quality_floor
+from casm_app import _caption_quality_reason_blocks_model_report, _enforce_caption_quality_floor
 from caption_image import _caption_needs_expansion, _normalize_caption_text
 from pipeline.backend.integration.caption_generator import CaptionGenerator
 from pipeline.backend.core.report_generator import ReportGenerator
@@ -116,6 +116,28 @@ def test_casm_caption_quality_replaces_provider_failure_only():
     _assert(caption.startswith("Detection-only safety summary:"), "Expected explicit detection-only fallback")
 
 
+def test_augmented_caption_reason_does_not_block_strict_local_report():
+    _assert(
+        _caption_quality_reason_blocks_model_report("augmented_yolo_context") is False,
+        "YOLO addendum must not be treated as provider failure",
+    )
+    _assert(
+        _caption_quality_reason_blocks_model_report("augmented_too_short") is False,
+        "Short real captions with YOLO context should still reach report generation",
+    )
+
+
+def test_provider_failure_caption_reason_blocks_strict_local_report():
+    _assert(
+        _caption_quality_reason_blocks_model_report("image captioning not available") is True,
+        "Provider-unavailable captions must keep blocking detection-only local reports",
+    )
+    _assert(
+        _caption_quality_reason_blocks_model_report("empty_caption") is True,
+        "Empty captions must keep blocking strict local reports",
+    )
+
+
 def test_report_generator_keeps_non_placeholder_caption():
     subject = ReportGenerator.__new__(ReportGenerator)
     report_data = {
@@ -183,6 +205,8 @@ def main():
         test_casm_caption_quality_adds_yolo_context_to_rich_caption,
         test_casm_caption_quality_does_not_duplicate_existing_yolo_context,
         test_casm_caption_quality_replaces_provider_failure_only,
+        test_augmented_caption_reason_does_not_block_strict_local_report,
+        test_provider_failure_caption_reason_blocks_strict_local_report,
         test_report_generator_keeps_non_placeholder_caption,
         test_caption_generator_image_path_does_not_shadow_os_module,
         test_caption_generator_status_uses_active_gemini_vision_model,

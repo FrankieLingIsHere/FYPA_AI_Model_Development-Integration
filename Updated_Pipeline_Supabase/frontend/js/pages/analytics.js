@@ -117,10 +117,11 @@ const AnalyticsPage = {
     },
 
     async mount() {
-        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
-            await API.waitForDashboardWarmup(['stats', 'violations'], 900);
+        const cachedRendered = await this.renderCachedDataIfAvailable();
+        if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+            API.warmDashboardCaches({ reason: 'analytics-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
-        await this.refreshData();
+        await this.refreshData({ skipInitialCache: cachedRendered });
 
         this._realtimeHandler = () => {
             if (this._realtimeRefreshTimer) return;
@@ -184,6 +185,27 @@ const AnalyticsPage = {
         if (window.timePieChart) {
             window.timePieChart.destroy();
             window.timePieChart = null;
+        }
+    },
+
+    async renderCachedDataIfAvailable() {
+        if (typeof API === 'undefined' || typeof API.readJsonCache !== 'function') return false;
+        try {
+            const [cachedStats, cachedViolations] = await Promise.all([
+                API.readJsonCache('stats:summary'),
+                API.readJsonCache('violations:limit:1000')
+            ]);
+            const violations = cachedViolations && Array.isArray(cachedViolations.data)
+                ? cachedViolations.data
+                : [];
+            const stats = cachedStats && cachedStats.data && typeof cachedStats.data === 'object'
+                ? cachedStats.data
+                : (violations.length ? this.buildStatsFromViolations(violations) : null);
+            if (!stats) return false;
+            this.renderAnalyticsDataset(stats, violations);
+            return true;
+        } catch (error) {
+            return false;
         }
     },
 
@@ -745,29 +767,36 @@ const AnalyticsPage = {
         }
     },
 
-    async refreshData() {
+    renderAnalyticsDataset(stats, violations) {
+        const filteredViolations = this.assistantFilterState
+            ? this.filterViolations(violations, this.assistantFilterState.filters || {})
+            : (Array.isArray(violations) ? violations : []);
+        const baseStats = this.assistantFilterState
+            ? this.buildStatsFromViolations(filteredViolations)
+            : stats;
+        const normalizedStats = this.normalizeStats(baseStats, filteredViolations);
+        const derivedMetrics = this.buildDerivedMetrics(normalizedStats, filteredViolations);
+
+        this.renderAssistantBanner();
+        this.renderOverviewControl(normalizedStats, derivedMetrics, filteredViolations);
+        this.renderStats(normalizedStats, derivedMetrics);
+        this.renderInsights(derivedMetrics);
+        this.renderTrendsChart(filteredViolations);
+        this.renderViolationTypes(normalizedStats);
+        this.renderTimeDistribution(filteredViolations);
+        this.calculateSafetyScore(normalizedStats);
+    },
+
+    async refreshData(options = {}) {
         try {
+            if (!options.skipInitialCache) {
+                await this.renderCachedDataIfAvailable();
+            }
             const [stats, violations] = await Promise.all([
                 API.getStats(),
                 API.getViolations()
             ]);
-            const filteredViolations = this.assistantFilterState
-                ? this.filterViolations(violations, this.assistantFilterState.filters || {})
-                : (Array.isArray(violations) ? violations : []);
-            const baseStats = this.assistantFilterState
-                ? this.buildStatsFromViolations(filteredViolations)
-                : stats;
-            const normalizedStats = this.normalizeStats(baseStats, filteredViolations);
-            const derivedMetrics = this.buildDerivedMetrics(normalizedStats, filteredViolations);
-
-            this.renderAssistantBanner();
-            this.renderOverviewControl(normalizedStats, derivedMetrics, filteredViolations);
-            this.renderStats(normalizedStats, derivedMetrics);
-            this.renderInsights(derivedMetrics);
-            this.renderTrendsChart(filteredViolations);
-            this.renderViolationTypes(normalizedStats);
-            this.renderTimeDistribution(filteredViolations);
-            this.calculateSafetyScore(normalizedStats);
+            this.renderAnalyticsDataset(stats, violations);
         } catch (e) {
             console.error('Error loading analytics:', e);
             const statsEl = document.getElementById('analytics-stats');

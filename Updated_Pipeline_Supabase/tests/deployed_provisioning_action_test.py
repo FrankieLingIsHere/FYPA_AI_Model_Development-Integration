@@ -28,6 +28,7 @@ os.environ['SUPABASE_DB_URL'] = 'postgres://test:test@localhost:5432/test'
 os.environ['SUPABASE_URL'] = 'https://projtest123.supabase.co'
 os.environ['SUPABASE_SERVICE_ROLE_KEY'] = 'service-role-test-key'
 
+import casm_app
 from casm_app import (
     app,
     _load_pending_devices,
@@ -945,6 +946,57 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(mock_collect_submission.call_count, 2)
         heartbeat_url = str(mock_post.call_args.args[0])
         self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
+
+    @patch('casm_app.requests.post')
+    @patch('casm_app._local_mode_fetch_authoritative_status')
+    @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
+    def test_cloud_heartbeat_sends_during_supabase_backoff_without_extra_status_get(
+        self,
+        mock_collect_submission,
+        mock_fetch_status,
+        mock_post,
+    ):
+        mock_collect_submission.return_value = {
+            'ready': True,
+            'cloud_url': 'https://cloud.example.test',
+            'machine_id': 'TEST-EDGE-BACKOFF-HEARTBEAT-001',
+            'provision_secret': 'local-secret-backoff-001',
+            'provision_status': 'provisioned',
+            'credentials_present': True,
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        }
+        mock_post.return_value = self._mock_http_response(200, {'success': True, 'status': 'stored'})
+
+        old_until = casm_app.supabase_offline_backoff_until_epoch
+        old_context = casm_app.supabase_offline_backoff_context
+        old_error = casm_app.supabase_offline_backoff_error
+        try:
+            with casm_app.supabase_offline_backoff_lock:
+                casm_app.supabase_offline_backoff_until_epoch = casm_app.time.time() + 600
+                casm_app.supabase_offline_backoff_context = 'contract-test'
+                casm_app.supabase_offline_backoff_error = 'simulated Supabase DNS lag'
+
+            heartbeat_result = _send_local_mode_cloud_heartbeat_once()
+
+            self.assertTrue(heartbeat_result.get('sent'))
+            self.assertFalse(heartbeat_result.get('authoritative_fetched'))
+            self.assertEqual(
+                heartbeat_result.get('authoritative_skipped_reason'),
+                'supabase_offline_backoff',
+            )
+            mock_fetch_status.assert_not_called()
+            self.assertEqual(mock_post.call_count, 1)
+            self.assertIn('/api/local-mode/heartbeat', str(mock_post.call_args.args[0]))
+        finally:
+            with casm_app.supabase_offline_backoff_lock:
+                casm_app.supabase_offline_backoff_until_epoch = old_until
+                casm_app.supabase_offline_backoff_context = old_context
+                casm_app.supabase_offline_backoff_error = old_error
 
     @patch('casm_app._local_mode_save_provision_state')
     @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')

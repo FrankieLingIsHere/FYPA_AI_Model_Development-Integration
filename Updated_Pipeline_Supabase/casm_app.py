@@ -10744,8 +10744,14 @@ def _send_local_mode_cloud_heartbeat_once(
         return {'sent': False, 'reason': 'heartbeat_disabled'}
     if _is_hosted_runtime_environment():
         return {'sent': False, 'reason': 'hosted_runtime'}
-    if _is_supabase_offline_backoff_active():
-        return {'sent': False, 'reason': 'supabase_offline_backoff'}
+    supabase_backoff_active = _is_supabase_offline_backoff_active()
+    if supabase_backoff_active:
+        # Do not let Supabase DB reconnect backoff suppress the local -> cloud
+        # presence signal. The heartbeat talks to the cloud app over HTTPS, not
+        # directly to Supabase, so it can be the first thing to recover when
+        # Wi-Fi returns. Keep it egress-light by skipping the extra
+        # authoritative status GET while DB backoff is active.
+        skip_authoritative_fetch = True
 
     submission = _local_mode_collect_cloud_heartbeat_submission()
     if not submission.get('ready'):
@@ -10967,6 +10973,7 @@ def _send_local_mode_cloud_heartbeat_once(
         'machine_id': machine_id,
         'provision_status': provision_status,
         'authoritative_fetched': not skip_authoritative_fetch,
+        'authoritative_skipped_reason': 'supabase_offline_backoff' if supabase_backoff_active else '',
     }
 
 

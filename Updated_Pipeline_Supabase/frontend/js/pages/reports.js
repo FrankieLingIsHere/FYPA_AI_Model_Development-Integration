@@ -37,8 +37,8 @@ const ReportsPage = {
         maxRetries: 5,
         cooldownSeconds: 8,
         pollIntervalMs: 2500,
-        maxWaitMs: 240000,
-        expectedDurationSec: 60,
+        maxWaitMs: 420000,
+        expectedDurationSec: 180,
         minGeneratingDisplayMs: 1800,
         sawGeneratingStage: false
     },

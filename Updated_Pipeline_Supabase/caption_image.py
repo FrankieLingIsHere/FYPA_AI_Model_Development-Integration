@@ -87,6 +87,10 @@ LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS = max(
     12,
     _safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)
 )
+LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS = max(
+    LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS,
+    min(_safe_int_env('LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS', 210), 420)
+)
 LOCAL_OLLAMA_CAPTION_MAX_TOKENS = max(
     96,
     min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_TOKENS', 220), 512)
@@ -105,7 +109,12 @@ LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM = max(
     min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM', 320), 512)
 )
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
-OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
+_OLLAMA_VISION_NUM_GPU_RAW = os.getenv('OLLAMA_VISION_NUM_GPU', '').strip()
+OLLAMA_VISION_NUM_GPU = (
+    _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
+    if _OLLAMA_VISION_NUM_GPU_RAW
+    else None
+)
 OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
 ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM = max(256, _safe_int_env('ENVIRONMENT_VALIDATION_MAX_IMAGE_DIM', 512))
 ENVIRONMENT_VALIDATION_OLLAMA_NUM_CTX = max(512, _safe_int_env('ENVIRONMENT_VALIDATION_OLLAMA_NUM_CTX', 768))
@@ -127,7 +136,50 @@ _LAST_PROVIDER_FAILURES = []
 _gemini_quota_backoff_until = 0.0
 _LAST_PROVIDER_USED = None
 _ollama_auto_recover_next_allowed_ts = 0.0
+_local_gpu_hint_available_cache = None
 # ---------------------------
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _local_gpu_hint_available() -> bool:
+    """Best-effort GPU hint for choosing local Ollama timeout gates."""
+    global _local_gpu_hint_available_cache
+    if _env_flag('LOCAL_OLLAMA_ASSUME_CPU_ONLY', False):
+        return False
+    if _env_flag('LOCAL_OLLAMA_ASSUME_GPU_AVAILABLE', False):
+        return True
+    if _local_gpu_hint_available_cache is not None:
+        return bool(_local_gpu_hint_available_cache)
+
+    available = False
+    nvidia_smi = shutil.which('nvidia-smi')
+    if nvidia_smi:
+        try:
+            completed = subprocess.run(
+                [nvidia_smi, '-L'],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            available = completed.returncode == 0 and bool((completed.stdout or '').strip())
+        except Exception:
+            available = False
+
+    _local_gpu_hint_available_cache = bool(available)
+    return bool(available)
+
+
+def _local_ollama_cpu_timeout_needed() -> bool:
+    if OLLAMA_VISION_NUM_GPU is not None and OLLAMA_VISION_NUM_GPU <= 0:
+        return True
+    return not _local_gpu_hint_available()
 
 
 def _get_ollama_request_timeout():
@@ -141,6 +193,8 @@ def _get_ollama_request_timeout():
 
     if local_profile and 'OLLAMA_VISION_READ_TIMEOUT_SECONDS' not in os.environ:
         read_timeout = LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS
+        if _local_ollama_cpu_timeout_needed():
+            read_timeout = max(read_timeout, LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS)
     elif OLLAMA_VISION_READ_TIMEOUT_SECONDS <= 0:
         read_timeout = 120
     else:
@@ -228,6 +282,9 @@ def get_runtime_provider_diagnostics() -> dict:
         'ollama_auto_recover_cooldown_remaining_s': ollama_recovery_cooldown_remaining,
         'gemini_model': GEMINI_VISION_MODEL,
         'ollama_model': OLLAMA_MODEL_NAME,
+        'ollama_request_timeout': _get_ollama_request_timeout(),
+        'ollama_num_gpu_override': OLLAMA_VISION_NUM_GPU,
+        'ollama_cpu_timeout_gate': _local_ollama_cpu_timeout_needed(),
         'vision_api_model': VISION_API_MODEL,
     }
 
@@ -729,8 +786,9 @@ def _call_ollama_vision(
         'temperature': temperature,
         'num_predict': max_tokens,
         'num_ctx': OLLAMA_VISION_NUM_CTX,
-        'num_gpu': OLLAMA_VISION_NUM_GPU,
     }
+    if OLLAMA_VISION_NUM_GPU is not None:
+        options['num_gpu'] = OLLAMA_VISION_NUM_GPU
     options.update(request_overrides)
 
     payload = {

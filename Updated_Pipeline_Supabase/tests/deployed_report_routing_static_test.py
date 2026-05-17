@@ -19,8 +19,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("API.getImageUrl(violation.report_id, 'annotated.jpg', violation)", reports_js)
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
         self.assertIn('warmDashboardCaches({ reason: \'startup\'', app_js)
-        self.assertIn("API.waitForDashboardWarmup(['violations', 'pending']", reports_js)
-        self.assertIn("API.waitForDashboardWarmup(['stats', 'violations']", analytics_js)
+        self.assertIn("API.warmDashboardCaches({ reason: 'reports-mount'", reports_js)
+        self.assertIn("renderReportsListMarkup()", reports_js)
+        self.assertIn("API.warmDashboardCaches({ reason: 'analytics-mount'", analytics_js)
+        self.assertIn("renderCachedDataIfAvailable()", analytics_js)
 
     def test_local_mode_metrics_use_cloud_and_local_fetches(self):
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')

@@ -92,21 +92,25 @@ LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS = max(
     min(_safe_int_env('LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS', 210), 420)
 )
 LOCAL_OLLAMA_CAPTION_MAX_TOKENS = max(
-    96,
-    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_TOKENS', 220), 512)
+    160,
+    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_TOKENS', 420), 750)
 )
 LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS = max(
     256,
-    min(_safe_int_env('LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS', 300), 650)
+    min(_safe_int_env('LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS', 520), 850)
 )
+LOCAL_OLLAMA_CAPTION_EXPANSION_ENABLED = os.getenv(
+    'LOCAL_OLLAMA_CAPTION_EXPANSION_ENABLED',
+    'true',
+).lower() in ('1', 'true', 'yes', 'on')
 LOCAL_OLLAMA_CAPTION_WARMUP_ENABLED = os.getenv('LOCAL_OLLAMA_CAPTION_WARMUP_ENABLED', 'false').lower() in ('1', 'true', 'yes', 'on')
 LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS = max(
     8,
     min(_safe_int_env('LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS', 45), 90)
 )
 LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM = max(
-    192,
-    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM', 320), 512)
+    224,
+    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM', 448), 640)
 )
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
 _OLLAMA_VISION_NUM_GPU_RAW = os.getenv('OLLAMA_VISION_NUM_GPU', '').strip()
@@ -1402,15 +1406,24 @@ def caption_image_llava(image_path, prompt=None):
         and str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower() == 'local'
     )
 
-    # Local Gemma/Ollama reacts better to a shorter, stricter grounding prompt
-    # than to the longer shared cloud prompt.
+    # Local Gemma/Ollama needs strict grounding, but over-compressing the prompt
+    # starves useful visual detail. Keep the local prompt factual while still
+    # asking for the richer observer-style caption Gemma produced in earlier
+    # local runs.
     if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-        structured_prompt = """Return JSON only with keys caption, scene, people_count, visible_people, major_objects, ppe_visible, activity_context. Caption must be 3 factual sentences from visible evidence only. Do not use markdown or safety conclusions."""
-        default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 3-4 complete sentences.
+        structured_prompt = """Return JSON only with keys caption, scene, people_count, visible_people, major_objects, ppe_visible, activity_context.
+
+Requirements:
+- caption must be one factual paragraph with 5-7 complete sentences from visible evidence only.
+- In caption, describe indoor/outdoor setting, visible people count, visible body region, posture, gaze direction, clothing, eyewear, nearby room/site objects, windows, walls, vehicles, tools, or machinery when clearly visible.
+- Mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.
+- Do not use markdown, safety conclusions, legal conclusions, hazard conclusions, or guessed worksite context.
+- If visibility is unclear, say it is unclear instead of guessing."""
+        default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 5-7 complete sentences.
 
 Requirements:
 - Start with whether the scene is indoor or outdoor and the total visible people count, including partially visible people at the image edges.
-- Mention the main people, clothing, eyewear, vehicles, buildings, trees, posts, tools, or machinery only when clearly visible.
+- Mention visible body region, posture, gaze direction, clothing, eyewear, vehicles, buildings, trees, posts, tools, machinery, windows, walls, or other nearby objects only when clearly visible.
 - Mention PPE only when clearly visible; if none is visible, explicitly say no PPE is visible.
 
 Strict grounding rules:
@@ -1421,9 +1434,9 @@ Strict grounding rules:
         expansion_prompt = """Rewrite the caption with slightly richer factual detail from the image only.
 
 Requirements:
-- Keep one paragraph with 4-6 complete sentences.
+- Keep one paragraph with 5-7 complete sentences.
 - Start with indoor/outdoor and total visible people count, including edge-cropped people.
-- Describe the most visible people, then major visible background objects such as vehicles or buildings.
+- Describe the most visible people, body region, posture, gaze direction, clothing, eyewear, and major visible background objects such as vehicles, windows, walls, room objects, tools, or buildings.
 - End by stating whether any PPE is visible.
 - No intro phrase, no bullet points, no guessing.
 """
@@ -1485,9 +1498,9 @@ Requirements:
             structured_caption = _generate_vision_response(
                 prompt=structured_prompt,
                 image_base64=image_base64,
-                temperature=0.05,
+                temperature=0.18,
                 max_tokens=LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS,
-                ollama_options={'num_ctx': 768}
+                ollama_options={'num_ctx': 1536}
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)
@@ -1511,7 +1524,7 @@ Requirements:
 
             should_expand = _caption_needs_expansion(caption) and not caption.startswith('ALERT_')
             if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-                should_expand = False
+                should_expand = bool(LOCAL_OLLAMA_CAPTION_EXPANSION_ENABLED and should_expand)
 
             if should_expand:
                 expanded = _generate_vision_response(

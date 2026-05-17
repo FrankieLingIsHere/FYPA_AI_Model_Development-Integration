@@ -1088,6 +1088,78 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
             casm_app.reset_report_progress()
 
 
+def test_local_pending_recovery_preserves_metadata_ppe_labels():
+    report_id = "local_recovery_metadata_contract_001"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
+        casm_app.cv2.imwrite(str(report_dir / "original.jpg"), frame)
+        casm_app.cv2.imwrite(str(report_dir / "annotated.jpg"), frame)
+        (report_dir / "metadata.json").write_text(json.dumps({
+            "report_id": report_id,
+            "source_scope": "local",
+            "sync_source": "local_pipeline",
+            "device_id": "offline_local_cache",
+            "violation_types": [],
+            "missing_ppe": ["NO-Hardhat", "Safety Vest", "Mask"],
+            "ppe_tags": [],
+            "violation_summary": "PPE Violation Detected: Missing Hard Hat, Missing Safety Vest, Missing Mask",
+            "violation_count": 3,
+            "person_count": 1,
+        }), encoding="utf-8")
+        stale_epoch = time.time() - 3600
+        os.utime(report_dir, (stale_epoch, stale_epoch))
+
+        fake_queue = CaptureQueue()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_violation_queue = casm_app.violation_queue
+        old_ensure_runtime_ready = casm_app._ensure_violation_queue_runtime_ready
+        old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        old_recovery_enabled = casm_app.LOCAL_PENDING_RECOVERY_ENABLED
+        old_recovery_stale = casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS
+        old_recovery_max = casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = None
+            casm_app.violation_queue = fake_queue
+            casm_app._ensure_violation_queue_runtime_ready = lambda reason='': True
+            casm_app.ensure_queue_worker_running = lambda: True
+            casm_app.LOCAL_PENDING_RECOVERY_ENABLED = True
+            casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = 1
+            casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = 1
+
+            summary = casm_app._run_local_pending_recovery_sweep(reason="contract")
+
+            _assert(summary.get("enqueued") == 1, f"Recovery did not enqueue: {summary}")
+            _assert(fake_queue.items, "Recovery queue did not receive item")
+            payload = fake_queue.items[0]["violation_data"]
+            _assert(
+                payload.get("violation_types") == ["NO-Hardhat", "NO-Safety Vest", "NO-Mask"],
+                f"Recovered payload lost PPE labels: {payload}",
+            )
+            _assert(payload.get("violation_count") == 3, f"Recovered count drifted: {payload}")
+            _assert(payload.get("source_scope") == "local", f"Recovered scope drifted: {payload}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.violation_queue = old_violation_queue
+            casm_app._ensure_violation_queue_runtime_ready = old_ensure_runtime_ready
+            casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
+            casm_app.LOCAL_PENDING_RECOVERY_ENABLED = old_recovery_enabled
+            casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = old_recovery_stale
+            casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = old_recovery_max
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
 def test_strict_local_augmented_caption_allows_model_report():
     class RealCaptionGenerator:
         def generate_caption(self, _image_path):
@@ -1317,6 +1389,7 @@ def main():
         test_report_source_tag_matrix_preserves_local_and_synced_local_cases,
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,
+        test_local_pending_recovery_preserves_metadata_ppe_labels,
         test_strict_local_augmented_caption_allows_model_report,
         test_strict_local_caption_failure_blocks_detection_only_report,
     ]

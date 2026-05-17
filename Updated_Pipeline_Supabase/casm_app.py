@@ -3433,23 +3433,94 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             except Exception:
                 detection_payload = None
 
+        local_metadata: Dict[str, Any] = {}
+        metadata_path = violation_dir / 'metadata.json'
+        try:
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as metadata_file:
+                    parsed_metadata = json.load(metadata_file) or {}
+                if isinstance(parsed_metadata, dict):
+                    local_metadata = parsed_metadata
+        except Exception as metadata_error:
+            logger.debug(f"Could not read local recovery metadata for {report_id}: {metadata_error}")
+
         detections: List[Dict[str, Any]] = []
         if isinstance(detection_payload, dict):
             raw_detections = detection_payload.get('detections')
             if isinstance(raw_detections, list):
                 detections = [item for item in raw_detections if isinstance(item, dict)]
+        if not detections:
+            metadata_detection_payload = local_metadata.get('detection_data')
+            if isinstance(metadata_detection_payload, str):
+                try:
+                    metadata_detection_payload = json.loads(metadata_detection_payload)
+                except Exception:
+                    metadata_detection_payload = None
+            if isinstance(metadata_detection_payload, dict):
+                raw_detections = metadata_detection_payload.get('detections')
+                if isinstance(raw_detections, list):
+                    detections = [item for item in raw_detections if isinstance(item, dict)]
+            if not detections and isinstance(local_metadata.get('detections'), list):
+                detections = [item for item in local_metadata.get('detections') if isinstance(item, dict)]
 
         fallback_count = None
         if isinstance(event, dict):
             fallback_count = event.get('violation_count')
+        local_fallback_count = local_metadata.get('violation_count')
+        try:
+            fallback_count_value = int(fallback_count or 0)
+        except Exception:
+            fallback_count_value = 0
+        for count_candidate in (local_fallback_count, local_metadata.get('detection_count')):
+            try:
+                count_value = int(count_candidate or 0)
+            except Exception:
+                count_value = 0
+            if count_value > fallback_count_value:
+                fallback_count = count_value
+                fallback_count_value = count_value
 
-        violation_summary = violation.get('violation_summary') if isinstance(violation, dict) else None
-        violation_types, resolved_violation_count = _resolve_violation_types_and_count(
-            detections,
-            event=event if isinstance(event, dict) else None,
-            violation_summary=violation_summary,
-            fallback_count=fallback_count,
+        violation_summary_candidates = [
+            violation.get('violation_summary') if isinstance(violation, dict) else None,
+            event.get('violation_summary') if isinstance(event, dict) else None,
+            local_metadata.get('violation_summary'),
+        ]
+        violation_summary = next(
+            (str(candidate).strip() for candidate in violation_summary_candidates if str(candidate or '').strip()),
+            None,
         )
+        metadata_missing_ppe = local_metadata.get('missing_ppe')
+        if isinstance(metadata_missing_ppe, str):
+            metadata_missing_ppe = [metadata_missing_ppe]
+        if not isinstance(metadata_missing_ppe, list):
+            metadata_missing_ppe = []
+        metadata_missing_ppe_labels: List[str] = []
+        for missing_item in metadata_missing_ppe:
+            raw_missing_item = str(missing_item or '').strip()
+            if not raw_missing_item:
+                continue
+            if (
+                _is_violation_label(raw_missing_item)
+                or raw_missing_item.lower().startswith(('missing ', 'without ', 'no ', 'no-'))
+            ):
+                metadata_missing_ppe_labels.append(raw_missing_item)
+            else:
+                metadata_missing_ppe_labels.append(f"Missing {raw_missing_item}")
+        metadata_violation_types = _normalize_violation_type_list(
+            local_metadata.get('violation_types'),
+            local_metadata.get('ppe_tags'),
+            metadata_missing_ppe_labels,
+        )
+        if metadata_violation_types:
+            violation_types = metadata_violation_types
+            resolved_violation_count = max(len(metadata_violation_types), fallback_count_value, 1)
+        else:
+            violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+                detections,
+                event=event if isinstance(event, dict) else None,
+                violation_summary=violation_summary,
+                fallback_count=fallback_count,
+            )
 
         try:
             timestamp_iso = _parse_report_id_timestamp(report_id).isoformat()
@@ -3481,19 +3552,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             # re-enqueued with source_scope='local' — that would corrupt their
             # Supabase record and make them show as "Local"/"Local Synced" after
             # the user switches back to cloud mode.
-            _metadata_path_for_guard = violation_dir / 'metadata.json'
-            _guard_metadata: Dict[str, Any] = {}
-            try:
-                if _metadata_path_for_guard.exists():
-                    with open(_metadata_path_for_guard, 'r', encoding='utf-8') as _gmf:
-                        _gm = json.load(_gmf) or {}
-                    if isinstance(_gm, dict):
-                        _guard_metadata = _gm
-            except Exception:
-                pass
             _guard_record: Dict[str, Any] = {
                 'report_id': report_id,
-                **_guard_metadata,
+                **local_metadata,
             }
             if isinstance(event, dict):
                 _guard_record.setdefault('device_id', event.get('device_id'))

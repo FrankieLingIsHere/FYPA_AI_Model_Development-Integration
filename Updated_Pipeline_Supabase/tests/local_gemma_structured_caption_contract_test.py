@@ -167,8 +167,8 @@ def test_caption_image_llava_prefers_structured_local_caption_without_custom_pro
                 raise AssertionError("Expected one structured local caption/activity call")
             if kwargs.get("ollama_format") is not None:
                 raise AssertionError("Strict local vision captions should avoid Ollama schema format because it can stall Gemma vision")
-            if (kwargs.get("ollama_options") or {}).get("num_ctx") != 768:
-                raise AssertionError("Expected compact Ollama context for structured local caption")
+            if (kwargs.get("ollama_options") or {}).get("num_ctx") != 1536:
+                raise AssertionError("Expected detail-preserving Ollama context for structured local caption")
             return """```json
 {
   "caption": "The scene depicts an indoor room. An indoor scene shows one visible person. The person's upper body is visible, and he appears seated while facing forward. He is wearing a grey shirt, and no PPE is clearly visible. A couch and a backpack are visible nearby.",

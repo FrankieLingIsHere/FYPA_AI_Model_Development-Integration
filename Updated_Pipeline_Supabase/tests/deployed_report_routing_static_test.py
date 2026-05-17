@@ -44,6 +44,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
     def test_local_realtime_uses_sse_and_backend_push_rows(self):
         realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+        supabase_report_generator = (ROOT / 'pipeline' / 'backend' / 'core' / 'supabase_report_generator.py').read_text(encoding='utf-8')
 
         self.assertIn("host === 'localhost'", realtime_js)
         self.assertIn('return false;', realtime_js)
@@ -52,6 +53,16 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("_push_processing_status('generating')", casm_app)
         self.assertIn("existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))", casm_app)
         self.assertIn('realtime_report_events = deque', casm_app)
+        self.assertIn("def _signal_local_report_ready(reason: str = 'local_report_html_ready')", casm_app)
+        self.assertIn("'report_openable_after_seconds'", casm_app)
+        self.assertIn("'report_ready_callback': _signal_local_report_ready", casm_app)
+        self.assertIn('ready_callback = report_data.get(\'report_ready_callback\')', supabase_report_generator)
+        self.assertIn('supabase_local_report_html_written', supabase_report_generator)
+        self.assertLess(
+            supabase_report_generator.index('supabase_local_report_html_written'),
+            supabase_report_generator.index('# Step 1.5: Validate caption against annotations'),
+            'Report-ready callback must run before validation/upload/persistence work',
+        )
 
     def test_local_notifications_survive_initial_load_and_preliminary_rows(self):
         realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')

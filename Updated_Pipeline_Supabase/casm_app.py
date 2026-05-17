@@ -5449,6 +5449,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     generation_started_at = time.perf_counter()
     generation_timings_seconds: Dict[str, float] = {}
     should_update_cloud_status = bool(db_manager and not force_local_artifact_pipeline)
+    report_created = False
+    failure_reason = None
+    cloud_upload_skipped = False
+    result_storage_keys: Dict[str, Any] = {}
+    report_ready_signal_sent = False
+    report_ready_signal_lock = Lock()
 
     def _push_processing_status(status: str, error_message: str = None, has_report: bool = False) -> None:
         try:
@@ -5501,6 +5507,59 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.info("Report generation timing %s stage=%s elapsed=%.2fs", report_id, stage_name, elapsed)
         except Exception:
             pass
+
+    def _signal_local_report_ready(reason: str = 'local_report_html_ready') -> bool:
+        """Publish ready as soon as report.html is locally openable, before slow cloud finalization."""
+        nonlocal report_created, failure_reason, report_ready_signal_sent
+        local_report_html = violation_dir / 'report.html'
+        if not local_report_html.exists():
+            return False
+
+        with report_ready_signal_lock:
+            if report_ready_signal_sent:
+                return True
+            report_ready_signal_sent = True
+            report_created = True
+            failure_reason = None
+            generation_timings_seconds.setdefault(
+                'report_openable_after_seconds',
+                round(max(0.0, time.perf_counter() - generation_started_at), 2),
+            )
+
+        try:
+            update_report_progress(
+                current=report_id,
+                current_step='Report ready',
+                status='completed',
+            )
+        except Exception:
+            pass
+
+        try:
+            html_content = local_report_html.read_text(encoding='utf-8')
+            _persist_local_report_html_cache(report_id, html_content)
+        except Exception as cache_err:
+            logger.debug(f"Could not prime local report HTML cache for {report_id}: {cache_err}")
+
+        try:
+            _push_processing_status('completed', has_report=True)
+            logger.info(
+                "Report %s marked ready from local HTML before cloud finalization (reason=%s)",
+                report_id,
+                reason,
+            )
+        except Exception as realtime_err:
+            logger.debug(f"Could not push early ready status for {report_id}: {realtime_err}")
+
+        if should_update_cloud_status:
+            try:
+                db_manager.update_detection_status(report_id, 'completed')
+                logger.info(f" Status updated to COMPLETED from local-ready signal: {report_id}")
+            except Exception as e:
+                _activate_local_offline_runtime('process_queued_violation.local_ready_status_completed', e)
+                logger.warning(f"Could not update completed status from local-ready signal: {e}")
+
+        return True
 
     logger.info(f" Processing queued violation: {report_id}")
     _push_processing_status('generating')
@@ -5716,10 +5775,6 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     resolved_report_severity = context_adjusted_severity
 
     # Generate report
-    report_created = False
-    failure_reason = None
-    cloud_upload_skipped = False
-    result_storage_keys: Dict[str, Any] = {}
     caption_provider = None
     caption_model = None
     report_generation_started_at = time.perf_counter()
@@ -5791,6 +5846,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'cloud_upload_disabled': force_local_artifact_pipeline,
                 'force_local_nlp': force_local_artifact_pipeline,
                 'allow_local_nlp_fallback': force_local_artifact_pipeline,
+                'report_ready_callback': _signal_local_report_ready,
             }
             if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
                 report_data['source_scope'] = 'local'
@@ -5894,8 +5950,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         logger.info(f" Report generated: {target_html}")
                         report_created = True
 
-                        # Update status to completed
-                        if should_update_cloud_status:
+                        # Update status to completed if the early local-ready signal did not already do it.
+                        if should_update_cloud_status and not report_ready_signal_sent:
                             try:
                                 db_manager.update_detection_status(report_id, 'completed')
                                 logger.info(f" Status updated to COMPLETED: {report_id}")
@@ -5936,7 +5992,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 failure_path.unlink()
         except Exception as cleanup_err:
             logger.debug(f"Could not remove stale generation failure file for {report_id}: {cleanup_err}")
-        if should_update_cloud_status:
+        if should_update_cloud_status and not report_ready_signal_sent:
             try:
                 db_manager.update_detection_status(report_id, 'completed')
             except Exception as status_err:

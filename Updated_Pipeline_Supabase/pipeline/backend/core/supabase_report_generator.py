@@ -101,10 +101,13 @@ class SupabaseReportGenerator(ReportGenerator):
         logger.info(f"Generating Supabase-backed report: {report_id}")
 
         progress_status_marked = False
+        early_ready_signaled = False
 
         def _safe_update_progress(stage: str):
             """Update progress if supported, otherwise keep status at generating."""
-            nonlocal progress_status_marked
+            nonlocal progress_status_marked, early_ready_signaled
+            if early_ready_signaled:
+                return
             try:
                 if hasattr(self.db_manager, 'update_progress'):
                     self.db_manager.update_progress(report_id, stage)
@@ -205,6 +208,21 @@ class SupabaseReportGenerator(ReportGenerator):
                 except Exception:
                     pass
 
+        # The local HTML is openable at this point. Notify the queue/UI before
+        # slower storage upload, violation persistence, and flood-log work.
+        ready_callback = report_data.get('report_ready_callback')
+        if callable(ready_callback):
+            try:
+                html_path = result.get('html') if isinstance(result, dict) else None
+                if html_path and Path(html_path).exists():
+                    callback_started = time.perf_counter()
+                    early_ready_signaled = bool(ready_callback('supabase_local_report_html_written'))
+                    if early_ready_signaled:
+                        progress_status_marked = True
+                    _record_timing('early_ready_callback_seconds', callback_started)
+            except Exception as callback_err:
+                logger.debug(f"Early report-ready callback skipped for {report_id}: {callback_err}")
+
         # Step 1.5: Validate caption against annotations
         caption = report_data.get('caption', '')
         detections = report_data.get('detections', [])
@@ -255,7 +273,7 @@ class SupabaseReportGenerator(ReportGenerator):
                         person_count=person_count,
                         violation_count=violation_count,
                         severity=severity,
-                        status='generating'
+                        status='completed' if early_ready_signaled else 'generating'
                     )
                     progress_status_marked = True
             else:
@@ -266,7 +284,7 @@ class SupabaseReportGenerator(ReportGenerator):
                     violation_count=violation_count,
                     severity=severity,
                     device_id=device_id or None,
-                    status='generating'
+                    status='completed' if early_ready_signaled else 'generating'
                 )
             
             if not detection_result:

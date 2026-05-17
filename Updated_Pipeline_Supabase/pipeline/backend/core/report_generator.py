@@ -1328,15 +1328,32 @@ class ReportGenerator:
             _evidence('caption/detections indicate road, traffic lane, vehicle, or cone-controlled work zone'),
         ))
 
+        severity_hint = str(report_data.get('severity') or '').strip().upper()
+        ppe_only_low_review = bool(
+            severity_hint == 'LOW'
+            and has_ppe_gap
+            and not (
+                restricted_area
+                or unsafe_posture
+                or machinery_related
+                or work_height
+                or material_stability
+                or traffic_interface
+            )
+        )
         regulatory_followup = (
             has_ppe_gap
             or bool(violation_summary.strip())
             or _has_any('ppe non-compliance', 'ppe violation', 'missing ppe')
-        )
+        ) and not ppe_only_low_review
         signals.append((
             'regulatory report generation / evidence-pack follow-up',
             regulatory_followup,
-            _evidence('confirmed violation report, PPE gap, or enforcement-relevant summary'),
+            _evidence(
+                'confirmed violation report, PPE gap, or enforcement-relevant summary'
+                if not ppe_only_low_review
+                else 'LOW severity PPE-only review; no activity hazard signal is confirmed'
+            ),
         ))
 
         lines = [
@@ -1358,10 +1375,16 @@ class ReportGenerator:
             'When observed=true, the final JSON must contain a model-authored risk/action for the affected person(s), '
             'including a plain HIGH/MEDIUM/LOW/REVIEW_REQUIRED likelihood without the word "inferred".'
         )
-        lines.append(
-            'If regulatory report generation / evidence-pack follow-up is observed=true, add a corrective action that begins '
-            'with "Generate the regulatory incident report package" and names the required image evidence, detector metadata, and supervisor sign-off.'
-        )
+        if ppe_only_low_review:
+            lines.append(
+                'For LOW severity PPE-only review with no observed activity hazard, do not create an incident-package or stop-work action. '
+                'Use supervisor verification, PPE issuance if required by task/zone, and local report note follow-up instead.'
+            )
+        else:
+            lines.append(
+                'If regulatory report generation / evidence-pack follow-up is observed=true, add a corrective action that begins '
+                'with "Generate the regulatory incident report package" and names the required image evidence, detector metadata, and supervisor sign-off.'
+            )
         return '\n'.join(lines)
 
     def _observed_activity_categories_from_signal_block(self, signal_block: str) -> List[str]:
@@ -1589,6 +1612,7 @@ Based on classification, APPLY these specific standards:
 - IF Roadside Work Zone: Apply **JKR Arahan Teknik (Jalan) 2C/85**. High Visibility Vest is MANDATORY.
 - IF Work at Height: Apply **BOWEC 1986 (Scaffolds)**. Safety Harness/Helmet is MANDATORY.
 - IF Excavation: Apply **DOSH Guidelines on Trenching**. Shoring/Barriers required.
+- IF General Workspace / Indoor / Office / Residential / ordinary Public Area with no active construction, traffic, dust/fume, chemical, machinery, work-at-height, or overhead-object exposure: Apply **OSHA 1994 Section 15 risk assessment / suitable PPE duty** only. Do NOT apply BOWEC hard-hat, JKR hi-vis, or USECHH respiratory rules as mandatory unless that specific hazard is visible.
 - OTHERWISE: Apply **BOWEC 1986 (General)** and relevant OSHA 1994 provisions.
 
 *** INSTRUCTION 3: WITNESS COUNT (ZERO TOLERANCE) ***
@@ -1606,6 +1630,7 @@ Generate a JSON report following this logic:
     - Do NOT limit citations to PPE-only rules; include non-PPE breaches (e.g., traffic control, fall protection, unsafe stacking, excavation controls) when evidenced by caption/detections.
     - In the lower report sections (`hazards_faced`, `persons[].risks`, `persons[].corrective_actions`), cover observed activity risks such as restricted-area entry, unsafe posture, machinery-related exposure, work-at-height, traffic-interface exposure, material collapse, and regulatory report generation / evidence-pack follow-up. Do not add these to the caption or visual_evidence.
     - When regulatory_followup is observed, include a `corrective_actions` sentence that starts with "Generate the regulatory incident report package" and specifies image evidence, detector metadata, and supervisor sign-off.
+    - When severity_level is LOW and the scene is General Workspace, Indoor / Office, Residential, or ordinary Public Area with no observed activity risk, treat hardhat/vest/mask gaps as a supervisor verification finding. Use LOW likelihood, avoid stop-work wording, and do not cite construction, traffic, dust/fume, or falling-object hazards unless the caption or YOLO payload explicitly shows them.
 3. **WEIGHTED SEVERITY**:
    - Set `severity_level` to exactly "{str(report_data.get('severity') or 'MEDIUM').strip().upper() if str(report_data.get('severity') or '').strip().upper() in ('HIGH', 'MEDIUM', 'LOW') else 'MEDIUM'}". Use only HIGH, MEDIUM, or LOW; never return CRITICAL.
 4. **WRITE-UP DEPTH (MANDATORY)**:
@@ -1723,6 +1748,13 @@ RESPONSE FORMAT (JSON):
             result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
 
             if result:
+                if isinstance(result, dict) and self._is_low_severity_review_context(report_data or {}, result):
+                    logger.info(
+                        "Applying LOW context proportionality guard to Gemini result before schema/semantic gates for report %s",
+                        report_id or 'unknown',
+                    )
+                    result = self._apply_low_context_proportionality_guard(result, report_data or {})
+
                 if isinstance(result, dict) and result.get('_schema_incomplete'):
                     missing = result.get('_missing_required_report_keys') or []
                     if not self.allow_schema_incomplete_report:
@@ -2055,7 +2087,7 @@ RESPONSE FORMAT (JSON):
             if not str(reg.get('penalty') or '').strip():
                 gaps.append(f'dosh_regulations_cited[{idx}].penalty')
 
-        if missing_ppe_keys:
+        if missing_ppe_keys and not self._is_low_severity_review_context(report_data or {}, nlp_analysis):
             combined_action_text = ' '.join(all_actions).lower()
             if 'generate the regulatory incident report package' not in combined_action_text:
                 gaps.append('persons[].corrective_actions.regulatory_incident_report_package')
@@ -2108,7 +2140,10 @@ RESPONSE FORMAT (JSON):
             expectations.append(f"Set severity_level exactly to {expected_severity}.")
         if missing_labels:
             expectations.append("Mark detector-confirmed missing PPE as Missing in every person ppe map: " + ', '.join(missing_labels) + ".")
-            expectations.append('Include a corrective action beginning with "Generate the regulatory incident report package".')
+            if self._is_low_severity_review_context(report_data or {}, {}):
+                expectations.append("For LOW PPE-only context, use supervisor verification actions and do not create incident-package or stop-work wording.")
+            else:
+                expectations.append('Include a corrective action beginning with "Generate the regulatory incident report package".')
 
         return (
             str(prompt or '')
@@ -2219,13 +2254,13 @@ Rules:
 - Create exactly {person_count} person record(s), unless person_count is zero.
 - The persons array must contain one object for each of these ids: {required_person_ids or 'none'}.
 - Do not merge multiple people into one person record; repeat concise risk/actions for each visible person if individual details are similar.
-- Use severity_level "{severity}" unless the caption clearly proves a lower-risk office/residential/public context or a higher-risk construction/industrial/traffic context.
-- For office, residential, classroom, meeting room, or ordinary public scenes with no visible work-zone, machinery, traffic-control, dust, fumes, overhead work, or mobile equipment, use MEDIUM for hardhat/vest/mask-only PPE gaps.
+- Use severity_level "{severity}" unless the caption clearly proves a higher-risk construction/industrial/traffic context.
+- For general workspace, office, residential, classroom, meeting room, or ordinary public scenes with no visible work-zone, machinery, traffic-control, dust, fumes, overhead work, or mobile equipment, preserve LOW severity for hardhat/vest/mask-only PPE gaps and use LOW likelihood. Treat them as supervisor verification findings, not immediate-danger findings.
 - For construction, industrial, warehouse, road work, traffic interface, work at height, chemicals, dust, fumes, machinery, or overhead/falling-object exposure, use HIGH when the missing PPE matches that hazard.
 - Keep text concise but complete; every person needs ppe, risks, and corrective_actions.
 - Each risk must include risk_category, risk, likelihood, evidence, regulation_citation, legal_regulatory_consequences, and mitigation_steps.
 - If you include an activity risk, use only the listed observed categories. Do not invent unlisted activity risks.
-- If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off.
+- If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off. If regulatory_followup is not observed, do not create incident-package or stop-work wording.
 - Do not write "(inferred)" in likelihood; use HIGH, MEDIUM, LOW, or REVIEW_REQUIRED.
 - Cite OSHA 1994 Section 15 for PPE duty; cite BOWEC 1986 Reg. 24 only when hardhat/head protection is relevant.
 
@@ -3236,6 +3271,46 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     missing_model_cells.append('persons[].corrective_actions')
 
                 provider_is_model = str(self.last_nlp_provider or '').strip().lower() not in ('', 'fallback', 'mock')
+                if (
+                    missing_model_cells
+                    and provider_is_model
+                    and self._is_low_severity_review_context(report_data, nlp_analysis)
+                ):
+                    logger.info(
+                        "LOW context report %s missing model cells %s; applying proportional verification guard before strict gate",
+                        report_id,
+                        ', '.join(missing_model_cells),
+                    )
+                    nlp_analysis = self._apply_low_context_proportionality_guard(nlp_analysis, report_data)
+                    persons_payload = nlp_analysis.get('persons')
+                    persons_list = persons_payload if isinstance(persons_payload, list) else []
+                    needs_persons = len(persons_list) == 0
+                    needs_regulation = not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0
+                    needs_environment = not str(nlp_analysis.get('environment_type', '')).strip()
+                    needs_risk_cells = not any(
+                        isinstance(person, dict)
+                        and isinstance(person.get('risks'), list)
+                        and len(person.get('risks') or []) > 0
+                        for person in persons_list
+                    )
+                    needs_action_cells = not any(
+                        isinstance(person, dict)
+                        and (
+                            (isinstance(person.get('corrective_actions'), list) and len(person.get('corrective_actions') or []) > 0)
+                            or (isinstance(person.get('actions'), list) and len(person.get('actions') or []) > 0)
+                        )
+                        for person in persons_list
+                    )
+                    missing_model_cells = []
+                    if needs_persons:
+                        missing_model_cells.append('persons')
+                    if needs_regulation:
+                        missing_model_cells.append('dosh_regulations_cited')
+                    if needs_risk_cells:
+                        missing_model_cells.append('persons[].risks')
+                    if needs_action_cells:
+                        missing_model_cells.append('persons[].corrective_actions')
+
                 schema_incomplete_payload = bool(
                     isinstance(nlp_analysis, dict)
                     and (
@@ -3421,6 +3496,8 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if len(nlp_analysis.get('summary', '')) < 50 or 'the worker' in nlp_analysis.get('summary', '').lower()[:20]:
             logger.info("Re-grounding summary with executive Malaysian safety context")
             nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
+
+        nlp_analysis = self._apply_low_context_proportionality_guard(nlp_analysis, report_data)
         _record_timing('nlp_postprocess_seconds', postprocess_started)
 
         nlp_integrity = self._build_nlp_integrity_snapshot(raw_nlp_analysis, nlp_analysis)
@@ -3659,6 +3736,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             env_type = 'General Workspace'
             env_detail = 'Work environment identified from visual analysis.'
 
+        input_report_severity = str(report_data.get('severity') or '').strip().upper()
         low_hazard_scene = bool(
             env_type in {'Indoor / Office', 'Residential'}
             and not (has_roadside or has_piles or has_work_height or has_work_zone_marker or yolo_machinery)
@@ -3669,7 +3747,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             and not has_roadside
             and not yolo_machinery
         )
-        context_review_scene = low_hazard_scene or public_context_review
+        general_low_context_review = bool(
+            env_type == 'General Workspace'
+            and input_report_severity == 'LOW'
+            and not (has_roadside or has_piles or has_work_height or has_work_zone_marker or yolo_machinery)
+        )
+        context_review_scene = low_hazard_scene or public_context_review or general_low_context_review
+        review_risk_tier = 'LOW' if input_report_severity == 'LOW' else 'MEDIUM'
 
         def _contextual_violation_data(key: str) -> Optional[Dict[str, Any]]:
             data = VIOLATION_DATA.get(key)
@@ -3690,7 +3774,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'falling-object, or site-entry exposure is confirmed from the scene evidence.'
                     ),
                     'risk': (
-                        'Moderate: head-protection non-compliance requires supervisor review before '
+                        f'{review_risk_tier.title()}: head-protection non-compliance requires supervisor review before '
                         'treating it as a mandatory hard-hat-zone breach.'
                     ),
                     'action': (
@@ -3705,7 +3789,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'controls should be enforced when overhead, impact, or controlled-site hazards exist.'
                     ),
                     'penalty': review_penalty,
-                    'risk_tier': 'MEDIUM',
+                    'risk_tier': review_risk_tier,
                 }
             if key == 'safety vest':
                 return {
@@ -3714,7 +3798,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'vehicle, moving plant, or work-zone traffic exposure is not confirmed.'
                     ),
                     'risk': (
-                        'Moderate: visibility PPE gap requires context review before classifying it '
+                        f'{review_risk_tier.title()}: visibility PPE gap requires context review before classifying it '
                         'as a struck-by vehicle hazard.'
                     ),
                     'action': (
@@ -3729,7 +3813,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'low-visibility, or controlled work-zone exposure is present.'
                     ),
                     'penalty': review_penalty,
-                    'risk_tier': 'MEDIUM',
+                    'risk_tier': review_risk_tier,
                 }
             return {
                 'hazard': (
@@ -3737,7 +3821,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     'spray, or airborne contaminant exposure is not confirmed from the scene evidence.'
                 ),
                 'risk': (
-                    'Moderate: respiratory PPE gap requires task/exposure review before classifying '
+                    f'{review_risk_tier.title()}: respiratory PPE gap requires task/exposure review before classifying '
                     'it as a hazardous-substance exposure.'
                 ),
                 'action': (
@@ -3752,7 +3836,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     'dusts, fumes, vapours, chemicals, or airborne contaminants.'
                 ),
                 'penalty': review_penalty,
-                'risk_tier': 'MEDIUM',
+                'risk_tier': review_risk_tier,
             }
 
         # Build PPE status and collect data
@@ -5821,6 +5905,245 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         return [str(data)]
 
+    def _has_high_hazard_scene_evidence(self, report_data: Optional[Dict[str, Any]]) -> bool:
+        """Return true only when caption/detector evidence supports high-hazard escalation."""
+        if not isinstance(report_data, dict):
+            return False
+
+        caption_text = " ".join(
+            str(report_data.get(field) or '')
+            for field in ('caption', 'vlm_caption', 'visual_evidence')
+        ).lower()
+        high_terms = (
+            'construction', 'road work', 'roadworks', 'work zone', 'traffic',
+            'roadside', 'highway', 'lane closure', 'safety cone', 'cone',
+            'barrier', 'barricade', 'vehicle', 'truck', 'lorry', 'bus',
+            'forklift', 'excavator', 'crane', 'machinery', 'mobile plant',
+            'warehouse', 'factory', 'industrial', 'loading dock',
+            'scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform',
+            'overhead', 'falling object', 'debris', 'timber', 'pile',
+            'trench', 'excavation', 'confined space', 'welding', 'grinding',
+            'cutting', 'dust', 'fume', 'fumes', 'chemical', 'spray', 'smoke',
+            'silica', 'asbestos',
+        )
+        if any(self._has_positive_environment_keyword(caption_text, term) for term in high_terms):
+            return True
+
+        labels = []
+        for det in report_data.get('detections') or []:
+            if not isinstance(det, dict):
+                continue
+            label = str(det.get('class_name') or det.get('class') or '').strip().lower()
+            if not label:
+                continue
+            canonical = label.replace('_', ' ').replace('-', ' ')
+            if canonical.startswith('no ') or canonical in {'person', 'worker', 'man', 'woman', 'people'}:
+                continue
+            labels.append(canonical)
+
+        high_label_terms = (
+            'vehicle', 'truck', 'lorry', 'bus', 'forklift', 'excavator',
+            'crane', 'machinery', 'cone', 'barrier', 'scaffold', 'ladder',
+            'traffic', 'road', 'dust', 'smoke', 'chemical',
+        )
+        return any(any(term in label for term in high_label_terms) for label in labels)
+
+    def _is_low_severity_review_context(
+        self,
+        report_data: Optional[Dict[str, Any]],
+        nlp_analysis: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Identify LOW PPE-only findings where report tone must stay advisory."""
+        if not isinstance(report_data, dict):
+            return False
+
+        analysis = nlp_analysis if isinstance(nlp_analysis, dict) else {}
+        severity = str(
+            report_data.get('severity')
+            or analysis.get('severity_level')
+            or analysis.get('severity')
+            or ''
+        ).strip().upper()
+        if severity != 'LOW':
+            return False
+
+        env = self._normalize_environment_type(
+            analysis.get('environment_type')
+            or self._extract_environment_from_caption(str(report_data.get('caption') or report_data.get('vlm_caption') or ''))
+            or 'General Workspace'
+        )
+        low_envs = {'General Workspace', 'Indoor / Office', 'Residential', 'Public Area'}
+        if env not in low_envs:
+            return False
+
+        return not self._has_high_hazard_scene_evidence(report_data)
+
+    def _low_context_review_hazards(self, missing_keys: List[str]) -> List[str]:
+        hazards_by_key = {
+            'hardhat': 'Head-protection requirement requires supervisor verification; no overhead, falling-object, construction, or impact exposure is confirmed in the frame.',
+            'safety_vest': 'High-visibility requirement requires supervisor verification; no active traffic, mobile plant, vehicle path, or controlled work-zone exposure is confirmed.',
+            'mask': 'Respiratory-protection requirement requires supervisor verification; no dust, fume, chemical, smoke, or airborne contaminant source is confirmed.',
+            'gloves': 'Hand-protection requirement requires task verification; no sharp, hot, abrasive, or chemical handling activity is confirmed.',
+            'goggles': 'Eye-protection requirement requires task verification; no grinding, cutting, splash, or flying-particle activity is confirmed.',
+            'footwear': 'Foot-protection requirement requires task verification; no crushing, puncture, uneven-terrain, or slip hazard is confirmed.',
+        }
+        hazards = [hazards_by_key[key] for key in missing_keys if key in hazards_by_key]
+        return hazards or [
+            'PPE requirement requires supervisor verification; no high-hazard work activity is confirmed in the frame.'
+        ]
+
+    def _low_context_review_actions(self, missing_keys: List[str], environment_type: str) -> List[str]:
+        ppe_phrase = self._format_missing_ppe_phrase([_ppe_label_for_key(key) for key in missing_keys])
+        env = (environment_type or 'general workspace').strip().lower()
+        return [
+            f"Verify whether the {env} scene is a controlled work zone and whether {ppe_phrase} is mandatory for the assigned task before escalating enforcement.",
+            f"Provide and fit {ppe_phrase} if site rules, task risk assessment, signage, or supervisor instruction confirms that the PPE is required.",
+            "Record the detector evidence, the supervisor review outcome, and any coaching or PPE issue action in the local report file for audit traceability.",
+        ]
+
+    def _low_context_review_regulations(self, missing_keys: List[str], environment_type: str) -> List[Dict[str, str]]:
+        ppe_phrase = self._format_missing_ppe_phrase([_ppe_label_for_key(key) for key in missing_keys])
+        env = (environment_type or 'general workspace').strip().lower()
+        return [{
+            'regulation': 'OSHA 1994 Section 15 / Section 24',
+            'requirement': (
+                f"In the observed {env} frame, OSHA 1994 is applied as a suitable-PPE and safe-system-of-work duty rather than as an automatic construction-site breach. "
+                f"The employer and worker should verify whether {ppe_phrase} is required by the task risk assessment, site signage, permit conditions, or supervisor instruction."
+            ),
+            'explanation': (
+                "The visual evidence does not confirm active construction, traffic, dust or fume exposure, machinery, work at height, or overhead-object hazards. "
+                "Because the PPE need is task- and zone-dependent here, the report records a low-severity compliance review finding instead of a high-severity legal order."
+            ),
+            'penalty': (
+                "Escalate to formal enforcement only if supervisor review confirms the person was in a controlled zone or task where the missing PPE was mandatory. "
+                "Otherwise, retain the detector evidence, coaching record, and any PPE issue action as audit follow-up."
+            ),
+        }]
+
+    def _low_context_review_risks(self, missing_keys: List[str], environment_type: str) -> List[Dict[str, Any]]:
+        env = (environment_type or 'general workspace').strip().lower()
+        risk_templates = {
+            'hardhat': (
+                "The hardhat detector flag is a low-likelihood compliance concern in this frame because no overhead work, falling-object source, active construction activity, or impact hazard is visible. "
+                "Head protection may still be required by site rule or assigned task, so supervisor verification is needed before treating this as a mandatory hard-hat-zone breach.",
+                "YOLO flagged missing Hardhat; caption/scene evidence does not confirm overhead or falling-object exposure.",
+            ),
+            'safety_vest': (
+                "The safety-vest detector flag is a low-likelihood compliance concern because the frame does not show traffic, mobile plant, vehicle movement, or controlled work-zone separation needs. "
+                "High-visibility clothing may still be required by local site rules, so the finding should be verified against the task and zone controls.",
+                "YOLO flagged missing Safety Vest; caption/scene evidence does not confirm traffic or mobile-plant exposure.",
+            ),
+            'mask': (
+                "The mask detector flag is a low-likelihood compliance concern because the frame does not show dust, fumes, chemicals, smoke, spraying, or other airborne contaminant sources. "
+                "Respiratory protection may still be required for a hidden task or local rule, so the exposure condition should be checked before regulatory escalation.",
+                "YOLO flagged missing Mask; caption/scene evidence does not confirm respiratory exposure.",
+            ),
+            'gloves': (
+                "The glove detector flag is a low-likelihood compliance concern because the frame does not show abrasive handling, sharp edges, hot work, or chemical contact. "
+                "Hand protection should be verified against the assigned task before the finding is escalated beyond routine corrective follow-up.",
+                "YOLO flagged missing Gloves; caption/scene evidence does not confirm hand-injury exposure.",
+            ),
+            'goggles': (
+                "The eye-protection detector flag is a low-likelihood compliance concern because the frame does not show grinding, cutting, splashing, or flying-particle activity. "
+                "Eye protection should be verified against the assigned task before treating the finding as a process-specific breach.",
+                "YOLO flagged missing Goggles; caption/scene evidence does not confirm eye-hazard exposure.",
+            ),
+            'footwear': (
+                "The footwear detector flag is a low-likelihood compliance concern because the frame does not show crushing loads, puncture hazards, uneven ground, or wet/slip exposure. "
+                "Safety footwear should be verified against the task and local site rules before enforcement escalation.",
+                "YOLO flagged missing Footwear; caption/scene evidence does not confirm foot-injury exposure.",
+            ),
+        }
+        risks: List[Dict[str, Any]] = []
+        for key in missing_keys or ['ppe']:
+            risk_text, evidence = risk_templates.get(key, (
+                f"The PPE detector flag is a low-likelihood compliance concern in this {env} frame because no matching high-hazard activity is visible. "
+                "The supervisor should verify the assigned task and local zone requirements before escalating the finding.",
+                "YOLO flagged a missing PPE item; caption/scene evidence does not confirm a matching high-hazard exposure.",
+            ))
+            risks.append({
+                'risk_category': 'PPE_context_review',
+                'risk': risk_text,
+                'likelihood': 'LOW',
+                'evidence': evidence,
+                'regulation_citation': 'OSHA 1994 Section 15 / Section 24',
+                'legal_regulatory_consequences': (
+                    "Formal enforcement should be considered only if supervisor review confirms a mandatory PPE zone or task-specific exposure. "
+                    "For the current low-risk frame, retain the finding as an audit and corrective-coaching record."
+                ),
+                'mitigation_steps': [
+                    "Check site signage, permit conditions, and task risk assessment to confirm whether the flagged PPE is mandatory for this person.",
+                    "Issue and fit the relevant PPE if the supervisor confirms the task or zone requires it.",
+                    "Attach the detector evidence and supervisor decision to the report so the audit trail explains why the severity remains LOW.",
+                ],
+            })
+        return risks
+
+    def _apply_low_context_proportionality_guard(
+        self,
+        nlp_analysis: Dict[str, Any],
+        report_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Keep LOW general-workspace reports from inheriting high-hazard boilerplate."""
+        if not isinstance(nlp_analysis, dict):
+            return nlp_analysis
+        if not self._is_low_severity_review_context(report_data, nlp_analysis):
+            return nlp_analysis
+
+        environment_type = self._normalize_environment_type(
+            nlp_analysis.get('environment_type') or 'General Workspace'
+        ) or 'General Workspace'
+        missing_keys = self._extract_detector_missing_ppe_keys(report_data)
+        missing_phrase = self._detector_missing_ppe_phrase(missing_keys)
+        hazards = self._low_context_review_hazards(missing_keys)
+        actions = self._low_context_review_actions(missing_keys, environment_type)
+        risks = self._low_context_review_risks(missing_keys, environment_type)
+
+        nlp_analysis['environment_type'] = environment_type
+        nlp_analysis['severity_level'] = 'LOW'
+        report_data['severity'] = 'LOW'
+        nlp_analysis['summary'] = (
+            f"LOW severity PPE compliance review in {environment_type}. "
+            f"YOLO flagged {missing_phrase}, but the visual evidence does not confirm active construction, traffic, machinery, dust or fume, work-at-height, or overhead-object exposure. "
+            "Supervisor verification is required before treating the finding as a mandatory PPE-zone breach."
+        )
+        nlp_analysis['hazards_detected'] = hazards
+        nlp_analysis['suggested_actions'] = actions
+        nlp_analysis['dosh_regulations_cited'] = self._low_context_review_regulations(missing_keys, environment_type)
+
+        persons = nlp_analysis.get('persons')
+        if not isinstance(persons, list):
+            persons = []
+        target_count = self._person_card_target_count([p for p in persons if isinstance(p, dict)], report_data)
+        if target_count <= 0 and missing_keys:
+            target_count = 1
+        while target_count and len(persons) < target_count:
+            persons.append({'id': f'Person {len(persons) + 1}', 'ppe': {}})
+
+        for idx, person in enumerate(persons):
+            if not isinstance(person, dict):
+                continue
+            person.setdefault('id', f'Person {idx + 1}')
+            current_desc = self._clean_plain_text_for_report(person.get('description') or '')
+            over_escalated = bool(re.search(
+                r'\b(fatal|immediate danger|stop work|falling object|struck-by|dust|fume|silica|traffic|lorry|excavator|machinery)\b',
+                current_desc,
+                flags=re.IGNORECASE,
+            ))
+            if not current_desc or over_escalated:
+                person['description'] = (
+                    f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
+                    f"Detector-confirmed PPE condition: {missing_phrase}; no matching high-hazard activity is confirmed by the scene evidence."
+                )
+            person['hazards_faced'] = list(hazards)
+            person['risks'] = [dict(risk) for risk in risks]
+            person['corrective_actions'] = list(actions)
+            person['actions'] = list(actions)
+
+        nlp_analysis['persons'] = persons
+        nlp_analysis['_low_context_proportionality_guard'] = True
+        return nlp_analysis
+
     # =========================================================================
     # Scenario-aware fallback expanders
     # -------------------------------------------------------------------------
@@ -6485,6 +6808,15 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
     def _build_grounded_summary_text(self, report_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> str:
         """Build concise grounded summary when model summary is unrelated to visual evidence."""
+        if self._is_low_severity_review_context(report_data, nlp_analysis):
+            env = self._normalize_environment_type(nlp_analysis.get('environment_type') or 'General Workspace') or 'General Workspace'
+            missing_phrase = self._detector_missing_ppe_phrase(self._extract_detector_missing_ppe_keys(report_data))
+            return (
+                f"LOW severity PPE compliance review in {env}. "
+                f"YOLO flagged {missing_phrase}, but the visual evidence does not confirm active construction, traffic, machinery, dust or fume, work-at-height, or overhead-object exposure. "
+                "Supervisor verification is required before treating the finding as a mandatory PPE-zone breach."
+            )
+
         detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
         missing_items: List[str] = []
         for det in detections:

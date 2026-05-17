@@ -452,6 +452,70 @@ def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
     _assert("stop work" not in combined_text, "Office fallback should request review before stop-work escalation")
 
 
+def test_low_general_workspace_model_output_is_proportionate():
+    subject = ReportGenerator.__new__(ReportGenerator)
+    caption = (
+        "A man with dark hair is visible in the frame. He is wearing a black shirt and a red lanyard. "
+        "There is a large plant in the background. No PPE is clearly visible."
+    )
+    report_data = {
+        "caption": caption,
+        "vlm_caption": caption,
+        "detections": [
+            {"class_name": "Person", "confidence": 0.91},
+            {"class_name": "NO-Hardhat", "confidence": 0.88},
+            {"class_name": "NO-Safety Vest", "confidence": 0.82},
+            {"class_name": "NO-Mask", "confidence": 0.79},
+        ],
+        "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest, NO-Mask",
+        "person_count": 1,
+        "severity": "LOW",
+    }
+    analysis = subject._sanitize_nlp_analysis({
+        "summary": "CRITICAL RISK: Missing PPE creates falling-object, struck-by, and respiratory exposure hazards. LEGAL ORDER: Stop work immediately.",
+        "visual_evidence": caption,
+        "environment_type": "General Workspace",
+        "hazards_detected": [
+            "Head injury risk from falling or struck-by objects",
+            "Struck-by risk due to reduced worker visibility",
+            "Respiratory exposure risk from dust or airborne contaminants",
+        ],
+        "dosh_regulations_cited": [{"regulation": "BOWEC 1986 Reg. 24"}],
+        "persons": [{
+            "id": "Person 1",
+            "description": "Worker exposed to immediate danger from falling objects and traffic.",
+            "ppe": {"hardhat": "Missing", "safety_vest": "Missing", "mask": "Missing"},
+            "hazards_faced": ["falling objects", "traffic", "dust"],
+            "risks": [{
+                "risk_category": "PPE",
+                "risk": "The worker could suffer a fatal injury due to the missing PPE.",
+                "likelihood": "HIGH",
+                "evidence": "Missing PPE.",
+                "regulation_citation": "BOWEC 1986 Reg. 24",
+                "legal_regulatory_consequences": "Stop-work order.",
+                "mitigation_steps": ["Stop work immediately."],
+            }],
+            "corrective_actions": ["Stop work immediately."],
+        }],
+    })
+
+    guarded = subject._apply_low_context_proportionality_guard(analysis, report_data)
+    rendered_summary = subject._format_summary_html(guarded, report_data)
+    rendered_person = subject._generate_person_cards_section(guarded, report_data)
+    combined_text = f"{guarded} {rendered_summary} {rendered_person}".lower()
+
+    _assert(guarded["severity_level"] == "LOW", guarded["severity_level"])
+    _assert(guarded.get("_low_context_proportionality_guard") is True, "LOW context guard should be applied")
+    _assert(all(risk.get("likelihood") == "LOW" for risk in guarded["persons"][0]["risks"]), guarded["persons"][0]["risks"])
+    _assert("stop work" not in combined_text, "LOW general workspace report should not contain stop-work wording")
+    _assert("head injury risk from falling" not in combined_text, "LOW report should not invent falling-object danger language")
+    _assert("respiratory exposure risk from dust" not in combined_text, "LOW report should not invent dust/fume exposure")
+    _assert("high potential for lta" not in combined_text, "LOW report should not render MAJOR severity footer")
+    _assert("supervisor verification" in combined_text, "LOW report should explain supervisor verification")
+    semantic_gaps = subject._missing_semantic_nlp_fields(guarded, report_data)
+    _assert(not semantic_gaps, f"LOW context guard should satisfy strict semantic gate: {semantic_gaps!r}")
+
+
 def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it():
     subject = ReportGenerator.__new__(ReportGenerator)
     subject.enforce_strict_provider_split = True
@@ -573,6 +637,7 @@ def main():
         test_rendered_activity_risk_fields_are_model_json_cells,
         test_fallback_report_risks_have_concrete_likelihood_badges,
         test_fallback_office_ppe_gaps_do_not_invent_construction_hazards,
+        test_low_general_workspace_model_output_is_proportionate,
         test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it,
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
         test_executive_summary_formats_labeled_what_and_danger_as_bullets,

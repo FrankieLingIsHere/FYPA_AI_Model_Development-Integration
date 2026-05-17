@@ -117,6 +117,9 @@ const AnalyticsPage = {
     },
 
     async mount() {
+        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
+            await API.waitForDashboardWarmup(['stats', 'violations'], 900);
+        }
         await this.refreshData();
 
         this._realtimeHandler = () => {

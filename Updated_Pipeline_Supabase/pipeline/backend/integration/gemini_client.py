@@ -153,20 +153,23 @@ class GeminiClient:
             self.report_timeout_ms = 16000
         self.report_timeout_ms = max(5000, min(self.report_timeout_ms, 60000))
         try:
-            self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '1') or 1)
+            self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '2') or 2)
         except (TypeError, ValueError):
-            self.report_max_retries = 1
+            self.report_max_retries = 2
         self.report_max_retries = max(1, min(self.report_max_retries, max(1, self.max_retries)))
         try:
             self.report_thinking_budget = int(os.getenv('GEMINI_REPORT_THINKING_BUDGET', '0') or 0)
         except (TypeError, ValueError):
             self.report_thinking_budget = 0
         self.report_thinking_budget = max(0, min(self.report_thinking_budget, 4096))
+        self.allow_schema_incomplete_report = str(
+            os.getenv('GEMINI_ALLOW_SCHEMA_INCOMPLETE', 'false')
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
         temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
         try:
-            self.report_temperature_cap = float(temp_cap) if temp_cap else 0.2
+            self.report_temperature_cap = float(temp_cap) if temp_cap else 0.1
         except ValueError:
-            self.report_temperature_cap = 0.2
+            self.report_temperature_cap = 0.1
 
         # Rate limiter state
         self._last_call_time = 0
@@ -486,6 +489,103 @@ class GeminiClient:
         )
         return compact
 
+    def _build_report_json_schema(self) -> Dict[str, Any]:
+        """Return a Gemini structured-output schema for report generation JSON."""
+        string_array = {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+        risk_schema = {
+            "type": "object",
+            "required": ["description", "likelihood", "evidence", "regulation_citation", "mitigation_steps"],
+            "properties": {
+                "description": {"type": "string"},
+                "likelihood": {"type": "string"},
+                "evidence": {"type": "string"},
+                "risk_category": {"type": "string"},
+                "regulation_citation": {"type": "string"},
+                "legal_regulatory_consequences": {"type": "string"},
+                "mitigation_steps": string_array,
+            },
+        }
+        person_schema = {
+            "type": "object",
+            "required": ["id", "ppe_status", "hazards", "risks", "corrective_actions"],
+            "properties": {
+                "id": {"type": "string"},
+                "description": {"type": "string"},
+                "location": {"type": "string"},
+                "activity": {"type": "string"},
+                "ppe_status": {
+                    "type": "object",
+                    "properties": {
+                        "hardhat": {"type": "string"},
+                        "safety_vest": {"type": "string"},
+                        "gloves": {"type": "string"},
+                        "goggles": {"type": "string"},
+                        "footwear": {"type": "string"},
+                        "mask": {"type": "string"},
+                    },
+                },
+                "hazards": string_array,
+                "risks": {
+                    "type": "array",
+                    "items": risk_schema,
+                },
+                "corrective_actions": string_array,
+                "actions": string_array,
+            },
+        }
+        regulation_schema = {
+            "type": "object",
+            "required": ["regulation", "requirement", "explanation", "penalty"],
+            "properties": {
+                "regulation": {"type": "string"},
+                "requirement": {"type": "string"},
+                "explanation": {"type": "string"},
+                "penalty": {"type": "string"},
+            },
+        }
+        return {
+            "type": "object",
+            "required": [
+                "environment_type",
+                "visual_evidence",
+                "persons",
+                "summary",
+                "dosh_regulations_cited",
+            ],
+            "properties": {
+                "environment_type": {"type": "string"},
+                "visual_evidence": {"type": "string"},
+                "persons": {
+                    "type": "array",
+                    "items": person_schema,
+                },
+                "summary": {"type": "string"},
+                "dosh_regulations_cited": {
+                    "type": "array",
+                    "items": regulation_schema,
+                },
+            },
+        }
+
+    def _build_report_generation_config(self):
+        """Build Gemini report config with JSON schema enforcement enabled."""
+        config_kwargs = {
+            "temperature": min(self.temperature, self.report_temperature_cap),
+            "max_output_tokens": min(self.max_tokens, self.report_output_max_tokens),
+            "response_mime_type": "application/json",
+            "response_json_schema": self._build_report_json_schema(),
+            "http_options": types.HttpOptions(timeout=self.report_timeout_ms),
+        }
+        if self.report_thinking_budget >= 0 and hasattr(types, "ThinkingConfig"):
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=self.report_thinking_budget,
+                include_thoughts=False,
+            )
+        return types.GenerateContentConfig(**config_kwargs)
+
     def _mark_schema_incomplete_payload(self, payload: Dict[str, Any], missing_keys: List[str]) -> Dict[str, Any]:
         """Annotate a usable but incomplete Gemini payload for downstream deterministic completion."""
         marked = dict(payload)
@@ -601,8 +701,9 @@ class GeminiClient:
                 contents=[repair_prompt],
                 config=types.GenerateContentConfig(
                     temperature=0.0,
-                    max_output_tokens=min(self.max_tokens, 1600),
+                    max_output_tokens=min(self.max_tokens, self.report_output_max_tokens, 4096),
                     response_mime_type="application/json",
+                    response_json_schema=self._build_report_json_schema(),
                 )
             )
 
@@ -937,16 +1038,7 @@ class GeminiClient:
                     self.report_thinking_budget,
                 )
 
-                generation_config = types.GenerateContentConfig(
-                    temperature=min(self.temperature, self.report_temperature_cap),
-                    max_output_tokens=min(self.max_tokens, self.report_output_max_tokens),
-                    response_mime_type="application/json",
-                    http_options=types.HttpOptions(timeout=self.report_timeout_ms),
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=self.report_thinking_budget,
-                        include_thoughts=False,
-                    ),
-                )
+                generation_config = self._build_report_generation_config()
 
                 response = self.client.models.generate_content(
                     model=self.model_name,
@@ -982,7 +1074,7 @@ class GeminiClient:
                                 success=False,
                                 error=self.last_error,
                             )
-                            if best_effort_result is not None:
+                            if best_effort_result is not None and self.allow_schema_incomplete_report:
                                 logger.warning(
                                     "Proceeding with best-effort Gemini JSON for report %s; "
                                     "downstream sanitizer will fill missing keys: %s",
@@ -993,7 +1085,7 @@ class GeminiClient:
                                     best_effort_result,
                                     best_effort_missing,
                                 )
-                            break
+                            continue
 
                         logger.info(" NLP report JSON generated successfully")
                         self.last_error = None
@@ -1035,7 +1127,7 @@ class GeminiClient:
                                 error=self.last_error,
                                 repaired=True,
                             )
-                            if best_effort_result is not None:
+                            if best_effort_result is not None and self.allow_schema_incomplete_report:
                                 logger.warning(
                                     "Proceeding with best-effort repaired Gemini JSON for report %s; "
                                     "downstream sanitizer will fill missing keys: %s",
@@ -1046,7 +1138,7 @@ class GeminiClient:
                                     best_effort_result,
                                     best_effort_missing,
                                 )
-                            break
+                            continue
 
                         logger.info(" NLP report JSON repaired successfully")
                         self.last_error = None
@@ -1089,7 +1181,7 @@ class GeminiClient:
             except json.JSONDecodeError as e:
                 self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
                 logger.error(self.last_error)
-                if attempt < self.max_retries - 1:
+                if attempt < self.report_max_retries - 1:
                     time.sleep(2)
             except Exception as e:
                 err_text = str(e)
@@ -1136,13 +1228,19 @@ class GeminiClient:
                     time.sleep(wait)
 
         logger.error("Failed to generate NLP report after all retries")
-        if best_effort_result is not None:
+        if best_effort_result is not None and self.allow_schema_incomplete_report:
             logger.warning(
                 "Using best-effort Gemini JSON after retries for report %s; missing keys: %s",
                 report_id or 'unknown',
                 ", ".join(best_effort_missing),
             )
             return self._mark_schema_incomplete_payload(best_effort_result, best_effort_missing)
+        if best_effort_result is not None:
+            self.last_error = (
+                "Gemini JSON remained schema-incomplete after retries and "
+                "GEMINI_ALLOW_SCHEMA_INCOMPLETE is disabled; missing keys: "
+                + ", ".join(best_effort_missing)
+            )
         if not self.last_error:
             self.last_error = "Failed to generate NLP report after all retries"
         return None

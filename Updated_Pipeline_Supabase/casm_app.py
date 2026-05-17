@@ -8866,7 +8866,7 @@ def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
     return rows
 
 
-def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
+def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = False) -> Dict[str, Any]:
     """Collect compact realtime state for frontend auto-refresh subscribers."""
     def _realtime_source_payload(scope: str, reason: str) -> Dict[str, str]:
         normalized_scope = str(scope or '').strip().lower()
@@ -8921,7 +8921,11 @@ def _build_realtime_snapshot(limit: int = 30) -> Dict[str, Any]:
 
         if should_poll:
             now_epoch = time.time()
-            if cached_rows and (now_epoch - cached_at) < REALTIME_SUPABASE_POLL_INTERVAL_SECONDS:
+            if (
+                cached_rows
+                and not force_supabase_refresh
+                and (now_epoch - cached_at) < REALTIME_SUPABASE_POLL_INTERVAL_SECONDS
+            ):
                 report_rows = list(report_rows) + list(cached_rows)
             else:
                 try:
@@ -9153,7 +9157,9 @@ def api_realtime_snapshot():
     except Exception:
         limit = 30
 
-    payload = _build_realtime_snapshot(limit=limit)
+    fresh_raw = str(request.args.get('fresh') or '').strip().lower()
+    force_supabase_refresh = fresh_raw in ('1', 'true', 'yes', 'on')
+    payload = _build_realtime_snapshot(limit=limit, force_supabase_refresh=force_supabase_refresh)
     return jsonify(payload)
 
 

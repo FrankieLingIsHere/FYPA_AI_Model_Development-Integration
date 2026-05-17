@@ -10,12 +10,17 @@ class ReportRoutingStaticTest(unittest.TestCase):
     def test_report_origin_routing_helpers_exist(self):
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
         reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
+        app_js = (ROOT / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
+        analytics_js = (ROOT / 'frontend' / 'js' / 'pages' / 'analytics.js').read_text(encoding='utf-8')
 
         self.assertIn('getReportBackendBase(sourceHint = null)', api_js)
         self.assertIn("scope === 'cloud' || scope === 'synced_local'", api_js)
         self.assertIn('configuredCloudBase && configuredCloudBase === normalized', api_js)
         self.assertIn("API.getImageUrl(violation.report_id, 'annotated.jpg', violation)", reports_js)
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
+        self.assertIn('warmDashboardCaches({ reason: \'startup\'', app_js)
+        self.assertIn("API.waitForDashboardWarmup(['violations', 'pending']", reports_js)
+        self.assertIn("API.waitForDashboardWarmup(['stats', 'violations']", analytics_js)
 
     def test_local_mode_metrics_use_cloud_and_local_fetches(self):
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
@@ -65,6 +70,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('ViolationMonitor._notifyViolationDetected(violation)', realtime_js)
         self.assertIn('ViolationMonitor.applyRealtimePayload(payload)', realtime_js)
         self.assertNotIn("ViolationMonitor.checkForNewViolations({ noCache: true, reason: 'realtime-update' })", realtime_js)
+        self.assertIn('this.fetchRealtimeSnapshot({ fresh: true })', realtime_js)
+        self.assertIn('fresh=1', realtime_js)
         self.assertIn('rowNeedsLifecycleFallback', realtime_js)
         self.assertIn("progressStatus === 'generating'", realtime_js)
         self.assertIn('!progressRowHasReport', realtime_js)

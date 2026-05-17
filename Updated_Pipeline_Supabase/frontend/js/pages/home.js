@@ -205,6 +205,9 @@ const HomePage = {
     },
 
     async mount() {
+        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
+            await API.waitForDashboardWarmup(['stats', 'pending'], 700);
+        }
         await this.refreshData();
 
         this._realtimeHandler = () => {

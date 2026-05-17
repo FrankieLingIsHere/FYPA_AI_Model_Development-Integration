@@ -801,6 +801,9 @@ async function initializeWithStartupGate() {
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);
     initializeProvisioningStatusTracker();
+    if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
+        API.warmDashboardCaches({ reason: 'startup', timeoutMs: 10000 });
+    }
     Router.init();
 
     if (typeof TimezoneManager !== 'undefined') {

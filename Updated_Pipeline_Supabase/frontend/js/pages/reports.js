@@ -127,7 +127,14 @@ const ReportsPage = {
         this.timezoneChangeHandler = () => this.renderReports();
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
 
-        await this.loadReports({ noCache: true });
+        if (typeof API !== 'undefined' && typeof API.waitForDashboardWarmup === 'function') {
+            await API.waitForDashboardWarmup(['violations', 'pending'], 900);
+        }
+        const warmReportsCache = typeof API !== 'undefined'
+            && typeof API.isDashboardWarm === 'function'
+            && API.isDashboardWarm('violations')
+            && API.isDashboardWarm('pending');
+        await this.loadReports({ noCache: !warmReportsCache });
         await this.updateProviderRuntimeBadge();
         this.providerRuntimeInterval = setInterval(() => this.updateProviderRuntimeBadge(), 15000);
         this.syncFallbackPolling();

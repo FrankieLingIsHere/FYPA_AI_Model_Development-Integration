@@ -13,6 +13,12 @@ const API = {
     reportHtmlObjectUrls: new Map(),
     LOCAL_REPORT_DRAFTS_SCOPE: 'reports:local-drafts',
     LOCAL_REPORT_SYNC_TAG: 'casm-local-report-sync',
+    dashboardWarmupState: {
+        promise: null,
+        startedAt: 0,
+        completedAt: 0,
+        results: {}
+    },
 
     /**
      * fetch() with a hard client-side timeout via AbortController. Used for
@@ -983,6 +989,119 @@ const API = {
     reportHtmlCacheScope(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         return `report-html:universal:${rid}`;
+    },
+
+    isDashboardWarm(dataset, maxAgeMs = 90000) {
+        const state = this.dashboardWarmupState || {};
+        const completedAt = Number(state.completedAt || 0);
+        if (!completedAt || (Date.now() - completedAt) > Math.max(1000, Number(maxAgeMs) || 90000)) {
+            return false;
+        }
+        return !!(state.results && state.results[dataset]);
+    },
+
+    async waitForDashboardWarmup(datasets = [], timeoutMs = 800) {
+        const required = Array.isArray(datasets) ? datasets : [datasets];
+        const allWarm = () => required.every((name) => this.isDashboardWarm(name));
+        if (allWarm()) return true;
+
+        const state = this.dashboardWarmupState || {};
+        if (!state.promise || timeoutMs <= 0) return false;
+
+        try {
+            await Promise.race([
+                state.promise,
+                new Promise((resolve) => setTimeout(resolve, Math.max(50, Number(timeoutMs) || 800)))
+            ]);
+        } catch (_) {
+            // Warmup is an optimization path; page loads still have their normal fetch path.
+        }
+        return allWarm();
+    },
+
+    warmDashboardCaches(options = {}) {
+        const state = this.dashboardWarmupState;
+        const now = Date.now();
+        const force = !!options.force;
+        const minIntervalMs = Math.max(5000, Number(options.minIntervalMs || 90000));
+        if (state.promise) return state.promise;
+        if (!force && state.completedAt && (now - state.completedAt) < minIntervalMs) {
+            return Promise.resolve(state.results || {});
+        }
+
+        state.startedAt = now;
+        state.results = {};
+        const timeoutMs = Math.max(3000, Math.min(Number(options.timeoutMs || 10000), 30000));
+
+        const warmStats = async () => {
+            const data = await this.fetchJsonNoCache(`${API_CONFIG.BASE_URL}/api/stats`, {
+                cacheScope: 'stats:summary',
+                timeoutMs
+            });
+            if (data && typeof data === 'object' && !data.error) {
+                state.results.stats = true;
+            }
+            return data;
+        };
+
+        const warmViolations = async () => {
+            const safeLimit = 1000;
+            let list = await this.fetchJsonNoCache(
+                `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`,
+                { timeoutMs }
+            );
+            list = Array.isArray(list) ? list : [];
+            list = await this.mergeLocalReportDrafts(list, safeLimit);
+            await this.writeJsonCache(`violations:limit:${safeLimit}`, this.stripLocalDraftRuntimeFields(list));
+            state.results.violations = true;
+            return list;
+        };
+
+        const warmPending = async () => {
+            let list = await this.fetchJsonNoCache(`${API_CONFIG.BASE_URL}/api/reports/pending`, {
+                timeoutMs: Math.max(3000, Math.min(timeoutMs, 12000))
+            });
+            list = Array.isArray(list) ? list : [];
+            list = await this.mergeLocalReportDrafts(list, 100);
+            await this.writeJsonCache('reports:pending', this.stripLocalDraftRuntimeFields(list));
+            state.results.pending = true;
+            return list;
+        };
+
+        state.promise = Promise.allSettled([
+            warmStats(),
+            warmViolations(),
+            warmPending()
+        ]).then((results) => {
+            state.completedAt = Date.now();
+            const summary = {
+                stats: !!state.results.stats,
+                violations: !!state.results.violations,
+                pending: !!state.results.pending,
+                failures: results
+                    .map((result, index) => ({ result, name: ['stats', 'violations', 'pending'][index] }))
+                    .filter((item) => item.result.status === 'rejected')
+                    .map((item) => ({
+                        dataset: item.name,
+                        error: item.result.reason && item.result.reason.message
+                            ? item.result.reason.message
+                            : String(item.result.reason || 'unknown')
+                    }))
+            };
+            try {
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('ppe-dashboard:warmup', { detail: summary }));
+                }
+            } catch (_) { }
+            if (summary.failures.length) {
+                console.warn('Dashboard cache warmup completed with partial failures:', summary.failures);
+            }
+            return summary;
+        }).finally(() => {
+            state.promise = null;
+        });
+
+        return state.promise;
     },
 
     async writeJsonCache(scope, payload) {

@@ -169,14 +169,14 @@ const RealtimeSync = {
                     schema: 'public',
                     table: 'detection_events'
                 }, () => {
-                    this.fetchRealtimeSnapshot();
+                    this.fetchRealtimeSnapshot({ fresh: true });
                 })
                 .on('postgres_changes', {
                     event: '*',
                     schema: 'public',
                     table: 'violations'
                 }, () => {
-                    this.fetchRealtimeSnapshot();
+                    this.fetchRealtimeSnapshot({ fresh: true });
                 })
                 .subscribe((status) => {
                     const normalized = String(status || '').toUpperCase();
@@ -222,16 +222,22 @@ const RealtimeSync = {
         this.supabaseChannel = null;
     },
 
-    async fetchRealtimeSnapshot() {
+    async fetchRealtimeSnapshot(options = {}) {
         const now = Date.now();
+        const fresh = !!(options && options.fresh);
         if (this.pendingSnapshotFetch) return;
-        if (now - this.lastSnapshotAt < 700) return;
+        if (!fresh && now - this.lastSnapshotAt < 700) return;
 
         this.pendingSnapshotFetch = true;
         this.lastSnapshotAt = now;
 
         try {
-            const response = await fetch(API.getRealtimeSnapshotUrl(), {
+            let snapshotUrl = API.getRealtimeSnapshotUrl();
+            if (fresh) {
+                const separator = snapshotUrl.includes('?') ? '&' : '?';
+                snapshotUrl = `${snapshotUrl}${separator}fresh=1&_ts=${Date.now()}`;
+            }
+            const response = await fetch(snapshotUrl, {
                 method: 'GET',
                 cache: 'no-store'
             });

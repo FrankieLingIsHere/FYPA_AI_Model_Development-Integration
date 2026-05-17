@@ -227,8 +227,9 @@ class ReportGenerator:
         self.last_gemini_budget_block_reason = None
         self.strict_report_generation = os.getenv('STRICT_REPORT_GENERATION', 'true').lower() == 'true'
         self.allow_nlp_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
-        self.cloud_report_fallback_enabled = str(os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
+        self.cloud_report_fallback_enabled = str(os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
+        self.allow_schema_incomplete_report = str(os.getenv('GEMINI_ALLOW_SCHEMA_INCOMPLETE', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
         try:
@@ -1711,6 +1712,15 @@ RESPONSE FORMAT (JSON):
             if result:
                 if isinstance(result, dict) and result.get('_schema_incomplete'):
                     missing = result.get('_missing_required_report_keys') or []
+                    if not self.allow_schema_incomplete_report:
+                        detail = (
+                            "Gemini returned schema-incomplete JSON and "
+                            "GEMINI_ALLOW_SCHEMA_INCOMPLETE is disabled: "
+                            f"{', '.join(missing) if missing else 'unknown'}"
+                        )
+                        self.last_nlp_error = detail
+                        logger.warning(detail)
+                        return None
                     detail = (
                         "Gemini returned usable partial JSON; downstream report sanitizer "
                         f"will fill missing keys: {', '.join(missing) if missing else 'unknown'}"
@@ -1762,7 +1772,7 @@ RESPONSE FORMAT (JSON):
 
                     if repaired_result is not None:
                         result = repaired_result
-                    elif best_effort_result is not None:
+                    elif best_effort_result is not None and self.allow_schema_incomplete_report:
                         logger.warning(
                             "Gemini output still missing fields after regeneration (%s); continuing with best-effort Gemini output for downstream sanitization",
                             ', '.join(best_effort_missing),
@@ -1773,7 +1783,7 @@ RESPONSE FORMAT (JSON):
                     else:
                         detail = (
                             "Gemini output missing required fields after regeneration: "
-                            + ", ".join(repaired_missing)
+                            + ", ".join(best_effort_missing or repaired_missing)
                         )
                         self.last_nlp_error = detail
                         logger.warning(detail)

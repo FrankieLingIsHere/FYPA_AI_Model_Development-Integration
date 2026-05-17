@@ -40,6 +40,7 @@ def _new_subject(fake_client, regen_attempts=1):
     subject = ReportGenerator.__new__(ReportGenerator)
     subject.gemini_client = fake_client
     subject.gemini_schema_regen_attempts = regen_attempts
+    subject.allow_schema_incomplete_report = False
     subject.last_nlp_error = None
     return subject
 
@@ -75,7 +76,7 @@ def test_schema_regen_success():
     _assert("SCHEMA REGENERATION REQUIREMENT" in fake.calls[1]["prompt"], "Expected schema regeneration instruction in second prompt")
 
 
-def test_schema_regen_failure_returns_best_effort():
+def test_schema_regen_failure_returns_none_when_schema_incomplete_disabled():
     first_missing = _valid_payload()
     first_missing.pop("summary")
     second_still_missing = _valid_payload()
@@ -87,10 +88,27 @@ def test_schema_regen_failure_returns_best_effort():
 
     result = subject._call_gemini_api("base prompt", image_path=None, report_id="r2")
 
-    _assert(result is not None, "Expected best-effort payload when schema remains incomplete after regeneration")
-    _assert(not result.get("summary"), "Expected returned best-effort payload to remain schema-incomplete")
+    _assert(result is None, "Expected schema-incomplete Gemini payload to be rejected by default")
     _assert(len(fake.calls) == 2, "Expected two Gemini calls (initial + regeneration)")
-    _assert(subject.last_nlp_error is None, "Expected no terminal nlp error when best-effort payload is returned")
+    _assert(subject.last_nlp_error, "Expected terminal nlp error when schema-incomplete output is rejected")
+
+
+def test_schema_regen_failure_can_return_best_effort_when_opted_in():
+    first_missing = _valid_payload()
+    first_missing.pop("summary")
+    second_still_missing = _valid_payload()
+    second_still_missing.pop("persons")
+    second_still_missing.pop("summary")
+
+    fake = _FakeGeminiClient([first_missing, second_still_missing])
+    subject = _new_subject(fake, regen_attempts=1)
+    subject.allow_schema_incomplete_report = True
+
+    result = subject._call_gemini_api("base prompt", image_path=None, report_id="r2b")
+
+    _assert(result is not None, "Expected opt-in best-effort payload when schema remains incomplete")
+    _assert(result.get("_schema_incomplete") is True, "Expected schema-incomplete marker on opt-in payload")
+    _assert(len(fake.calls) == 2, "Expected two Gemini calls (initial + regeneration)")
 
 
 def test_schema_no_regen_when_valid():
@@ -112,6 +130,7 @@ def test_schema_incomplete_payload_skips_regen_for_downstream_completion():
     }
     fake = _FakeGeminiClient([partial_payload])
     subject = _new_subject(fake, regen_attempts=2)
+    subject.allow_schema_incomplete_report = True
 
     result = subject._call_gemini_api("base prompt", image_path="img.jpg", report_id="r4")
 
@@ -123,7 +142,8 @@ def test_schema_incomplete_payload_skips_regen_for_downstream_completion():
 def main():
     tests = [
         test_schema_regen_success,
-        test_schema_regen_failure_returns_best_effort,
+        test_schema_regen_failure_returns_none_when_schema_incomplete_disabled,
+        test_schema_regen_failure_can_return_best_effort_when_opted_in,
         test_schema_no_regen_when_valid,
         test_schema_incomplete_payload_skips_regen_for_downstream_completion,
     ]

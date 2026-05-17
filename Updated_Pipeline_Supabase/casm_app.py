@@ -2566,6 +2566,19 @@ def _run_startup_sequence():
                 startup_state['checks'][key]['status'] = 'pending'
                 startup_state['checks'][key]['detail'] = 'Not started yet'
 
+        # Start the cloud presence signal before heavier startup checks. Cold
+        # cloud-mode views use this heartbeat to know the local backend exists;
+        # waiting until every local startup check completes makes the badge lag.
+        try:
+            _ensure_local_mode_cloud_heartbeat_worker()
+            _send_local_mode_cloud_heartbeat_background(
+                reason='startup-begin',
+                skip_authoritative_fetch=True,
+                lean_payload=True,
+            )
+        except Exception as heartbeat_start_err:
+            logger.debug(f"Startup cloud heartbeat fast-start skipped: {heartbeat_start_err}")
+
         _set_startup_progress(8, 'Checking pipeline modules')
         if not FULL_PIPELINE_AVAILABLE:
             _set_startup_step('pipeline_imports', 'error', 'Required pipeline modules failed to import')
@@ -2740,6 +2753,11 @@ def _run_startup_sequence():
         _ensure_startup_local_auto_provision_worker()
         _ensure_local_mode_cloud_heartbeat_worker()
         _set_startup_ready()
+        _send_local_mode_cloud_heartbeat_background(
+            reason='startup-ready',
+            skip_authoritative_fetch=True,
+            lean_payload=False,
+        )
         logger.info(' Startup sequence completed. System is ready.')
 
     except Exception as e:
@@ -10975,6 +10993,47 @@ def _send_local_mode_cloud_heartbeat_once(
         'authoritative_fetched': not skip_authoritative_fetch,
         'authoritative_skipped_reason': 'supabase_offline_backoff' if supabase_backoff_active else '',
     }
+
+
+def _send_local_mode_cloud_heartbeat_background(
+    *,
+    reason: str = '',
+    skip_authoritative_fetch: bool = True,
+    lean_payload: bool = True,
+) -> Optional[Thread]:
+    """Fire a bounded one-shot heartbeat without blocking startup/UI requests."""
+    if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED or _is_hosted_runtime_environment():
+        return None
+
+    def _target() -> None:
+        try:
+            result = _send_local_mode_cloud_heartbeat_once(
+                skip_authoritative_fetch=skip_authoritative_fetch,
+                lean_payload=lean_payload,
+            )
+            if result.get('sent'):
+                logger.debug(
+                    "Local-mode cloud heartbeat one-shot sent "
+                    f"(reason={reason or 'unspecified'}, machine_id={result.get('machine_id')})"
+                )
+            else:
+                logger.debug(
+                    "Local-mode cloud heartbeat one-shot skipped "
+                    f"(reason={reason or 'unspecified'}, skip_reason={result.get('reason')})"
+                )
+        except Exception as heartbeat_err:
+            logger.debug(
+                f"Local-mode cloud heartbeat one-shot failed "
+                f"(reason={reason or 'unspecified'}): {heartbeat_err}"
+            )
+
+    heartbeat_thread = Thread(
+        target=_target,
+        daemon=True,
+        name=f"local-mode-heartbeat-once-{str(reason or 'manual')[:24]}",
+    )
+    heartbeat_thread.start()
+    return heartbeat_thread
 
 
 def _local_mode_cloud_heartbeat_worker() -> None:

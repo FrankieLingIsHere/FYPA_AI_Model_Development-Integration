@@ -139,6 +139,7 @@ try {
 }
 
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
+const PROVISIONING_HEARTBEAT_FAST_FOLLOWUP_DELAYS_MS = [1200, 4000, 8000];
 // Cache lifetime is intentionally short. Provisioning status can flip
 // (admin revoke, secret rotation) without the cache being notified, and
 // a stale "approved" entry was previously sticking on the home/settings
@@ -155,6 +156,7 @@ let provisioningStatusPollBusy = false;
 let provisioningStatusPollInterval = null;
 let provisioningHeartbeatRefreshBurstTimer = null;
 let provisioningHeartbeatRefreshBurstUntil = 0;
+let provisioningHeartbeatRefreshBurstBusy = false;
 let provisioningStatusState = {
     status: 'idle',
     machineId: '',
@@ -626,6 +628,7 @@ function stopProvisioningHeartbeatRefreshBurst() {
         provisioningHeartbeatRefreshBurstTimer = null;
     }
     provisioningHeartbeatRefreshBurstUntil = 0;
+    provisioningHeartbeatRefreshBurstBusy = false;
 }
 
 function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup') {
@@ -634,7 +637,7 @@ function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup'
     if (provisioningHeartbeatRefreshBurstTimer) return;
 
     provisioningHeartbeatRefreshBurstUntil = Date.now() + 90000;
-    provisioningHeartbeatRefreshBurstTimer = setInterval(() => {
+    const tick = async () => {
         if (Date.now() > provisioningHeartbeatRefreshBurstUntil) {
             stopProvisioningHeartbeatRefreshBurst();
             return;
@@ -643,12 +646,25 @@ function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup'
             stopProvisioningHeartbeatRefreshBurst();
             return;
         }
-        refreshProvisioningStatus({
-            source: reason,
-            force: true,
-            notify: false
-        });
-    }, 10000);
+        if (provisioningHeartbeatRefreshBurstBusy) {
+            return;
+        }
+        provisioningHeartbeatRefreshBurstBusy = true;
+        try {
+            await refreshProvisioningStatus({
+                source: reason,
+                force: true,
+                notify: false
+            });
+        } finally {
+            provisioningHeartbeatRefreshBurstBusy = false;
+        }
+    };
+
+    provisioningHeartbeatRefreshBurstTimer = setInterval(tick, 10000);
+    PROVISIONING_HEARTBEAT_FAST_FOLLOWUP_DELAYS_MS.forEach((delayMs) => {
+        setTimeout(tick, delayMs);
+    });
 }
 
 function announceProvisioningStatusTransition(previousState, nextState, options = {}) {

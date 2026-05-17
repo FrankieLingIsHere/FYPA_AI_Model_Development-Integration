@@ -7,6 +7,7 @@ const GlobalSettingsModal = {
     localProvisionPollInterval: null,
     heartbeatCountdownInterval: null,
     heartbeatRefreshPollInterval: null,
+    heartbeatRefreshPollBusy: false,
     REMOTE_PROVISION_STATE_KEY: 'ppe.remoteProvisioningState.v1',
     PROVIDER_PROFILE_MANUAL_LOCK_KEY: 'ppe.providerProfile.manualLock.v1',
     localProvisionState: {
@@ -1012,20 +1013,28 @@ const GlobalSettingsModal = {
                 this.stopHeartbeatRefreshPolling();
                 return;
             }
+            if (this.heartbeatRefreshPollBusy) {
+                return;
+            }
+            this.heartbeatRefreshPollBusy = true;
             try {
                 await this.refreshProvisioningState();
             } catch (error) {
                 console.debug('GlobalSettingsModal: heartbeat refresh poll skipped', error);
+            } finally {
+                this.heartbeatRefreshPollBusy = false;
             }
         };
 
         this.heartbeatRefreshPollInterval = setInterval(tick, 12000);
+        setTimeout(tick, 800);
     },
 
     stopHeartbeatRefreshPolling() {
         if (!this.heartbeatRefreshPollInterval) return;
         clearInterval(this.heartbeatRefreshPollInterval);
         this.heartbeatRefreshPollInterval = null;
+        this.heartbeatRefreshPollBusy = false;
     },
 
     stopHeartbeatCountdown() {

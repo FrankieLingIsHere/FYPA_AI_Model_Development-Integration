@@ -225,20 +225,28 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
         ],
     }, "original long prompt")
 
-    _assert('"environment_type"' in compact, "Compact prompt missing environment_type schema")
-    _assert('"persons"' in compact, "Compact prompt missing persons schema")
-    _assert('"dosh_regulations_cited"' in compact, "Compact prompt missing regulation schema")
-    _assert('"hardhat": "Missing"' in compact, "Compact prompt did not preserve YOLO hardhat gap")
-    _assert('"safety_vest": "Missing"' in compact, "Compact prompt did not preserve YOLO vest gap")
-    _assert("Do not return an empty object" in compact, "Compact prompt must reject empty JSON")
-    _assert("ACTIVITY RISK SIGNALS" in compact, "Compact prompt missing activity-risk signal block")
-    _assert("restricted-area entry / exclusion-zone breach: observed=true" in compact, "Compact prompt missing restricted-area signal")
-    _assert("machinery-related struck-by / caught-between exposure: observed=true" in compact, "Compact prompt missing machinery signal")
-    _assert('"risk_category": "PPE"' in compact, "Compact prompt missing PPE risk_category schema")
-    _assert('Observed non-PPE activity categories from local caption/YOLO: restricted_area, machinery' in compact, "Compact prompt missing observed local activity categories")
+    _assert("Return schema keys: environment_type, visual_evidence, persons" in compact, "Compact prompt missing required schema keys")
+    _assert("YOLO missing PPE: Hardhat, Safety Vest" in compact, "Compact prompt did not preserve YOLO PPE gaps")
+    _assert("No empty object" in compact, "Compact prompt must reject empty JSON")
+    _assert("Observed non-PPE activity categories: restricted_area, machinery" in compact, "Compact prompt missing observed local activity categories")
+    _assert("risk_category, risk, likelihood, evidence" in compact, "Compact prompt missing structured risk fields")
     _assert('Do not invent unlisted activity risks' in compact, "Compact prompt missing anti-invention rule")
     _assert("Generate the regulatory incident report package" in compact, "Compact prompt missing regulatory report package action")
     _assert('Do not write "(inferred)" in likelihood' in compact, "Compact prompt should block inferred labels")
+    _assert(len(compact) < 3500, f"Compact prompt too large for local Gemma: {len(compact)} chars")
+
+    schema = subject._build_ollama_report_json_schema({
+        "person_count": 2,
+    })
+    _assert(schema["required"] == [
+        "environment_type",
+        "visual_evidence",
+        "persons",
+        "summary",
+        "severity_level",
+        "dosh_regulations_cited",
+    ], "Ollama JSON schema must require top-level report keys")
+    _assert("minItems" not in schema["properties"]["persons"], "Ollama schema should not over-constrain slow local generation")
 
     compact_two_people = subject._build_ollama_compact_report_prompt({
         "caption": "Two workers are standing in a work area.",
@@ -251,7 +259,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
             {"class_name": "NO-Hardhat"},
         ],
     }, "original long prompt")
-    _assert('"id": "Person 2"' in compact_two_people, "Compact prompt did not preserve multi-person schema")
+    _assert('Person 1, Person 2' in compact_two_people, "Compact prompt did not preserve multi-person ids")
 
 
 def test_activity_signals_ignore_negated_caption_terms():
@@ -299,8 +307,8 @@ def test_ollama_compact_prompt_expands_local_caption_activity_context():
         ],
     }, "original long prompt")
 
-    _assert("traffic-interface exposure: observed=true" in compact, "Local caption activity hint should mark traffic observed")
-    _assert('Observed non-PPE activity categories from local caption/YOLO: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
+    _assert("Observed non-PPE activity categories: traffic_interface" in compact, "Local caption activity hint should mark traffic observed")
+    _assert('Observed non-PPE activity categories: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
 
 
 def test_cloud_activity_block_allows_clear_direct_image_override():
@@ -509,7 +517,8 @@ def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
             "SCENE CLASS: Indoor / Office CRITICAL RISK: **Direct exposure to potential respiratory hazards** "
             "Core Violation: Non-compliance with respiratory protection requirements "
             "Immediate Risk: The individual faces immediate health risks from inhaling contaminants "
-            "Critical Action**: Stop work until PPE is worn."
+            "Critical Action**: Stop work until PPE is worn. "
+            "LEGAL ORDER: Verify whether OSHA 1994 Section 15 controls apply before enforcement action."
         ),
         "visual_evidence": "One worker is visible indoors with missing mask and safety vest.",
         "environment_type": "Indoor / Office",
@@ -540,6 +549,10 @@ def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
     _assert(summary.count('class="summary-bullet-list"') >= 3, "WHAT/DANGER/LAW should render as bullet lists")
     _assert('<strong class="summary-item-label">Scene class:</strong>' in summary, "WHAT row should expose labeled line items")
     _assert('<strong class="summary-item-label">Critical risk:</strong>' in summary, "Critical risk should be a line-item label")
+    what_segment = summary.split('<td class="summary-label">WHAT</td>', 1)[1].split('<td class="summary-label">DANGER</td>', 1)[0]
+    law_segment = summary.split('<td class="summary-label">LAW</td>', 1)[1]
+    _assert("Legal order:" not in what_segment, "Legal order should not be merged into WHAT")
+    _assert("Legal order:" in law_segment, "Legal order should be rendered in LAW")
     _assert("**" not in summary, "Markdown bold markers must not leak into executive summary")
     _assert("summary-value-danger" in summary, "DANGER row should keep danger styling without bolding all copy")
     _assert("Respirator</span>y" not in summary, "Tooltip injection must not split the word respiratory")

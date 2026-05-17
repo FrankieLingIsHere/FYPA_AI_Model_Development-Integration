@@ -218,6 +218,9 @@ class CaptureQueue:
     def get_stats(self):
         return {"current_size": len(self.items), "capacity": 100}
 
+    def get_queue_size(self):
+        return len(self.items)
+
 
 class CaptureProcessingDB:
     def __init__(self):
@@ -743,6 +746,48 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
             casm_app.reset_report_progress()
 
 
+def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_storage_manager = casm_app.storage_manager
+        old_violation_queue = casm_app.violation_queue
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            casm_app.VIOLATIONS_DIR = Path(tmpdir)
+            casm_app.db_manager = object()
+            casm_app.storage_manager = object()
+            casm_app.violation_queue = CaptureQueue()
+
+            manual_result = casm_app._sync_local_cache_candidates(
+                max_items=10,
+                dry_run=False,
+                reconcile_reason="manual_api",
+                require_worker=False,
+            )
+            reconnect_result = casm_app._sync_local_cache_candidates(
+                max_items=10,
+                dry_run=False,
+                reconcile_reason="reconnect_auto",
+                require_worker=False,
+            )
+
+            _assert(manual_result.get("deferred_reason") == "routing_profile_local", manual_result)
+            _assert(reconnect_result.get("success") is True, reconnect_result)
+            _assert(reconnect_result.get("deferred") is not True, reconnect_result)
+            _assert(reconnect_result.get("scanned") == 0, reconnect_result)
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.storage_manager = old_storage_manager
+            casm_app.violation_queue = old_violation_queue
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+
+
 def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
     cases = [
         {
@@ -1057,6 +1102,7 @@ def main():
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
+        test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile,
         test_report_source_tag_matrix_preserves_local_and_synced_local_cases,
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,

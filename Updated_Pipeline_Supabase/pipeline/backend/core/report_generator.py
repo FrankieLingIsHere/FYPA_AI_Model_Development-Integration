@@ -2156,7 +2156,7 @@ RESPONSE FORMAT (JSON):
         report_data: Optional[Dict[str, Any]],
         original_prompt: str,
     ) -> str:
-        """Build a smaller schema-first prompt for local Gemma JSON generation."""
+        """Build a small schema-first prompt for local Gemma JSON generation."""
         if not isinstance(report_data, dict):
             return original_prompt
 
@@ -2200,113 +2200,122 @@ RESPONSE FORMAT (JSON):
         observed_activity_categories = self._observed_activity_categories_from_signal_block(activity_risk_signal_block)
         observed_activity_text = ', '.join(observed_activity_categories) if observed_activity_categories else 'none'
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
-        ppe_defaults = {
-            'hardhat': 'Missing' if any('hard' in item.lower() or 'helmet' in item.lower() for item in missing_labels) else 'Not Mentioned',
-            'safety_vest': 'Missing' if any('vest' in item.lower() for item in missing_labels) else 'Not Mentioned',
-            'mask': 'Missing' if any('mask' in item.lower() or 'respirator' in item.lower() for item in missing_labels) else 'Not Mentioned',
-            'gloves': 'Missing' if any('glove' in item.lower() for item in missing_labels) else 'Not Mentioned',
-            'footwear': 'Missing' if any('boot' in item.lower() or 'shoe' in item.lower() or 'foot' in item.lower() for item in missing_labels) else 'Not Mentioned',
-            'goggles': 'Missing' if any('goggle' in item.lower() or 'eye' in item.lower() for item in missing_labels) else 'Not Mentioned',
-        }
-        person_entries: List[str] = []
-        for idx in range(1, min(person_count, 6) + 1):
-            person_entries.append(f"""    {{
-      "id": "Person {idx}",
-      "description": "Grounded description of observed worker {idx} and any missing PPE supported by YOLO.",
-      "ppe": {{
-        "hardhat": "{ppe_defaults['hardhat']}",
-        "safety_vest": "{ppe_defaults['safety_vest']}",
-        "mask": "{ppe_defaults['mask']}",
-        "gloves": "{ppe_defaults['gloves']}",
-        "footwear": "{ppe_defaults['footwear']}",
-        "goggles": "{ppe_defaults['goggles']}"
-      }},
-      "hazards_faced": [
-        {{
-          "type": "Hazard caused by missing {missing_phrase}",
-          "source": "YOLO detected PPE non-compliance",
-          "severity": "{severity}"
-        }}
-      ],
-      "risks": [
-        {{
-          "risk_category": "PPE",
-          "risk": "Two concise sentences explaining what could happen to Person {idx} and why the missing {missing_phrase} makes it likely.",
-          "likelihood": "{severity if severity in ('HIGH', 'MEDIUM', 'LOW') else 'REVIEW_REQUIRED'}",
-          "evidence": "YOLO detected missing {missing_phrase}.",
-          "regulation_citation": "OSHA 1994 Section 15 and BOWEC 1986 general PPE duty",
-          "legal_regulatory_consequences": "Stop-work order or enforcement action may follow continued non-compliance.",
-          "mitigation_steps": [
-            "Stop work in the affected zone until the required PPE is issued and verified.",
-            "Brief the worker on the observed hazard before work restarts.",
-            "Record photographic proof of corrected PPE compliance."
-          ]
-        }}
-      ],
-      "corrective_actions": [
-        "Stop work and remove Person {idx} from the affected zone until {missing_phrase} is worn correctly.",
-        "Supervisor must inspect PPE fit and record sign-off before work restarts.",
-        "Generate or update the regulatory incident report package with image evidence, detector metadata, and supervisor sign-off before closing the case."
-      ]
-    }}""")
-        if person_count > len(person_entries):
-            person_entries.append("""    {
-      "id": "Additional Persons",
-      "description": "Summarize the remaining observed workers only when evidence supports additional distinct observations.",
-      "ppe": {
-        "hardhat": "Not Mentioned",
-        "safety_vest": "Not Mentioned",
-        "mask": "Not Mentioned",
-        "gloves": "Not Mentioned",
-        "footwear": "Not Mentioned",
-        "goggles": "Not Mentioned"
-      },
-      "hazards_faced": [],
-      "risks": [],
-      "corrective_actions": []
-    }""")
-        person_entries_json = ',\n'.join(person_entries)
+        required_person_ids = ', '.join(f"Person {idx}" for idx in range(1, min(person_count, 6) + 1))
 
         return f"""You are a Malaysian JKR/DOSH safety report JSON generator.
-Return exactly one valid JSON object. Do not return markdown. Do not return an empty object.
+Return only one JSON object matching the supplied schema. No markdown. No empty object.
 
 Evidence:
 - Caption: {caption or 'No visual caption available'}
 - YOLO person count: {person_count}
 - YOLO missing PPE: {', '.join(missing_labels)}
 - Violation summary: {violation_summary or ', '.join(missing_labels)}
-- Severity: {severity}
-
-{activity_risk_signal_block}
+- Contextual severity from detector/caption: {severity}
+- Initial environment from caption keywords: {detected_environment}
+- Observed non-PPE activity categories: {observed_activity_text}
 
 Rules:
 - Use YOLO as authoritative for PPE status.
-- Use environment_type "{detected_environment}" unless the evidence clearly proves a more specific category.
-- Analyse exactly {person_count} person(s).
-- Keep text concise, factual, and grounded in the evidence above.
-- Include every required top-level key.
-- Observed non-PPE activity categories from local caption/YOLO: {observed_activity_text}.
+- Create exactly {person_count} person record(s), unless person_count is zero.
+- The persons array must contain one object for each of these ids: {required_person_ids or 'none'}.
+- Do not merge multiple people into one person record; repeat concise risk/actions for each visible person if individual details are similar.
+- Use severity_level "{severity}" unless the caption clearly proves a lower-risk office/residential/public context or a higher-risk construction/industrial/traffic context.
+- For office, residential, classroom, meeting room, or ordinary public scenes with no visible work-zone, machinery, traffic-control, dust, fumes, overhead work, or mobile equipment, use MEDIUM for hardhat/vest/mask-only PPE gaps.
+- For construction, industrial, warehouse, road work, traffic interface, work at height, chemicals, dust, fumes, machinery, or overhead/falling-object exposure, use HIGH when the missing PPE matches that hazard.
+- Keep text concise but complete; every person needs ppe, risks, and corrective_actions.
+- Each risk must include risk_category, risk, likelihood, evidence, regulation_citation, legal_regulatory_consequences, and mitigation_steps.
 - If you include an activity risk, use only the listed observed categories. Do not invent unlisted activity risks.
 - If regulatory_followup is observed, add a corrective action beginning "Generate the regulatory incident report package" and mention image evidence, detector metadata, and supervisor sign-off.
 - Do not write "(inferred)" in likelihood; use HIGH, MEDIUM, LOW, or REVIEW_REQUIRED.
+- Cite OSHA 1994 Section 15 for PPE duty; cite BOWEC 1986 Reg. 24 only when hardhat/head protection is relevant.
 
-Required JSON object:
-{{
-  "environment_type": "{detected_environment}",
-  "visual_evidence": "The scene depicts a {detected_environment} setting. Describe the caption and YOLO PPE gaps in two concise factual sentences.",
-  "persons": [
-{person_entries_json}
-  ],
-  "summary": "Concise professional summary naming the incident class, core PPE breach, immediate risk, and critical action.",
-  "dosh_regulations_cited": [
-    {{
-      "regulation": "OSHA 1994 Section 15",
-      "requirement": "Employer must provide and maintain safe plant, systems of work, and protective equipment for the observed task.",
-      "explanation": "This applies because YOLO detected missing {missing_phrase} for a worker in the observed scene.",
-      "penalty": "DOSH may issue enforcement action, including a stop-work order or prosecution for continued non-compliance."
-    }}
-  ]
-}}"""
+Return schema keys: environment_type, visual_evidence, persons, summary, severity_level, dosh_regulations_cited.
+Use missing PPE phrase where needed: {missing_phrase}."""
+
+    def _build_ollama_report_json_schema(self, report_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Return a compact JSON schema supported by Ollama's format parameter."""
+        string_array = {"type": "array", "items": {"type": "string"}}
+        return {
+            "type": "object",
+            "required": [
+                "environment_type",
+                "visual_evidence",
+                "persons",
+                "summary",
+                "severity_level",
+                "dosh_regulations_cited",
+            ],
+            "properties": {
+                "environment_type": {"type": "string"},
+                "visual_evidence": {"type": "string"},
+                "summary": {"type": "string"},
+                "severity_level": {"type": "string"},
+                "persons": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "description", "ppe", "risks", "corrective_actions"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "description": {"type": "string"},
+                            "ppe": {
+                                "type": "object",
+                                "properties": {
+                                    "hardhat": {"type": "string"},
+                                    "safety_vest": {"type": "string"},
+                                    "mask": {"type": "string"},
+                                    "gloves": {"type": "string"},
+                                    "footwear": {"type": "string"},
+                                    "goggles": {"type": "string"},
+                                },
+                            },
+                            "hazards_faced": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {"type": "string"},
+                                        "source": {"type": "string"},
+                                        "severity": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "risks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["risk", "likelihood", "evidence"],
+                                    "properties": {
+                                        "risk_category": {"type": "string"},
+                                        "risk": {"type": "string"},
+                                        "likelihood": {"type": "string"},
+                                        "evidence": {"type": "string"},
+                                        "regulation_citation": {"type": "string"},
+                                        "legal_regulatory_consequences": {"type": "string"},
+                                        "mitigation_steps": string_array,
+                                    },
+                                },
+                            },
+                            "corrective_actions": string_array,
+                            "actions": string_array,
+                        },
+                    },
+                },
+                "dosh_regulations_cited": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["regulation", "requirement", "explanation", "penalty"],
+                        "properties": {
+                            "regulation": {"type": "string"},
+                            "requirement": {"type": "string"},
+                            "explanation": {"type": "string"},
+                            "penalty": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        }
 
     def _augment_local_observed_activity_risks(
         self,
@@ -2556,13 +2565,23 @@ Required JSON object:
 
         request_timeout = self.ollama_timeout
         if fast_mode:
-            max_attempts = 1
-            schema_regen_attempts = 0
             try:
-                forced_read_timeout = int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '8') or 8)
+                forced_max_attempts = int(os.getenv('OLLAMA_FORCE_LOCAL_MAX_ATTEMPTS', '2') or 2)
             except (TypeError, ValueError):
-                forced_read_timeout = 8
-            forced_read_timeout = max(4, min(forced_read_timeout, 60))
+                forced_max_attempts = 2
+            max_attempts = max(1, min(forced_max_attempts, max_attempts, 4))
+
+            try:
+                forced_schema_regen = int(os.getenv('OLLAMA_FORCE_LOCAL_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
+            except (TypeError, ValueError):
+                forced_schema_regen = 1
+            schema_regen_attempts = max(0, min(forced_schema_regen, schema_regen_attempts or forced_schema_regen, 2))
+
+            try:
+                forced_read_timeout = int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '150') or 150)
+            except (TypeError, ValueError):
+                forced_read_timeout = 150
+            forced_read_timeout = max(30, min(forced_read_timeout, 240))
             connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
             request_timeout = (connect_timeout, forced_read_timeout)
 
@@ -2570,15 +2589,26 @@ Required JSON object:
             local_num_predict = int(
                 os.getenv(
                     'OLLAMA_FORCE_LOCAL_NUM_PREDICT' if fast_mode else 'OLLAMA_REPORT_NUM_PREDICT',
-                    '512' if fast_mode else '2048',
-                ) or (512 if fast_mode else 2048)
+                    '2048',
+                ) or 2048
             )
         except (TypeError, ValueError):
-            local_num_predict = 512 if fast_mode else 2048
-        local_num_predict = max(256 if fast_mode else 512, min(local_num_predict, 4096))
+            local_num_predict = 2048
+        local_num_predict = max(1024 if fast_mode else 512, min(local_num_predict, 4096))
         local_keep_alive = os.getenv(
             'OLLAMA_FORCE_LOCAL_KEEP_ALIVE' if fast_mode else 'OLLAMA_REPORT_KEEP_ALIVE',
             '5m' if fast_mode else '0',
+        )
+        use_ollama_json_schema = str(
+            os.getenv(
+                'OLLAMA_FORCE_LOCAL_JSON_SCHEMA' if fast_mode else 'OLLAMA_REPORT_JSON_SCHEMA',
+                'true' if fast_mode else 'false',
+            )
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
+        ollama_response_format: Any = (
+            self._build_ollama_report_json_schema(report_data)
+            if use_ollama_json_schema
+            else 'json'
         )
 
         def _sleep_before_retry(attempt_no: int):
@@ -2593,7 +2623,7 @@ Required JSON object:
                 'prompt': prompt_for_request,
                 'context': [],
                 'stream': False,
-                'format': 'json',
+                'format': ollama_response_format,
                 'keep_alive': local_keep_alive,
                 'options': {
                     # Match Gemini's discipline for structured JSON output.
@@ -2951,7 +2981,7 @@ Required JSON object:
 
         local_rule_based_fast_path = (
             force_local_nlp
-            and str(os.getenv('LOCAL_REPORT_RULE_BASED_FAST_PATH', 'true')).strip().lower()
+            and str(os.getenv('LOCAL_REPORT_RULE_BASED_FAST_PATH', 'false')).strip().lower()
             in ('1', 'true', 'yes', 'on')
         )
         if not nlp_analysis and local_rule_based_fast_path:
@@ -5552,6 +5582,8 @@ Required JSON object:
             elif detected_violation_items > 0:
                 hazard_items = ['Increased injury/exposure risk due to observed PPE non-compliance']
 
+        what_text, summary_legal_items = self._partition_summary_legal_order_segments(what_text)
+
         if no_concrete_ppe_evidence and caption_safety_neutral:
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
@@ -5578,6 +5610,8 @@ Required JSON object:
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
+            if summary_legal_items:
+                reg_names = [*reg_names, *summary_legal_items]
             reg_text = self._format_summary_bullet_list(reg_names)
 
         parsed_summary = self._format_summary_what_html(what_text)
@@ -5619,6 +5653,50 @@ Required JSON object:
         clean = clean.replace('**', '')
         return clean.strip()
 
+    def _partition_summary_legal_order_segments(self, text: Any) -> Tuple[str, List[str]]:
+        """Move model-written legal order text out of WHAT and into LAW."""
+        clean = self._clean_summary_copy_text(text)
+        if not clean:
+            return '', []
+
+        segments = self._split_summary_labeled_segments(clean)
+        if not segments:
+            return clean, []
+
+        legal_labels = {
+            'legal order',
+            'legal obligation',
+            'legal obligations',
+            'legal consequence',
+            'legal consequences',
+            'legal requirement',
+            'legal requirements',
+            'regulatory order',
+            'regulatory action',
+        }
+        retained: List[Tuple[str, str]] = []
+        legal_items: List[str] = []
+        for label, body in segments:
+            label_key = str(label or '').strip().lower()
+            body_text = self._clean_summary_copy_text(body)
+            if not body_text:
+                continue
+            if label_key in legal_labels:
+                display_label = 'Legal order' if label_key == 'legal order' else label
+                legal_items.append(f"{display_label}: {body_text}")
+            else:
+                retained.append((label, body_text))
+
+        if not legal_items:
+            return clean, []
+
+        if retained:
+            retained_text = ' '.join(f"{label}: {body}" for label, body in retained)
+        else:
+            retained_text = 'PPE non-compliance detected from analyzed scene evidence.'
+
+        return retained_text, legal_items
+
     def _split_summary_labeled_segments(self, text: str) -> List[Tuple[str, str]]:
         """Split legacy model summaries like 'CRITICAL RISK: ... Core Violation: ...'."""
         clean = self._clean_summary_copy_text(text)
@@ -5633,6 +5711,15 @@ Required JSON object:
             'critical action': 'Critical action',
             'recommended action': 'Recommended action',
             'action required': 'Action required',
+            'legal order': 'Legal order',
+            'legal obligation': 'Legal obligation',
+            'legal obligations': 'Legal obligations',
+            'legal consequence': 'Legal consequence',
+            'legal consequences': 'Legal consequences',
+            'legal requirement': 'Legal requirement',
+            'legal requirements': 'Legal requirements',
+            'regulatory order': 'Regulatory order',
+            'regulatory action': 'Regulatory action',
             'why it matters': 'Why it matters',
             'evidence': 'Evidence',
             'summary': 'Summary',

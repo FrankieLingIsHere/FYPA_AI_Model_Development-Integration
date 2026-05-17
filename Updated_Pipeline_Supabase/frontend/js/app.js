@@ -14,6 +14,7 @@ const LEGACY_LOCAL_MODE_CHECKUP_COMPLETED_KEY = 'ppe.localMode.checkupCompleted.
 const LEGACY_LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY = 'ppe.localMode.autoSetupAllowed.v1';
 const LOCAL_MODE_POLICY_STATE_KEY = 'ppe.localMode.policyState.v2';
 const LOCAL_MODE_PROVISIONING_STATUS_KEY = 'ppe.localMode.provisioningStatus.v2';
+const PROVIDER_PROFILE_MANUAL_LOCK_KEY = 'ppe.providerProfile.manualLock.v1';
 const LEGACY_LOCAL_MODE_PROVISIONING_STATUS_KEYS = [
     'ppe.localMode.provisioningStatus.v1'
 ];
@@ -99,6 +100,44 @@ function getOrCreateDeviceMachineId() {
         try { return _deriveStableDeviceMachineId(); } catch (_) { return _generateDeviceMachineId(); }
     }
 }
+
+function getManualProviderProfileLock() {
+    try {
+        const value = String(localStorage.getItem(PROVIDER_PROFILE_MANUAL_LOCK_KEY) || '').trim().toLowerCase();
+        return value === 'local' ? 'local' : '';
+    } catch (error) {
+        return '';
+    }
+}
+
+function setManualProviderProfileLock(profile) {
+    try {
+        const value = String(profile || '').trim().toLowerCase();
+        if (value === 'local') {
+            localStorage.setItem(PROVIDER_PROFILE_MANUAL_LOCK_KEY, 'local');
+        } else {
+            localStorage.removeItem(PROVIDER_PROFILE_MANUAL_LOCK_KEY);
+        }
+    } catch (error) {
+        // Ignore localStorage access failures.
+    }
+}
+
+function clearManualProviderProfileLock() {
+    setManualProviderProfileLock('');
+}
+
+try {
+    window.PPEProviderProfileManualLock = {
+        key: PROVIDER_PROFILE_MANUAL_LOCK_KEY,
+        get: getManualProviderProfileLock,
+        set: setManualProviderProfileLock,
+        clear: clearManualProviderProfileLock
+    };
+} catch (error) {
+    // Ignore non-browser contexts.
+}
+
 const LOCAL_MODE_PROVISIONING_POLL_INTERVAL_MS = 8000;
 // Cache lifetime is intentionally short. Provisioning status can flip
 // (admin revoke, secret rotation) without the cache being notified, and
@@ -483,10 +522,12 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             status = heartbeatProvisionStatus;
         }
 
+        const heartbeatMatchesThisMachine = cloudHeartbeat.matchesRequestedMachine !== false;
         const heartbeatActive = !!(
             cloudHeartbeat.available
             && cloudHeartbeat.isRecent
             && cloudHeartbeat.localModePossible
+            && heartbeatMatchesThisMachine
         );
         const heartbeatIsApproved = (
             heartbeatProvisionStatus === 'approved'
@@ -1360,7 +1401,7 @@ function initializeAdaptivePipelineModeManager() {
         async handoffBrowserLocalDrafts(reason, options = {}) {
             const force = !!options.force;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
-            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+            if (manualProfile === 'local' && options.allowWhileLocal !== true) {
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1415,7 +1456,7 @@ function initializeAdaptivePipelineModeManager() {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
-            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+            if (manualProfile === 'local' && options.allowWhileLocal !== true) {
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1438,7 +1479,8 @@ function initializeAdaptivePipelineModeManager() {
             try {
                 const syncRes = await API.syncLocalCacheToSupabase({
                     limit: 180,
-                    reason: 'reconnect_auto'
+                    reason: 'reconnect_auto',
+                    allowLocalModeSync: true
                 });
                 if (!syncRes || syncRes.success === false) {
                     await this.handoffBrowserLocalDrafts(`${reason} (sync warning)`, { force: true, limit: 10 });
@@ -1468,7 +1510,7 @@ function initializeAdaptivePipelineModeManager() {
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             const deferIfInFlight = options.deferIfInFlight !== false;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
-            if ((this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true) {
+            if (manualProfile === 'local' && options.allowWhileLocal !== true) {
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1509,7 +1551,8 @@ function initializeAdaptivePipelineModeManager() {
             try {
                 const syncRes = await API.syncLocalCacheToSupabase({
                     limit: 180,
-                    reason: 'reconnect_auto'
+                    reason: 'reconnect_auto',
+                    allowLocalModeSync: true
                 });
                 if (!syncRes || syncRes.success === false) {
                     console.warn('Local-cache reconciliation returned warning:', (syncRes && syncRes.error) || syncRes);
@@ -1568,7 +1611,8 @@ function initializeAdaptivePipelineModeManager() {
                 await this.syncBacklogToSupabase(`network state ${networkState}`, {
                     force,
                     notifyOnEnqueue: force,
-                    deferIfInFlight: true
+                    deferIfInFlight: true,
+                    allowWhileLocal: true
                 });
             }
 
@@ -1596,7 +1640,8 @@ function initializeAdaptivePipelineModeManager() {
             if (!this.shouldUseLocal(networkState) && navigator.onLine !== false) {
                 await this.handoffBrowserLocalDrafts(`resolved cloud backend for ${networkState}`, {
                     force,
-                    limit: 10
+                    limit: 10,
+                    allowWhileLocal: true
                 });
             }
 
@@ -1736,11 +1781,19 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 if (!skipBacklogSync) {
-                    await this.syncBacklogToSupabase(reason, { force: true, notifyOnEnqueue: false });
+                    await this.syncBacklogToSupabase(reason, {
+                        force: true,
+                        notifyOnEnqueue: false,
+                        allowWhileLocal: true
+                    });
                 }
 
                 await API.executeReportRecovery('failover');
-                await this.handoffBrowserLocalDrafts(reason, { force: true, limit: 10 });
+                await this.handoffBrowserLocalDrafts(reason, {
+                    force: true,
+                    limit: 10,
+                    allowWhileLocal: true
+                });
                 this.currentMode = 'cloud';
                 this.notify(`Pipeline switched to CLOUD mode and sync queued (${reason}).`, 'info', {
                     dedupeKey: 'adaptive-switch-cloud-success',
@@ -1751,11 +1804,13 @@ function initializeAdaptivePipelineModeManager() {
                 // Keep reconciliation resilient even when cloud mode switch fails.
                 await this.syncBacklogToSupabase(`${reason} (cloud switch fallback)`, {
                     force: true,
-                    notifyOnEnqueue: false
+                    notifyOnEnqueue: false,
+                    allowWhileLocal: true
                 });
                 await this.handoffBrowserLocalDrafts(`${reason} (cloud switch fallback)`, {
                     force: true,
-                    limit: 10
+                    limit: 10,
+                    allowWhileLocal: true
                 });
             } finally {
                 this.switchInFlight = false;
@@ -1787,11 +1842,15 @@ function initializeAdaptivePipelineModeManager() {
 
                 const profile = String((settings && settings.routing_profile) || '').trim().toLowerCase();
                 if (profile === 'local') {
+                    const manualLock = getManualProviderProfileLock();
                     this.currentMode = 'local';
-                    this.manualProviderProfile = 'local';
+                    this.manualProviderProfile = manualLock === 'local' ? 'local' : '';
                     this.localUnavailableNotified = false;
                     this.lastEvaluatedNetworkState = null;
-                    this.notify('Local mode ready. Reports will stay local until you switch provider mode.', 'success', {
+                    const message = manualLock === 'local'
+                        ? 'Local mode ready. Reports will stay local until you switch provider mode.'
+                        : 'Local mode ready. It will switch back to cloud automatically when the connection is good.';
+                    this.notify(message, 'success', {
                         dedupeKey: `adaptive-startup-local-ready-${reason}`,
                         dedupeTtlMs: 30000
                     });
@@ -1801,6 +1860,7 @@ function initializeAdaptivePipelineModeManager() {
                 if (profile === 'cloud') {
                     this.currentMode = 'cloud';
                     this.manualProviderProfile = '';
+                    clearManualProviderProfileLock();
                     return 'cloud';
                 }
             } catch (error) {

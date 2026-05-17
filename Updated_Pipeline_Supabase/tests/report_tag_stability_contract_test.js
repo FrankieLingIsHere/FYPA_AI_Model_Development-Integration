@@ -346,6 +346,8 @@ function testLocalSyncEventMatrix() {
 
   assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores queued local sync event');
   assertTag(localRecord, 'local', 'Local', 'local report stays local while sync is only queued');
+  const queuedSyncInfo = ReportsPage.getSyncInfo(localRecord, 'local');
+  assertEqual(queuedSyncInfo && queuedSyncInfo.label, 'Sync queued', 'queued local sync badge label');
 
   ReportsPage.applyLocalSyncUpdate({
     success: true,
@@ -359,6 +361,8 @@ function testLocalSyncEventMatrix() {
 
   assertTag(cloudRecord, 'cloud', 'Cloud', 'cloud report ignores completed local sync event');
   assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts completed local sync event');
+  const completedSyncInfo = ReportsPage.getSyncInfo(localRecord, 'synced_local');
+  assertEqual(completedSyncInfo && completedSyncInfo.label, 'Synced', 'completed local sync badge label');
 }
 
 function testReportStatusProbeDoesNotForceFullListRefresh() {

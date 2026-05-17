@@ -2946,6 +2946,12 @@ const API = {
             const reason = String(options.reason || '').trim() || 'manual_api';
             const dryRun = !!options.dryRun;
             const origin = String(options.origin || 'local_synced').trim() || 'local_synced';
+            const normalizedReason = reason.toLowerCase();
+            const allowLocalModeSync = !!options.allowLocalModeSync
+                || normalizedReason === 'reconnect_auto'
+                || normalizedReason === 'auto_reconnect'
+                || normalizedReason.includes('reconnect')
+                || normalizedReason.includes('online');
             const syncBase = this._normalizeBaseUrl(options.baseUrl || options.syncBaseUrl || this.getLocalSyncBackendBaseUrl());
             const localLoopbackBlocked = this.isLocalBackendBase(syncBase)
                 && !this.canUseLocalBackendFromPage(syncBase)
@@ -2995,7 +3001,8 @@ const API = {
                                     reason,
                                     dry_run: true,
                                     origin,
-                                    source_scope: 'synced_local'
+                                    source_scope: 'synced_local',
+                                    allow_local_mode_sync: allowLocalModeSync
                                 })
                             }, Number(options.candidateTimeoutMs || 12000));
                             backendCandidateProbe = await probeResponse.json().catch(() => ({}));
@@ -3033,7 +3040,8 @@ const API = {
                     reason,
                     dry_run: dryRun,
                     origin,
-                    source_scope: 'synced_local'
+                    source_scope: 'synced_local',
+                    allow_local_mode_sync: allowLocalModeSync
                 })
             }, Number(options.timeoutMs || 30000));
 

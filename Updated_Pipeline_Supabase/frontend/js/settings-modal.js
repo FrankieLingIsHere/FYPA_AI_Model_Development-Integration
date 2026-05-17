@@ -6,12 +6,31 @@ const GlobalSettingsModal = {
     keydownHandler: null,
     localProvisionPollInterval: null,
     heartbeatCountdownInterval: null,
+    heartbeatRefreshPollInterval: null,
     REMOTE_PROVISION_STATE_KEY: 'ppe.remoteProvisioningState.v1',
+    PROVIDER_PROFILE_MANUAL_LOCK_KEY: 'ppe.providerProfile.manualLock.v1',
     localProvisionState: {
         status: 'idle',
         machineId: '',
         adminPortalUrl: '',
         cloudHeartbeat: null
+    },
+
+    setProviderProfileManualLock(profile) {
+        try {
+            if (window.PPEProviderProfileManualLock && typeof window.PPEProviderProfileManualLock.set === 'function') {
+                window.PPEProviderProfileManualLock.set(profile);
+                return;
+            }
+            const normalized = String(profile || '').trim().toLowerCase();
+            if (normalized === 'local') {
+                localStorage.setItem(this.PROVIDER_PROFILE_MANUAL_LOCK_KEY, 'local');
+            } else {
+                localStorage.removeItem(this.PROVIDER_PROFILE_MANUAL_LOCK_KEY);
+            }
+        } catch (error) {
+            // Ignore localStorage access failures.
+        }
     },
 
     RECOMMENDED_SETTINGS: {
@@ -974,6 +993,41 @@ const GlobalSettingsModal = {
         }, 1000);
     },
 
+    heartbeatNeedsRemoteRefresh() {
+        if (!this.isLikelyRemoteBackend()) return false;
+        const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
+        return !heartbeat.available || !heartbeat.isRecent;
+    },
+
+    ensureHeartbeatRefreshPolling() {
+        if (!this.isLikelyRemoteBackend()) return;
+        if (this.heartbeatRefreshPollInterval) return;
+
+        const tick = async () => {
+            if (!this.isOpen) {
+                this.stopHeartbeatRefreshPolling();
+                return;
+            }
+            if (!this.heartbeatNeedsRemoteRefresh()) {
+                this.stopHeartbeatRefreshPolling();
+                return;
+            }
+            try {
+                await this.refreshProvisioningState();
+            } catch (error) {
+                console.debug('GlobalSettingsModal: heartbeat refresh poll skipped', error);
+            }
+        };
+
+        this.heartbeatRefreshPollInterval = setInterval(tick, 12000);
+    },
+
+    stopHeartbeatRefreshPolling() {
+        if (!this.heartbeatRefreshPollInterval) return;
+        clearInterval(this.heartbeatRefreshPollInterval);
+        this.heartbeatRefreshPollInterval = null;
+    },
+
     stopHeartbeatCountdown() {
         if (!this.heartbeatCountdownInterval) return;
         clearInterval(this.heartbeatCountdownInterval);
@@ -1018,10 +1072,12 @@ const GlobalSettingsModal = {
                 normalizedStatus = heartbeatProvisionStatus;
             }
 
+            const heartbeatMatchesThisMachine = normalizedHeartbeat.matchesRequestedMachine !== false;
             const heartbeatActive = !!(
                 normalizedHeartbeat.available
                 && normalizedHeartbeat.isRecent
                 && normalizedHeartbeat.localModePossible
+                && heartbeatMatchesThisMachine
             );
             const heartbeatIsApproved = (
                 heartbeatProvisionStatus === 'approved'
@@ -1050,6 +1106,9 @@ const GlobalSettingsModal = {
         this.updateInstallerRedownloadButton();
         this.updateRequestProvisioningButton();
         this.updateHeartbeatBadge();
+        if (this.isOpen && this.heartbeatNeedsRemoteRefresh()) {
+            this.ensureHeartbeatRefreshPolling();
+        }
 
         // Propagate the resolved per-device status into the global
         // PPEProvisioningStatus tracker so the home page badge and any
@@ -1331,6 +1390,12 @@ const GlobalSettingsModal = {
         const status = String(this.localProvisionState.status || '').toLowerCase();
         const machineId = String(this.localProvisionState.machineId || '').trim();
         const adminPortalUrl = String(this.localProvisionState.adminPortalUrl || '').trim();
+        const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
+        const heartbeatVisible = this.isLikelyRemoteBackend() && heartbeat.available;
+        const heartbeatFresh = heartbeatVisible && heartbeat.isRecent;
+        const heartbeatMatches = heartbeat.matchesRequestedMachine !== false;
+        const heartbeatHostLabel = heartbeat.machineId ? ` (${heartbeat.machineId})` : '';
+        const heartbeatCatchingUp = this.isLikelyRemoteBackend() && (!heartbeatVisible || !heartbeatFresh);
 
         if (status === 'pending_approval') {
             const machineText = machineId ? ` for machine ${machineId}` : '';
@@ -1341,13 +1406,22 @@ const GlobalSettingsModal = {
         }
 
         if (status === 'active') {
-            statusEl.textContent = 'Device provisioned and active. Local backend is running.';
+            statusEl.textContent = heartbeatFresh
+                ? 'Device provisioned and active. Cloud heartbeat confirms the local backend is running.'
+                : 'Device provisioned and active. Waiting for the cloud heartbeat badge to refresh.';
             statusEl.style.color = 'var(--success-color)';
             return;
         }
 
         if (status === 'provisioned') {
-            statusEl.textContent = 'Local mode is approved and provisioned. Cloud credentials are active on this backend.';
+            if (heartbeatCatchingUp) {
+                statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
+                statusEl.style.color = 'var(--warning-color)';
+                return;
+            }
+            statusEl.textContent = heartbeatMatches
+                ? 'Local mode is approved and provisioned. Cloud heartbeat confirms this backend is reachable.'
+                : `Local mode is approved and provisioned. Cloud heartbeat is fresh from the local host${heartbeatHostLabel}.`;
             statusEl.style.color = 'var(--success-color)';
             return;
         }
@@ -1592,6 +1666,7 @@ const GlobalSettingsModal = {
                 window.AdaptivePipelineManager.currentMode = 'local';
                 window.AdaptivePipelineManager.manualProviderProfile = 'local';
             }
+            this.setProviderProfileManualLock('local');
             await this.loadProviderRoutingSettings();
 
             // Redirect API traffic to the local backend now that the profile has switched.
@@ -1647,6 +1722,7 @@ const GlobalSettingsModal = {
                 window.AdaptivePipelineManager.currentMode = 'cloud';
                 window.AdaptivePipelineManager.manualProviderProfile = '';
             }
+            this.setProviderProfileManualLock('');
             await this.loadProviderRoutingSettings();
             return { success: true, profile: 'api', message: 'API mode profile applied' };
         } catch (error) {
@@ -1690,6 +1766,7 @@ const GlobalSettingsModal = {
                     (this.RECOMMENDED_SETTINGS.provider_routing || {}).routing_profile || 'cloud'
                 ).trim().toLowerCase() === 'local' ? 'local' : 'cloud';
             }
+            this.setProviderProfileManualLock('');
             return { success: true, profile: 'recommended', message: 'Recommended settings applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply recommended failed', error);
@@ -1797,6 +1874,9 @@ const GlobalSettingsModal = {
                 machine_id: heartbeatMachineId || this.localProvisionState.machineId,
                 cloud_local_heartbeat: rawCloudHeartbeat
             });
+            if (this.heartbeatNeedsRemoteRefresh()) {
+                this.ensureHeartbeatRefreshPolling();
+            }
             const useHeartbeatDiagnostics = isLikelyRemoteBackend && heartbeatRecent;
             let ready = useHeartbeatDiagnostics
                 ? !!cloudHeartbeat.localModePossible
@@ -2259,6 +2339,9 @@ const GlobalSettingsModal = {
             this.refreshProvisioningState()
         ]);
         this.updateHeartbeatBadge();
+        if (this.heartbeatNeedsRemoteRefresh()) {
+            this.ensureHeartbeatRefreshPolling();
+        }
 
         if (options && options.focusLocalCheckup) {
             setTimeout(() => this.focusLocalCheckupControls(), 40);
@@ -2274,6 +2357,7 @@ const GlobalSettingsModal = {
         modal.setAttribute('aria-hidden', 'true');
         this.unlockBodyScroll();
         this.stopHeartbeatCountdown();
+        this.stopHeartbeatRefreshPolling();
 
         if (typeof Router !== 'undefined' && Router.updateActiveNav) {
             Router.updateActiveNav(APP_STATE.currentPage || 'home');

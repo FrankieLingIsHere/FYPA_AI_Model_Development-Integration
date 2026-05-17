@@ -411,6 +411,37 @@ const ReportsPage = {
     },
 
     applyLocalSyncUpdate(detail = {}) {
+        const queuedReportIds = Array.from(new Set(
+            (Array.isArray(detail.queued_report_ids) ? detail.queued_report_ids : [])
+                .map((id) => String(id || '').trim())
+                .filter(Boolean)
+        ));
+        if (queuedReportIds.length) {
+            const queuedSet = new Set(queuedReportIds);
+            let queuedChanged = false;
+            this.violations = this.violations.map((violation) => {
+                const reportId = String((violation && violation.report_id) || '').trim();
+                if (!queuedSet.has(reportId)) return violation;
+                const sourceScope = this.inferSourceScope(violation);
+                if (sourceScope === 'cloud' || !this.hasLocalOriginEvidence(violation)) {
+                    return violation;
+                }
+                queuedChanged = true;
+                return {
+                    ...violation,
+                    source_scope: 'local',
+                    source_label: 'Local',
+                    sync_source: detail.sync_source || violation.sync_source || 'sync_local_cache',
+                    source: detail.source || violation.source || 'sync_local_cache',
+                    sync_state: detail.sync_state || violation.sync_state || 'cloud_sync_queued',
+                    updated_at: new Date().toISOString()
+                };
+            });
+            if (queuedChanged) {
+                this.renderReports();
+            }
+        }
+
         const reportIds = Array.from(new Set([
             ...(Array.isArray(detail.synced_report_ids) ? detail.synced_report_ids : []),
             ...(Array.isArray(detail.completed_report_ids) ? detail.completed_report_ids : []),
@@ -765,6 +796,13 @@ const ReportsPage = {
                 existing.has_original = !!existing.has_original || !!item.has_original;
                 existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
                 existing.has_report = !!existing.has_report || !!item.has_report;
+                if (item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState) {
+                    existing.sync_state = item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState;
+                }
+                if (item.sync_source || item.source) {
+                    existing.sync_source = item.sync_source || existing.sync_source || '';
+                    existing.source = item.source || existing.source || '';
+                }
 
                 let mergedScope = existingScope || pendingScope || 'cloud';
                 if (existingScope === 'synced_local' && pendingScope === 'cloud') {
@@ -807,7 +845,10 @@ const ReportsPage = {
                 has_annotated: !!item.has_annotated,
                 has_report: !!item.has_report,
                 source_scope: pendingScope,
-                source_label: pendingLabel
+                source_label: pendingLabel,
+                sync_state: item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState || '',
+                sync_source: item.sync_source || '',
+                source: item.source || ''
             });
         });
 
@@ -1746,6 +1787,54 @@ const ReportsPage = {
         };
     },
 
+    getSyncInfo(violation, sourceScope = '') {
+        const syncState = this.getSyncState(violation);
+        if (!syncState) return null;
+
+        const scope = this.normalizeSourceScope(sourceScope) || this.inferSourceScope(violation);
+        const localRelated = scope === 'local'
+            || scope === 'synced_local'
+            || this.hasLocalOriginMarkerEvidence(violation);
+        if (!localRelated) return null;
+
+        if (
+            syncState === 'cloud_completed'
+            || syncState === 'completed_synced'
+            || syncState === 'synced'
+        ) {
+            return {
+                color: 'success',
+                icon: 'fa-check-circle',
+                label: 'Synced',
+                title: 'Local report HTML is confirmed in cloud storage.'
+            };
+        }
+
+        if (
+            syncState.includes('queued')
+            || syncState.includes('pending')
+            || syncState.includes('retry')
+        ) {
+            return {
+                color: 'warning',
+                icon: 'fa-cloud-upload-alt',
+                label: 'Sync queued',
+                title: 'Cloud sync is queued; this changes to Local Synced after report HTML is confirmed in cloud storage.'
+            };
+        }
+
+        if (syncState.includes('syncing') || syncState.includes('in_progress')) {
+            return {
+                color: 'warning',
+                icon: 'fa-sync-alt fa-spin',
+                label: 'Syncing',
+                title: 'Cloud sync is in progress.'
+            };
+        }
+
+        return null;
+    },
+
     // Handle report click with fallback for generating reports
     handleReportClick(violation) {
         if (this.isReportReady(violation)) {
@@ -2525,6 +2614,7 @@ const ReportsPage = {
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
         const sourceScope = this.inferSourceScope(violation);
+        const syncInfo = this.getSyncInfo(violation, sourceScope);
         const inlineViolation = this.encodeInlineReportPayload(violation);
         const deviceId = String((violation && violation.device_id) || '').trim();
         const deviceKey = deviceId.toLowerCase();
@@ -2593,6 +2683,9 @@ const ReportsPage = {
                         <span class="badge badge-${statusInfo.color}">
                             <i class="fas ${statusInfo.icon}"></i> ${statusInfo.text}
                         </span>
+                        ${syncInfo ? `<span class="badge badge-${syncInfo.color}" title="${syncInfo.title}">
+                            <i class="fas ${syncInfo.icon}"></i> ${syncInfo.label}
+                        </span>` : ''}
                         ${violation.has_original ? '<span class="badge badge-success"><i class="fas fa-image"></i> Original</span>' : ''}
                         ${violation.has_annotated ? '<span class="badge badge-success"><i class="fas fa-draw-polygon"></i> Annotated</span>' : ''}
                     </div>

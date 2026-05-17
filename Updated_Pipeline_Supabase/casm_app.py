@@ -4148,7 +4148,8 @@ def queue_worker_loop():
                                     max_items=SUPABASE_AUTO_SYNC_BATCH_SIZE,
                                     dry_run=False,
                                     reconcile_reason='auto_reconnect',
-                                    require_worker=False
+                                    require_worker=False,
+                                    allow_local_mode_sync=True
                                 )
                                 enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
                                 if enqueued_count > 0:
@@ -5823,6 +5824,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 in {'person', 'worker', 'man', 'woman', 'people'}
             )
             effective_annotated_path = annotated_path if annotated_path.exists() else original_path
+            local_nlp_fallback_allowed = bool(
+                force_local_artifact_pipeline
+                and str(os.getenv('LOCAL_REPORT_ALLOW_NLP_FALLBACK', 'false')).strip().lower()
+                in ('1', 'true', 'yes', 'on')
+            )
 
             report_data = {
                 'report_id': report_id,
@@ -5845,7 +5851,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'detection_data': data.get('detection_data') if isinstance(data.get('detection_data'), dict) else {},
                 'cloud_upload_disabled': force_local_artifact_pipeline,
                 'force_local_nlp': force_local_artifact_pipeline,
-                'allow_local_nlp_fallback': force_local_artifact_pipeline,
+                'allow_local_nlp_fallback': local_nlp_fallback_allowed,
                 'report_ready_callback': _signal_local_report_ready,
             }
             if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
@@ -5879,7 +5885,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         12,
                         min(
                             _report_gen_timeout_seconds,
-                            int(os.getenv('LOCAL_REPORT_GENERATION_TIMEOUT_SECONDS', '25') or 25),
+                            int(os.getenv('LOCAL_REPORT_GENERATION_TIMEOUT_SECONDS', '150') or 150),
                         ),
                     )
                 except (TypeError, ValueError):
@@ -12857,6 +12863,7 @@ def _sync_local_cache_candidates(
     if sync_origin not in {'local_synced', 'sync_local_cache', 'browser_local_draft_handoff'}:
         sync_origin = 'local_synced'
     is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
+    local_mode_sync_allowed = bool(allow_local_mode_sync or is_auto_reconnect)
 
     # In cloud routing profile we still want the sweep to run so reports
     # created during a previous local-mode session can be reconciled to
@@ -12865,11 +12872,12 @@ def _sync_local_cache_candidates(
     # before their cloud artifact upload completes.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     cloud_mode_orphans_only = (active_profile != 'local')
-    if active_profile == 'local' and not dry_run and not allow_local_mode_sync:
+    if active_profile == 'local' and not dry_run and not local_mode_sync_allowed:
         return {
             'success': True,
             'reconcile_reason': reason,
             'origin': sync_origin,
+            'allow_local_mode_sync': False,
             'dry_run': False,
             'scanned': 0,
             'candidates': 0,
@@ -12883,7 +12891,7 @@ def _sync_local_cache_candidates(
             'worker_running': _is_queue_worker_alive(),
             'deferred': True,
             'deferred_reason': 'routing_profile_local',
-            'message': 'Local-mode reports remain local until the runtime switches back to cloud/reconnect sync.',
+            'message': 'Local-mode reports remain local until reconnect sync or cloud mode is available.',
         }
 
     def _load_local_metadata(violation_dir: Path) -> Dict[str, Any]:

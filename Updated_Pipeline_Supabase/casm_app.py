@@ -1147,7 +1147,23 @@ _REPORT_SEVERITY_RANK = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
 
 _LOW_RISK_CONTEXT_TERMS = {
     'office', 'indoor office', 'desk', 'administrative', 'meeting room', 'classroom',
-    'lobby', 'reception', 'control room', 'training room', 'break room'
+    'lobby', 'reception', 'control room', 'training room', 'break room',
+    'residential', 'home', 'apartment', 'living room', 'bedroom', 'kitchen',
+    'indoor public area', 'ordinary public area'
+}
+
+_PUBLIC_REVIEW_CONTEXT_TERMS = {
+    'public area', 'public street', 'street scene', 'sidewalk', 'pavement',
+    'pedestrian', 'parking lot', 'bus stop', 'public transport', 'open yard'
+}
+
+_WORK_ZONE_CONTEXT_TERMS = {
+    'construction', 'worksite', 'work zone', 'work-zone', 'road work',
+    'roadside work', 'restricted work area', 'exclusion zone', 'loading bay',
+    'loading dock', 'warehouse', 'factory', 'industrial', 'machinery',
+    'mobile equipment', 'moving equipment', 'forklift', 'crane', 'excavator',
+    'scaffold', 'trench', 'excavation', 'overhead', 'falling object',
+    'traffic control', 'safety cone', 'barricade', 'barrier tape'
 }
 
 _HIGH_RISK_CONTEXT_TERMS = {
@@ -1297,14 +1313,21 @@ def _contextual_severity_for_label(label: str, base_severity: str, context_text:
     )
     broad_high = _context_has_any(context_text, _HIGH_RISK_CONTEXT_TERMS)
     low_context = _context_has_any(context_text, _LOW_RISK_CONTEXT_TERMS) and not broad_high
+    public_review_context = (
+        _context_has_any(context_text, _PUBLIC_REVIEW_CONTEXT_TERMS)
+        and not _context_has_any(context_text, _WORK_ZONE_CONTEXT_TERMS)
+    )
+    environment_review_context = low_context or public_review_context
 
     if high_for_label:
+        if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and environment_review_context:
+            return 'MEDIUM'
         return 'HIGH'
 
     # Hard hats and hi-vis vests can be high-consequence controls, but in a
     # clearly low-hazard office/admin scene they should not dominate the risk
     # score without surrounding struck-by, overhead, traffic, or worksite cues.
-    if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and low_context:
+    if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and environment_review_context:
         return 'MEDIUM'
 
     # Respiratory, hand, eye, and footwear PPE become high only when the scene
@@ -1364,7 +1387,11 @@ def _classify_violation_severity(
             severity_context,
             _HIGH_RISK_CONTEXT_TERMS,
         )
-        if highest == 'MEDIUM' and len(distinct_medium) >= 3 and not low_context:
+        public_review_context = (
+            _context_has_any(severity_context, _PUBLIC_REVIEW_CONTEXT_TERMS)
+            and not _context_has_any(severity_context, _WORK_ZONE_CONTEXT_TERMS)
+        )
+        if highest == 'MEDIUM' and len(distinct_medium) >= 3 and not low_context and not public_review_context:
             return 'HIGH'
         return highest
 
@@ -9393,14 +9420,19 @@ def _sync_report_generator_provider_runtime(
         0.0,
         _float_or_env(gemini_monthly_budget_usd, 'GEMINI_MONTHLY_BUDGET_USD', 0.0)
     )
+    gemini_min_output_tokens_per_report = max(
+        4096,
+        _int_or_env(None, 'GEMINI_REPORT_MIN_OUTPUT_TOKENS', 6144)
+    )
     report_generator.gemini_max_output_tokens_per_report = max(
-        1,
+        gemini_min_output_tokens_per_report,
         _int_or_env(
             gemini_max_output_tokens_per_report,
             'GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT',
-            getattr(report_generator, 'gemini_max_output_tokens_per_report', 2200)
+            getattr(report_generator, 'gemini_max_output_tokens_per_report', 8192)
         )
     )
+    report_generator.gemini_min_output_tokens_per_report = gemini_min_output_tokens_per_report
 
     gemini_runtime_available = False
     if normalized_profile == 'cloud' and gemini_enabled:
@@ -9437,8 +9469,8 @@ def _sync_report_generator_provider_runtime(
 
     if getattr(report_generator, 'gemini_client', None) is not None:
         report_generator.gemini_client.max_tokens = min(
-            report_generator.gemini_client.max_tokens,
-            report_generator.gemini_max_output_tokens_per_report
+            max(report_generator.gemini_client.max_tokens, gemini_min_output_tokens_per_report),
+            report_generator.gemini_max_output_tokens_per_report,
         )
 
     return True
@@ -12046,7 +12078,7 @@ def _current_provider_settings():
         'gemini_enabled': bool(GEMINI_CONFIG.get('enabled', True)),
         'gemini_daily_budget_usd': float(os.getenv('GEMINI_DAILY_BUDGET_USD', '0') or 0),
         'gemini_monthly_budget_usd': float(os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0') or 0),
-        'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200),
+        'gemini_max_output_tokens_per_report': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192') or 8192),
         'nlp_provider_order': MODEL_API_CONFIG.get('nlp_provider_order', nlp_default_order),
         'embedding_provider_order': MODEL_API_CONFIG.get('embedding_provider_order', embedding_default_order),
         'vision_provider_order': vision_settings.get('vision_provider_order', vision_default_order),
@@ -12086,7 +12118,8 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
             'daily_calls': 0,
             'monthly_calls': 0,
             'last_block_reason': None,
-            'enforced_max_output_tokens': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200') or 2200),
+            'min_output_tokens': int(os.getenv('GEMINI_REPORT_MIN_OUTPUT_TOKENS', '6144') or 6144),
+            'enforced_max_output_tokens': int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192') or 8192),
         },
     }
 
@@ -12233,7 +12266,11 @@ def api_provider_routing_settings():
         gemini_enabled = bool(data.get('gemini_enabled', GEMINI_CONFIG.get('enabled', True)))
         gemini_daily_budget_usd = max(0.0, _to_float(data.get('gemini_daily_budget_usd', os.getenv('GEMINI_DAILY_BUDGET_USD', '0')), 0.0))
         gemini_monthly_budget_usd = max(0.0, _to_float(data.get('gemini_monthly_budget_usd', os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0')), 0.0))
-        gemini_max_output_tokens_per_report = max(1, _to_int(data.get('gemini_max_output_tokens_per_report', os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '2200')), 2200))
+        gemini_min_output_tokens_per_report = max(4096, _to_int(os.getenv('GEMINI_REPORT_MIN_OUTPUT_TOKENS', '6144'), 6144))
+        gemini_max_output_tokens_per_report = max(
+            gemini_min_output_tokens_per_report,
+            _to_int(data.get('gemini_max_output_tokens_per_report', os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192')), 8192)
+        )
 
         nlp_provider_order = _normalize_provider_order(
             data.get('nlp_provider_order'),

@@ -41,6 +41,14 @@ def test_report_severity_uses_environment_context_for_ppe_risk():
         violation_types=["NO-Hardhat"],
         context_text="Construction worksite below overhead crane activity.",
     ) == "HIGH"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Hardhat", "NO-Safety Vest"],
+        context_text="Residential living room scene with a person beside a couch and television.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Safety Vest"],
+        context_text="Roadside work zone with cones, traffic control, and moving vehicles beside the worker.",
+    ) == "HIGH"
 
 
 def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists():
@@ -65,8 +73,20 @@ def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists()
         context_text="Administrative office room.",
     ) == "MEDIUM"
     assert casm_app._classify_violation_severity(
+        violation_types=["NO-Mask", "NO-Gloves", "NO-Safety Shoes"],
+        context_text="Ordinary public area street scene with pedestrians near a bus stop.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
         violation_types=["NO-Hardhat", "NO-Safety Vest", "NO-Mask"],
         context_text="Indoor / Office scene with a desk and no visible traffic, machinery, dust, fumes, or overhead work.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Hardhat", "NO-Safety Vest", "NO-Mask"],
+        context_text="Ordinary public area street scene with pedestrians near a bus stop.",
+    ) == "MEDIUM"
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Safety Vest"],
+        context_text="Public street scene near a bus stop with pedestrians.",
     ) == "MEDIUM"
 
 

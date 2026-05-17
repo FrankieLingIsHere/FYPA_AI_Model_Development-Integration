@@ -229,7 +229,9 @@ class ReportGenerator:
         self.allow_nlp_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.cloud_report_fallback_enabled = str(os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
+        self.gemini_semantic_regen_attempts = int(os.getenv('GEMINI_SEMANTIC_REGEN_ATTEMPTS', '1') or 1)
         self.allow_schema_incomplete_report = str(os.getenv('GEMINI_ALLOW_SCHEMA_INCOMPLETE', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
+        self.allow_semantic_incomplete_report = str(os.getenv('GEMINI_ALLOW_SEMANTIC_INCOMPLETE', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
         try:
@@ -259,7 +261,10 @@ class ReportGenerator:
         self.gemini_cost_per_1m_input_tokens = float(os.getenv('GEMINI_COST_PER_1M_INPUT_TOKENS', '0.30') or 0.30)
         self.gemini_cost_per_1m_output_tokens = float(os.getenv('GEMINI_COST_PER_1M_OUTPUT_TOKENS', '2.50') or 2.50)
         self.gemini_est_output_tokens_per_report = int(os.getenv('GEMINI_EST_OUTPUT_TOKENS_PER_REPORT', '1800') or 1800)
+        self.gemini_min_output_tokens_per_report = int(os.getenv('GEMINI_REPORT_MIN_OUTPUT_TOKENS', '6144') or 6144)
+        self.gemini_min_output_tokens_per_report = max(4096, min(self.gemini_min_output_tokens_per_report, 16384))
         self.gemini_max_output_tokens_per_report = int(os.getenv('GEMINI_MAX_OUTPUT_TOKENS_PER_REPORT', '8192') or 8192)
+        self.gemini_max_output_tokens_per_report = max(self.gemini_min_output_tokens_per_report, self.gemini_max_output_tokens_per_report)
         self.gemini_report_include_image = str(
             os.getenv('GEMINI_REPORT_INCLUDE_IMAGE', 'false')
         ).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -289,8 +294,8 @@ class ReportGenerator:
                 if self.gemini_client.is_available:
                     if self.gemini_max_output_tokens_per_report > 0:
                         self.gemini_client.max_tokens = min(
-                            self.gemini_client.max_tokens,
-                            self.gemini_max_output_tokens_per_report
+                            max(self.gemini_client.max_tokens, self.gemini_min_output_tokens_per_report),
+                            self.gemini_max_output_tokens_per_report,
                         )
                     logger.info("Gemini client initialized for NLP report generation")
                 else:
@@ -525,6 +530,7 @@ class ReportGenerator:
                 'daily_calls': int(state.get('daily_calls', 0) or 0),
                 'monthly_calls': int(state.get('monthly_calls', 0) or 0),
                 'last_block_reason': self.last_gemini_budget_block_reason,
+                'min_output_tokens': self.gemini_min_output_tokens_per_report,
                 'enforced_max_output_tokens': self.gemini_max_output_tokens_per_report,
             },
         }
@@ -1601,7 +1607,7 @@ Generate a JSON report following this logic:
     - In the lower report sections (`hazards_faced`, `persons[].risks`, `persons[].corrective_actions`), cover observed activity risks such as restricted-area entry, unsafe posture, machinery-related exposure, work-at-height, traffic-interface exposure, material collapse, and regulatory report generation / evidence-pack follow-up. Do not add these to the caption or visual_evidence.
     - When regulatory_followup is observed, include a `corrective_actions` sentence that starts with "Generate the regulatory incident report package" and specifies image evidence, detector metadata, and supervisor sign-off.
 3. **WEIGHTED SEVERITY**:
-   - Boost severity to "CRITICAL" if the missing PPE is lethal for that scene.
+   - Set `severity_level` to exactly "{str(report_data.get('severity') or 'MEDIUM').strip().upper() if str(report_data.get('severity') or '').strip().upper() in ('HIGH', 'MEDIUM', 'LOW') else 'MEDIUM'}". Use only HIGH, MEDIUM, or LOW; never return CRITICAL.
 4. **WRITE-UP DEPTH (MANDATORY)**:
    Reports are read by safety officers preparing legal paperwork. Short
    one-line answers are unacceptable. For every regulation, risk and
@@ -1678,6 +1684,7 @@ RESPONSE FORMAT (JSON):
         }}
     ],
     "summary": " **SCENE CLASS**: [Environment Type]...\\n **CRITICAL RISK**: ...\\n **LEGAL ORDER**: ...",
+    "severity_level": "{str(report_data.get('severity') or 'MEDIUM').strip().upper() if str(report_data.get('severity') or '').strip().upper() in ('HIGH', 'MEDIUM', 'LOW') else 'MEDIUM'}",
     "dosh_regulations_cited": [
         {{
             "regulation": "Official JKR/DOSH regulation name",
@@ -1691,7 +1698,13 @@ RESPONSE FORMAT (JSON):
 
         return prompt
 
-    def _call_gemini_api(self, prompt: str, image_path: str = None, report_id: str = None) -> Optional[Dict[str, Any]]:
+    def _call_gemini_api(
+        self,
+        prompt: str,
+        image_path: str = None,
+        report_id: str = None,
+        report_data: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Call Gemini API for NLP analysis (primary provider).
 
@@ -1789,6 +1802,68 @@ RESPONSE FORMAT (JSON):
                         logger.warning(detail)
                         return None
 
+                semantic_gaps = self._missing_semantic_nlp_fields(
+                    result,
+                    report_data=report_data,
+                    direct_image_available=bool(image_path),
+                )
+                if semantic_gaps:
+                    logger.warning(
+                        "Gemini NLP output semantically incomplete %s for report %s; attempting semantic regeneration",
+                        semantic_gaps,
+                        report_id or 'unknown',
+                    )
+                    regen_prompt = self._build_semantic_regen_prompt(prompt, semantic_gaps, report_data)
+                    attempts = max(0, self.gemini_semantic_regen_attempts)
+                    repaired_result = None
+                    repaired_gaps = list(semantic_gaps)
+
+                    for attempt_idx in range(attempts):
+                        candidate = self.gemini_client.generate_report_json(
+                            regen_prompt,
+                            image_path=image_path,
+                            report_id=report_id,
+                        )
+                        if not candidate:
+                            continue
+
+                        candidate_missing = self._missing_required_nlp_fields(candidate)
+                        candidate_gaps = self._missing_semantic_nlp_fields(
+                            candidate,
+                            report_data=report_data,
+                            direct_image_available=bool(image_path),
+                        )
+                        if not candidate_missing and not candidate_gaps:
+                            repaired_result = candidate
+                            repaired_gaps = []
+                            logger.info(
+                                "Gemini semantic regeneration succeeded on attempt %s for report %s",
+                                attempt_idx + 1,
+                                report_id or 'unknown',
+                            )
+                            break
+
+                        repaired_gaps = candidate_missing + candidate_gaps
+
+                    if repaired_result is not None:
+                        result = repaired_result
+                    elif self.allow_semantic_incomplete_report:
+                        logger.warning(
+                            "Gemini output still semantically incomplete after regeneration (%s); opt-in allows continuation",
+                            ', '.join(repaired_gaps),
+                        )
+                        result = dict(result)
+                        result['_semantic_incomplete'] = True
+                        result['_missing_semantic_report_fields'] = list(repaired_gaps)
+                    else:
+                        detail = (
+                            "Gemini output semantically incomplete after regeneration: "
+                            + ", ".join(repaired_gaps or semantic_gaps)
+                        )
+                        self.last_nlp_error = detail
+                        logger.warning(detail)
+                        return None
+
                 logger.info("Gemini NLP analysis completed")
                 self.last_nlp_error = None
                 return result
@@ -1821,6 +1896,181 @@ RESPONSE FORMAT (JSON):
             missing.append('dosh_regulations_cited')
         return missing
 
+    def _word_count(self, value: Any) -> int:
+        return len(re.findall(r'[A-Za-z0-9]+', str(value or '')))
+
+    def _expected_report_person_count(self, report_data: Optional[Dict[str, Any]]) -> int:
+        if not isinstance(report_data, dict):
+            return 0
+        try:
+            explicit_count = int(report_data.get('person_count') or 0)
+        except (TypeError, ValueError):
+            explicit_count = 0
+        if explicit_count > 0:
+            return explicit_count
+
+        detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
+        yolo_count = sum(
+            1 for det in detections
+            if isinstance(det, dict)
+            and str(det.get('class_name') or det.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
+            in {'person', 'worker', 'man', 'woman', 'people'}
+        )
+        if yolo_count > 0:
+            return yolo_count
+
+        caption_count = infer_people_count_from_text(
+            str(report_data.get('caption') or ''),
+            str(report_data.get('violation_summary') or ''),
+        )
+        return max(0, int(caption_count or 0))
+
+    def _person_ppe_payload(self, person: Dict[str, Any]) -> Dict[str, Any]:
+        ppe = person.get('ppe') if isinstance(person.get('ppe'), dict) else {}
+        if ppe:
+            return ppe
+        ppe_status = person.get('ppe_status') if isinstance(person.get('ppe_status'), dict) else {}
+        return ppe_status
+
+    def _ppe_payload_marks_missing(self, ppe_payload: Dict[str, Any], key: str) -> bool:
+        if not isinstance(ppe_payload, dict):
+            return False
+        for raw_key, raw_value in ppe_payload.items():
+            if _canonical_ppe_key(raw_key) != key:
+                continue
+            value = str(raw_value or '').strip().lower()
+            return any(marker in value for marker in ('missing', 'no ', 'not worn', 'not wearing', 'absent', 'lacking'))
+        return False
+
+    def _risk_mentions_category(self, risk: Any, category: str) -> bool:
+        text = ''
+        if isinstance(risk, dict):
+            text = ' '.join(
+                str(risk.get(key) or '')
+                for key in ('risk_category', 'category', 'type', 'risk', 'description', 'evidence')
+            )
+        else:
+            text = str(risk or '')
+        normalized = text.lower().replace('-', '_').replace(' ', '_')
+        aliases = {
+            'restricted_area': ('restricted_area', 'restricted', 'exclusion_zone', 'cordoned'),
+            'unsafe_posture': ('unsafe_posture', 'posture', 'manual_handling', 'overreaching', 'crouching'),
+            'machinery': ('machinery', 'mobile_plant', 'equipment', 'excavator', 'forklift'),
+            'traffic_interface': ('traffic_interface', 'traffic', 'road', 'street', 'vehicle', 'bus'),
+            'work_at_height': ('work_at_height', 'height', 'ladder', 'scaffold', 'roof', 'edge'),
+            'material_stability': ('material_stability', 'material', 'collapse', 'stack', 'pile'),
+        }
+        return any(alias in normalized for alias in aliases.get(category, (category,)))
+
+    def _missing_semantic_nlp_fields(
+        self,
+        nlp_analysis: Optional[Dict[str, Any]],
+        report_data: Optional[Dict[str, Any]] = None,
+        direct_image_available: bool = False,
+    ) -> List[str]:
+        """Return deep semantic gaps that make a Gemini report unusable even if JSON parses."""
+        if not isinstance(nlp_analysis, dict):
+            return ['semantic_report_json']
+
+        gaps: List[str] = []
+        persons = nlp_analysis.get('persons') if isinstance(nlp_analysis.get('persons'), list) else []
+        expected_count = self._expected_report_person_count(report_data)
+        if expected_count > 0 and len(persons) != expected_count:
+            gaps.append(f'persons.count expected {expected_count} got {len(persons)}')
+
+        if self._word_count(nlp_analysis.get('visual_evidence')) < 12:
+            gaps.append('visual_evidence.detail')
+        if self._word_count(nlp_analysis.get('summary')) < 10:
+            gaps.append('summary.detail')
+
+        expected_severity = str((report_data or {}).get('severity') or '').strip().upper()
+        if expected_severity in {'HIGH', 'MEDIUM', 'LOW'}:
+            model_severity = str(nlp_analysis.get('severity_level') or nlp_analysis.get('severity') or '').strip().upper()
+            if model_severity != expected_severity:
+                gaps.append(f'severity_level expected {expected_severity}')
+
+        missing_ppe_keys = self._extract_detector_missing_ppe_keys(report_data or {})
+        allowed_likelihood = {'HIGH', 'MEDIUM', 'LOW', 'REVIEW_REQUIRED'}
+        all_risks: List[Any] = []
+        all_actions: List[str] = []
+
+        for idx, person in enumerate(persons):
+            prefix = f'persons[{idx}]'
+            if not isinstance(person, dict):
+                gaps.append(prefix)
+                continue
+            if self._word_count(person.get('description')) < 8:
+                gaps.append(f'{prefix}.description.detail')
+
+            ppe_payload = self._person_ppe_payload(person)
+            if not ppe_payload:
+                gaps.append(f'{prefix}.ppe')
+            for key in missing_ppe_keys:
+                if not self._ppe_payload_marks_missing(ppe_payload, key):
+                    gaps.append(f'{prefix}.ppe.{key}=Missing')
+
+            hazards = person.get('hazards_faced') if isinstance(person.get('hazards_faced'), list) else person.get('hazards')
+            if not isinstance(hazards, list) or not hazards:
+                gaps.append(f'{prefix}.hazards_faced')
+
+            risks = person.get('risks') if isinstance(person.get('risks'), list) else []
+            if not risks:
+                gaps.append(f'{prefix}.risks')
+            for risk_idx, risk in enumerate(risks):
+                risk_prefix = f'{prefix}.risks[{risk_idx}]'
+                if not isinstance(risk, dict):
+                    gaps.append(f'{risk_prefix}.structured')
+                    continue
+                all_risks.append(risk)
+                risk_text = risk.get('risk') or risk.get('description')
+                if self._word_count(risk_text) < 12:
+                    gaps.append(f'{risk_prefix}.risk.detail')
+                likelihood = str(risk.get('likelihood') or '').strip().upper()
+                if likelihood not in allowed_likelihood:
+                    gaps.append(f'{risk_prefix}.likelihood')
+                if self._word_count(risk.get('evidence')) < 3:
+                    gaps.append(f'{risk_prefix}.evidence')
+                mitigation = risk.get('mitigation_steps') if isinstance(risk.get('mitigation_steps'), list) else []
+                if len([step for step in mitigation if self._word_count(step) >= 4]) < 2:
+                    gaps.append(f'{risk_prefix}.mitigation_steps')
+
+            actions = person.get('corrective_actions') if isinstance(person.get('corrective_actions'), list) else person.get('actions')
+            actions = actions if isinstance(actions, list) else []
+            action_texts = [str(action or '').strip() for action in actions if str(action or '').strip()]
+            all_actions.extend(action_texts)
+            if len([action for action in action_texts if self._word_count(action) >= 6]) < 3:
+                gaps.append(f'{prefix}.corrective_actions')
+
+        regs = nlp_analysis.get('dosh_regulations_cited') if isinstance(nlp_analysis.get('dosh_regulations_cited'), list) else []
+        for idx, reg in enumerate(regs):
+            if not isinstance(reg, dict):
+                gaps.append(f'dosh_regulations_cited[{idx}].structured')
+                continue
+            if not str(reg.get('regulation') or '').strip():
+                gaps.append(f'dosh_regulations_cited[{idx}].regulation')
+            if self._word_count(reg.get('requirement')) < 10:
+                gaps.append(f'dosh_regulations_cited[{idx}].requirement.detail')
+            if self._word_count(reg.get('explanation')) < 10:
+                gaps.append(f'dosh_regulations_cited[{idx}].explanation.detail')
+            if not str(reg.get('penalty') or '').strip():
+                gaps.append(f'dosh_regulations_cited[{idx}].penalty')
+
+        if missing_ppe_keys:
+            combined_action_text = ' '.join(all_actions).lower()
+            if 'generate the regulatory incident report package' not in combined_action_text:
+                gaps.append('persons[].corrective_actions.regulatory_incident_report_package')
+
+        if isinstance(report_data, dict):
+            signal_block = self._build_activity_risk_signal_block(
+                report_data,
+                direct_image_available=direct_image_available,
+            )
+            for category in self._observed_activity_categories_from_signal_block(signal_block):
+                if not any(self._risk_mentions_category(risk, category) for risk in all_risks):
+                    gaps.append(f'persons[].risks.{category}')
+
+        return gaps
+
     def _build_schema_regen_prompt(self, prompt: str, missing_fields: List[str]) -> str:
         """Append strict schema reminder to force required fields in regenerated output."""
         fields_text = ', '.join(missing_fields)
@@ -1829,8 +2079,45 @@ RESPONSE FORMAT (JSON):
             + "\n\nSCHEMA REGENERATION REQUIREMENT:\n"
             + f"Your previous response was missing required fields: {fields_text}.\n"
             + "Return exactly one valid JSON object with ALL required fields present and non-empty:\n"
-            + "environment_type, visual_evidence, persons, summary, dosh_regulations_cited.\n"
+            + "environment_type, visual_evidence, persons, summary, severity_level, dosh_regulations_cited.\n"
             + "No markdown fences. No extra text."
+        )
+
+    def _build_semantic_regen_prompt(
+        self,
+        prompt: str,
+        semantic_gaps: List[str],
+        report_data: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        expected_count = self._expected_report_person_count(report_data)
+        expected_severity = str((report_data or {}).get('severity') or '').strip().upper()
+        missing_labels = [
+            _ppe_label_for_key(key)
+            for key in self._extract_detector_missing_ppe_keys(report_data or {})
+        ]
+        expectations = [
+            "Return exactly one valid JSON object with the same schema.",
+            "Do not omit required fields and do not use markdown fences.",
+            "Every person must include description, ppe, hazards_faced, risks, and at least three corrective_actions.",
+            "Each risk must be structured with risk, likelihood, evidence, regulation_citation, and at least two mitigation_steps.",
+            "Regulation requirement and explanation must be full explanatory sentences, not short labels.",
+        ]
+        if expected_count > 0:
+            expectations.append(f"Analyze exactly {expected_count} person(s).")
+        if expected_severity in {'HIGH', 'MEDIUM', 'LOW'}:
+            expectations.append(f"Set severity_level exactly to {expected_severity}.")
+        if missing_labels:
+            expectations.append("Mark detector-confirmed missing PPE as Missing in every person ppe map: " + ', '.join(missing_labels) + ".")
+            expectations.append('Include a corrective action beginning with "Generate the regulatory incident report package".')
+
+        return (
+            str(prompt or '')
+            + "\n\nSEMANTIC COMPLETENESS REGENERATION REQUIREMENT:\n"
+            + "Your previous response was parseable JSON but incomplete for report use.\n"
+            + "Missing semantic checks: "
+            + ', '.join(semantic_gaps)
+            + "\n"
+            + "\n".join(f"- {item}" for item in expectations)
         )
 
     def _build_ollama_model_chain(self, primary_model: str) -> List[str]:
@@ -2765,6 +3052,7 @@ Required JSON object:
                         prompt,
                         image_path=gemini_report_image_path,
                         report_id=str(report_data.get('report_id') or ''),
+                        report_data=report_data,
                     )
                     if self.gemini_client is not None:
                         self.last_nlp_model = getattr(self.gemini_client, 'model_name', None)
@@ -5672,6 +5960,8 @@ Required JSON object:
 
             ppe_obj: Dict[str, str] = {}
             ppe_raw = person.get('ppe', {})
+            if not isinstance(ppe_raw, dict):
+                ppe_raw = person.get('ppe_status', {})
             if isinstance(ppe_raw, dict):
                 for key, value in ppe_raw.items():
                     key_str = _as_clean_str(key)

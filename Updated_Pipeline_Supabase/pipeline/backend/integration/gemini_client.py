@@ -122,7 +122,7 @@ class GeminiClient:
         self.model_candidates = deduped_candidates
         self.last_model_switch_reason = None
         self.temperature = gemini_config.get('temperature', 0.4)
-        self.max_tokens = gemini_config.get('max_tokens', 2000)
+        self.max_tokens = gemini_config.get('max_tokens', 8192)
         self.timeout = gemini_config.get('timeout', 120)
         self.max_retries = gemini_config.get('max_retries', 3)
         self.paid_plan = bool(gemini_config.get('paid_plan', False))
@@ -145,17 +145,22 @@ class GeminiClient:
 
         prompt_budget = os.getenv('GEMINI_REPORT_PROMPT_MAX_CHARS', '').strip()
         self.report_prompt_max_chars = int(prompt_budget) if prompt_budget.isdigit() else 22000
+        min_output_budget = os.getenv('GEMINI_REPORT_MIN_OUTPUT_TOKENS', '').strip()
+        self.report_output_min_tokens = int(min_output_budget) if min_output_budget.isdigit() else 6144
+        self.report_output_min_tokens = max(4096, min(self.report_output_min_tokens, 16384))
         output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
         self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 8192
+        self.report_output_max_tokens = max(self.report_output_min_tokens, self.report_output_max_tokens)
+        self.max_tokens = max(int(self.max_tokens or 0), self.report_output_min_tokens)
         try:
-            self.report_timeout_ms = int(os.getenv('GEMINI_REPORT_TIMEOUT_MS', '16000') or 16000)
+            self.report_timeout_ms = int(os.getenv('GEMINI_REPORT_TIMEOUT_MS', '45000') or 45000)
         except (TypeError, ValueError):
-            self.report_timeout_ms = 16000
+            self.report_timeout_ms = 45000
         self.report_timeout_ms = max(5000, min(self.report_timeout_ms, 60000))
         try:
-            self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '2') or 2)
+            self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '1') or 1)
         except (TypeError, ValueError):
-            self.report_max_retries = 2
+            self.report_max_retries = 1
         self.report_max_retries = max(1, min(self.report_max_retries, max(1, self.max_retries)))
         try:
             self.report_thinking_budget = int(os.getenv('GEMINI_REPORT_THINKING_BUDGET', '0') or 0)
@@ -497,8 +502,9 @@ class GeminiClient:
         }
         risk_schema = {
             "type": "object",
-            "required": ["description", "likelihood", "evidence", "regulation_citation", "mitigation_steps"],
+            "required": ["risk", "likelihood", "evidence", "regulation_citation", "mitigation_steps"],
             "properties": {
+                "risk": {"type": "string"},
                 "description": {"type": "string"},
                 "likelihood": {"type": "string"},
                 "evidence": {"type": "string"},
@@ -510,12 +516,23 @@ class GeminiClient:
         }
         person_schema = {
             "type": "object",
-            "required": ["id", "ppe_status", "hazards", "risks", "corrective_actions"],
+            "required": ["id", "description", "ppe", "hazards_faced", "risks", "corrective_actions"],
             "properties": {
                 "id": {"type": "string"},
                 "description": {"type": "string"},
                 "location": {"type": "string"},
                 "activity": {"type": "string"},
+                "ppe": {
+                    "type": "object",
+                    "properties": {
+                        "hardhat": {"type": "string"},
+                        "safety_vest": {"type": "string"},
+                        "gloves": {"type": "string"},
+                        "goggles": {"type": "string"},
+                        "footwear": {"type": "string"},
+                        "mask": {"type": "string"},
+                    },
+                },
                 "ppe_status": {
                     "type": "object",
                     "properties": {
@@ -528,6 +545,17 @@ class GeminiClient:
                     },
                 },
                 "hazards": string_array,
+                "hazards_faced": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string"},
+                            "source": {"type": "string"},
+                            "severity": {"type": "string"},
+                        },
+                    },
+                },
                 "risks": {
                     "type": "array",
                     "items": risk_schema,
@@ -553,6 +581,7 @@ class GeminiClient:
                 "visual_evidence",
                 "persons",
                 "summary",
+                "severity_level",
                 "dosh_regulations_cited",
             ],
             "properties": {
@@ -563,6 +592,7 @@ class GeminiClient:
                     "items": person_schema,
                 },
                 "summary": {"type": "string"},
+                "severity_level": {"type": "string"},
                 "dosh_regulations_cited": {
                     "type": "array",
                     "items": regulation_schema,
@@ -570,11 +600,17 @@ class GeminiClient:
             },
         }
 
+    def _effective_report_output_tokens(self) -> int:
+        """Return an output budget large enough for complete report JSON."""
+        configured = max(int(self.max_tokens or 0), self.report_output_min_tokens)
+        ceiling = max(int(self.report_output_max_tokens or 0), self.report_output_min_tokens)
+        return max(self.report_output_min_tokens, min(configured, ceiling))
+
     def _build_report_generation_config(self):
         """Build Gemini report config with JSON schema enforcement enabled."""
         config_kwargs = {
             "temperature": min(self.temperature, self.report_temperature_cap),
-            "max_output_tokens": min(self.max_tokens, self.report_output_max_tokens),
+            "max_output_tokens": self._effective_report_output_tokens(),
             "response_mime_type": "application/json",
             "response_json_schema": self._build_report_json_schema(),
             "http_options": types.HttpOptions(timeout=self.report_timeout_ms),
@@ -667,7 +703,7 @@ class GeminiClient:
     def _missing_required_report_keys(self, payload: Optional[Dict[str, Any]]) -> List[str]:
         """Return required report keys absent from a parsed Gemini NLP payload."""
         if not isinstance(payload, dict):
-            return ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
+            return ['environment_type', 'visual_evidence', 'persons', 'summary', 'severity_level', 'dosh_regulations_cited']
 
         missing = []
         if not str(payload.get('environment_type') or '').strip():
@@ -678,6 +714,8 @@ class GeminiClient:
             missing.append('persons')
         if not str(payload.get('summary') or '').strip():
             missing.append('summary')
+        if not str(payload.get('severity_level') or '').strip():
+            missing.append('severity_level')
         if not isinstance(payload.get('dosh_regulations_cited'), list) or len(payload.get('dosh_regulations_cited') or []) == 0:
             missing.append('dosh_regulations_cited')
         return missing
@@ -701,7 +739,7 @@ class GeminiClient:
                 contents=[repair_prompt],
                 config=types.GenerateContentConfig(
                     temperature=0.0,
-                    max_output_tokens=min(self.max_tokens, self.report_output_max_tokens, 4096),
+                    max_output_tokens=self._effective_report_output_tokens(),
                     response_mime_type="application/json",
                     response_json_schema=self._build_report_json_schema(),
                 )

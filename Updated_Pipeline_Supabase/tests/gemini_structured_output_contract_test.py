@@ -28,6 +28,7 @@ def _new_client_for_config():
     client.temperature = 0.4
     client.report_temperature_cap = 0.1
     client.max_tokens = 8192
+    client.report_output_min_tokens = 6144
     client.report_output_max_tokens = 8192
     client.report_timeout_ms = 16000
     client.report_thinking_budget = 0
@@ -43,8 +44,14 @@ def test_gemini_report_config_uses_json_schema():
     _assert(isinstance(schema, dict), "Gemini report config must include response_json_schema")
     _assert(schema.get("type") == "object", "Report JSON schema must describe one object")
     required = set(schema.get("required") or [])
-    for key in ("environment_type", "visual_evidence", "persons", "summary", "dosh_regulations_cited"):
+    for key in ("environment_type", "visual_evidence", "persons", "summary", "severity_level", "dosh_regulations_cited"):
         _assert(key in required, f"Report JSON schema missing required key: {key}")
+    _assert(getattr(config, "max_output_tokens", None) >= 6144, "Report JSON output budget must not be capped below the completeness floor")
+
+    person_schema = schema.get("properties", {}).get("persons", {}).get("items", {})
+    person_required = set(person_schema.get("required") or [])
+    for key in ("id", "description", "ppe", "hazards_faced", "risks", "corrective_actions"):
+        _assert(key in person_required, f"Person schema missing required semantic field: {key}")
 
 
 def test_gemini_repair_config_uses_same_json_schema():

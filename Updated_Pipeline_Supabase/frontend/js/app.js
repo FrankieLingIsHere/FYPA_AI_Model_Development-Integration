@@ -1430,6 +1430,23 @@ function initializeAdaptivePipelineModeManager() {
             await clearOfflineTransitionState(reason);
         },
 
+        releaseManualLocalHoldForReconnect(reason = 'network-reconnect') {
+            const manualProfile = String(this.manualProviderProfile || getManualProviderProfileLock() || '').trim().toLowerCase();
+            if (manualProfile !== 'local') {
+                return false;
+            }
+
+            this.manualProviderProfile = '';
+            clearManualProviderProfileLock();
+            this.localUnavailableNotified = false;
+            this.lastEvaluatedNetworkState = null;
+            this.notify('Network restored. Returning to CLOUD mode and syncing local reports.', 'info', {
+                dedupeKey: 'adaptive-reconnect-release-local-hold',
+                dedupeTtlMs: 30000
+            });
+            return true;
+        },
+
         async handoffBrowserLocalDrafts(reason, options = {}) {
             const force = !!options.force;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
@@ -1923,24 +1940,31 @@ function initializeAdaptivePipelineModeManager() {
 
     window.addEventListener('ppe-network:status', (event) => {
         const networkState = event && event.detail ? event.detail.state : 'network-good';
+        const recoveredFromOffline = manager.lastEvaluatedNetworkState === 'network-offline';
+        if (!manager.shouldUseLocal(networkState) && navigator.onLine !== false && recoveredFromOffline) {
+            manager.releaseManualLocalHoldForReconnect(`network event ${networkState}`);
+        }
         manager.evaluate(networkState, { force: true });
         if (!manager.shouldUseLocal(networkState) && navigator.onLine !== false) {
             manager.directReconnectSync(`network event ${networkState}`, {
                 force: true,
-                notifyOnEnqueue: false
+                notifyOnEnqueue: false,
+                allowWhileLocal: true
             });
         }
     });
 
     window.addEventListener('online', async () => {
         await manager.clearCloudTransitionFlags('online event');
+        manager.releaseManualLocalHoldForReconnect('online event');
         if (typeof API !== 'undefined' && typeof API.registerLocalReportBackgroundSync === 'function') {
             void API.registerLocalReportBackgroundSync('online event');
         }
         manager.evaluate('network-good', { force: true });
         manager.directReconnectSync('online event', {
             force: true,
-            notifyOnEnqueue: true
+            notifyOnEnqueue: true,
+            allowWhileLocal: true
         });
     });
 

@@ -167,11 +167,83 @@ function testCloudCompletedLocalDraftNormalizesAsSyncedLocal() {
   assertEqual(draft.source_label, 'Local Synced', 'cloud_completed local draft label');
 }
 
+function testMixedTagReconnectSnapshotsDoNotCollapseCards() {
+  const { API } = loadApiContext();
+  const cachedRows = [
+    {
+      report_id: 'cache-mixed-cloud-001',
+      timestamp: '2026-05-17T08:00:00Z',
+      status: 'completed',
+      has_report: true,
+      has_cloud_report_artifact: true,
+      report_html_key: 'violations/cache-mixed-cloud-001/report.html',
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    },
+    {
+      report_id: 'cache-mixed-local-001',
+      timestamp: '2026-05-17T08:01:00Z',
+      status: 'completed',
+      has_report: true,
+      has_local_report: true,
+      local_report_url: 'blob:local-report',
+      device_id: 'offline_local_cache',
+      source: 'offline_local_cache',
+      source_scope: 'local',
+      source_label: 'Local',
+    },
+    {
+      report_id: 'cache-mixed-synced-001',
+      timestamp: '2026-05-17T08:02:00Z',
+      status: 'completed',
+      has_report: true,
+      has_cloud_report_artifact: true,
+      report_html_key: 'violations/cache-mixed-synced-001/report.html',
+      origin: 'local_synced',
+      sync_source: 'sync_local_cache',
+      source_scope: 'synced_local',
+      source_label: 'Local Synced',
+    },
+    {
+      report_id: 'cache-mixed-shared-001',
+      timestamp: '2026-05-17T08:03:00Z',
+      status: 'completed',
+      has_report: true,
+      report_html_key: 'violations/cache-mixed-shared-001/report.html',
+      source_scope: 'shared',
+      source_label: 'Shared',
+    },
+  ];
+  const staleCloudSnapshots = cachedRows.map((row) => ({
+    report_id: row.report_id,
+    timestamp: row.timestamp,
+    status: 'generating',
+    has_report: false,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  }));
+
+  const merged = API._mergeOptimistically(cachedRows, staleCloudSnapshots, 20);
+  const byId = new Map(merged.map((row) => [row.report_id, row]));
+
+  assertEqual(byId.get('cache-mixed-cloud-001').source_scope, 'cloud', 'cloud card remains cloud');
+  assertEqual(byId.get('cache-mixed-local-001').source_scope, 'local', 'local card must not collapse to cloud');
+  assertEqual(byId.get('cache-mixed-local-001').source_label, 'Local', 'local card label after reconnect snapshot');
+  assertEqual(byId.get('cache-mixed-synced-001').source_scope, 'synced_local', 'synced local card must not collapse to cloud');
+  assertEqual(byId.get('cache-mixed-synced-001').source_label, 'Local Synced', 'synced local card label after reconnect snapshot');
+  assertEqual(byId.get('cache-mixed-shared-001').source_scope, 'shared', 'shared card must not collapse to cloud');
+  assertEqual(byId.get('cache-mixed-shared-001').source_label, 'Shared', 'shared card label after reconnect snapshot');
+  cachedRows.forEach((row) => {
+    assertEqual(byId.get(row.report_id).has_report, true, `${row.report_id} keeps readable artifact evidence`);
+  });
+}
+
 async function main() {
   const tests = [
     testRuntimeTransitionPreservesReportListCaches,
     testSyncedLocalMergeSurvivesCloudPendingSnapshot,
     testCloudCompletedLocalDraftNormalizesAsSyncedLocal,
+    testMixedTagReconnectSnapshotsDoNotCollapseCards,
   ];
   const failures = [];
   for (const testFn of tests) {

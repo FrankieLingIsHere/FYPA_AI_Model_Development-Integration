@@ -1025,6 +1025,8 @@ const ReportsPage = {
                     mergedScope = this.hasSyncedLocalEvidence(existing) ? 'synced_local' : 'cloud';
                 } else if (existingScope === 'local' && pendingScope === 'cloud' && this.hasLocalScopeEvidence(existing)) {
                     mergedScope = 'local';
+                } else if (existingScope === 'shared' && pendingScope === 'cloud') {
+                    mergedScope = 'shared';
                 } else if (pendingScope === 'synced_local') {
                     mergedScope = 'synced_local';
                 } else if (pendingScope === 'shared' && mergedScope !== 'synced_local') {
@@ -1674,6 +1676,10 @@ const ReportsPage = {
 
         if (forceCloudRuntime && normalizedCandidate === 'cloud') {
             return 'cloud';
+        }
+
+        if (anchoredScope === 'shared' && normalizedCandidate === 'cloud') {
+            return 'shared';
         }
 
         if (

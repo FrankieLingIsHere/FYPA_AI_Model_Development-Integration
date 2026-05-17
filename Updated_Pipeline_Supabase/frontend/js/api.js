@@ -2038,6 +2038,11 @@ const API = {
         const incomingScope = this.inferReportSourceScope(incoming);
         const existingLabel = String(existing.source_label || '').trim().toLowerCase();
         const incomingLabel = String(incoming.source_label || '').trim().toLowerCase();
+        const forceCloudRuntime = !!(
+            incoming.force_cloud_runtime
+            || incoming.routed_via_cloud_fallback
+            || incoming.source_reason === 'manual_cloud_reprocess_fallback'
+        );
         const syncedLocal = (
             existingScope === 'synced_local'
             || incomingScope === 'synced_local'
@@ -2046,6 +2051,7 @@ const API = {
         ) && (
             this.hasConfirmedSyncedLocalReport(existing)
             || this.hasConfirmedSyncedLocalReport(incoming)
+            || this.hasConfirmedSyncedLocalReport(merged)
         );
 
         if (syncedLocal) {
@@ -2085,9 +2091,16 @@ const API = {
         }
 
         const strictLocal = this.isStrictLocalOriginReport(existing) || this.isStrictLocalOriginReport(incoming);
-        if (strictLocal && incomingScope !== 'cloud' && existingScope !== 'cloud') {
+        if (!forceCloudRuntime && (existingScope === 'shared' || incomingScope === 'shared')) {
+            merged.source_scope = 'shared';
+            merged.source_label = 'Shared';
+            return merged;
+        }
+
+        if (!forceCloudRuntime && strictLocal && (existingScope === 'local' || incomingScope === 'local')) {
             merged.source_scope = 'local';
-            merged.source_label = String(merged.source_label || '').trim() || 'Local';
+            merged.source_label = 'Local';
+            return merged;
         }
 
         return merged;

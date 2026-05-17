@@ -291,6 +291,46 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertNotEqual(status_payload.get('status'), 'active')
         self.assertNotEqual(status_payload.get('device_status'), 'approved')
 
+    def test_hosted_cloud_status_does_not_treat_cloud_credentials_as_local_heartbeat(self):
+        browser_machine_id = 'TEST-WEB-COLD-NO-HEARTBEAT-001'
+
+        with patch('casm_app._is_hosted_runtime_environment', return_value=True), \
+             patch('casm_app._local_mode_has_supabase_credentials', return_value=True):
+            status_response = self.client.get(
+                f'/api/local-mode/provisioning/status?machine_id={browser_machine_id}'
+            )
+
+        self.assertEqual(status_response.status_code, 200)
+        payload = status_response.json or {}
+        self.assertTrue(payload.get('credentials_present'))
+        self.assertEqual(payload.get('status'), 'idle')
+        self.assertEqual(payload.get('device_status'), 'idle')
+        self.assertFalse(payload.get('active'))
+        heartbeat = payload.get('cloud_local_heartbeat') or {}
+        self.assertFalse(heartbeat.get('available'))
+        self.assertEqual(payload.get('status_source'), 'idle')
+
+    def test_hosted_approved_device_stays_provisioned_when_heartbeat_missing(self):
+        machine_id = 'TEST-WEB-APPROVED-NO-HEARTBEAT-001'
+        _ = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        with patch('casm_app._is_hosted_runtime_environment', return_value=True), \
+             patch('casm_app._local_mode_has_supabase_credentials', return_value=True):
+            status_response = self.client.get(
+                f'/api/local-mode/provisioning/status?machine_id={machine_id}'
+            )
+
+        self.assertEqual(status_response.status_code, 200)
+        payload = status_response.json or {}
+        self.assertEqual(payload.get('status'), 'approved')
+        self.assertEqual(payload.get('device_status'), 'approved')
+        self.assertTrue(payload.get('provisioned'))
+        self.assertFalse(payload.get('active'))
+        heartbeat = payload.get('cloud_local_heartbeat') or {}
+        self.assertFalse(heartbeat.get('available'))
+        self.assertEqual(payload.get('status_source'), 'cloud')
+
     def test_approved_heartbeat_can_reissue_missing_or_stale_browser_secret(self):
         machine_id = 'TEST-EDGE-HEARTBEAT-REISSUE-001'
         provision_secret = self._request_device(machine_id)

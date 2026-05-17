@@ -10777,7 +10777,7 @@ def _send_local_mode_cloud_heartbeat_once(
 
         # Local state can be lost (for example after reinstall) while credentials still exist.
         # Try one auto-provision pass to recover provision_secret before marking heartbeat unavailable.
-        if initial_reason == 'provision_secret_missing':
+        if initial_reason in ('provision_secret_missing', 'machine_id_missing'):
             recovery_state = _local_mode_load_provision_state()
             recovery_cloud_url = _local_mode_normalize_cloud_url(
                 os.getenv('CLOUD_URL')
@@ -10792,7 +10792,6 @@ def _send_local_mode_cloud_heartbeat_once(
                 _local_mode_has_supabase_credentials()
                 and bool(recovery_cloud_url)
                 and not _local_mode_cloud_url_is_placeholder(recovery_cloud_url)
-                and bool(recovery_machine_id)
                 and not _has_recent_local_provision_secret_stale_marker(recovery_state)
             )
 
@@ -11314,6 +11313,7 @@ def api_local_mode_provisioning_status():
             _local_mode_write_machine_id(machine_id)
 
     credentials_present = _local_mode_has_supabase_credentials()
+    credentials_imply_local_runtime = bool(credentials_present and not _is_hosted_runtime_environment())
     heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
     heartbeat_machine_id = _local_mode_normalize_machine_id(heartbeat_summary.get('machine_id'))
 
@@ -11367,7 +11367,7 @@ def api_local_mode_provisioning_status():
 
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
         normalized_status = authoritative_status
-    elif credentials_present:
+    elif credentials_imply_local_runtime:
         normalized_status = 'credentials_present'
     else:
         normalized_status = 'idle'

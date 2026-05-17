@@ -1257,23 +1257,39 @@ const GlobalSettingsModal = {
         const btn = this.getEl('globalRequestProvisioningBtn');
         if (!btn) return;
         const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
+        const machineId = String(this.localProvisionState.machineId || '').trim();
+        const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
+        const remoteHeartbeatMissing = !!(
+            this.isLikelyRemoteBackend()
+            && (!heartbeat.available || !heartbeat.isRecent)
+        );
         const isApproved = status === 'approved' || status === 'provisioned' || status === 'active';
         const isPending = status === 'pending_approval';
-        const needsValidation = status === 'validation_required';
+        const needsValidation = status === 'validation_required'
+            || (
+                !!machineId
+                && this.isLikelyRemoteBackend()
+                && (
+                    status === 'credentials_present'
+                    || (isApproved && remoteHeartbeatMissing)
+                )
+            );
 
         btn.disabled = isPending;
         btn.style.opacity = isPending ? '0.45' : '';
         btn.style.cursor = isPending ? 'not-allowed' : '';
 
-        if (isApproved) {
+        if (needsValidation) {
+            btn.title = remoteHeartbeatMissing
+                ? 'Cloud has not received a fresh local heartbeat. Re-validate installer access for this machine.'
+                : 'Send a fresh validation request for this previously approved device.';
+            btn.innerHTML = '<i class="fas fa-shield-alt"></i> Re-Validate Provisioning';
+        } else if (isApproved) {
             btn.title = 'Device is already provisioned. Request reprovisioning only to refresh installer access or recover credentials.';
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Request Reprovisioning';
         } else if (isPending) {
             btn.title = 'Provisioning request already submitted. Waiting for admin approval.';
             btn.innerHTML = '<i class="fas fa-clock"></i> Pending Approval…';
-        } else if (needsValidation) {
-            btn.title = 'Send a fresh validation request for this previously approved device.';
-            btn.innerHTML = '<i class="fas fa-shield-alt"></i> Re-Validate Provisioning';
         } else {
             btn.title = 'Send a provisioning request to the administrator for approval.';
             btn.innerHTML = '<i class="fas fa-paper-plane"></i> Request Provisioning';
@@ -1424,7 +1440,9 @@ const GlobalSettingsModal = {
 
         if (status === 'provisioned') {
             if (heartbeatCatchingUp) {
-                statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
+                statusEl.textContent = this.isLikelyRemoteBackend()
+                    ? 'Device is approved, but cloud has not received a fresh local backend heartbeat yet. Start or restart the local BAT, then use Re-Validate Provisioning if the heartbeat stays missing.'
+                    : 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
                 statusEl.style.color = 'var(--warning-color)';
                 return;
             }
@@ -1442,7 +1460,9 @@ const GlobalSettingsModal = {
         }
 
         if (status === 'credentials_present') {
-            statusEl.textContent = 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
+            statusEl.textContent = this.isLikelyRemoteBackend()
+                ? 'Cloud has not received a paired local backend heartbeat yet. Start or restart the local BAT on the host PC, then run Local Mode Checkup again.'
+                : 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
             statusEl.style.color = 'var(--warning-color)';
             return;
         }

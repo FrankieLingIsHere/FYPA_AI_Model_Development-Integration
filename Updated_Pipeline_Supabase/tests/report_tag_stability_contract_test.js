@@ -486,6 +486,7 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   const ReportsPage = loadReportsPage();
   let loadCalls = 0;
   let prefetchCalls = 0;
+  let readyToastCalls = 0;
 
   ReportsPage.violations = [{
     report_id: 'tag-status-probe-001',
@@ -498,6 +499,7 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   }];
   ReportsPage.loadReports = async () => { loadCalls += 1; };
   ReportsPage.prefetchReport = async () => { prefetchCalls += 1; };
+  ReportsPage.notifyReportReady = () => { readyToastCalls += 1; };
 
   ReportsPage.applyReportStatusUpdate({
     report_id: 'tag-status-probe-001',
@@ -514,8 +516,73 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   assertTag(record, 'cloud', 'Cloud', 'status probe preserves cloud tag');
   assertEqual(loadCalls, 0, 'status probe must not force full list refresh');
   assertEqual(prefetchCalls, 1, 'status probe warms only the completed report');
+  assertEqual(readyToastCalls, 1, 'status probe emits ready toast on pending-to-ready transition');
   ReportsPage.visualStatusTimers.forEach((timer) => clearTimeout(timer));
   ReportsPage.visualStatusTimers.clear();
+}
+
+function testReportStatusProbeDoesNotReplayReadyToastForReadyCard() {
+  const ReportsPage = loadReportsPage();
+  let readyToastCalls = 0;
+
+  ReportsPage.violations = [{
+    report_id: 'tag-status-probe-ready-001',
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    report_html_key: 'violations/tag-status-probe-ready-001/report.html',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  }];
+  ReportsPage.renderReports = () => {};
+  ReportsPage.prefetchReport = async () => {};
+  ReportsPage.notifyReportReady = () => { readyToastCalls += 1; };
+
+  ReportsPage.applyReportStatusUpdate({
+    report_id: 'tag-status-probe-ready-001',
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  });
+
+  assertEqual(readyToastCalls, 0, 'already-ready status refresh must not replay ready toast');
+}
+
+function testLocalSyncCompletionToastFiresForAlreadySyncedCache() {
+  const ReportsPage = loadReportsPage();
+  const notifications = [];
+
+  ReportsPage.violations = [{
+    report_id: 'tag-local-sync-toast-001',
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    report_html_key: 'violations/tag-local-sync-toast-001/report.html',
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    origin: 'local_synced',
+    sync_source: 'sync_local_cache',
+    source: 'sync_local_cache',
+    sync_state: 'cloud_completed',
+  }];
+  ReportsPage.renderReports = () => {};
+  ReportsPage.loadReports = async () => {};
+  ReportsPage.notify = (message, type, options) => notifications.push({ message, type, options });
+
+  ReportsPage.applyLocalSyncUpdate({
+    success: true,
+    completed_report_ids: ['tag-local-sync-toast-001'],
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_completed',
+  });
+
+  assertEqual(notifications.length, 1, 'completed sync event should toast even if cache already updated the card');
+  assertEqual(notifications[0].type, 'success', 'completed sync toast type');
+  assertEqual(notifications[0].message, '1 local report synced to cloud storage.', 'completed sync toast message');
 }
 
 function testRealtimePayloadDoesNotForceFullListRefresh() {
@@ -558,6 +625,8 @@ function main() {
     testReadyReportsAreNotDowngradedByLateSnapshots,
     testSyncedLocalBadgeWinsOverQueuedSyncState,
     testReportStatusProbeDoesNotForceFullListRefresh,
+    testReportStatusProbeDoesNotReplayReadyToastForReadyCard,
+    testLocalSyncCompletionToastFiresForAlreadySyncedCache,
     testRealtimePayloadDoesNotForceFullListRefresh,
   ];
   const failures = [];

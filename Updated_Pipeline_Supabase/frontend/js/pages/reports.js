@@ -4,6 +4,8 @@ const ReportsPage = {
     providerRuntimeInterval: null,
     realtimeHandler: null,
     realtimeConnectionHandler: null,
+    dashboardWarmupHandler: null,
+    runtimeTransitionHandler: null,
     localSyncHandler: null,
     reportStatusHandler: null,
     timezoneChangeHandler: null,
@@ -151,6 +153,19 @@ const ReportsPage = {
         this.realtimeConnectionHandler = () => this.syncFallbackPolling();
         window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
 
+        this.dashboardWarmupHandler = (event) => {
+            const detail = (event && event.detail) || {};
+            if (detail.violations || detail.pending) {
+                this.loadReports({ noCache: false }).catch(() => {});
+            }
+        };
+        window.addEventListener('ppe-dashboard:warmup', this.dashboardWarmupHandler);
+
+        this.runtimeTransitionHandler = () => {
+            this.loadReports({ noCache: false }).catch(() => {});
+        };
+        window.addEventListener('ppe-runtime:cloud-transition-cleared', this.runtimeTransitionHandler);
+
         this.localSyncHandler = (event) => this.applyLocalSyncUpdate((event && event.detail) || {});
         window.addEventListener('ppe-local-report-sync:update', this.localSyncHandler);
 
@@ -193,6 +208,14 @@ const ReportsPage = {
         if (this.realtimeConnectionHandler) {
             window.removeEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
             this.realtimeConnectionHandler = null;
+        }
+        if (this.dashboardWarmupHandler) {
+            window.removeEventListener('ppe-dashboard:warmup', this.dashboardWarmupHandler);
+            this.dashboardWarmupHandler = null;
+        }
+        if (this.runtimeTransitionHandler) {
+            window.removeEventListener('ppe-runtime:cloud-transition-cleared', this.runtimeTransitionHandler);
+            this.runtimeTransitionHandler = null;
         }
         if (this.localSyncHandler) {
             window.removeEventListener('ppe-local-report-sync:update', this.localSyncHandler);
@@ -338,6 +361,7 @@ const ReportsPage = {
                 if (!data || typeof data !== 'object') return;
 
                 const currentStatus = this.normalizeStatus(violation);
+                const wasReady = this.isReportReady(violation);
                 const nextHasReport = this.hasReadableReportEvidence(data) || this.hasReadableReportEvidence(violation);
                 const nextStatus = this.normalizeStatusValue(data.status, nextHasReport);
                 const statusChanged = nextStatus && nextStatus !== currentStatus;
@@ -355,6 +379,9 @@ const ReportsPage = {
 
                 if (updated && this.isReportReady(updated)) {
                     this.prefetchReport(reportId, updated).catch(() => {});
+                    if (!wasReady) {
+                        this.notifyReportReady(reportId, updated);
+                    }
                 }
             }));
         } finally {
@@ -368,6 +395,7 @@ const ReportsPage = {
         if (!reportId) return;
 
         const existing = this.violations.find((v) => String((v && v.report_id) || '').trim() === reportId) || null;
+        const wasReady = existing ? this.isReportReady(existing) : false;
         const hasReport = this.hasReadableReportEvidence(detail) || this.hasReadableReportEvidence(existing);
         const status = this.normalizeStatusValue(detail.status || (existing && existing.status), hasReport);
         const sourceScope = this.inferSourceScope(detail) || (existing && existing.source_scope) || 'cloud';
@@ -381,6 +409,9 @@ const ReportsPage = {
 
         if (updated && this.isReportReady(updated)) {
             this.prefetchReport(reportId, updated).catch(() => {});
+            if (!wasReady) {
+                this.notifyReportReady(reportId, updated);
+            }
         }
     },
 
@@ -502,10 +533,21 @@ const ReportsPage = {
             };
         });
 
+        const toastReportIds = changedReportIds.length
+            ? changedReportIds
+            : reportIds.filter((reportId) => {
+                const violation = this.violations.find((item) => String((item && item.report_id) || '').trim() === reportId);
+                return violation
+                    && this.inferSourceScope(violation) === 'synced_local'
+                    && this.hasSyncedLocalEvidence(violation);
+            });
+
         if (changed) {
             this.renderReports();
-            this.notify(`${changedCount} local report${changedCount === 1 ? '' : 's'} synced to cloud storage.`, 'success', {
-                dedupeKey: `local-sync-${changedReportIds.join('-')}`,
+        }
+        if (toastReportIds.length) {
+            this.notify(`${toastReportIds.length} local report${toastReportIds.length === 1 ? '' : 's'} synced to cloud storage.`, 'success', {
+                dedupeKey: `local-sync-${toastReportIds.join('-')}`,
                 dedupeTtlMs: 12000
             });
         }
@@ -1713,17 +1755,35 @@ const ReportsPage = {
         return normalizedCandidate;
     },
 
-    notify(message, type = 'info') {
+    notify(message, type = 'info', options = {}) {
         if (typeof NotificationManager !== 'undefined') {
-            if (type === 'success') return NotificationManager.success(message);
-            if (type === 'warning') return NotificationManager.warning(message);
-            if (type === 'error') return NotificationManager.error(message);
-            return NotificationManager.info(message);
+            if (type === 'success') return NotificationManager.success(message, options);
+            if (type === 'warning') return NotificationManager.warning(message, options);
+            if (type === 'error') return NotificationManager.error(message, options);
+            return NotificationManager.info(message, options);
         }
         if (type === 'error') {
             alert(message);
         } else {
             console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+    },
+
+    notifyReportReady(reportId, sourceHint = null) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return;
+        if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
+            NotificationManager.reportReady(rid, {
+                action: {
+                    text: 'Open Report',
+                    onClickFn: () => this.openReport(rid, sourceHint)
+                }
+            });
+        } else {
+            this.notify(`Report ${rid} is ready for review.`, 'success', {
+                dedupeKey: `report-ready:${rid}`,
+                dedupeTtlMs: 60000
+            });
         }
     },
 

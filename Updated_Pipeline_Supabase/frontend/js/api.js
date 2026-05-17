@@ -1049,10 +1049,7 @@ const API = {
         const timeoutMs = Math.max(3000, Math.min(Number(options.timeoutMs || 10000), 30000));
 
         const warmStats = async () => {
-            const data = await this.fetchJsonNoCache(`${API_CONFIG.BASE_URL}/api/stats`, {
-                cacheScope: 'stats:summary',
-                timeoutMs
-            });
+            const data = await this.getStats();
             if (data && typeof data === 'object' && !data.error) {
                 state.results.stats = true;
             }
@@ -1061,24 +1058,20 @@ const API = {
 
         const warmViolations = async () => {
             const safeLimit = 1000;
-            let list = await this.fetchJsonNoCache(
-                `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`,
-                { timeoutMs }
-            );
-            list = Array.isArray(list) ? list : [];
-            list = await this.mergeLocalReportDrafts(list, safeLimit);
-            await this.writeJsonCache(`violations:limit:${safeLimit}`, this.stripLocalDraftRuntimeFields(list));
+            const list = await this.getViolations({
+                noCache: true,
+                limit: safeLimit,
+                timeoutMs
+            });
             state.results.violations = true;
             return list;
         };
 
         const warmPending = async () => {
-            let list = await this.fetchJsonNoCache(`${API_CONFIG.BASE_URL}/api/reports/pending`, {
+            const list = await this.getPendingReports({
+                noCache: true,
                 timeoutMs: Math.max(3000, Math.min(timeoutMs, 12000))
             });
-            list = Array.isArray(list) ? list : [];
-            list = await this.mergeLocalReportDrafts(list, 100);
-            await this.writeJsonCache('reports:pending', this.stripLocalDraftRuntimeFields(list));
             state.results.pending = true;
             return list;
         };
@@ -1605,12 +1598,12 @@ const API = {
     },
 
     async clearRuntimeTransitionCaches(reason = 'cloud-transition') {
+        // Keep report-list caches across local/cloud transitions. Those caches are
+        // the cross-mode bridge for cloud rows while local blob drafts remain in
+        // IndexedDB; dropping them makes the Reports page look local-only until a
+        // hard refresh rebuilds the list.
         const scopes = [
-            'stats:summary',
-            'reports:pending',
-            'violations:limit:100',
-            'violations:limit:1000',
-            'violations:limit:5000'
+            'stats:summary'
         ];
         await Promise.all(scopes.map((scope) => this.removeJsonCache(scope)));
 
@@ -1726,8 +1719,17 @@ const API = {
         if (!reportId) return null;
         const sourceScope = String(draft.source_scope || '').trim() || 'local';
         const syncState = String(draft.sync_state || '').trim() || 'pending_local_generation';
+        const normalizedSyncState = syncState.toLowerCase();
+        const syncFinished = (
+            normalizedSyncState === 'synced'
+            || normalizedSyncState === 'cloud_completed'
+            || normalizedSyncState === 'completed_synced'
+        );
+        const finalSourceScope = (sourceScope === 'synced_local' || (syncFinished && this.hasCloudReportArtifactEvidence(draft)))
+            ? 'synced_local'
+            : sourceScope;
         const status = String(draft.status || '').trim() || (
-            syncState === 'synced' || sourceScope === 'synced_local' ? 'completed' : 'pending'
+            finalSourceScope === 'synced_local' ? 'completed' : 'pending'
         );
 
         return {
@@ -1743,8 +1745,10 @@ const API = {
             has_original: draft.has_original !== false,
             has_annotated: !!draft.has_annotated,
             has_report: !!draft.has_report,
-            source_scope: syncState === 'synced' ? 'synced_local' : sourceScope,
-            source_label: draft.source_label || (syncState === 'synced' ? 'Local Synced' : 'Local'),
+            source_scope: finalSourceScope,
+            source_label: finalSourceScope === 'synced_local'
+                ? 'Local Synced'
+                : (draft.source_label || 'Local'),
             sync_state: syncState,
             updated_at: draft.updated_at || new Date().toISOString()
         };
@@ -2047,20 +2051,29 @@ const API = {
         if (syncedLocal) {
             const existingStrictLocal = this.isStrictLocalOriginReport(existing);
             const incomingStrictLocal = this.isStrictLocalOriginReport(incoming);
-            const existingCloudAuthoritative = existingScope === 'cloud' && !existingStrictLocal;
-            const incomingCloudAuthoritative = incomingScope === 'cloud' && !incomingStrictLocal;
+            const existingConfirmedSynced = this.hasConfirmedSyncedLocalReport(existing);
+            const incomingConfirmedSynced = this.hasConfirmedSyncedLocalReport(incoming);
+            const confirmedLocalSyncAnchor = !!(
+                (existingConfirmedSynced && (existingScope === 'synced_local' || existingStrictLocal || existingLabel.includes('local synced')))
+                || (incomingConfirmedSynced && (incomingScope === 'synced_local' || incomingStrictLocal || incomingLabel.includes('local synced')))
+            );
 
-            if (incomingCloudAuthoritative || existingCloudAuthoritative) {
-                const cloudSource = incomingCloudAuthoritative ? incoming : existing;
-                const cloudStatus = String(cloudSource.status || '').trim().toLowerCase();
-                const cloudInFlight = ['pending', 'queued', 'processing', 'generating'].includes(cloudStatus);
-                if (cloudInFlight || !this.hasLocalReportArtifacts(cloudSource)) {
-                    merged.source_scope = 'cloud';
-                    merged.source_label = 'Cloud';
-                    merged.origin = '';
-                    merged.sync_source = '';
-                    merged.source = '';
-                    return merged;
+            if (!confirmedLocalSyncAnchor) {
+                const existingCloudAuthoritative = existingScope === 'cloud' && !existingStrictLocal;
+                const incomingCloudAuthoritative = incomingScope === 'cloud' && !incomingStrictLocal;
+
+                if (incomingCloudAuthoritative || existingCloudAuthoritative) {
+                    const cloudSource = incomingCloudAuthoritative ? incoming : existing;
+                    const cloudStatus = String(cloudSource.status || '').trim().toLowerCase();
+                    const cloudInFlight = ['pending', 'queued', 'processing', 'generating'].includes(cloudStatus);
+                    if (cloudInFlight || !this.hasLocalReportArtifacts(cloudSource)) {
+                        merged.source_scope = 'cloud';
+                        merged.source_label = 'Cloud';
+                        merged.origin = '';
+                        merged.sync_source = '';
+                        merged.source = '';
+                        return merged;
+                    }
                 }
             }
 

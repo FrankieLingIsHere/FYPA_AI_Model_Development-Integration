@@ -663,8 +663,10 @@ const ViolationMonitor = {
             const violationTime = this.parseEventDate(v.timestamp) || this.getLifecycleEventDate(v) || new Date(0);
             const hasReport = this.hasReadableReportEvidence(v);
             const status = this.normalizeStatusValue(v.status, hasReport);
+            const happenedDuringSession = this.sessionStartTime && violationTime >= this.sessionStartTime;
+            const watchStatus = (status === 'pending' || status === 'generating') && happenedDuringSession;
 
-            this.knownViolations.set(reportId, { status, timestamp: violationTime, hasReport, watchStatus: false });
+            this.knownViolations.set(reportId, { status, timestamp: violationTime, hasReport, watchStatus });
         }
 
         console.log(`[ViolationMonitor] Initial load hydrated ${violations.length} violation(s); startup notifications suppressed`);
@@ -821,23 +823,34 @@ const ViolationMonitor = {
 
         this.notifiedEvents.add(notifKey);
 
-        NotificationManager.show(
-            `Safety report is ready for review`,
-            'success',
-            10000,
-            {
-                title: 'Report Complete',
-                action: {
-                    text: 'Open Report',
-                    onClickFn: () => {
-                        const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
-                            ? API.getReportUrl(violation.report_id, violation)
-                            : `${API_CONFIG.BASE_URL}/report/${violation.report_id}`;
-                        window.open(url, '_blank');
-                    }
-                }
+        const action = {
+            text: 'Open Report',
+            onClickFn: () => {
+                const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
+                    ? API.getReportUrl(violation.report_id, violation)
+                    : `${API_CONFIG.BASE_URL}/report/${violation.report_id}`;
+                window.open(url, '_blank');
             }
-        );
+        };
+
+        if (typeof NotificationManager.reportReady === 'function') {
+            NotificationManager.reportReady(violation.report_id, {
+                title: 'Report Complete',
+                action
+            });
+        } else {
+            NotificationManager.show(
+                `Safety report is ready for review`,
+                'success',
+                10000,
+                {
+                    title: 'Report Complete',
+                    action,
+                    dedupeKey: violation.report_id ? `report-ready:${violation.report_id}` : 'report-ready:unknown',
+                    dedupeTtlMs: 60000
+                }
+            );
+        }
 
         console.log(`[ViolationMonitor] READY: ${violation.report_id}`);
     },

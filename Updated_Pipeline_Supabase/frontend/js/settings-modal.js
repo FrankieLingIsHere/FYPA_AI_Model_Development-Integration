@@ -855,6 +855,8 @@ const GlobalSettingsModal = {
             modelAvailable: !!(source.model_available ?? source.modelAvailable ?? fallback.modelAvailable),
             source: String(source.source ?? fallback.source ?? '').trim(),
             error: String(source.error ?? fallback.error ?? '').trim(),
+            requestedMachineId: String(source.requested_machine_id ?? source.requestedMachineId ?? fallback.requestedMachineId ?? '').trim(),
+            matchesRequestedMachine: !!(source.matches_requested_machine ?? source.matchesRequestedMachine ?? fallback.matchesRequestedMachine),
             receivedAtMs: hasSource ? Date.now() : Number(fallback.receivedAtMs || Date.now())
         };
     },
@@ -944,6 +946,7 @@ const GlobalSettingsModal = {
         const ageSeconds = this.getCloudHeartbeatAgeSeconds(heartbeat);
         const freshWindow = Math.max(0, Number(heartbeat.freshWithinSeconds || 0));
         const ageText = ageSeconds == null ? 'unknown' : this.formatDurationSeconds(ageSeconds);
+        const scopeLabel = heartbeat.matchesRequestedMachine === false ? 'host ' : '';
 
         if (heartbeat.isRecent) {
             const expiresInSeconds = ageSeconds == null
@@ -951,10 +954,9 @@ const GlobalSettingsModal = {
                 : Math.max(0, freshWindow - ageSeconds);
             const expiresText = this.formatDurationSeconds(expiresInSeconds);
             const readinessLabel = heartbeat.localModePossible ? 'ready' : 'not ready';
-            paintBadge(
-                heartbeat.localModePossible ? 'success' : 'warning',
-                `Cloud heartbeat: fresh (${readinessLabel}) • age ${ageText} • expires in ${expiresText}`
-            );
+            const heartbeatLabel = `Cloud heartbeat: fresh ${scopeLabel}(${readinessLabel})`
+                + ` • age ${ageText} • expires in ${expiresText}`;
+            paintBadge(heartbeat.localModePossible ? 'success' : 'warning', heartbeatLabel);
             return;
         }
 
@@ -962,7 +964,7 @@ const GlobalSettingsModal = {
             ? null
             : Math.max(0, ageSeconds - freshWindow);
         const staleSuffix = staleBySeconds == null ? '' : ` • stale by ${this.formatDurationSeconds(staleBySeconds)}`;
-        paintBadge('error', `Cloud heartbeat: stale • last seen ${ageText} ago${staleSuffix}`);
+        paintBadge('error', `Cloud heartbeat: stale ${scopeLabel}• last seen ${ageText} ago${staleSuffix}`);
     },
 
     ensureHeartbeatCountdown() {
@@ -1196,8 +1198,8 @@ const GlobalSettingsModal = {
         btn.style.cursor = isPending ? 'not-allowed' : '';
 
         if (isApproved) {
-            btn.title = 'Device is already approved. Click to force a new request (rotates credentials).';
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Re-Request Provisioning';
+            btn.title = 'Device is already provisioned. Request reprovisioning only to refresh installer access or recover credentials.';
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Request Reprovisioning';
         } else if (isPending) {
             btn.title = 'Provisioning request already submitted. Waiting for admin approval.';
             btn.innerHTML = '<i class="fas fa-clock"></i> Pending Approval…';
@@ -1230,7 +1232,7 @@ const GlobalSettingsModal = {
         const currentStatus = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
         if (currentStatus === 'approved' || currentStatus === 'provisioned' || currentStatus === 'active') {
             const confirmed = window.confirm(
-                'This device is already approved. Re-requesting will refresh installer '
+                'This device is already provisioned. Reprovisioning will refresh installer '
                 + 'validation and recover credentials if the cloud still sees this device as approved.\n\n'
                 + 'Use this when the local installer BAT is broken or credentials were cleared.\n\n'
                 + 'Continue?'

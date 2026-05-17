@@ -23,6 +23,7 @@ const ReportsPage = {
         completed: new Set(),
         inFlight: new Set()
     },
+    visualStatusTimers: new Map(),
     cacheWarmTimer: null,
     modalRuntime: {
         reportId: null,
@@ -37,7 +38,9 @@ const ReportsPage = {
         cooldownSeconds: 8,
         pollIntervalMs: 2500,
         maxWaitMs: 240000,
-        expectedDurationSec: 60
+        expectedDurationSec: 60,
+        minGeneratingDisplayMs: 650,
+        sawGeneratingStage: false
     },
 
     render() {
@@ -173,6 +176,10 @@ const ReportsPage = {
         if (this.cacheWarmTimer) {
             clearTimeout(this.cacheWarmTimer);
             this.cacheWarmTimer = null;
+        }
+        if (this.visualStatusTimers && typeof this.visualStatusTimers.forEach === 'function') {
+            this.visualStatusTimers.forEach((timer) => clearTimeout(timer));
+            this.visualStatusTimers.clear();
         }
         if (this.providerRuntimeInterval) {
             clearInterval(this.providerRuntimeInterval);
@@ -621,19 +628,56 @@ const ReportsPage = {
             sourceRecord.source_label
         ].map((label) => String(label || '').trim())
             .find((label) => this.sourceLabelMatchesScope(label, sourceScope)) || '';
+        const statusSequence = this.normalizeStatusSequence(
+            patch.status_sequence || sourceRecord.status_sequence || existing.status_sequence || []
+        );
+        const patchHasReport = Object.prototype.hasOwnProperty.call(patch, 'has_report')
+            ? !!patch.has_report
+            : !!(existing.has_report || sourceRecord.has_report);
+        const nextStatus = this.normalizeStatusValue(
+            patch.status || existing.status || sourceRecord.status || 'pending',
+            patchHasReport
+        );
+        const existingStatus = this.normalizeStatus(existing);
+        const nowMs = Date.now();
+        let displayStatus = existing.display_status;
+        let displayStatusUntil = Number(existing.display_status_until || 0);
+        const fastCompletedAfterGenerating = !!(
+            nextStatus === 'completed'
+            && statusSequence.includes('generating')
+            && existingStatus !== 'generating'
+            && (!displayStatusUntil || displayStatusUntil < nowMs)
+        );
+        if (fastCompletedAfterGenerating) {
+            displayStatus = 'generating';
+            displayStatusUntil = nowMs + Math.max(300, Number(this.modalRuntime.minGeneratingDisplayMs || 650));
+            if (this.visualStatusTimers.has(rid)) {
+                clearTimeout(this.visualStatusTimers.get(rid));
+            }
+            this.visualStatusTimers.set(rid, setTimeout(() => {
+                this.visualStatusTimers.delete(rid);
+                const index = this.violations.findIndex((v) => String((v && v.report_id) || '').trim() === rid);
+                if (index >= 0) {
+                    this.violations[index] = {
+                        ...this.violations[index],
+                        display_status: '',
+                        display_status_until: 0
+                    };
+                    this.renderReports();
+                }
+            }, Math.max(300, Number(this.modalRuntime.minGeneratingDisplayMs || 650))));
+        }
         const next = {
             ...sourceRecord,
             ...existing,
             ...patch,
             report_id: rid,
             timestamp: patch.timestamp || existing.timestamp || sourceRecord.timestamp || nowIso,
-            status: this.normalizeStatusValue(
-                patch.status || existing.status || sourceRecord.status || 'pending',
-                !!(Object.prototype.hasOwnProperty.call(patch, 'has_report') ? patch.has_report : (existing.has_report || sourceRecord.has_report))
-            ),
-            has_report: Object.prototype.hasOwnProperty.call(patch, 'has_report')
-                ? !!patch.has_report
-                : !!(existing.has_report || sourceRecord.has_report),
+            status: nextStatus,
+            status_sequence: statusSequence,
+            has_report: patchHasReport,
+            display_status: displayStatus,
+            display_status_until: displayStatusUntil,
             source_scope: sourceScope,
             source_label: patchLabel
                 || inheritedLabel
@@ -1078,6 +1122,19 @@ const ReportsPage = {
         return raw;
     },
 
+    normalizeStatusSequence(sequence) {
+        const values = Array.isArray(sequence) ? sequence : [sequence];
+        const normalized = [];
+        values.forEach((value) => {
+            const status = this.normalizeStatusValue(value, false);
+            if (!status || status === 'unknown') return;
+            if (!normalized.length || normalized[normalized.length - 1] !== status) {
+                normalized.push(status);
+            }
+        });
+        return normalized.slice(-6);
+    },
+
     getStatusPriority(status) {
         const normalized = this.normalizeStatusValue(status);
         if (normalized === 'completed') return 50;
@@ -1094,6 +1151,20 @@ const ReportsPage = {
             ? violation.status
             : '';
         return this.normalizeStatusValue(raw, hasReport);
+    },
+
+    getDisplayStatus(violation) {
+        const displayStatus = this.normalizeStatusValue(violation && violation.display_status, false);
+        const displayUntil = Number(violation && violation.display_status_until);
+        if (
+            displayStatus
+            && displayStatus !== 'unknown'
+            && Number.isFinite(displayUntil)
+            && displayUntil > Date.now()
+        ) {
+            return displayStatus;
+        }
+        return this.normalizeStatus(violation);
     },
 
     normalizeSourceScope(scope) {
@@ -1606,7 +1677,7 @@ const ReportsPage = {
 
     // Get status display info
     getStatusInfo(violation) {
-        const status = this.normalizeStatus(violation);
+        const status = this.getDisplayStatus(violation);
         const ready = this.isReportReady(violation);
 
         switch(status) {
@@ -1871,6 +1942,7 @@ const ReportsPage = {
             this.modalRuntime.lastPollStatus = null;
             this.modalRuntime.cooldownUntil = 0;
             this.modalRuntime.pollStartedAt = 0;
+            this.modalRuntime.sawGeneratingStage = false;
         }
         return this.modalRuntime;
     },
@@ -2193,6 +2265,7 @@ const ReportsPage = {
         }
 
         if (status === 'generating' || status === 'processing') {
+            runtime.sawGeneratingStage = true;
             this.setModalStage('generating');
             this.setModalStatusText((data && data.message) || 'AI is generating your report...');
             if (alertMessage) {
@@ -2202,6 +2275,20 @@ const ReportsPage = {
         }
 
         if (status === 'completed' && data.has_report) {
+            if (
+                !runtime.sawGeneratingStage
+                && runtime.lastPollStatus
+                && runtime.lastPollStatus !== 'generating'
+                && Number(this.modalRuntime.minGeneratingDisplayMs || 0) > 0
+            ) {
+                runtime.sawGeneratingStage = true;
+                this.setModalStage('generating');
+                this.setModalStatusText('AI finished generating your report. Finalizing view...');
+                await new Promise((resolve) => setTimeout(
+                    resolve,
+                    Math.max(300, Number(this.modalRuntime.minGeneratingDisplayMs || 650))
+                ));
+            }
             this.setModalStage('completed');
             this.setModalStatusText('Report completed. Opening now...');
             await this.loadReports({ noCache: true, targetedReportId: reportId });

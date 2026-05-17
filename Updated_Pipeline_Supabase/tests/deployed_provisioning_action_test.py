@@ -33,6 +33,7 @@ from casm_app import (
     _load_pending_devices,
     _save_pending_devices,
     _send_local_mode_cloud_heartbeat_once,
+    _get_cloud_local_mode_heartbeat_snapshot,
     PENDING_DEVICES_FILE,
     BOOTSTRAP_TOKEN_STATE_FILE,
     LOCAL_MODE_PROVISION_STATE_FILE,
@@ -250,6 +251,44 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(rerequest_payload.get('device_status'), 'active')
         self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
         self.assertTrue(rerequest_payload.get('active'))
+
+    def test_cloud_heartbeat_visible_without_approving_wrong_browser_machine(self):
+        host_machine_id = 'TEST-EDGE-HOST-HEARTBEAT-001'
+        browser_machine_id = 'TEST-WEB-BROWSER-HEARTBEAT-001'
+        provision_secret = self._request_device(host_machine_id)
+        self._approve_device(host_machine_id)
+
+        heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': host_machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        })
+        self.assertEqual(heartbeat.status_code, 200)
+
+        snapshot = _get_cloud_local_mode_heartbeat_snapshot(browser_machine_id)
+        self.assertTrue(snapshot.get('available'))
+        self.assertEqual(snapshot.get('machine_id'), host_machine_id)
+        self.assertEqual(snapshot.get('requested_machine_id'), browser_machine_id)
+        self.assertFalse(snapshot.get('matches_requested_machine'))
+        self.assertEqual(snapshot.get('provision_status'), 'idle')
+
+        status_response = self.client.get(
+            f'/api/local-mode/provisioning/status?machine_id={browser_machine_id}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+        status_payload = status_response.json or {}
+        status_heartbeat = status_payload.get('cloud_local_heartbeat') or {}
+        self.assertTrue(status_heartbeat.get('available'))
+        self.assertFalse(status_heartbeat.get('matches_requested_machine'))
+        self.assertEqual(status_heartbeat.get('provision_status'), 'idle')
+        self.assertNotEqual(status_payload.get('status'), 'active')
+        self.assertNotEqual(status_payload.get('device_status'), 'approved')
 
     def test_approved_heartbeat_can_reissue_missing_or_stale_browser_secret(self):
         machine_id = 'TEST-EDGE-HEARTBEAT-REISSUE-001'

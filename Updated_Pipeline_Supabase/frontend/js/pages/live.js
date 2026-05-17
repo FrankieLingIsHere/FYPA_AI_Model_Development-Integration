@@ -547,7 +547,14 @@ const LivePage = {
         const shouldPreferBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
             if (selectedSource === 'phone' && phoneCameraSupported) return true;
-            if (selectedSource === 'webcam' && (isLikelyRemoteBackend() || !!selectedBrowserDeviceId)) return true;
+            if (
+                selectedSource === 'webcam'
+                && (
+                    isLikelyRemoteBackend()
+                    || !!selectedBrowserDeviceId
+                    || backendWebcamDevices.length === 0
+                )
+            ) return true;
             return false;
         };
 
@@ -652,7 +659,8 @@ const LivePage = {
 
         const refreshBackendWebcamOptions = async (notify = false) => {
             try {
-                const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}`);
+                const refreshParam = notify ? '?refresh=1' : '';
+                const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}${refreshParam}`);
                 if (!resp.ok) {
                     throw new Error('Failed to load backend webcam devices');
                 }

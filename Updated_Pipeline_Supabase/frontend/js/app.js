@@ -114,6 +114,8 @@ let localModePolicyState = {
 let provisioningTrackerBootstrapped = false;
 let provisioningStatusPollBusy = false;
 let provisioningStatusPollInterval = null;
+let provisioningHeartbeatRefreshBurstTimer = null;
+let provisioningHeartbeatRefreshBurstUntil = 0;
 let provisioningStatusState = {
     status: 'idle',
     machineId: '',
@@ -415,6 +417,8 @@ function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
         modelAvailable: !!(source.model_available ?? source.modelAvailable ?? fallbackState.modelAvailable),
         source: String(source.source ?? fallbackState.source ?? '').trim(),
         error: String(source.error ?? fallbackState.error ?? '').trim(),
+        requestedMachineId: String(source.requested_machine_id ?? source.requestedMachineId ?? fallbackState.requestedMachineId ?? '').trim(),
+        matchesRequestedMachine: !!(source.matches_requested_machine ?? source.matchesRequestedMachine ?? fallbackState.matchesRequestedMachine),
         receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : Date.now()
     };
 }
@@ -434,7 +438,9 @@ function cloudHeartbeatSignature(heartbeat = {}) {
         String(!!hb.ollamaRunning),
         String(!!hb.modelAvailable),
         String(hb.source || ''),
-        String(hb.error || '')
+        String(hb.error || ''),
+        String(hb.requestedMachineId || ''),
+        String(!!hb.matchesRequestedMachine)
     ].join('|');
 }
 
@@ -565,6 +571,45 @@ function hasProvisioningStateChanged(previousState, nextState) {
         || previousState.error !== nextState.error;
 }
 
+function cloudHeartbeatNeedsFollowup(state = provisioningStatusState) {
+    if (!isLikelyRemoteBackend()) return false;
+    const heartbeat = state && state.cloudHeartbeat && typeof state.cloudHeartbeat === 'object'
+        ? state.cloudHeartbeat
+        : {};
+    return !heartbeat.available || !heartbeat.isRecent;
+}
+
+function stopProvisioningHeartbeatRefreshBurst() {
+    if (provisioningHeartbeatRefreshBurstTimer) {
+        clearInterval(provisioningHeartbeatRefreshBurstTimer);
+        provisioningHeartbeatRefreshBurstTimer = null;
+    }
+    provisioningHeartbeatRefreshBurstUntil = 0;
+}
+
+function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup') {
+    if (!isLikelyRemoteBackend()) return;
+
+    if (provisioningHeartbeatRefreshBurstTimer) return;
+
+    provisioningHeartbeatRefreshBurstUntil = Date.now() + 90000;
+    provisioningHeartbeatRefreshBurstTimer = setInterval(() => {
+        if (Date.now() > provisioningHeartbeatRefreshBurstUntil) {
+            stopProvisioningHeartbeatRefreshBurst();
+            return;
+        }
+        if (!cloudHeartbeatNeedsFollowup()) {
+            stopProvisioningHeartbeatRefreshBurst();
+            return;
+        }
+        refreshProvisioningStatus({
+            source: reason,
+            force: true,
+            notify: false
+        });
+    }, 10000);
+}
+
 function announceProvisioningStatusTransition(previousState, nextState, options = {}) {
     if (!nextState) return;
     if (options.notify === false) return;
@@ -603,6 +648,11 @@ function publishProvisioningState(nextState, options = {}) {
     }
 
     announceProvisioningStatusTransition(previousState, normalized, options);
+    if (cloudHeartbeatNeedsFollowup(normalized)) {
+        scheduleProvisioningHeartbeatRefreshBurst('heartbeat-followup');
+    } else {
+        stopProvisioningHeartbeatRefreshBurst();
+    }
     return { ...normalized };
 }
 
@@ -707,15 +757,18 @@ function initializeProvisioningStatusTracker() {
 
     window.addEventListener('online', () => {
         refreshProvisioningStatus({ source: 'online', force: true });
+        scheduleProvisioningHeartbeatRefreshBurst('online-heartbeat-followup');
     });
 
     window.addEventListener('ppe-backend:resolved', () => {
         refreshProvisioningStatus({ source: 'backend-resolved', force: true });
+        scheduleProvisioningHeartbeatRefreshBurst('backend-resolved-heartbeat-followup');
     });
 
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
             refreshProvisioningStatus({ source: 'visibility', force: true });
+            scheduleProvisioningHeartbeatRefreshBurst('visibility-heartbeat-followup');
         }
     });
 }

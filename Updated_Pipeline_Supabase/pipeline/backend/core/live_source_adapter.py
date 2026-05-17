@@ -35,6 +35,14 @@ class LiveSourceAdapter:
             probe_cache_seconds = 15.0
         self.webcam_probe_cache_seconds = max(2.0, probe_cache_seconds)
         try:
+            negative_probe_cache_seconds = float(os.getenv('WEBCAM_NEGATIVE_PROBE_CACHE_SECONDS', '90'))
+        except Exception:
+            negative_probe_cache_seconds = 90.0
+        self.webcam_negative_probe_cache_seconds = max(
+            self.webcam_probe_cache_seconds,
+            min(negative_probe_cache_seconds, 600.0)
+        )
+        try:
             backend_fail_cooldown = float(os.getenv('WEBCAM_BACKEND_FAIL_COOLDOWN_SECONDS', '180'))
         except Exception:
             backend_fail_cooldown = 180.0
@@ -316,11 +324,18 @@ class LiveSourceAdapter:
         """Probe likely webcam indexes and return openable device slots."""
         # Avoid probing every request; status endpoints can be polled frequently.
         now = time.monotonic()
-        if not force_refresh and self._webcam_probe_cache and (now - self._webcam_probe_cache_ts) < self.webcam_probe_cache_seconds:
+        cache_age = now - float(self._webcam_probe_cache_ts or 0.0)
+        cache_window = (
+            self.webcam_probe_cache_seconds
+            if self._webcam_probe_cache
+            else self.webcam_negative_probe_cache_seconds
+        )
+        cache_valid = self._webcam_probe_cache_ts > 0 and cache_age < cache_window
+        if not force_refresh and cache_valid:
             return list(self._webcam_probe_cache)
 
         # Prevent rapid forced refresh loops from hammering camera backends.
-        if force_refresh and self._webcam_probe_cache and (now - self._webcam_probe_cache_ts) < 1.0:
+        if force_refresh and self._webcam_probe_cache_ts > 0 and cache_age < 1.0:
             return list(self._webcam_probe_cache)
 
         # While webcam stream is active, probing other indexes can interfere with capture.

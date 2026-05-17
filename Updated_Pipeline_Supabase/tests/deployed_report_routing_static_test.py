@@ -53,6 +53,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("_push_processing_status('generating')", casm_app)
         self.assertIn("existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))", casm_app)
         self.assertIn('realtime_report_events = deque', casm_app)
+        self.assertIn("'status_sequence': status_sequence", casm_app)
+        self.assertIn('normalizeStatusSequence(sequence)', reports_js := (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8'))
+        self.assertIn('display_status_until', reports_js)
+        self.assertIn('minGeneratingDisplayMs', reports_js)
         self.assertIn("def _signal_local_report_ready(reason: str = 'local_report_html_ready')", casm_app)
         self.assertIn("'report_openable_after_seconds'", casm_app)
         self.assertIn("'report_ready_callback': _signal_local_report_ready", casm_app)
@@ -127,6 +131,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         live_js = (ROOT / 'frontend' / 'js' / 'pages' / 'live.js').read_text(encoding='utf-8')
         config_js = (ROOT / 'frontend' / 'js' / 'config.js').read_text(encoding='utf-8')
         infer_image = (ROOT / 'infer_image.py').read_text(encoding='utf-8')
+        live_source_adapter = (ROOT / 'pipeline' / 'backend' / 'core' / 'live_source_adapter.py').read_text(encoding='utf-8')
 
         self.assertIn("@app.route('/api/live/prepare', methods=['POST'])", casm_app)
         self.assertIn("_prepare_live_runtime(", casm_app)
@@ -137,9 +142,26 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("Retrying cloud report generation for", casm_app)
         self.assertIn("prepareLiveRuntime(", live_js)
         self.assertIn("void prepareLiveRuntime('live-page-mount');", live_js)
+        self.assertIn("backendWebcamDevices.length === 0", live_js)
+        self.assertIn("const refreshParam = notify ? '?refresh=1' : ''", live_js)
         self.assertIn("LIVE_PREPARE: '/api/live/prepare'", config_js)
         self.assertIn("def warmup_model(", infer_image)
         self.assertIn("def is_model_ready(", infer_image)
+        self.assertIn('WEBCAM_NEGATIVE_PROBE_CACHE_SECONDS', live_source_adapter)
+        self.assertIn('cache_valid = self._webcam_probe_cache_ts > 0', live_source_adapter)
+
+    def test_cloud_heartbeat_and_provisioning_labels_stay_visible(self):
+        casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
+        app_js = (ROOT / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
+        settings_js = (ROOT / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
+
+        self.assertIn("'matches_requested_machine': bool(matched_requested_machine)", casm_app)
+        self.assertIn("heartbeat_summary.get('matches_requested_machine', True)", casm_app)
+        self.assertIn("provision_status = 'idle'", casm_app)
+        self.assertIn('scheduleProvisioningHeartbeatRefreshBurst', app_js)
+        self.assertIn('online-heartbeat-followup', app_js)
+        self.assertIn('Request Reprovisioning', settings_js)
+        self.assertIn('Cloud heartbeat: fresh ${scopeLabel}', settings_js)
 
 
 if __name__ == '__main__':

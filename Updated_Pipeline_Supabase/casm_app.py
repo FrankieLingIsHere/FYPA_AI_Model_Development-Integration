@@ -9140,11 +9140,32 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             'queued': 25,
             'unknown': 0,
         }
+
+        def _row_status_sequence(*rows: Dict[str, Any]) -> List[str]:
+            sequence: List[str] = []
+            for candidate in rows:
+                if not isinstance(candidate, dict):
+                    continue
+                raw_sequence = candidate.get('status_sequence')
+                if isinstance(raw_sequence, list):
+                    values = raw_sequence
+                else:
+                    values = [candidate.get('status')]
+                for raw_status in values:
+                    status_value = str(raw_status or '').strip().lower()
+                    if not status_value:
+                        continue
+                    if not sequence or sequence[-1] != status_value:
+                        sequence.append(status_value)
+            return sequence[-6:]
+
         deduped_rows: Dict[str, Dict[str, Any]] = {}
         for row in report_rows:
             report_id = str((row or {}).get('report_id') or '').strip()
             if not report_id:
                 continue
+            row = dict(row)
+            row['status_sequence'] = _row_status_sequence(row)
             existing = deduped_rows.get(report_id)
             if not existing:
                 deduped_rows[report_id] = row
@@ -9154,13 +9175,14 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             existing_status = str(existing.get('status') or '').strip().lower()
             row_updated = str(row.get('updated_at') or row.get('timestamp') or '')
             existing_updated = str(existing.get('updated_at') or existing.get('timestamp') or '')
+            status_sequence = _row_status_sequence(existing, row)
             if (
                 status_priority.get(row_status, 0) > status_priority.get(existing_status, 0)
                 or row_updated > existing_updated
             ):
-                deduped_rows[report_id] = {**existing, **row}
+                deduped_rows[report_id] = {**existing, **row, 'status_sequence': status_sequence}
             else:
-                deduped_rows[report_id] = {**row, **existing}
+                deduped_rows[report_id] = {**row, **existing, 'status_sequence': status_sequence}
         report_rows = list(deduped_rows.values())
 
     report_rows.sort(
@@ -10914,11 +10936,13 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
 
     selected_machine_id = ''
     selected_record: Optional[Dict[str, Any]] = None
+    matched_requested_machine = not bool(normalized_hint)
 
     if normalized_hint:
         if isinstance(records.get(normalized_hint), dict):
             selected_machine_id = normalized_hint
             selected_record = records.get(normalized_hint)
+            matched_requested_machine = True
         else:
             hint_lower = normalized_hint.lower()
             for machine_id, record in records.items():
@@ -10928,16 +10952,14 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
                 if existing_machine_id.lower() == hint_lower:
                     selected_machine_id = existing_machine_id
                     selected_record = record
+                    matched_requested_machine = True
                     break
 
-    if selected_record is None and not normalized_hint:
-        # Only fall back to the newest record from ANY machine when the
-        # caller did NOT pin a specific machine_id. If a hint WAS given
-        # and no matching record exists, returning the newest record from
-        # a different device would incorrectly leak that device's
-        # provision_status (approved/provisioned) to the requesting
-        # device, causing every viewer of the cloud frontend to be
-        # reported as approved as soon as the host laptop heartbeats.
+    if selected_record is None:
+        # The newest heartbeat is useful as a visibility signal in cloud mode
+        # even when the browser's own machine_id does not match the local host.
+        # When it is not an exact match, provision_status is sanitized below so
+        # the heartbeat cannot approve the wrong browser/device.
         newest_epoch = -1.0
         newest_machine_id = ''
         newest_record: Optional[Dict[str, Any]] = None
@@ -10971,6 +10993,8 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
             'model_available': False,
             'source': '',
             'error': '',
+            'requested_machine_id': normalized_hint,
+            'matches_requested_machine': bool(matched_requested_machine),
         }
 
     last_seen_at = str(selected_record.get('last_seen_at') or '').strip()
@@ -10991,6 +11015,8 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
         status = 'stale'
 
     provision_status = _normalize_heartbeat_provision_status(selected_record.get('provision_status'))
+    if normalized_hint and not matched_requested_machine:
+        provision_status = 'idle'
 
     return {
         'available': True,
@@ -11007,6 +11033,8 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
         'model_available': bool(selected_record.get('model_available')),
         'source': str(selected_record.get('source') or '').strip(),
         'error': str(selected_record.get('error') or '').strip(),
+        'requested_machine_id': normalized_hint,
+        'matches_requested_machine': bool(matched_requested_machine),
     }
 
 
@@ -11121,10 +11149,12 @@ def api_local_mode_provisioning_status():
     elif heartbeat_provision_status == 'credentials_present' and normalized_status == 'idle':
         normalized_status = 'credentials_present'
 
+    heartbeat_matches_requested = bool(heartbeat_summary.get('matches_requested_machine', True))
     heartbeat_active = bool(
         heartbeat_summary.get('available')
         and heartbeat_summary.get('is_recent')
         and heartbeat_summary.get('local_mode_possible')
+        and heartbeat_matches_requested
     )
     device_status = normalized_status
     response_status = normalized_status
@@ -11425,6 +11455,7 @@ def _api_local_mode_auto_provisioning_impl():
             heartbeat_summary.get('available')
             and heartbeat_summary.get('is_recent')
             and heartbeat_summary.get('local_mode_possible')
+            and heartbeat_summary.get('matches_requested_machine', True)
         )
         response_status = 'active' if heartbeat_active else effective_status
         return jsonify({
@@ -19376,6 +19407,7 @@ def provision_request():
         heartbeat_summary.get('available')
         and heartbeat_summary.get('is_recent')
         and heartbeat_summary.get('local_mode_possible')
+        and heartbeat_summary.get('matches_requested_machine', True)
     )
     public_device_status = (
         'active'

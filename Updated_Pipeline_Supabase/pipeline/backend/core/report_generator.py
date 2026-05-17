@@ -2589,7 +2589,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             local_num_predict = int(
                 os.getenv(
                     'OLLAMA_FORCE_LOCAL_NUM_PREDICT' if fast_mode else 'OLLAMA_REPORT_NUM_PREDICT',
-                    '2048',
+                    '1600' if fast_mode else '2048',
                 ) or 2048
             )
         except (TypeError, ValueError):

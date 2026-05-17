@@ -477,6 +477,54 @@ function testSyncedLocalThumbnailRoutesToAvailableBackend() {
   );
 }
 
+async function testCompletedLocalSyncCoercesQueuedState() {
+  const events = [];
+  const context = loadApiContext(async () => createResponse(true, 200, {}));
+  context.CustomEvent = function CustomEvent(type, init = {}) {
+    return { type, detail: init.detail || {} };
+  };
+  context.window.dispatchEvent = (event) => {
+    events.push(event);
+    return true;
+  };
+
+  const reportId = 'offline-local-sync-complete-001';
+  const localRow = {
+    report_id: reportId,
+    status: 'completed',
+    has_report: true,
+    has_local_report: true,
+    has_original: true,
+    source_scope: 'local',
+    source_label: 'Local',
+    source: 'offline_local_cache',
+    device_id: 'offline_local_cache',
+    sync_state: 'cloud_sync_queued',
+  };
+
+  await context.API.writeLocalReportDrafts([localRow]);
+  await context.API.writeJsonCache('reports:pending', [localRow]);
+
+  await context.API.markReportsAsLocalSynced([reportId], {
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_sync_queued',
+    completed_report_ids: [reportId],
+  });
+
+  const drafts = await context.API.readLocalReportDrafts();
+  const draft = drafts.find((item) => item.report_id === reportId);
+  assertEqual(draft.sync_state, 'cloud_completed', 'completed local sync must not leave draft sync_state queued');
+
+  const pending = await context.API.readJsonCache('reports:pending');
+  const pendingRow = pending.data.find((item) => item.report_id === reportId);
+  assertEqual(pendingRow.sync_state, 'cloud_completed', 'completed local sync must not leave pending cache sync_state queued');
+
+  const syncEvent = events.find((event) => event.type === 'ppe-local-report-sync:update');
+  assert(syncEvent, 'completed local sync should dispatch a UI update event');
+  assertEqual(syncEvent.detail.queued_report_ids.length, 0, 'completed local sync event should not re-emit completed ids as queued');
+  assert(syncEvent.detail.completed_report_ids.includes(reportId), 'completed local sync event should include completed id');
+}
+
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
@@ -488,6 +536,7 @@ async function main() {
     testCloudFallbackRepairsStaleLocalReportCaches,
     testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
     testSyncedLocalThumbnailRoutesToAvailableBackend,
+    testCompletedLocalSyncCoercesQueuedState,
   ];
   const failures = [];
   for (const testFn of tests) {

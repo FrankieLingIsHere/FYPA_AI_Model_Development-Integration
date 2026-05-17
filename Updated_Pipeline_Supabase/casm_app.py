@@ -5723,7 +5723,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     caption_failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                     logger.warning(
                         f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
-                        "Continuing with detection-only fallback report generation."
+                        "Caption marked unavailable; strict local report generation will block fallback output."
                     )
                     caption = (
                         "Caption unavailable due to local-mode provider issue. "
@@ -5796,7 +5796,23 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     except Exception:
         pass
 
-    if report_generator:
+    local_requires_model_caption = bool(
+        force_local_artifact_pipeline
+        and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
+        in ('1', 'true', 'yes', 'on')
+    )
+    caption_blocks_model_report = bool(
+        local_requires_model_caption
+        and (caption_failure_reason or caption_quality_fallback_applied)
+    )
+    if caption_blocks_model_report:
+        failure_reason = (
+            "Local model caption was not available; report generation stopped instead of "
+            f"creating a detection-only fallback. {caption_failure_reason or caption_quality_reason}"
+        ).strip()
+        logger.warning("Strict local report generation blocked for %s: %s", report_id, failure_reason)
+
+    if report_generator and not caption_blocks_model_report:
         try:
             # Update progress
             update_report_progress(
@@ -6382,7 +6398,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         caption_failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                         logger.warning(
                             f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
-                            "Continuing with detection-only fallback report generation."
+                            "Caption marked unavailable; strict local report generation will block fallback output."
                         )
                         caption = (
                             "Caption unavailable due to local-mode provider issue. "
@@ -6427,6 +6443,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         caption_model = None
         report_generation_provider = None
         report_generation_model = None
+        generation_failure_reason = ''
         try:
             from caption_image import get_runtime_provider_diagnostics
             vision_diag = get_runtime_provider_diagnostics() or {}
@@ -6441,7 +6458,23 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         except Exception:
             pass
 
-        if report_generator:
+        local_requires_model_caption = bool(
+            _is_local_pipeline_runtime_active()
+            and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
+            in ('1', 'true', 'yes', 'on')
+        )
+        caption_blocks_model_report = bool(
+            local_requires_model_caption
+            and (caption_failure_reason or caption_quality_fallback_applied)
+        )
+        if caption_blocks_model_report:
+            generation_failure_reason = (
+                "Local model caption was not available; report generation stopped instead of "
+                f"creating a detection-only fallback. {caption_failure_reason or caption_quality_reason}"
+            ).strip()
+            logger.warning("Strict local report generation blocked for %s: %s", report_id, generation_failure_reason)
+
+        if report_generator and not caption_blocks_model_report:
             try:
                 # Update status to "generating"
                 if db_manager:
@@ -6521,7 +6554,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 
         # Do not auto-create fallback report templates. Keep explicit failed status.
         if not report_created and db_manager:
-            failure_reason = "Report generation did not produce model-generated HTML output"
+            failure_reason = generation_failure_reason or "Report generation did not produce model-generated HTML output"
             try:
                 db_manager.update_detection_status(report_id, 'failed', failure_reason)
                 logger.info(f" Status updated to FAILED: {report_id}")
@@ -6547,6 +6580,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'caption_quality_fallback_applied': bool(caption_quality_fallback_applied),
             'caption_quality_reason': caption_quality_reason,
             'caption_failure_reason': caption_failure_reason,
+            'failure_reason': None if report_created else (generation_failure_reason or None),
         }
 
         metadata_path = violation_dir / 'metadata.json'

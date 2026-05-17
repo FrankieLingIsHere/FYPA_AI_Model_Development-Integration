@@ -39,7 +39,7 @@ const ReportsPage = {
         pollIntervalMs: 2500,
         maxWaitMs: 240000,
         expectedDurationSec: 60,
-        minGeneratingDisplayMs: 650,
+        minGeneratingDisplayMs: 1800,
         sawGeneratingStage: false
     },
 
@@ -467,6 +467,10 @@ const ReportsPage = {
         }
 
         const idSet = new Set(reportIds);
+        const detailSyncState = String(detail.sync_state || '').trim();
+        const completedSyncState = detailSyncState && !/queued|pending|retry/i.test(detailSyncState)
+            ? detailSyncState
+            : 'cloud_completed';
         let changed = false;
         let changedCount = 0;
         const changedReportIds = [];
@@ -493,7 +497,7 @@ const ReportsPage = {
                 origin: 'local_synced',
                 sync_source: detail.sync_source || violation.sync_source || 'sync_local_cache',
                 source: detail.source || violation.source || 'sync_local_cache',
-                sync_state: detail.sync_state || 'cloud_completed',
+                sync_state: completedSyncState,
                 display_status: '',
                 display_status_until: 0,
                 updated_at: new Date().toISOString()
@@ -695,7 +699,12 @@ const ReportsPage = {
             local_report_url: record.local_report_url || previous.local_report_url,
             has_cloud_report_artifact: !!(record.has_cloud_report_artifact || previous.has_cloud_report_artifact),
             has_cloud_artifacts: !!(record.has_cloud_artifacts || previous.has_cloud_artifacts),
-            has_local_report: !!(record.has_local_report || previous.has_local_report)
+            has_local_report: !!(record.has_local_report || previous.has_local_report),
+            has_original: !!(record.has_original || previous.has_original || record.original_image_key || previous.original_image_key),
+            has_annotated: !!(record.has_annotated || previous.has_annotated || record.annotated_image_key || previous.annotated_image_key),
+            original_image_key: record.original_image_key || previous.original_image_key,
+            annotated_image_key: record.annotated_image_key || previous.annotated_image_key,
+            local_image_url: record.local_image_url || previous.local_image_url
         };
 
         if (!record.sync_state && previous.sync_state) {
@@ -739,7 +748,7 @@ const ReportsPage = {
             sourceRecord.source_label
         ].map((label) => String(label || '').trim())
             .find((label) => this.sourceLabelMatchesScope(label, sourceScope)) || '';
-        const statusSequence = this.normalizeStatusSequence(
+        const incomingStatusSequence = this.normalizeStatusSequence(
             patch.status_sequence || sourceRecord.status_sequence || existing.status_sequence || []
         );
         const existingHasReadableReport = this.hasReadableReportEvidence(existing);
@@ -766,12 +775,24 @@ const ReportsPage = {
         }
         const existingStatus = this.normalizeStatus(existing);
         const nowMs = Date.now();
+        const hadExistingRecord = existingIndex >= 0;
+        const statusSequence = this.normalizeStatusSequence([
+            ...incomingStatusSequence,
+            ...(hadExistingRecord ? [existingStatus] : []),
+            nextStatus
+        ]);
         let displayStatus = existing.display_status;
         let displayStatusUntil = Number(existing.display_status_until || 0);
+        const sawInFlightBeforeCompleted = statusSequence.includes('generating')
+            || (
+                hadExistingRecord
+                && (existingStatus === 'pending' || existingStatus === 'generating')
+                && nextStatus === 'completed'
+            );
         const fastCompletedAfterGenerating = !!(
             nextStatus === 'completed'
             && !existingHasReadableReport
-            && statusSequence.includes('generating')
+            && sawInFlightBeforeCompleted
             && existingStatus !== 'generating'
             && (!displayStatusUntil || displayStatusUntil < nowMs)
         );
@@ -807,6 +828,25 @@ const ReportsPage = {
             status: nextStatus,
             status_sequence: statusSequence,
             has_report: nextHasReport,
+            has_original: !!(
+                patch.has_original
+                || existing.has_original
+                || sourceRecord.has_original
+                || patch.original_image_key
+                || existing.original_image_key
+                || sourceRecord.original_image_key
+                || patch.local_image_url
+                || existing.local_image_url
+                || sourceRecord.local_image_url
+            ),
+            has_annotated: !!(
+                patch.has_annotated
+                || existing.has_annotated
+                || sourceRecord.has_annotated
+                || patch.annotated_image_key
+                || existing.annotated_image_key
+                || sourceRecord.annotated_image_key
+            ),
             has_local_report: !!(patch.has_local_report || existing.has_local_report || sourceRecord.has_local_report),
             has_cloud_report_artifact: !!(
                 patch.has_cloud_report_artifact
@@ -829,6 +869,8 @@ const ReportsPage = {
             ),
             report_html_key: patch.report_html_key || existing.report_html_key || sourceRecord.report_html_key,
             report_pdf_key: patch.report_pdf_key || existing.report_pdf_key || sourceRecord.report_pdf_key,
+            original_image_key: patch.original_image_key || existing.original_image_key || sourceRecord.original_image_key,
+            annotated_image_key: patch.annotated_image_key || existing.annotated_image_key || sourceRecord.annotated_image_key,
             cloud_report_url: patch.cloud_report_url || existing.cloud_report_url || sourceRecord.cloud_report_url,
             report_url: patch.report_url || existing.report_url || sourceRecord.report_url,
             local_report_url: patch.local_report_url || existing.local_report_url || sourceRecord.local_report_url,

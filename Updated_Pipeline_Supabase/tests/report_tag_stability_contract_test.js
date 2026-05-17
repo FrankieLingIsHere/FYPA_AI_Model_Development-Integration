@@ -353,7 +353,7 @@ function testLocalSyncEventMatrix() {
     success: true,
     completed_report_ids: ['tag-cloud-sync-event-001', 'tag-local-sync-event-001'],
     sync_source: 'sync_local_cache',
-    sync_state: 'cloud_completed',
+    sync_state: 'cloud_sync_queued',
   });
 
   cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
@@ -364,6 +364,74 @@ function testLocalSyncEventMatrix() {
   const completedSyncInfo = ReportsPage.getSyncInfo(localRecord, 'synced_local');
   assertEqual(completedSyncInfo && completedSyncInfo.label, 'Synced', 'completed local sync badge label');
   assertEqual(localRecord.sync_state, 'cloud_completed', 'completed local sync event clears queued sync state');
+}
+
+function testFastCompletedReportShowsGeneratingStageBriefly() {
+  const ReportsPage = loadReportsPage();
+  ReportsPage.violations = [{
+    report_id: 'tag-fast-completed-generating-001',
+    timestamp: new Date().toISOString(),
+    status: 'pending',
+    has_report: false,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    device_id: 'webcam_0',
+  }];
+  ReportsPage.renderReports = () => {};
+
+  const record = ReportsPage.upsertReportRuntimeState(
+    'tag-fast-completed-generating-001',
+    {
+      status: 'completed',
+      has_report: true,
+      report_html_key: 'violations/tag-fast-completed-generating-001/report.html',
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    },
+    ReportsPage.violations[0],
+  );
+
+  assertEqual(record.status, 'completed', 'fast completed report keeps true ready status');
+  assertEqual(ReportsPage.getDisplayStatus(record), 'generating', 'fast completed report briefly shows generating display state');
+  assertEqual(record.status_sequence.join(','), 'pending,completed', 'status sequence records queued-to-ready transition');
+  ReportsPage.visualStatusTimers.forEach((timer) => clearTimeout(timer));
+  ReportsPage.visualStatusTimers.clear();
+}
+
+function testThumbnailEvidenceSurvivesRuntimeRefresh() {
+  const ReportsPage = loadReportsPage();
+  ReportsPage.violations = [{
+    report_id: 'tag-thumbnail-sticky-001',
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+    has_report: true,
+    has_original: true,
+    has_annotated: true,
+    original_image_key: 'violations/tag-thumbnail-sticky-001/original.jpg',
+    annotated_image_key: 'violations/tag-thumbnail-sticky-001/annotated.jpg',
+    report_html_key: 'violations/tag-thumbnail-sticky-001/report.html',
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    sync_source: 'sync_local_cache',
+  }];
+  ReportsPage.renderReports = () => {};
+
+  const record = ReportsPage.upsertReportRuntimeState(
+    'tag-thumbnail-sticky-001',
+    {
+      status: 'completed',
+      has_report: true,
+      source_scope: 'synced_local',
+      source_label: 'Local Synced',
+      sync_source: 'sync_local_cache',
+    },
+    ReportsPage.violations[0],
+  );
+
+  assertEqual(record.has_original, true, 'runtime refresh preserves original thumbnail evidence');
+  assertEqual(record.has_annotated, true, 'runtime refresh preserves annotated thumbnail evidence');
+  assertEqual(record.original_image_key, 'violations/tag-thumbnail-sticky-001/original.jpg', 'runtime refresh preserves original image key');
+  assertEqual(record.annotated_image_key, 'violations/tag-thumbnail-sticky-001/annotated.jpg', 'runtime refresh preserves annotated image key');
 }
 
 function testReadyReportsAreNotDowngradedByLateSnapshots() {
@@ -446,6 +514,8 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   assertTag(record, 'cloud', 'Cloud', 'status probe preserves cloud tag');
   assertEqual(loadCalls, 0, 'status probe must not force full list refresh');
   assertEqual(prefetchCalls, 1, 'status probe warms only the completed report');
+  ReportsPage.visualStatusTimers.forEach((timer) => clearTimeout(timer));
+  ReportsPage.visualStatusTimers.clear();
 }
 
 function testRealtimePayloadDoesNotForceFullListRefresh() {
@@ -483,6 +553,8 @@ function main() {
     testMergeMatrix,
     testRuntimePatchMatrix,
     testLocalSyncEventMatrix,
+    testFastCompletedReportShowsGeneratingStageBriefly,
+    testThumbnailEvidenceSurvivesRuntimeRefresh,
     testReadyReportsAreNotDowngradedByLateSnapshots,
     testSyncedLocalBadgeWinsOverQueuedSyncState,
     testReportStatusProbeDoesNotForceFullListRefresh,

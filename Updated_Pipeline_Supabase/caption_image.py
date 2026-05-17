@@ -91,6 +91,19 @@ LOCAL_OLLAMA_CAPTION_MAX_TOKENS = max(
     96,
     min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_TOKENS', 220), 512)
 )
+LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS = max(
+    256,
+    min(_safe_int_env('LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS', 300), 650)
+)
+LOCAL_OLLAMA_CAPTION_WARMUP_ENABLED = os.getenv('LOCAL_OLLAMA_CAPTION_WARMUP_ENABLED', 'false').lower() in ('1', 'true', 'yes', 'on')
+LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS = max(
+    8,
+    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS', 45), 90)
+)
+LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM = max(
+    192,
+    min(_safe_int_env('LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM', 320), 512)
+)
 OLLAMA_VISION_NUM_CTX = max(512, _safe_int_env('OLLAMA_VISION_NUM_CTX', 2048))
 OLLAMA_VISION_NUM_GPU = _safe_int_env('OLLAMA_VISION_NUM_GPU', 0)
 OLLAMA_VISION_NUM_THREAD = _safe_int_env('OLLAMA_VISION_NUM_THREAD', 4)
@@ -304,6 +317,29 @@ def _encode_environment_validation_image(image_path):
     except Exception as e:
         logger.debug("Environment validation image downscale failed; using original bytes: %s", e)
         return encode_image_to_base64(image_path)
+
+
+def _encode_local_caption_image(image_path):
+    """Encode a compact local-caption image so Gemma vision can finish promptly."""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(image_path) as image:
+            image = ImageOps.exif_transpose(image)
+            if max(image.size) > LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM:
+                image.thumbnail(
+                    (LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM, LOCAL_OLLAMA_CAPTION_MAX_IMAGE_DIM),
+                    Image.Resampling.LANCZOS,
+                )
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            buffer = io.BytesIO()
+            image.save(buffer, format='JPEG', quality=78, optimize=True)
+            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+    except Exception as e:
+        logger.debug("Local caption image downscale failed; using environment image bytes: %s", e)
+        return _encode_environment_validation_image(image_path)
 
 
 def _normalize_openai_base_url(raw_url: str, endpoint_suffix: str) -> str:
@@ -649,6 +685,7 @@ def _call_ollama_vision(
     temperature: float = 0.6,
     max_tokens: int = 250,
     ollama_options: dict = None,
+    ollama_format=None,
 ) -> str:
     """Call local Ollama vision model."""
     target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma3:4b'
@@ -704,6 +741,8 @@ def _call_ollama_vision(
         'keep_alive': keep_alive,
         'options': options,
     }
+    if ollama_format:
+        payload['format'] = ollama_format
     if OLLAMA_VISION_NUM_THREAD > 0:
         payload['options']['num_thread'] = OLLAMA_VISION_NUM_THREAD
 
@@ -791,6 +830,7 @@ def _generate_vision_response(
     temperature: float = 0.6,
     max_tokens: int = 300,
     ollama_options: dict = None,
+    ollama_format=None,
 ) -> str:
     """Try providers in configured order until one returns a response."""
     global _LAST_PROVIDER_USED
@@ -831,6 +871,7 @@ def _generate_vision_response(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 ollama_options=ollama_options,
+                ollama_format=ollama_format,
             )
         else:
             output = ''
@@ -954,12 +995,15 @@ def _render_local_caption_from_json(payload: dict) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    model_caption = _normalize_caption_text(
+    raw_model_caption = (
         payload.get("caption")
         or payload.get("narrative")
         or payload.get("description")
         or ""
     )
+    if isinstance(raw_model_caption, list):
+        raw_model_caption = " ".join(str(item).strip() for item in raw_model_caption if str(item).strip())
+    model_caption = _normalize_caption_text(raw_model_caption)
     model_caption = _strip_caption_inference_sentences(model_caption)
     scene = str(payload.get("scene") or "").strip().rstrip(".")
     people_count = payload.get("people_count")
@@ -981,7 +1025,12 @@ def _render_local_caption_from_json(payload: dict) -> str:
 
     visible_people = [str(item).strip().strip(".") for item in visible_people if str(item).strip()]
     major_objects = [str(item).strip().strip(".") for item in major_objects if str(item).strip()]
-    ppe_visible = [str(item).strip().strip(".") for item in ppe_visible if str(item).strip()]
+    ppe_visible = [
+        str(item).strip().strip(".")
+        for item in ppe_visible
+        if str(item).strip()
+        and str(item).strip().lower() not in ('none', 'no ppe', 'no ppe visible', 'not visible', 'n/a', 'na')
+    ]
     activity_context = [str(item).strip().strip(".").lower() for item in activity_context if str(item).strip()]
 
     activity_map = {
@@ -1031,6 +1080,13 @@ def _render_local_caption_from_json(payload: dict) -> str:
 
     if model_caption:
         caption = model_caption.rstrip()
+        lowered_caption = caption.lower()
+        if not ppe_visible and not any(
+            term in lowered_caption
+            for term in ('ppe', 'hard hat', 'hardhat', 'helmet', 'vest', 'mask', 'glove', 'goggle', 'safety glasses')
+        ):
+            caption = f"{caption.rstrip('.')} . No PPE is clearly visible."
+            caption = caption.replace(' .', '.')
         missing_activity_items = [
             item for item in activity_items
             if not _caption_has_activity_terms(caption, item)
@@ -1196,6 +1252,76 @@ def check_model_available(model_name):
         pass
     return False
 
+
+def _ensure_ollama_local_caption_ready() -> dict:
+    """Check local model readiness and optionally warm it before the image call."""
+    target_model = str(OLLAMA_MODEL_NAME or '').strip() or 'gemma3:4b'
+    if not check_ollama_running():
+        recovery = attempt_ollama_auto_recover(
+            reason='Ollama service is not running',
+            model_name=target_model,
+            require_model=True,
+        )
+        if not recovery.get('ready'):
+            return {'ready': False, 'error': 'Ollama service is not running'}
+
+    if not check_model_available(target_model):
+        recovery = attempt_ollama_auto_recover(
+            reason=f"Model '{target_model}' is not available",
+            model_name=target_model,
+            require_model=True,
+        )
+        if not recovery.get('ready'):
+            return {'ready': False, 'error': f"Model '{target_model}' is not available"}
+
+    if not LOCAL_OLLAMA_CAPTION_WARMUP_ENABLED:
+        return {'ready': True, 'warmup_skipped': True}
+
+    payload = {
+        'model': target_model,
+        'prompt': 'Return OK only.',
+        'stream': False,
+        'keep_alive': os.getenv('OLLAMA_VISION_KEEP_ALIVE', '5m'),
+        'options': {
+            'temperature': 0.0,
+            'num_predict': 4,
+            'num_ctx': 512,
+        },
+    }
+    if OLLAMA_VISION_NUM_THREAD > 0:
+        payload['options']['num_thread'] = OLLAMA_VISION_NUM_THREAD
+
+    try:
+        started = time.perf_counter()
+        response = requests.post(
+            OLLAMA_API_URL,
+            json=payload,
+            timeout=(
+                max(1, LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS),
+                max(8, LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS),
+            ),
+        )
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        if not response.ok:
+            return {
+                'ready': False,
+                'error': f"Ollama warm-up failed with HTTP {response.status_code}",
+                'elapsed_ms': elapsed_ms,
+            }
+        text = ''
+        try:
+            text = str((response.json() or {}).get('response') or '').strip()
+        except Exception:
+            text = ''
+        return {'ready': True, 'elapsed_ms': elapsed_ms, 'response_preview': text[:24]}
+    except requests.exceptions.Timeout as e:
+        return {
+            'ready': False,
+            'error': f"Ollama warm-up timed out after {LOCAL_OLLAMA_CAPTION_WARMUP_TIMEOUT_SECONDS}s: {e}",
+        }
+    except Exception as e:
+        return {'ready': False, 'error': f"Ollama warm-up failed: {e}"}
+
 def caption_image_llava(image_path, prompt=None):
     """
     Generate caption using Qwen2.5-VL via Ollama API.
@@ -1221,25 +1347,7 @@ def caption_image_llava(image_path, prompt=None):
     # Local Gemma/Ollama reacts better to a shorter, stricter grounding prompt
     # than to the longer shared cloud prompt.
     if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-        structured_prompt = """Return strict JSON only with keys caption, scene, people_count, visible_people, major_objects, ppe_visible, activity_context.
-
-Rules:
-- Use only visible evidence from the image.
-- caption: one concise descriptive paragraph with 3-4 complete narrative sentences, similar to a safety observer's visual note.
-- In caption, describe indoor/outdoor setting, visible people count, visible body region, posture, gaze direction, clothing, eyewear, held objects, and background objects when clear.
-- In caption, mention PPE only when clearly visible; if none is visible, say no PPE is clearly visible.
-- In caption, do not say the scene is safe/unsafe, typical, likely, or suggestive of a condition; describe visible facts only.
-- In caption, do not state that hazards, unusual elements, machinery, or traffic interactions are absent; only describe visible objects and PPE absence.
-- scene: short factual setting phrase such as outdoor street scene, indoor room, office area, warehouse interior, or construction area.
-- people_count must count only clearly visible people.
-- visible_people: short list, one person per item, each starting with "person" and mentioning position or clothing.
-- major_objects: specific visible objects/structures; include large vehicles when clear.
-- ppe_visible: [] when no PPE is clearly visible.
-- activity_context: list using only exact tokens restricted_area, unsafe_posture, machinery, traffic_interface, work_at_height, material_stability; [] when none are clear.
-- traffic_interface = road/street/sidewalk/lane/bus/truck/vehicle near people. machinery = heavy equipment/mobile plant only, such as excavator/crane/forklift/loader/industrial machine. unsafe_posture = awkward bending/leaning/kneeling/climbing/twisting/overreaching. restricted_area = cones/barriers/warning signs/tape/cordon.
-- Do not write bullet points, field labels, JSON keys, or activity_context tokens inside caption.
-- Do not guess jobs, hazards, phones, eyewear, gaze, PPE, or hidden objects.
-"""
+        structured_prompt = """Return JSON only with keys caption, scene, people_count, visible_people, major_objects, ppe_visible, activity_context. Caption must be 3 factual sentences from visible evidence only. Do not use markdown or safety conclusions."""
         default_prompt = """Describe only what is clearly visible in this image in one factual paragraph of 3-4 complete sentences.
 
 Requirements:
@@ -1295,11 +1403,17 @@ Requirements:
 """
     caption_prompt = str(prompt or '').strip() or default_prompt
 
+    if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER and not str(prompt or '').strip():
+        readiness = _ensure_ollama_local_caption_ready()
+        if not readiness.get('ready'):
+            _record_provider_failure('ollama', readiness.get('error') or 'Ollama local caption warm-up failed')
+            return _build_user_facing_failure_message()
+
     # Encode image to base64. In strict local mode, use a smaller JPEG so a
     # slow local VLM cannot dominate the whole report-generation window.
     try:
         if strict_local_profile and 'ollama' in VISION_PROVIDER_ORDER:
-            image_base64 = _encode_environment_validation_image(image_path)
+            image_base64 = _encode_local_caption_image(image_path)
         else:
             image_base64 = encode_image_to_base64(image_path)
     except Exception as e:
@@ -1314,7 +1428,8 @@ Requirements:
                 prompt=structured_prompt,
                 image_base64=image_base64,
                 temperature=0.05,
-                max_tokens=650
+                max_tokens=LOCAL_OLLAMA_STRUCTURED_CAPTION_MAX_TOKENS,
+                ollama_options={'num_ctx': 768}
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)

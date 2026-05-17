@@ -1525,9 +1525,23 @@ const API = {
         const ids = await this.filterStrictLocalSyncReportIds(requestedIds);
         if (!ids.length) return [];
 
+        const completedDetailIds = new Set([
+            ...(Array.isArray(detail.synced_report_ids) ? detail.synced_report_ids : []),
+            ...(Array.isArray(detail.completed_report_ids) ? detail.completed_report_ids : []),
+            ...(detail.completed === true && detail.report_id ? [detail.report_id] : [])
+        ].map((id) => String(id || '').trim()).filter(Boolean));
+        const detailSyncState = String(detail.sync_state || '').trim();
+        const detailSyncStateQueued = /queued|pending|retry/i.test(detailSyncState);
         const updateReport = (item) => {
             if (!item || !ids.includes(String(item.report_id || '').trim())) return item;
             if (!this.isStrictLocalOriginReport(item)) return item;
+            const reportId = String(item.report_id || '').trim();
+            const completedForReport = detail.completed === true
+                || completedDetailIds.has(reportId)
+                || (!detailSyncStateQueued && /^(cloud_completed|synced)$/i.test(detailSyncState));
+            const nextSyncState = completedForReport
+                ? (detailSyncState && !detailSyncStateQueued ? detailSyncState : 'cloud_completed')
+                : (detailSyncState || item.sync_state || 'cloud_sync_queued');
             return {
                 ...item,
                 source_scope: 'synced_local',
@@ -1535,7 +1549,7 @@ const API = {
                 origin: 'local_synced',
                 sync_source: detail.sync_source || item.sync_source || 'sync_local_cache',
                 source: detail.source || item.source || 'sync_local_cache',
-                sync_state: detail.sync_state || item.sync_state || 'cloud_sync_queued',
+                sync_state: nextSyncState,
                 status: item.status || 'completed',
                 updated_at: new Date().toISOString()
             };
@@ -1562,10 +1576,15 @@ const API = {
             await this.writeJsonCache(scope, cached.data.map(updateReport));
         }));
 
+        const marksCompleted = ids.some((id) => completedDetailIds.has(id))
+            || detail.completed === true
+            || (!detailSyncStateQueued && /^(cloud_completed|synced)$/i.test(detailSyncState));
         this.dispatchLocalReportSyncUpdate({
             ...detail,
             report_ids: ids,
-            queued_report_ids: detail.queued_report_ids || ids
+            queued_report_ids: detail.queued_report_ids || (marksCompleted ? [] : ids),
+            completed_report_ids: detail.completed_report_ids || (marksCompleted ? ids : []),
+            synced_report_ids: detail.synced_report_ids || (marksCompleted ? ids : [])
         });
         return ids;
     },
@@ -3065,7 +3084,7 @@ const API = {
                     source_scope: 'synced_local',
                     source_label: 'Local Synced',
                     sync_source: 'sync_local_cache',
-                    sync_state: 'cloud_sync_queued'
+                    sync_state: 'cloud_completed'
                 });
             }
             return data;
@@ -3195,7 +3214,7 @@ const API = {
                 source_scope: 'synced_local',
                 source_label: 'Local Synced',
                 sync_source: 'browser_local_draft_handoff',
-                sync_state: queuedReportIds.length ? 'cloud_generation_queued' : 'cloud_completed',
+                sync_state: 'cloud_completed',
                 queued_report_ids: queuedReportIds,
                 completed_report_ids: completedReportIds
             });

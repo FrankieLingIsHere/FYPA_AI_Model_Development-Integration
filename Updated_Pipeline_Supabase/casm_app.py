@@ -7029,6 +7029,12 @@ def api_violations():
                     metadata_violation_count = metadata.get('detection_count')
                 if not isinstance(metadata_violation_count, (int, float)):
                     metadata_violation_count = len(metadata_ppe_tags or metadata_missing_ppe)
+                metadata_source_scope = _normalize_source_scope(
+                    metadata.get('source_scope')
+                    or metadata.get('report_scope')
+                    or metadata.get('scope')
+                )
+                metadata_source_reason = str(metadata.get('source_reason') or source_reason).strip() or source_reason
                 classified_metadata_severity = _classify_violation_severity(
                     violation_types=metadata_ppe_tags,
                     detections=metadata.get('detections') if isinstance(metadata.get('detections'), list) else [],
@@ -7068,7 +7074,9 @@ def api_violations():
                     ),
                     'violation_type': metadata.get('violation_type', 'PPE Violation'),
                     'location': metadata.get('location', 'Unknown'),
-                    **_build_source_payload('local', source_reason)
+                    'origin': metadata.get('origin'),
+                    'sync_source': metadata.get('sync_source') or metadata.get('source'),
+                    **_build_source_payload(metadata_source_scope or 'local', metadata_source_reason)
                 })
             except ValueError:
                 logger.warning(f"Skipping invalid report directory: {report_id}")
@@ -7369,13 +7377,16 @@ def api_violations():
                     or existing_device_key.startswith('offline_')
                 )
 
+                local_row_scope = _normalize_source_scope(local_row.get('source_scope'))
                 if existing_scope == 'cloud':
                     existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
-                    existing.update(_build_source_payload('local', 'local_cache_row'))
-                    existing['origin'] = existing.get('origin') or 'local'
+                    existing.update(_build_source_payload(local_row_scope or 'local', 'local_cache_row'))
+                    if (local_row_scope or 'local') == 'local':
+                        existing['origin'] = existing.get('origin') or 'local'
                 continue
 
+            local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or 'local'
             formatted_violations.append({
                 'report_id': local_report_id,
                 'timestamp': local_row.get('timestamp'),
@@ -7394,7 +7405,7 @@ def api_violations():
                     ),
                 ),
                 'status': local_status,
-                'device_id': local_row.get('device_id') or 'local_cache',
+                'device_id': local_row.get('device_id') or ('local_cache' if local_row_scope == 'local' else None),
                 'error_message': local_row.get('error_message'),
                 'violation_summary': (
                     local_row.get('violation_summary')
@@ -7415,10 +7426,10 @@ def api_violations():
                 ),
                 'has_cloud_artifacts': False,
                 'has_cloud_report_artifact': False,
-                'origin': 'local',
-                'sync_source': None,
+                'origin': local_row.get('origin') or ('local' if local_row_scope == 'local' else None),
+                'sync_source': local_row.get('sync_source') or local_row.get('source'),
                 'detection_data': None,
-                **_build_source_payload('local', 'local_cache_row')
+                **_build_source_payload(local_row_scope, 'local_cache_row')
             })
 
         formatted_violations.sort(
@@ -7764,12 +7775,15 @@ def api_stats():
 
             existing = by_report.get(report_id)
             if existing is None:
+                local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or (
+                    'cloud' if (cloud_storage_authoritative and report_id in storage_artifact_ids) else 'local'
+                )
                 by_report[report_id] = {
                     'report_id': report_id,
                     'timestamp': timestamp_value,
                     'severity': 'MEDIUM',
                     'status': local_status or 'pending',
-                    'source_scope': 'cloud' if (cloud_storage_authoritative and report_id in storage_artifact_ids) else 'local',
+                    'source_scope': local_row_scope,
                 }
                 continue
 
@@ -7786,6 +7800,8 @@ def api_stats():
 
             if existing.get('source_scope') == 'cloud':
                 existing['source_scope'] = 'cloud'
+            elif not existing.get('source_scope'):
+                existing['source_scope'] = _normalize_source_scope(local_row.get('source_scope')) or 'local'
 
         stats = _build_stats_payload(list(by_report.values()))
         if isinstance(storage_index, dict):
@@ -9040,6 +9056,13 @@ def _scan_local_report_state_rows_uncached(
         metadata_violation_summary = None
         metadata_violation_type = None
         metadata_device_id = None
+        metadata_source_scope = None
+        metadata_source_label = None
+        metadata_source = None
+        metadata_sync_source = None
+        metadata_origin = None
+        metadata_sync_state = None
+        metadata_source_reason = None
         try:
             metadata_path = violation_dir / 'metadata.json'
             if metadata_path.exists():
@@ -9080,6 +9103,20 @@ def _scan_local_report_state_rows_uncached(
                         metadata_violation_type = _meta.get('violation_type')
                     if isinstance(_meta.get('device_id'), str):
                         metadata_device_id = _meta.get('device_id')
+                    if isinstance(_meta.get('source_scope'), str):
+                        metadata_source_scope = _meta.get('source_scope')
+                    if isinstance(_meta.get('source_label'), str):
+                        metadata_source_label = _meta.get('source_label')
+                    if isinstance(_meta.get('source'), str):
+                        metadata_source = _meta.get('source')
+                    if isinstance(_meta.get('sync_source'), str):
+                        metadata_sync_source = _meta.get('sync_source')
+                    if isinstance(_meta.get('origin'), str):
+                        metadata_origin = _meta.get('origin')
+                    if isinstance(_meta.get('sync_state'), str):
+                        metadata_sync_state = _meta.get('sync_state')
+                    if isinstance(_meta.get('source_reason'), str):
+                        metadata_source_reason = _meta.get('source_reason')
         except Exception as meta_err:
             logger.debug(f"Could not parse metadata.json for {report_id}: {meta_err}")
 
@@ -9099,6 +9136,13 @@ def _scan_local_report_state_rows_uncached(
             'violation_summary': metadata_violation_summary,
             'violation_type': metadata_violation_type,
             'device_id': metadata_device_id,
+            'source_scope': metadata_source_scope,
+            'source_label': metadata_source_label,
+            'source': metadata_source,
+            'sync_source': metadata_sync_source,
+            'origin': metadata_origin,
+            'sync_state': metadata_sync_state,
+            'source_reason': metadata_source_reason,
             **queue_context,
         })
 
@@ -9247,6 +9291,9 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
 
             existing = by_id.get(report_id)
             local_status = str(local_row.get('status') or '').strip().lower() or 'unknown'
+            local_row_scope = str(local_row.get('source_scope') or '').strip().lower()
+            if local_row_scope not in ('local', 'cloud', 'shared', 'synced_local'):
+                local_row_scope = 'local'
 
             if existing:
                 existing_status = str(existing.get('status') or '').strip().lower()
@@ -9269,7 +9316,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                         if current_value in (None, '', [], {}):
                             existing[detail_key] = local_value
                 if not existing.get('source_scope'):
-                    existing.update(_realtime_source_payload('local', 'local_cache_row'))
+                    existing.update(_realtime_source_payload(local_row_scope, 'local_cache_row'))
                 if local_status in ('completed', 'failed', 'skipped') and existing_status in (
                     'pending', 'queued', 'processing', 'generating', 'unknown', ''
                 ):
@@ -9306,8 +9353,11 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                 'ppe_tags': local_row.get('ppe_tags') or [],
                 'violation_summary': local_row.get('violation_summary'),
                 'violation_type': local_row.get('violation_type'),
-                'device_id': local_row.get('device_id') or 'local_cache',
-                **_realtime_source_payload('local', 'local_cache_row'),
+                'device_id': local_row.get('device_id') or ('local_cache' if local_row_scope == 'local' else None),
+                'origin': local_row.get('origin'),
+                'sync_source': local_row.get('sync_source') or local_row.get('source'),
+                'sync_state': local_row.get('sync_state'),
+                **_realtime_source_payload(local_row_scope, 'local_cache_row'),
             }
             report_rows.append(snapshot_row)
             by_id[report_id] = snapshot_row
@@ -14047,17 +14097,31 @@ def api_pending_reports():
         if status not in ('pending', 'queued', 'processing', 'generating'):
             continue
 
+        row_source_scope = _normalize_pending_source_scope(
+            row.get('source_scope') or local_artifact_scope,
+            row.get('device_id') or local_seed_device_id,
+            sync_source=row.get('sync_source') or row.get('source') or row.get('origin') or '',
+            sync_state=row.get('sync_state') or '',
+            has_cloud_artifacts=str(row.get('source_scope') or '').strip().lower() in ('cloud', 'synced_local'),
+            has_cloud_report_artifact=bool(row.get('has_report')),
+            report_id=report_id,
+        )
+        row_source_label = _source_label(row_source_scope)
         pending_by_id[report_id] = {
             'report_id': report_id,
             'timestamp': row.get('updated_at') or row.get('timestamp'),
             'status': status,
-            'device_id': local_seed_device_id,
+            'device_id': row.get('device_id') or local_seed_device_id,
             'severity': _normalize_report_severity(row.get('severity'), default='MEDIUM'),
             'has_original': bool(row.get('has_original')),
             'has_annotated': bool(row.get('has_annotated')),
             'has_report': bool(row.get('has_report')),
-            'source_scope': local_artifact_scope,
-            'source_label': _source_label(local_artifact_scope),
+            'source_scope': row_source_scope,
+            'source_label': row.get('source_label') or row_source_label,
+            'sync_source': row.get('sync_source') or '',
+            'source': row.get('source') or '',
+            'origin': row.get('origin') or '',
+            'sync_state': row.get('sync_state') or '',
             'queue_size': row.get('queue_size'),
             'queue_position': row.get('queue_position'),
             'queued': row.get('queued'),

@@ -238,12 +238,83 @@ function testMixedTagReconnectSnapshotsDoNotCollapseCards() {
   });
 }
 
+function testLocalModeMirrorSnapshotsDoNotPoisonCachedTags() {
+  const { API } = loadApiContext();
+  const cachedRows = [
+    {
+      report_id: 'cache-mirror-cloud-001',
+      timestamp: '2026-05-17T09:00:00Z',
+      status: 'completed',
+      has_report: true,
+      has_cloud_report_artifact: true,
+      report_html_key: 'violations/cache-mirror-cloud-001/report.html',
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    },
+    {
+      report_id: 'cache-mirror-synced-001',
+      timestamp: '2026-05-17T09:01:00Z',
+      status: 'completed',
+      has_report: true,
+      has_cloud_report_artifact: true,
+      report_html_key: 'violations/cache-mirror-synced-001/report.html',
+      source_scope: 'synced_local',
+      source_label: 'Local Synced',
+      origin: 'local_synced',
+      sync_source: 'sync_local_cache',
+    },
+    {
+      report_id: 'cache-mirror-shared-001',
+      timestamp: '2026-05-17T09:02:00Z',
+      status: 'completed',
+      has_report: true,
+      report_html_key: 'violations/cache-mirror-shared-001/report.html',
+      source_scope: 'shared',
+      source_label: 'Shared',
+    },
+    {
+      report_id: 'cache-mirror-local-001',
+      timestamp: '2026-05-17T09:03:00Z',
+      status: 'completed',
+      has_report: true,
+      has_local_report: true,
+      local_report_url: 'blob:local-report',
+      device_id: 'offline_local_cache',
+      source: 'offline_local_cache',
+      source_scope: 'local',
+      source_label: 'Local',
+    },
+  ];
+  const localMirrorRows = cachedRows.map((row) => ({
+    report_id: row.report_id,
+    timestamp: row.timestamp,
+    status: 'completed',
+    has_report: true,
+    has_local_report: true,
+    source_scope: 'local',
+    source_label: 'Local',
+  }));
+
+  const merged = API._mergeOptimistically(cachedRows, localMirrorRows, 20);
+  const byId = new Map(merged.map((row) => [row.report_id, row]));
+
+  assertEqual(byId.get('cache-mirror-cloud-001').source_scope, 'cloud', 'local filesystem mirror must not relabel cloud cache');
+  assertEqual(byId.get('cache-mirror-cloud-001').source_label, 'Cloud', 'cloud label after local mirror');
+  assertEqual(byId.get('cache-mirror-synced-001').source_scope, 'synced_local', 'local filesystem mirror must not relabel synced cache');
+  assertEqual(byId.get('cache-mirror-synced-001').source_label, 'Local Synced', 'synced label after local mirror');
+  assertEqual(byId.get('cache-mirror-shared-001').source_scope, 'shared', 'local filesystem mirror must not relabel shared cache');
+  assertEqual(byId.get('cache-mirror-shared-001').source_label, 'Shared', 'shared label after local mirror');
+  assertEqual(byId.get('cache-mirror-local-001').source_scope, 'local', 'real local artifact remains local');
+  assertEqual(byId.get('cache-mirror-local-001').source_label, 'Local', 'real local label after local mirror');
+}
+
 async function main() {
   const tests = [
     testRuntimeTransitionPreservesReportListCaches,
     testSyncedLocalMergeSurvivesCloudPendingSnapshot,
     testCloudCompletedLocalDraftNormalizesAsSyncedLocal,
     testMixedTagReconnectSnapshotsDoNotCollapseCards,
+    testLocalModeMirrorSnapshotsDoNotPoisonCachedTags,
   ];
   const failures = [];
   for (const testFn of tests) {

@@ -957,8 +957,11 @@ const ReportsPage = {
             const normalized = { ...item, report_id: reportId };
             normalized.status = this.normalizeStatus(normalized);
             const inferredScope = this.inferSourceScope(normalized);
+            const normalizedLabel = String(normalized.source_label || '').trim();
             normalized.source_scope = inferredScope;
-            normalized.source_label = String(normalized.source_label || '').trim() || this.sourceLabelForScope(inferredScope);
+            normalized.source_label = this.sourceLabelMatchesScope(normalizedLabel, inferredScope)
+                ? normalizedLabel
+                : this.sourceLabelForScope(inferredScope);
             byId.set(reportId, normalized);
         });
 
@@ -972,7 +975,10 @@ const ReportsPage = {
                 itemHasReport
             );
             const pendingScope = this.inferSourceScope(item);
-            const pendingLabel = String((item && item.source_label) || '').trim() || this.sourceLabelForScope(pendingScope);
+            const rawPendingLabel = String((item && item.source_label) || '').trim();
+            const pendingLabel = this.sourceLabelMatchesScope(rawPendingLabel, pendingScope)
+                ? rawPendingLabel
+                : this.sourceLabelForScope(pendingScope);
             const existing = byId.get(reportId);
 
             if (existing) {
@@ -1446,6 +1452,9 @@ const ReportsPage = {
             }
             return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
+        if (explicit === 'local' && this.hasCloudArtifactEvidence(violation) && !this.hasDurableLocalOriginEvidence(violation)) {
+            return 'cloud';
+        }
         if (explicit) return explicit;
 
         const sourceMarker = this.getSourceMarker(violation);
@@ -1608,15 +1617,33 @@ const ReportsPage = {
         return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(reportId);
     },
 
+    hasDurableLocalOriginEvidence(record = {}) {
+        if (!record || typeof record !== 'object') return false;
+        if (this.hasStrictLocalArtifactOrigin(record)) return true;
+        if (this.hasLocalOriginMarkerEvidence(record)) return true;
+        return !!(
+            record.local_report_url
+            || record.original_blob
+            || record.annotated_blob
+            || record.report_blob
+            || record.report_html_blob
+            || record.cached_report_html
+        );
+    },
+
     hasLocalOriginEvidence(record = {}) {
         const explicit = this.normalizeSourceScope(record && record.source_scope);
-        if (explicit === 'local') return true;
+        if (explicit === 'local') {
+            return !this.hasCloudArtifactEvidence(record) || this.hasDurableLocalOriginEvidence(record);
+        }
         return this.hasLocalOriginMarkerEvidence(record);
     },
 
     hasLocalScopeEvidence(record = {}) {
         const explicit = this.normalizeSourceScope(record && record.source_scope);
-        if (explicit === 'local') return true;
+        if (explicit === 'local') {
+            return !this.hasCloudArtifactEvidence(record) || this.hasDurableLocalOriginEvidence(record);
+        }
         return this.hasLocalOriginMarkerEvidence(record) && !this.hasSyncedLocalEvidence(record);
     },
 
@@ -1745,9 +1772,13 @@ const ReportsPage = {
         }
 
         const mergedForMarker = { ...sourceRecord, ...existing, ...patch };
-        const localOrigin = this.hasLocalOriginMarkerEvidence(mergedForMarker);
+        const localOrigin = this.hasDurableLocalOriginEvidence(mergedForMarker);
         if (localOrigin) {
             return normalizedCandidate;
+        }
+
+        if (cloudAnchored) {
+            return 'cloud';
         }
 
         const status = this.normalizeStatusValue(

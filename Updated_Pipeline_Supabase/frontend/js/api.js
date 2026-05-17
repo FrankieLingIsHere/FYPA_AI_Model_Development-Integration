@@ -332,6 +332,20 @@ const API = {
         );
     },
 
+    hasDurableLocalOriginEvidence(record = {}) {
+        if (!record || typeof record !== 'object') return false;
+        if (this.hasStrictLocalArtifactOrigin(record)) return true;
+        if (this.hasLocalOriginMarkers(record)) return true;
+        return !!(
+            record.local_report_url
+            || record.original_blob
+            || record.annotated_blob
+            || record.report_blob
+            || record.report_html_blob
+            || record.cached_report_html
+        );
+    },
+
     hasConfirmedSyncedLocalReport(record = {}) {
         if (!record || typeof record !== 'object') return false;
         const sourceMarkers = this.getReportSourceMarkers(record);
@@ -389,6 +403,9 @@ const API = {
         if (explicit === 'synced_local') {
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
+        }
+        if (explicit === 'local' && this.hasCloudReportArtifacts(record) && !this.hasDurableLocalOriginEvidence(record)) {
+            return 'cloud';
         }
         if (['local', 'cloud', 'shared'].includes(explicit)) {
             return explicit;
@@ -2038,6 +2055,14 @@ const API = {
         const incomingScope = this.inferReportSourceScope(incoming);
         const existingLabel = String(existing.source_label || '').trim().toLowerCase();
         const incomingLabel = String(incoming.source_label || '').trim().toLowerCase();
+        const existingLocalAnchor = this.hasDurableLocalOriginEvidence(existing);
+        const incomingLocalAnchor = this.hasDurableLocalOriginEvidence(incoming);
+        const existingProtectedScope = ['cloud', 'shared', 'synced_local'].includes(existingScope)
+            ? existingScope
+            : '';
+        const incomingProtectedScope = ['cloud', 'shared', 'synced_local'].includes(incomingScope)
+            ? incomingScope
+            : '';
         const forceCloudRuntime = !!(
             incoming.force_cloud_runtime
             || incoming.routed_via_cloud_fallback
@@ -2090,14 +2115,30 @@ const API = {
             return merged;
         }
 
-        const strictLocal = this.isStrictLocalOriginReport(existing) || this.isStrictLocalOriginReport(incoming);
+        const localAnchored = existingLocalAnchor || incomingLocalAnchor;
         if (!forceCloudRuntime && (existingScope === 'shared' || incomingScope === 'shared')) {
             merged.source_scope = 'shared';
             merged.source_label = 'Shared';
             return merged;
         }
 
-        if (!forceCloudRuntime && strictLocal && (existingScope === 'local' || incomingScope === 'local')) {
+        if (!forceCloudRuntime && incomingScope === 'local' && !incomingLocalAnchor && existingProtectedScope) {
+            merged.source_scope = existingProtectedScope;
+            merged.source_label = existingProtectedScope === 'synced_local'
+                ? 'Local Synced'
+                : existingProtectedScope === 'shared' ? 'Shared' : 'Cloud';
+            return merged;
+        }
+
+        if (!forceCloudRuntime && existingScope === 'local' && !existingLocalAnchor && incomingProtectedScope) {
+            merged.source_scope = incomingProtectedScope;
+            merged.source_label = incomingProtectedScope === 'synced_local'
+                ? 'Local Synced'
+                : incomingProtectedScope === 'shared' ? 'Shared' : 'Cloud';
+            return merged;
+        }
+
+        if (!forceCloudRuntime && localAnchored && (existingScope === 'local' || incomingScope === 'local')) {
             merged.source_scope = 'local';
             merged.source_label = 'Local';
             return merged;

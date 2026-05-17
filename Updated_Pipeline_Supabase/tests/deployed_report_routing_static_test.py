@@ -96,11 +96,18 @@ class ReportRoutingStaticTest(unittest.TestCase):
     def test_synced_local_tag_survives_cloud_mode_repair(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
+        api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
 
         self.assertIn('confirmed_synced_local = _has_confirmed_synced_local_evidence', casm_app)
         self.assertIn("source_scope_marker = 'synced_local'", casm_app)
         self.assertIn("'browser_local_draft_handoff'", casm_app)
+        self.assertIn("metadata_source_scope = _normalize_source_scope", casm_app)
+        self.assertIn("'source_scope': metadata_source_scope", casm_app)
+        self.assertIn("row_source_scope = _normalize_pending_source_scope", casm_app)
+        self.assertIn("hasDurableLocalOriginEvidence(record = {})", api_js)
+        self.assertIn("incomingScope === 'local' && !incomingLocalAnchor && existingProtectedScope", api_js)
         self.assertIn('resolveStableRuntimeSourceScope', reports_js)
+        self.assertIn('hasDurableLocalOriginEvidence(record = {})', reports_js)
         self.assertIn('hasSyncedLocalEvidence(existing)', reports_js)
         self.assertIn("status_info.get('source_scope') != 'local'", casm_app)
 

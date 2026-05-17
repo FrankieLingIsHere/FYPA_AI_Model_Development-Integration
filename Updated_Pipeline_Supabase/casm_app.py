@@ -5452,6 +5452,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     should_update_cloud_status = bool(db_manager and not force_local_artifact_pipeline)
     report_created = False
     failure_reason = None
+    caption_failure_reason = ''
     cloud_upload_skipped = False
     result_storage_keys: Dict[str, Any] = {}
     report_ready_signal_sent = False
@@ -5719,14 +5720,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     env_context = " [Warning: Scene may not be a typical work environment]"
 
                 if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
-                    failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
+                    caption_failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                     logger.warning(
-                        f" Local mode unavailable for {report_id}: {failure_reason}. "
+                        f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
                         "Continuing with detection-only fallback report generation."
                     )
                     caption = (
                         "Caption unavailable due to local-mode provider issue. "
-                        f"{failure_reason} "
+                        f"{caption_failure_reason} "
                         "Report generated using detection-only fallback analysis."
                     )
                     with open(caption_path, 'w', encoding='utf-8') as f:
@@ -5779,6 +5780,8 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_provider = None
     caption_model = None
     report_generation_started_at = time.perf_counter()
+    report_generation_provider = None
+    report_generation_model = None
     try:
         from caption_image import get_runtime_provider_diagnostics
         vision_diag = get_runtime_provider_diagnostics() or {}
@@ -5951,6 +5954,10 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             _invalidate_dashboard_snapshot_cache('stats')
 
                 if result and result.get('html'):
+                    result_nlp_analysis = result.get('nlp_analysis') if isinstance(result, dict) else {}
+                    if isinstance(result_nlp_analysis, dict):
+                        report_generation_provider = result_nlp_analysis.get('provider') or report_generation_provider
+                        report_generation_model = result_nlp_analysis.get('model') or report_generation_model
                     target_html = violation_dir / 'report.html'
                     if target_html.exists():
                         logger.info(f" Report generated: {target_html}")
@@ -6109,7 +6116,15 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'has_annotated': annotated_path.exists(),
         'has_caption': bool(caption),
         'has_report': report_created,
-        'failure_reason': failure_reason,
+        'caption': caption,
+        'caption_provider': caption_provider,
+        'caption_model': caption_model,
+        'generation_provider': report_generation_provider,
+        'generation_model': report_generation_model,
+        'caption_quality_fallback_applied': bool(caption_quality_fallback_applied),
+        'caption_quality_reason': caption_quality_reason,
+        'caption_failure_reason': caption_failure_reason,
+        'failure_reason': None if report_created else failure_reason,
         'generation_timings_seconds': dict(generation_timings_seconds),
     }
     if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
@@ -6350,6 +6365,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         caption_path = violation_dir / 'caption.txt'
         caption_quality_fallback_applied = False
         caption_quality_reason = ''
+        caption_failure_reason = ''
         logger.info(f"Caption generator status: {caption_generator is not None}")
 
         if caption_generator:
@@ -6363,14 +6379,14 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     logger.info(f"  Caption preview: {caption[:100]}...")
 
                     if isinstance(caption, str) and caption.startswith('ALERT_LOCAL_MODE_UNAVAILABLE:'):
-                        failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
+                        caption_failure_reason = caption.replace('ALERT_LOCAL_MODE_UNAVAILABLE:', '', 1).strip()
                         logger.warning(
-                            f" Local mode unavailable for {report_id}: {failure_reason}. "
+                            f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
                             "Continuing with detection-only fallback report generation."
                         )
                         caption = (
                             "Caption unavailable due to local-mode provider issue. "
-                            f"{failure_reason} "
+                            f"{caption_failure_reason} "
                             "Report generated using detection-only fallback analysis."
                         )
                         with open(caption_path, 'w', encoding='utf-8') as f:
@@ -6409,6 +6425,8 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         logger.info(f"Report generator status: {report_generator is not None}")
         caption_provider = None
         caption_model = None
+        report_generation_provider = None
+        report_generation_model = None
         try:
             from caption_image import get_runtime_provider_diagnostics
             vision_diag = get_runtime_provider_diagnostics() or {}
@@ -6470,6 +6488,10 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 logger.info(f"Report generation result: {result}")
 
                 if result and result.get('html'):
+                    result_nlp_analysis = result.get('nlp_analysis') if isinstance(result, dict) else {}
+                    if isinstance(result_nlp_analysis, dict):
+                        report_generation_provider = result_nlp_analysis.get('provider') or report_generation_provider
+                        report_generation_model = result_nlp_analysis.get('model') or report_generation_model
                     # Check if report was created in violations directory
                     target_html = violation_dir / 'report.html'
                     if target_html.exists():
@@ -6516,7 +6538,15 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'detection_count': len(detections),
             'no_hardhat_count': sum(1 for d in detections if 'no-hardhat' in d['class_name'].lower()),
             'has_caption': bool(caption),
-            'has_report': report_created
+            'has_report': report_created,
+            'caption': caption,
+            'caption_provider': caption_provider,
+            'caption_model': caption_model,
+            'generation_provider': report_generation_provider,
+            'generation_model': report_generation_model,
+            'caption_quality_fallback_applied': bool(caption_quality_fallback_applied),
+            'caption_quality_reason': caption_quality_reason,
+            'caption_failure_reason': caption_failure_reason,
         }
 
         metadata_path = violation_dir / 'metadata.json'
@@ -14683,6 +14713,9 @@ def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
                 'could not process image for captioning',
             'alert_local_mode_unavailable',
             'local mode is unavailable on this device',
+            'caption unavailable due to local-mode provider issue',
+            'detection-only safety summary',
+            'detection-only fallback analysis',
         ]
         matched_marker = next((m for m in known_markers if m in lowered), None)
         return {
@@ -15041,7 +15074,13 @@ def _load_local_traceability_sidecar(report_id: str) -> Dict[str, Any]:
                         return {}
                 with open(sidecar_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                return data if isinstance(data, dict) else {}
+                if not isinstance(data, dict):
+                        return {}
+                if not str(data.get('caption') or '').strip():
+                        caption_path = VIOLATIONS_DIR / report_id / 'caption.txt'
+                        if caption_path.exists():
+                                data['caption'] = caption_path.read_text(encoding='utf-8').strip()
+                return data
         except Exception as e:
                 logger.debug(f"Could not load traceability sidecar for {report_id}: {e}")
                 return {}
@@ -15070,6 +15109,14 @@ def _build_traceability_payload(
         nlp_integrity = detection_data.get('nlp_integrity') if isinstance(detection_data, dict) else None
         nlp_analysis = _safe_parse_json_like(violation.get('nlp_analysis'))
         generation_models = _extract_generation_model_info(detection_data, nlp_analysis)
+        caption_model_info = generation_models.get('caption_generation', {}) if isinstance(generation_models, dict) else {}
+        report_model_info = generation_models.get('report_generation', {}) if isinstance(generation_models, dict) else {}
+        generation_model_details_missing = bool(
+            not caption_model_info.get('provider')
+            or not caption_model_info.get('model')
+            or not report_model_info.get('provider')
+            or not report_model_info.get('model')
+        )
 
         detections = []
         if isinstance(detection_data, dict):
@@ -15083,10 +15130,12 @@ def _build_traceability_payload(
         sidecar: Dict[str, Any] = {}
         needs_sidecar = (
             not violation
+            or not caption
             or not detections
             or caption_validation is None
             or nlp_integrity is None
             or not generation_models
+            or generation_model_details_missing
         )
         if needs_sidecar:
             sidecar = _load_local_traceability_sidecar(report_id)
@@ -15100,15 +15149,27 @@ def _build_traceability_payload(
                     caption_validation = sidecar.get('caption_validation')
                 if nlp_integrity is None:
                     nlp_integrity = sidecar.get('nlp_integrity')
-                if not generation_models:
-                    sidecar_models = {
-                        'generation_provider': sidecar.get('generation_provider'),
-                        'generation_model': sidecar.get('generation_model'),
-                        'caption_provider': sidecar.get('caption_provider'),
-                        'caption_model': sidecar.get('caption_model'),
-                    }
-                    if any(sidecar_models.values()):
-                        generation_models = {k: v for k, v in sidecar_models.items() if v}
+                sidecar_caption_provider = sidecar.get('caption_provider')
+                sidecar_caption_model = sidecar.get('caption_model')
+                sidecar_report_provider = sidecar.get('generation_provider') or sidecar.get('report_provider')
+                sidecar_report_model = sidecar.get('generation_model') or sidecar.get('report_model')
+                if any((sidecar_caption_provider, sidecar_caption_model, sidecar_report_provider, sidecar_report_model)):
+                    if not isinstance(generation_models, dict) or not generation_models:
+                        generation_models = _extract_generation_model_info({}, {})
+                    caption_entry = generation_models.setdefault('caption_generation', {})
+                    report_entry = generation_models.setdefault('report_generation', {})
+                    if sidecar_caption_provider and not caption_entry.get('provider'):
+                        caption_entry['provider'] = sidecar_caption_provider
+                        caption_entry['source'] = 'local_sidecar.caption_provider'
+                    if sidecar_caption_model and not caption_entry.get('model'):
+                        caption_entry['model'] = sidecar_caption_model
+                        caption_entry['source'] = caption_entry.get('source') or 'local_sidecar.caption_model'
+                    if sidecar_report_provider and not report_entry.get('provider'):
+                        report_entry['provider'] = sidecar_report_provider
+                        report_entry['source'] = 'local_sidecar.generation_provider'
+                    if sidecar_report_model and not report_entry.get('model'):
+                        report_entry['model'] = sidecar_report_model
+                        report_entry['source'] = report_entry.get('source') or 'local_sidecar.generation_model'
 
         def _normalized_label(item: Dict[str, Any]) -> str:
             label = item.get('class_name') if isinstance(item, dict) else None

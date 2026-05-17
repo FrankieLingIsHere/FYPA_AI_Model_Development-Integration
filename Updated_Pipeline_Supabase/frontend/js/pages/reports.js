@@ -263,13 +263,22 @@ const ReportsPage = {
     async loadReports(options = {}) {
         const noCache = !!options.noCache;
         const targetedReportId = String(options.targetedReportId || '').trim();
+        const previousById = new Map(
+            this.violations
+                .map((item) => [String((item && item.report_id) || '').trim(), item])
+                .filter(([reportId]) => !!reportId)
+        );
 
         const [violations, pendingReports] = await Promise.all([
             API.getViolations({ noCache }),
             API.getPendingReports({ noCache })
         ]);
 
-        this.violations = this.mergePendingReports(violations, pendingReports);
+        this.violations = this.mergePendingReports(violations, pendingReports)
+            .map((item) => this.reconcileReportRuntimeContinuity(
+                item,
+                previousById.get(String((item && item.report_id) || '').trim())
+            ));
         if (targetedReportId) {
             await this.hydrateFocusedReport(targetedReportId, { noCache: true });
         }
@@ -331,10 +340,10 @@ const ReportsPage = {
                 if (!data || typeof data !== 'object') return;
 
                 const currentStatus = this.normalizeStatus(violation);
-                const nextStatus = this.normalizeStatusValue(data.status, !!data.has_report);
-                const nextHasReport = !!data.has_report;
+                const nextHasReport = this.hasReadableReportEvidence(data) || this.hasReadableReportEvidence(violation);
+                const nextStatus = this.normalizeStatusValue(data.status, nextHasReport);
                 const statusChanged = nextStatus && nextStatus !== currentStatus;
-                const reportReadyChanged = nextHasReport !== !!violation.has_report;
+                const reportReadyChanged = nextHasReport !== this.hasReadableReportEvidence(violation);
                 if (!statusChanged && !reportReadyChanged) return;
 
                 const updated = this.upsertReportRuntimeState(reportId, {
@@ -346,7 +355,7 @@ const ReportsPage = {
                 }, violation);
                 changed = true;
 
-                if (updated && nextStatus === 'completed' && nextHasReport) {
+                if (updated && this.isReportReady(updated)) {
                     this.prefetchReport(reportId, updated).catch(() => {});
                 }
             }));
@@ -361,17 +370,18 @@ const ReportsPage = {
         if (!reportId) return;
 
         const existing = this.violations.find((v) => String((v && v.report_id) || '').trim() === reportId) || null;
-        const status = this.normalizeStatusValue(detail.status || (existing && existing.status), !!detail.has_report);
+        const hasReport = this.hasReadableReportEvidence(detail) || this.hasReadableReportEvidence(existing);
+        const status = this.normalizeStatusValue(detail.status || (existing && existing.status), hasReport);
         const sourceScope = this.inferSourceScope(detail) || (existing && existing.source_scope) || 'cloud';
         const updated = this.upsertReportRuntimeState(reportId, {
             ...detail,
             status,
-            has_report: !!detail.has_report,
+            has_report: hasReport,
             source_scope: sourceScope,
             source_label: String(detail.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
         }, existing || detail);
 
-        if (updated && status === 'completed' && updated.has_report) {
+        if (updated && this.isReportReady(updated)) {
             this.prefetchReport(reportId, updated).catch(() => {});
         }
     },
@@ -396,10 +406,11 @@ const ReportsPage = {
             if (!reportId || seen.has(reportId)) return;
             seen.add(reportId);
             const sourceScope = this.inferSourceScope(row) || 'cloud';
+            const rowHasReport = this.hasReadableReportEvidence(row);
             this.upsertReportRuntimeState(reportId, {
                 ...row,
-                status: this.normalizeStatusValue(row.status || 'pending', !!row.has_report),
-                has_report: !!row.has_report,
+                status: this.normalizeStatusValue(row.status || 'pending', rowHasReport),
+                has_report: rowHasReport,
                 source_scope: sourceScope,
                 source_label: String(row.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
             }, row);
@@ -423,7 +434,7 @@ const ReportsPage = {
                 const reportId = String((violation && violation.report_id) || '').trim();
                 if (!queuedSet.has(reportId)) return violation;
                 const sourceScope = this.inferSourceScope(violation);
-                if (sourceScope === 'cloud' || !this.hasLocalOriginEvidence(violation)) {
+                if (sourceScope === 'cloud' || sourceScope === 'synced_local' || !this.hasLocalOriginEvidence(violation)) {
                     return violation;
                 }
                 queuedChanged = true;
@@ -473,12 +484,18 @@ const ReportsPage = {
             changedReportIds.push(reportId);
             return {
                 ...violation,
+                status: this.normalizeStatusValue(violation.status, true),
+                has_report: true,
+                has_cloud_report_artifact: true,
+                has_cloud_artifacts: true,
                 source_scope: 'synced_local',
                 source_label: 'Local Synced',
                 origin: 'local_synced',
                 sync_source: detail.sync_source || violation.sync_source || 'sync_local_cache',
                 source: detail.source || violation.source || 'sync_local_cache',
-                sync_state: detail.sync_state || violation.sync_state || 'cloud_sync_queued',
+                sync_state: detail.sync_state || 'cloud_completed',
+                display_status: '',
+                display_status_until: 0,
                 updated_at: new Date().toISOString()
             };
         });
@@ -534,11 +551,12 @@ const ReportsPage = {
                 return;
             }
 
+            const statusDataHasReport = this.hasReadableReportEvidence(statusData);
             const normalizedStatus = this.normalizeStatusValue(
                 statusData.status,
-                !!statusData.has_report
+                statusDataHasReport
             );
-            if (normalizedStatus === 'unknown' && !statusData.has_report) {
+            if (normalizedStatus === 'unknown' && !statusDataHasReport) {
                 return;
             }
 
@@ -556,7 +574,10 @@ const ReportsPage = {
                 violation_summary: statusData.violation_summary || 'Violation queued for report generation',
                 has_original: !!statusData.has_original,
                 has_annotated: !!statusData.has_annotated,
-                has_report: !!statusData.has_report,
+                has_report: statusDataHasReport,
+                has_cloud_report_artifact: !!statusData.has_cloud_report_artifact,
+                has_cloud_artifacts: !!statusData.has_cloud_artifacts,
+                has_local_report: !!statusData.has_local_report,
                 source_scope: sourceScope,
                 source_label: String(statusData.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
             };
@@ -625,6 +646,65 @@ const ReportsPage = {
         return normalized === 'pending' || normalized === 'generating';
     },
 
+    hasReadableReportEvidence(record = {}) {
+        if (!record || typeof record !== 'object') return false;
+        return !!(
+            record.has_report
+            || record.has_local_report
+            || record.has_report_html
+            || record.has_report_html_key
+            || record.has_cloud_report_artifact
+            || record.has_cloud_report
+            || record.report_html_key
+            || record.report_pdf_key
+            || record.cloud_report_url
+            || record.report_url
+            || record.local_report_url
+        );
+    },
+
+    isDowngradeRuntimeStatus(status) {
+        const normalized = this.normalizeStatusValue(status, false);
+        return normalized === 'pending' || normalized === 'generating';
+    },
+
+    reconcileReportRuntimeContinuity(record = {}, previous = {}) {
+        if (!record || typeof record !== 'object' || !previous || typeof previous !== 'object') {
+            return record;
+        }
+
+        const previousReady = this.isReportReady(previous) || this.hasReadableReportEvidence(previous);
+        if (!previousReady) return record;
+
+        const nextStatus = this.normalizeStatus(record);
+        if (nextStatus === 'failed' || nextStatus === 'skipped') {
+            return record;
+        }
+
+        const reconciled = {
+            ...previous,
+            ...record,
+            has_report: true,
+            status: nextStatus === 'partial' ? 'partial' : 'completed',
+            display_status: '',
+            display_status_until: 0,
+            report_html_key: record.report_html_key || previous.report_html_key,
+            report_pdf_key: record.report_pdf_key || previous.report_pdf_key,
+            cloud_report_url: record.cloud_report_url || previous.cloud_report_url,
+            report_url: record.report_url || previous.report_url,
+            local_report_url: record.local_report_url || previous.local_report_url,
+            has_cloud_report_artifact: !!(record.has_cloud_report_artifact || previous.has_cloud_report_artifact),
+            has_cloud_artifacts: !!(record.has_cloud_artifacts || previous.has_cloud_artifacts),
+            has_local_report: !!(record.has_local_report || previous.has_local_report)
+        };
+
+        if (!record.sync_state && previous.sync_state) {
+            reconciled.sync_state = previous.sync_state;
+        }
+
+        return reconciled;
+    },
+
     encodeInlineReportPayload(violation) {
         return JSON.stringify(violation || {})
             .replace(/&/g, '&amp;')
@@ -662,23 +742,43 @@ const ReportsPage = {
         const statusSequence = this.normalizeStatusSequence(
             patch.status_sequence || sourceRecord.status_sequence || existing.status_sequence || []
         );
+        const existingHasReadableReport = this.hasReadableReportEvidence(existing);
+        const sourceHasReadableReport = this.hasReadableReportEvidence(sourceRecord);
+        const patchHasReadableReport = this.hasReadableReportEvidence(patch);
+        const anyReadableReport = existingHasReadableReport || sourceHasReadableReport || patchHasReadableReport;
         const patchHasReport = Object.prototype.hasOwnProperty.call(patch, 'has_report')
-            ? !!patch.has_report
-            : !!(existing.has_report || sourceRecord.has_report);
-        const nextStatus = this.normalizeStatusValue(
+            ? (!!patch.has_report || patchHasReadableReport)
+            : anyReadableReport;
+        let nextStatus = this.normalizeStatusValue(
             patch.status || existing.status || sourceRecord.status || 'pending',
             patchHasReport
         );
+        let nextHasReport = patchHasReport;
+        const explicitTerminalFailure = nextStatus === 'failed' || nextStatus === 'skipped';
+        if (
+            existingHasReadableReport
+            && !explicitTerminalFailure
+            && !patch.force_status_downgrade
+            && (this.isDowngradeRuntimeStatus(nextStatus) || nextStatus === 'completed' || nextStatus === 'unknown')
+        ) {
+            nextStatus = 'completed';
+            nextHasReport = true;
+        }
         const existingStatus = this.normalizeStatus(existing);
         const nowMs = Date.now();
         let displayStatus = existing.display_status;
         let displayStatusUntil = Number(existing.display_status_until || 0);
         const fastCompletedAfterGenerating = !!(
             nextStatus === 'completed'
+            && !existingHasReadableReport
             && statusSequence.includes('generating')
             && existingStatus !== 'generating'
             && (!displayStatusUntil || displayStatusUntil < nowMs)
         );
+        if (existingHasReadableReport && !explicitTerminalFailure) {
+            displayStatus = '';
+            displayStatusUntil = 0;
+        }
         if (fastCompletedAfterGenerating) {
             displayStatus = 'generating';
             displayStatusUntil = nowMs + Math.max(300, Number(this.modalRuntime.minGeneratingDisplayMs || 650));
@@ -706,7 +806,32 @@ const ReportsPage = {
             timestamp: patch.timestamp || existing.timestamp || sourceRecord.timestamp || nowIso,
             status: nextStatus,
             status_sequence: statusSequence,
-            has_report: patchHasReport,
+            has_report: nextHasReport,
+            has_local_report: !!(patch.has_local_report || existing.has_local_report || sourceRecord.has_local_report),
+            has_cloud_report_artifact: !!(
+                patch.has_cloud_report_artifact
+                || existing.has_cloud_report_artifact
+                || sourceRecord.has_cloud_report_artifact
+                || patch.report_html_key
+                || patch.report_pdf_key
+                || existing.report_html_key
+                || existing.report_pdf_key
+                || sourceRecord.report_html_key
+                || sourceRecord.report_pdf_key
+            ),
+            has_cloud_artifacts: !!(
+                patch.has_cloud_artifacts
+                || existing.has_cloud_artifacts
+                || sourceRecord.has_cloud_artifacts
+                || patch.report_html_key
+                || existing.report_html_key
+                || sourceRecord.report_html_key
+            ),
+            report_html_key: patch.report_html_key || existing.report_html_key || sourceRecord.report_html_key,
+            report_pdf_key: patch.report_pdf_key || existing.report_pdf_key || sourceRecord.report_pdf_key,
+            cloud_report_url: patch.cloud_report_url || existing.cloud_report_url || sourceRecord.cloud_report_url,
+            report_url: patch.report_url || existing.report_url || sourceRecord.report_url,
+            local_report_url: patch.local_report_url || existing.local_report_url || sourceRecord.local_report_url,
             display_status: displayStatus,
             display_status_until: displayStatusUntil,
             source_scope: sourceScope,
@@ -759,9 +884,10 @@ const ReportsPage = {
             const reportId = String((item && item.report_id) || '').trim();
             if (!reportId) return;
 
+            const itemHasReport = this.hasReadableReportEvidence(item);
             const pendingStatus = this.normalizeStatusValue(
                 item && item.status,
-                !!(item && item.has_report)
+                itemHasReport
             );
             const pendingScope = this.inferSourceScope(item);
             const pendingLabel = String((item && item.source_label) || '').trim() || this.sourceLabelForScope(pendingScope);
@@ -770,7 +896,7 @@ const ReportsPage = {
             if (existing) {
                 const existingScope = this.inferSourceScope(existing);
                 const existingStatus = this.normalizeStatus(existing);
-                const existingHasReport = !!existing.has_report;
+                const existingHasReport = this.hasReadableReportEvidence(existing);
                 const pendingPriority = this.getStatusPriority(pendingStatus);
                 const existingPriority = this.getStatusPriority(existingStatus);
                 const allowRetryTransition = this.isPendingLikeStatus(pendingStatus)
@@ -795,9 +921,17 @@ const ReportsPage = {
                 }
                 existing.has_original = !!existing.has_original || !!item.has_original;
                 existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
-                existing.has_report = !!existing.has_report || !!item.has_report;
+                existing.has_report = existingHasReport || itemHasReport;
+                existing.has_cloud_report_artifact = !!existing.has_cloud_report_artifact || !!item.has_cloud_report_artifact || !!item.report_html_key || !!item.report_pdf_key;
+                existing.has_cloud_artifacts = !!existing.has_cloud_artifacts || !!item.has_cloud_artifacts;
+                existing.report_html_key = existing.report_html_key || item.report_html_key;
+                existing.report_pdf_key = existing.report_pdf_key || item.report_pdf_key;
                 if (item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState) {
-                    existing.sync_state = item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState;
+                    const nextSyncState = item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState;
+                    const queuedSyncState = /queued|pending|retry/i.test(String(nextSyncState || ''));
+                    if (!(existingScope === 'synced_local' && queuedSyncState)) {
+                        existing.sync_state = nextSyncState;
+                    }
                 }
                 if (item.sync_source || item.source) {
                     existing.sync_source = item.sync_source || existing.sync_source || '';
@@ -843,7 +977,11 @@ const ReportsPage = {
                 violation_summary: item.violation_summary || 'Violation queued for report generation',
                 has_original: !!item.has_original,
                 has_annotated: !!item.has_annotated,
-                has_report: !!item.has_report,
+                has_report: itemHasReport,
+                has_cloud_report_artifact: !!item.has_cloud_report_artifact || !!item.report_html_key || !!item.report_pdf_key,
+                has_cloud_artifacts: !!item.has_cloud_artifacts,
+                report_html_key: item.report_html_key,
+                report_pdf_key: item.report_pdf_key,
                 source_scope: pendingScope,
                 source_label: pendingLabel,
                 sync_state: item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState || '',
@@ -1187,7 +1325,7 @@ const ReportsPage = {
     },
 
     normalizeStatus(violation) {
-        const hasReport = !!(violation && violation.has_report);
+        const hasReport = this.hasReadableReportEvidence(violation);
         const raw = violation && Object.prototype.hasOwnProperty.call(violation, 'status')
             ? violation.status
             : '';
@@ -1712,7 +1850,7 @@ const ReportsPage = {
     // Check if report is ready to view
     isReportReady(violation) {
         const status = this.normalizeStatus(violation);
-        return violation.has_report &&
+        return this.hasReadableReportEvidence(violation) &&
                (status === 'completed' || status === 'partial' || status === 'unknown');
     },
 
@@ -1742,7 +1880,7 @@ const ReportsPage = {
             case 'partial':
                 return { icon: 'fa-exclamation-circle', color: 'warning', text: 'Partial' };
             default:
-                return violation.has_report
+                return this.hasReadableReportEvidence(violation)
                     ? { icon: 'fa-check-circle', color: 'success', text: 'Ready' }
                     : { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Processing' };
         }
@@ -1789,13 +1927,23 @@ const ReportsPage = {
 
     getSyncInfo(violation, sourceScope = '') {
         const syncState = this.getSyncState(violation);
-        if (!syncState) return null;
 
         const scope = this.normalizeSourceScope(sourceScope) || this.inferSourceScope(violation);
         const localRelated = scope === 'local'
             || scope === 'synced_local'
             || this.hasLocalOriginMarkerEvidence(violation);
         if (!localRelated) return null;
+
+        if (scope === 'synced_local') {
+            return {
+                color: 'success',
+                icon: 'fa-check-circle',
+                label: 'Synced',
+                title: 'Local report HTML is confirmed in cloud storage.'
+            };
+        }
+
+        if (!syncState) return null;
 
         if (
             syncState === 'cloud_completed'
@@ -1973,7 +2121,7 @@ const ReportsPage = {
             return 'Report is ready. Click Open Report to view it.';
         }
 
-        if (status === 'completed' && !violation.has_report) {
+        if (status === 'completed' && !this.hasReadableReportEvidence(violation)) {
             return 'Status says completed, but report file is not ready yet. Click Process Now to force generation.';
         }
 
@@ -2299,14 +2447,15 @@ const ReportsPage = {
     async pollReportProgress(reportId, { autoOpen = false } = {}) {
         const sourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
         const data = await API.getReportStatus(reportId, { source: sourceHint, noCache: true, timeoutMs: 6000 });
-        const status = this.normalizeStatusValue(data && data.status, !!(data && data.has_report));
+        const dataHasReport = this.hasReadableReportEvidence(data) || this.hasReadableReportEvidence(sourceHint);
+        const status = this.normalizeStatusValue(data && data.status, dataHasReport);
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
         const runtime = this.ensureModalRuntime(reportId);
         const latestSourceHint = this.upsertReportRuntimeState(reportId, {
             ...(data && typeof data === 'object' ? data : {}),
             status,
-            has_report: !!(data && data.has_report),
+            has_report: dataHasReport,
             source_scope: (data && data.source_scope) || (sourceHint && sourceHint.source_scope) || ''
         }, sourceHint) || sourceHint;
 
@@ -2323,7 +2472,7 @@ const ReportsPage = {
                         }
                     });
                 }
-            } else if (status === 'completed' && data && data.has_report) {
+            } else if (status === 'completed' && dataHasReport) {
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
                     NotificationManager.reportReady(reportId, {
                         action: {
@@ -2363,7 +2512,7 @@ const ReportsPage = {
             return false;
         }
 
-        if (status === 'completed' && data.has_report) {
+        if (status === 'completed' && dataHasReport) {
             if (
                 !runtime.sawGeneratingStage
                 && runtime.lastPollStatus

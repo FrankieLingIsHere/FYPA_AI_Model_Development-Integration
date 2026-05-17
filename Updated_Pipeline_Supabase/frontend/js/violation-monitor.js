@@ -111,10 +111,26 @@ const ViolationMonitor = {
         console.log('[ViolationMonitor] Stopped monitoring');
     },
 
+    hasReadableReportEvidence(record = {}) {
+        if (!record || typeof record !== 'object') return false;
+        return !!(
+            record.has_report
+            || record.has_local_report
+            || record.has_report_html
+            || record.has_cloud_report_artifact
+            || record.has_cloud_report
+            || record.report_html_key
+            || record.report_pdf_key
+            || record.cloud_report_url
+            || record.report_url
+            || record.local_report_url
+        );
+    },
+
     hasTrackedInFlightReports() {
         for (const item of this.knownViolations.values()) {
             if (!item || item.watchStatus !== true) continue;
-            const status = this.normalizeStatusValue(item && item.status);
+            const status = this.normalizeStatusValue(item && item.status, !!(item && item.hasReport));
             if (status === 'pending' || status === 'generating') {
                 return true;
             }
@@ -146,7 +162,7 @@ const ViolationMonitor = {
         const candidates = Array.from(this.knownViolations.entries())
             .filter(([, item]) => {
                 if (!item || item.watchStatus !== true) return false;
-                const status = this.normalizeStatusValue(item && item.status);
+                const status = this.normalizeStatusValue(item && item.status, !!(item && item.hasReport));
                 return status === 'pending' || status === 'generating';
             })
             .slice(0, 3);
@@ -165,8 +181,13 @@ const ViolationMonitor = {
                 });
                 if (!data || typeof data !== 'object') return;
 
-                const previousStatus = this.normalizeStatusValue(tracked && tracked.status);
-                const nextStatus = this.normalizeStatusValue(data.status, !!data.has_report);
+                const previousHasReport = !!(tracked && tracked.hasReport);
+                const dataHasReport = this.hasReadableReportEvidence(data) || previousHasReport;
+                const previousStatus = this.normalizeStatusValue(tracked && tracked.status, previousHasReport);
+                let nextStatus = this.normalizeStatusValue(data.status, dataHasReport);
+                if (previousHasReport && (nextStatus === 'pending' || nextStatus === 'generating')) {
+                    nextStatus = 'completed';
+                }
                 if (!nextStatus || nextStatus === previousStatus) return;
 
                 const previousTimestamp = tracked && tracked.timestamp instanceof Date
@@ -176,7 +197,7 @@ const ViolationMonitor = {
                     ...data,
                     report_id: reportId,
                     status: nextStatus,
-                    has_report: !!data.has_report,
+                    has_report: dataHasReport,
                     timestamp: previousTimestamp || new Date()
                 };
                 const shouldNotify = this.isLifecycleEventDuringSession(violation)
@@ -185,6 +206,7 @@ const ViolationMonitor = {
                 this.knownViolations.set(reportId, {
                     status: nextStatus,
                     timestamp: previousTimestamp || new Date(),
+                    hasReport: dataHasReport,
                     watchStatus: nextStatus === 'pending' || nextStatus === 'generating'
                 });
 
@@ -197,7 +219,7 @@ const ViolationMonitor = {
                 if (!shouldNotify) return;
                 if (nextStatus === 'generating' && previousStatus === 'pending') {
                     this._notifyReportGenerating(violation);
-                } else if (nextStatus === 'completed' && data.has_report) {
+                } else if (nextStatus === 'completed' && dataHasReport) {
                     this._notifyReportReady(violation);
                 } else if (nextStatus === 'failed' || nextStatus === 'partial' || nextStatus === 'skipped') {
                     this._notifyReportFailed(violation);
@@ -267,13 +289,18 @@ const ViolationMonitor = {
             const reportId = violation && violation.report_id;
             if (!reportId) continue;
 
-            const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
+            const rowHasReport = this.hasReadableReportEvidence(violation);
+            const previousData = this.knownViolations.get(reportId);
+            const previousHasReport = !!(previousData && previousData.hasReport);
+            let status = this.normalizeStatusValue(violation.status, rowHasReport || previousHasReport);
+            if (previousHasReport && (status === 'pending' || status === 'generating')) {
+                status = 'completed';
+            }
             const violationTime = this.parseEventDate(violation.updated_at)
                 || this.parseEventDate(violation.timestamp)
                 || this.getLifecycleEventDate(violation)
                 || new Date(0);
             const eventType = String((violation && violation.event_type) || '').trim().toLowerCase();
-            const previousData = this.knownViolations.get(reportId);
             const happenedDuringSession = violationTime >= this.sessionStartTime;
             const watchStatus = (status === 'pending' || status === 'generating')
                 && (happenedDuringSession || eventType === 'violation_detected' || (previousData && previousData.watchStatus === true));
@@ -296,6 +323,7 @@ const ViolationMonitor = {
                 this.knownViolations.set(reportId, {
                     status,
                     timestamp: violationTime,
+                    hasReport: rowHasReport,
                     watchStatus
                 });
                 continue;
@@ -319,6 +347,7 @@ const ViolationMonitor = {
                 this.knownViolations.set(reportId, {
                     status,
                     timestamp: previousData.timestamp,
+                    hasReport: rowHasReport || previousHasReport,
                     watchStatus: previousData.watchStatus === true && (status === 'pending' || status === 'generating')
                 });
             }
@@ -468,7 +497,8 @@ const ViolationMonitor = {
             const reportId = String((item && item.report_id) || '').trim();
             if (!reportId) return;
             const normalized = { ...item, report_id: reportId };
-            normalized.status = this.normalizeStatusValue(normalized.status, !!normalized.has_report);
+            normalized.has_report = this.hasReadableReportEvidence(normalized);
+            normalized.status = this.normalizeStatusValue(normalized.status, normalized.has_report);
             byId.set(reportId, normalized);
         });
 
@@ -476,19 +506,21 @@ const ViolationMonitor = {
             const reportId = String((item && item.report_id) || '').trim();
             if (!reportId) return;
 
-            const pendingStatus = this.normalizeStatusValue(item && item.status, !!(item && item.has_report));
+            const pendingHasReport = this.hasReadableReportEvidence(item);
+            const pendingStatus = this.normalizeStatusValue(item && item.status, pendingHasReport);
             const existing = byId.get(reportId);
             if (existing) {
-                const existingStatus = this.normalizeStatusValue(existing.status, !!existing.has_report);
+                const existingHasReport = this.hasReadableReportEvidence(existing);
+                const existingStatus = this.normalizeStatusValue(existing.status, existingHasReport);
                 const allowRetryTransition = (
                     (pendingStatus === 'pending' || pendingStatus === 'generating')
-                    && !existing.has_report
+                    && !existingHasReport
                     && (existingStatus === 'failed' || existingStatus === 'skipped')
                 );
                 if (
                     (
                         this.getStatusPriority(pendingStatus) > this.getStatusPriority(existingStatus)
-                        && !existing.has_report
+                        && !existingHasReport
                     )
                     || allowRetryTransition
                 ) {
@@ -507,7 +539,7 @@ const ViolationMonitor = {
                     || 'Violation queued for report generation';
                 existing.has_original = !!existing.has_original || !!item.has_original;
                 existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
-                existing.has_report = !!existing.has_report || !!item.has_report;
+                existing.has_report = existingHasReport || pendingHasReport;
                 return;
             }
 
@@ -523,7 +555,7 @@ const ViolationMonitor = {
                 violation_summary: item.violation_summary || 'Violation queued for report generation',
                 has_original: !!item.has_original,
                 has_annotated: !!item.has_annotated,
-                has_report: !!item.has_report,
+                has_report: pendingHasReport,
                 source_scope: item.source_scope || 'local',
                 source_label: item.source_label || 'Local'
             });
@@ -629,9 +661,10 @@ const ViolationMonitor = {
             const reportId = String((v && v.report_id) || '').trim();
             if (!reportId) continue;
             const violationTime = this.parseEventDate(v.timestamp) || this.getLifecycleEventDate(v) || new Date(0);
-            const status = this.normalizeStatusValue(v.status, !!v.has_report);
+            const hasReport = this.hasReadableReportEvidence(v);
+            const status = this.normalizeStatusValue(v.status, hasReport);
 
-            this.knownViolations.set(reportId, { status, timestamp: violationTime, watchStatus: false });
+            this.knownViolations.set(reportId, { status, timestamp: violationTime, hasReport, watchStatus: false });
         }
 
         console.log(`[ViolationMonitor] Initial load hydrated ${violations.length} violation(s); startup notifications suppressed`);
@@ -683,7 +716,8 @@ const ViolationMonitor = {
         const severity = violation.severity || 'HIGH';
         const timestamp = new Date(violation.timestamp).toLocaleTimeString();
         const reportId = violation.report_id;
-        const status = this.normalizeStatusValue(violation.status, !!violation.has_report);
+        const hasReport = this.hasReadableReportEvidence(violation);
+        const status = this.normalizeStatusValue(violation.status, hasReport);
         const violationTime = this.parseEventDate(violation.timestamp) || this.getLifecycleEventDate(violation) || new Date();
         if (reportId) {
             const previous = this.knownViolations.get(reportId);
@@ -691,6 +725,7 @@ const ViolationMonitor = {
                 this.knownViolations.set(reportId, {
                     status,
                     timestamp: violationTime,
+                    hasReport,
                     watchStatus: status === 'pending' || status === 'generating'
                 });
                 if (status === 'pending' || status === 'generating') {

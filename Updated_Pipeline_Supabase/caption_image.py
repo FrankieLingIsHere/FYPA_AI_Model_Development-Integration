@@ -84,8 +84,8 @@ LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS = max(
     _safe_int_env('LOCAL_OLLAMA_VISION_CONNECT_TIMEOUT_SECONDS', 3)
 )
 LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS = max(
-    4,
-    _safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 12)
+    12,
+    _safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)
 )
 LOCAL_OLLAMA_CAPTION_MAX_TOKENS = max(
     96,
@@ -684,7 +684,10 @@ def _call_ollama_vision(
             return ''
 
     request_overrides = dict(ollama_options or {})
-    keep_alive = request_overrides.pop('keep_alive', os.getenv('OLLAMA_VISION_KEEP_ALIVE', '0'))
+    active_profile = str(os.getenv('CASM_ROUTING_PROFILE', DEFAULT_ROUTING_PROFILE)).strip().lower()
+    local_profile = active_profile == 'local'
+    keep_alive_default = '5m' if local_profile else '0'
+    keep_alive = request_overrides.pop('keep_alive', os.getenv('OLLAMA_VISION_KEEP_ALIVE', keep_alive_default))
     options = {
         'temperature': temperature,
         'num_predict': max_tokens,
@@ -1311,7 +1314,7 @@ Requirements:
                 prompt=structured_prompt,
                 image_base64=image_base64,
                 temperature=0.05,
-                max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS
+                max_tokens=650
             )
             if structured_caption and not structured_caption.startswith('ALERT_'):
                 parsed_structured_caption = _try_parse_local_caption_json(structured_caption)

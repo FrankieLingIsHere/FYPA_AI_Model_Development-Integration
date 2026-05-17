@@ -108,7 +108,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
 
         self.assertIn("OLLAMA_VISION_READ_TIMEOUT_SECONDS = _safe_int_env('OLLAMA_VISION_READ_TIMEOUT_SECONDS', 60)", caption_image)
         self.assertIn('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS = max(', caption_image)
-        self.assertIn("_safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 12)", caption_image)
+        self.assertIn("_safe_int_env('LOCAL_OLLAMA_VISION_READ_TIMEOUT_SECONDS', 120)", caption_image)
         self.assertIn('max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS if strict_local_profile else 650', caption_image)
         self.assertIn('max_tokens=750', caption_image)
         self.assertIn('Do not answer with only one sentence.', caption_image)

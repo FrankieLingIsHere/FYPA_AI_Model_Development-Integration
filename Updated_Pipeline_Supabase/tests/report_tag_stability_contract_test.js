@@ -363,6 +363,55 @@ function testLocalSyncEventMatrix() {
   assertTag(localRecord, 'synced_local', 'Local Synced', 'local report accepts completed local sync event');
   const completedSyncInfo = ReportsPage.getSyncInfo(localRecord, 'synced_local');
   assertEqual(completedSyncInfo && completedSyncInfo.label, 'Synced', 'completed local sync badge label');
+  assertEqual(localRecord.sync_state, 'cloud_completed', 'completed local sync event clears queued sync state');
+}
+
+function testReadyReportsAreNotDowngradedByLateSnapshots() {
+  const ReportsPage = loadReportsPage();
+  const now = new Date().toISOString();
+
+  ReportsPage.violations = [{
+    report_id: 'tag-ready-stability-001',
+    timestamp: now,
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    report_html_key: 'violations/tag-ready-stability-001/report.html',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  }];
+  ReportsPage.renderReports = () => {};
+
+  const record = ReportsPage.upsertReportRuntimeState(
+    'tag-ready-stability-001',
+    {
+      status: 'generating',
+      has_report: false,
+      source_scope: 'cloud',
+      source_label: 'Cloud',
+    },
+    ReportsPage.violations[0],
+  );
+
+  assertEqual(record.status, 'completed', 'late generating snapshot must not downgrade ready status');
+  assertEqual(record.has_report, true, 'late generating snapshot must preserve readable report evidence');
+  assertEqual(ReportsPage.getStatusInfo(record).text, 'Ready', 'ready card must not flicker to generating/finalizing');
+}
+
+function testSyncedLocalBadgeWinsOverQueuedSyncState() {
+  const ReportsPage = loadReportsPage();
+  const record = {
+    report_id: 'tag-synced-queued-badge-001',
+    status: 'completed',
+    has_report: true,
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_sync_queued',
+  };
+
+  const syncInfo = ReportsPage.getSyncInfo(record, 'synced_local');
+  assertEqual(syncInfo && syncInfo.label, 'Synced', 'Local Synced report must not keep Sync queued badge');
 }
 
 function testReportStatusProbeDoesNotForceFullListRefresh() {
@@ -434,6 +483,8 @@ function main() {
     testMergeMatrix,
     testRuntimePatchMatrix,
     testLocalSyncEventMatrix,
+    testReadyReportsAreNotDowngradedByLateSnapshots,
+    testSyncedLocalBadgeWinsOverQueuedSyncState,
     testReportStatusProbeDoesNotForceFullListRefresh,
     testRealtimePayloadDoesNotForceFullListRefresh,
   ];

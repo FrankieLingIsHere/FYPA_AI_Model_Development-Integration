@@ -5698,6 +5698,8 @@ const CASMAssistant = {
         }
         window.setTimeout(settle, 80);
         window.setTimeout(settle, 220);
+        window.setTimeout(settle, 520);
+        window.setTimeout(settle, 900);
     },
 
     buildTimestampToken() {

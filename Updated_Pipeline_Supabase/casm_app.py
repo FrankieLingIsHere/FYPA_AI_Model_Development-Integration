@@ -733,6 +733,16 @@ LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = max(
     min(LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS, 300),
 )
 try:
+    PROVISION_CREDENTIAL_PROOF_TTL_SECONDS = int(
+        os.getenv('PROVISION_CREDENTIAL_PROOF_TTL_SECONDS', '300')
+    )
+except (TypeError, ValueError):
+    PROVISION_CREDENTIAL_PROOF_TTL_SECONDS = 300
+PROVISION_CREDENTIAL_PROOF_TTL_SECONDS = max(
+    60,
+    min(PROVISION_CREDENTIAL_PROOF_TTL_SECONDS, 900),
+)
+try:
     LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = int(
         os.getenv('LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS', '172800')
     )
@@ -10422,13 +10432,15 @@ def _local_mode_load_provision_state() -> Dict[str, Any]:
 
 
 def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
-    incoming = state if isinstance(state, dict) else {}
+    incoming = dict(state) if isinstance(state, dict) else {}
     existing = _local_mode_load_provision_state()
+    clear_provision_secret = bool(incoming.pop('_clear_provision_secret', False))
     merged = dict(incoming)
 
     # Status probes and self-heal paths sometimes write a partial state. Keep
     # the security-sensitive launcher linkage unless a caller explicitly
-    # supplies an empty provision_secret to clear a known-stale token.
+    # supplies _clear_provision_secret=True to clear a known-stale token. This
+    # keeps the installed BAT reusable after read-only status probes.
     for key in (
         'machine_id',
         'provision_secret',
@@ -10438,6 +10450,13 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
     ):
         if key not in merged and existing.get(key):
             merged[key] = existing.get(key)
+    if (
+        not clear_provision_secret
+        and 'provision_secret' in merged
+        and not str(merged.get('provision_secret') or '').strip()
+        and existing.get('provision_secret')
+    ):
+        merged['provision_secret'] = existing.get('provision_secret')
 
     LOCAL_MODE_PROVISION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = LOCAL_MODE_PROVISION_STATE_FILE.with_name(
@@ -10475,6 +10494,7 @@ def _mark_local_provision_secret_stale(
         'machine_id': normalized_machine_id,
         'cloud_url': normalized_cloud_url or state.get('cloud_url') or '',
         'provision_secret': '',
+        '_clear_provision_secret': True,
         'status': 'credentials_present' if _local_mode_has_supabase_credentials() else 'idle',
         'updated_at': now_iso,
         'last_provision_secret_error': 'invalid_or_stale',
@@ -11082,6 +11102,9 @@ def _send_local_mode_cloud_heartbeat_once(
                 _local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
                 if _local_admin_token:
                     refresh_headers['X-Admin-Token'] = _local_admin_token
+                refresh_headers.update(
+                    _build_provision_credential_recovery_headers(machine_id)
+                )
 
                 refresh_response = requests.post(
                     f"{cloud_url}/api/provision/request",
@@ -11947,6 +11970,9 @@ def _api_local_mode_auto_provisioning_impl():
             local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
             if local_admin_token:
                 request_headers['X-Admin-Token'] = local_admin_token
+            request_headers.update(
+                _build_provision_credential_recovery_headers(machine_id)
+            )
 
             response = requests.post(
                 f"{cloud_url}/api/provision/request",
@@ -12139,6 +12165,7 @@ def _api_local_mode_auto_provisioning_impl():
             'machine_id': machine_id,
             'cloud_url': cloud_url,
             'provision_secret': '',
+            '_clear_provision_secret': True,
             'status': 'idle',
             'updated_at': datetime.now(timezone.utc).isoformat(),
         })
@@ -18877,6 +18904,91 @@ def _hash_provision_secret(secret_value: str) -> str:
     return hashlib.sha256(secret_value.encode('utf-8')).hexdigest()
 
 
+def _provision_credential_proof_message(machine_id: str, issued_at_epoch: int) -> str:
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    return f"casm-provision-secret-recovery:v1:{normalized_machine_id}:{int(issued_at_epoch)}"
+
+
+def _build_provision_credential_recovery_headers(
+    machine_id: str,
+    *,
+    issued_at_epoch: Optional[int] = None,
+) -> Dict[str, str]:
+    """Build a short-lived proof that this host already holds cloud credentials.
+
+    The local backend never sends Supabase credentials to the cloud here. It
+    signs a timestamped machine_id claim with the service-role key that was
+    already provisioned into the local backend.
+    """
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    if not normalized_machine_id or not _local_mode_has_supabase_credentials():
+        return {}
+
+    service_key = str(os.getenv('SUPABASE_SERVICE_ROLE_KEY') or '').strip()
+    if not service_key or _local_mode_is_placeholder_secret(service_key):
+        return {}
+
+    issued_at = int(issued_at_epoch if issued_at_epoch is not None else time.time())
+    message = _provision_credential_proof_message(normalized_machine_id, issued_at)
+    signature = hmac.new(
+        service_key.encode('utf-8'),
+        message.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        'X-Provision-Credential-Proof': signature,
+        'X-Provision-Credential-Proof-Timestamp': str(issued_at),
+    }
+
+
+def _is_valid_provision_credential_recovery_proof(
+    machine_id: str,
+    data: Optional[Dict[str, Any]] = None,
+) -> bool:
+    normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+    if not normalized_machine_id:
+        return False
+
+    payload = data if isinstance(data, dict) else {}
+    proof = str(
+        request.headers.get('X-Provision-Credential-Proof')
+        or payload.get('credential_proof')
+        or ''
+    ).strip()
+    issued_at_raw = str(
+        request.headers.get('X-Provision-Credential-Proof-Timestamp')
+        or payload.get('credential_proof_timestamp')
+        or ''
+    ).strip()
+    if not proof or not issued_at_raw:
+        return False
+
+    try:
+        issued_at = int(float(issued_at_raw))
+    except (TypeError, ValueError):
+        return False
+
+    now_epoch = int(time.time())
+    if abs(now_epoch - issued_at) > int(PROVISION_CREDENTIAL_PROOF_TTL_SECONDS):
+        return False
+
+    credentials, missing_keys = _get_server_provisioning_credentials()
+    if missing_keys:
+        return False
+
+    service_key = str(credentials.get('SUPABASE_SERVICE_ROLE_KEY') or '').strip()
+    if not service_key or _local_mode_is_placeholder_secret(service_key):
+        return False
+
+    message = _provision_credential_proof_message(normalized_machine_id, issued_at)
+    expected = hmac.new(
+        service_key.encode('utf-8'),
+        message.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, proof)
+
+
 def _is_valid_provision_secret(device: Dict[str, Any], supplied_secret: str) -> bool:
     expected_hash = str(device.get('provision_secret_hash') or '').strip()
     supplied_secret = str(supplied_secret or '').strip()
@@ -19711,6 +19823,10 @@ def provision_request():
             'approved', 'provisioned', 'active', 'credentials_present'
         )
     )
+    rerequest_authenticated_by_credential_proof = bool(
+        is_rerequest_for_known_device
+        and _is_valid_provision_credential_recovery_proof(machine_id, data)
+    )
     # A previously-rejected device may always re-apply without admin intervention;
     # the admin's secret was already rotated on revocation so the device can't
     # prove prior trust with its old secret. Allow the re-application so the
@@ -19728,6 +19844,12 @@ def provision_request():
     if is_rerequest_for_known_device and presented_existing_secret:
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
             rerequest_authenticated_by_secret = True
+        elif rerequest_authenticated_by_credential_proof:
+            # The local backend still holds its provisioned cloud credentials
+            # and can prove that without exposing them. Allow it to recover a
+            # lost/rotated provision_secret so the reusable installed BAT keeps
+            # working after local state drift.
+            rerequest_authenticated_by_secret = False
         elif rerequest_authenticated_by_heartbeat:
             # The browser may hold a stale provision_secret after reinstall or
             # storage repair, while the approved local backend is still sending
@@ -19781,6 +19903,7 @@ def provision_request():
         not PROVISION_ALLOW_SELF_REGISTER
         and not rerequest_authenticated_by_secret
         and not rerequest_authenticated_by_heartbeat
+        and not rerequest_authenticated_by_credential_proof
         and not is_rejected_rerequest
         and not request_authenticated_by_admin
     ):
@@ -19873,6 +19996,8 @@ def provision_request():
     request_meta = _capture_request_metadata()
     if preserve_status and request_authenticated_by_admin and not rerequest_authenticated_by_secret:
         audit_event = 'request_existing_admin'
+    elif preserve_status and rerequest_authenticated_by_credential_proof and not rerequest_authenticated_by_secret:
+        audit_event = 'request_existing_credential_proof'
     elif preserve_status and rerequest_authenticated_by_heartbeat and not rerequest_authenticated_by_secret:
         audit_event = 'request_existing_heartbeat'
     elif preserve_status:

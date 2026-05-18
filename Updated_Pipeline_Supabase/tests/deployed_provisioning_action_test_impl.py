@@ -463,6 +463,41 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         self.assertEqual(status_response.status_code, 200)
 
+    @patch('casm_app.notify_admin')
+    def test_credential_proof_can_reissue_missing_secret_without_heartbeat(self, mock_notify_admin):
+        machine_id = 'TEST-EDGE-CREDENTIAL-PROOF-REISSUE-001'
+        first_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+        mock_notify_admin.reset_mock()
+
+        headers = casm_app._build_provision_credential_recovery_headers(machine_id)
+        self.assertTrue(headers.get('X-Provision-Credential-Proof'))
+
+        with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            reissue = self.client.post(
+                '/api/provision/request',
+                json={'machine_id': machine_id},
+                headers=headers,
+            )
+
+        self.assertEqual(reissue.status_code, 200)
+        payload = reissue.json or {}
+        refreshed_secret = str(payload.get('provision_secret') or '').strip()
+        self.assertTrue(refreshed_secret)
+        self.assertNotEqual(refreshed_secret, first_secret)
+        self.assertEqual(payload.get('status'), 'stored')
+        self.assertEqual(payload.get('provisioning_status'), 'approved')
+        self.assertEqual(payload.get('notification_reason'), 'status_preserved')
+
+        devices = _load_pending_devices()
+        self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
+        mock_notify_admin.assert_not_called()
+
+        status_response = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}&provision_secret={refreshed_secret}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+
     def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
         machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
         provision_secret = self._request_device(machine_id)
@@ -894,6 +929,28 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(str(persisted.get('provision_secret') or ''), 'secret-to-preserve-001')
         self.assertEqual(str(persisted.get('cloud_url') or ''), 'https://cloud.example.test')
         self.assertEqual(str(persisted.get('status') or ''), 'provisioned')
+
+        casm_app._local_mode_save_provision_state({
+            'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
+            'provision_secret': '',
+            'status': 'validation_required',
+        })
+        persisted_after_read_status = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(
+            str(persisted_after_read_status.get('provision_secret') or ''),
+            'secret-to-preserve-001',
+        )
+        self.assertEqual(str(persisted_after_read_status.get('status') or ''), 'validation_required')
+
+        casm_app._local_mode_save_provision_state({
+            'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
+            'provision_secret': '',
+            '_clear_provision_secret': True,
+            'status': 'credentials_present',
+        })
+        persisted_after_explicit_clear = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(str(persisted_after_explicit_clear.get('provision_secret') or ''), '')
+        self.assertNotIn('_clear_provision_secret', persisted_after_explicit_clear)
 
     def test_installer_request_recovers_from_local_state_machine_id_drift(self):
         canonical_machine_id = 'Web-897DE863'
@@ -1346,6 +1403,75 @@ class ProvisioningActionTest(unittest.TestCase):
         persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(persisted.get('status'), 'provisioned')
         self.assertTrue(str(persisted.get('provisioned_at') or '').strip())
+
+    @patch('casm_app._send_local_mode_cloud_heartbeat_once')
+    @patch('casm_app._local_mode_apply_supabase_credentials')
+    @patch('casm_app.requests.get')
+    @patch('casm_app.requests.post')
+    def test_local_auto_provision_missing_secret_uses_credential_proof(
+        self,
+        mock_post,
+        mock_get,
+        mock_apply_credentials,
+        mock_send_heartbeat,
+    ):
+        os.environ['CLOUD_URL'] = 'https://cloud.example.test'
+        machine_id = 'TEST-EDGE-AUTO-CREDENTIAL-PROOF-001'
+        LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
+        LOCAL_MODE_PROVISION_STATE_FILE.write_text(
+            json.dumps({
+                'machine_id': machine_id,
+                'cloud_url': 'https://cloud.example.test',
+                'status': 'credentials_present',
+            }),
+            encoding='utf-8',
+        )
+
+        expected_credentials = {
+            'SUPABASE_DB_URL': 'postgres://auto:test@localhost:5432/test',
+            'SUPABASE_URL': 'https://auto-example.supabase.co',
+            'SUPABASE_SERVICE_ROLE_KEY': 'auto-service-role-key',
+        }
+        mock_post.side_effect = [
+            self._mock_http_response(
+                200,
+                {
+                    'status': 'stored',
+                    'provisioning_status': 'approved',
+                    'provision_secret': 'recovered-secret-001',
+                },
+            ),
+            self._mock_http_response(
+                200,
+                {'status': 'provisioned', 'credentials': expected_credentials},
+            ),
+        ]
+        mock_get.return_value = self._mock_http_response(
+            200,
+            {'status': 'approved', 'bootstrap_token': 'bootstrap-credential-proof'},
+        )
+        mock_apply_credentials.return_value = {
+            'success': True,
+            'reinitialized': True,
+            'reinit_error': None,
+        }
+        mock_send_heartbeat.return_value = {'sent': True}
+
+        response = self.client.post('/api/local-mode/provisioning/auto', json={})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json or {}
+        self.assertEqual(payload.get('status'), 'provisioned')
+        self.assertTrue(payload.get('provisioned'))
+
+        request_call = mock_post.call_args_list[0]
+        self.assertIn('/api/provision/request', str(request_call.args[0]))
+        request_json = request_call.kwargs.get('json') or {}
+        request_headers = request_call.kwargs.get('headers') or {}
+        self.assertEqual(request_json.get('machine_id'), machine_id)
+        self.assertNotIn('current_provision_secret', request_json)
+        self.assertTrue(request_headers.get('X-Provision-Credential-Proof'))
+        self.assertTrue(request_headers.get('X-Provision-Credential-Proof-Timestamp'))
 
 
 if __name__ == '__main__':

@@ -112,6 +112,29 @@ class ViolationQueueManager:
         }
         return mapping.get(severity.upper(), ViolationPriority.MEDIUM)
     
+    def _prune_device_timestamps_locked(self, device_id: str, now: float) -> None:
+        """Drop timestamps outside the active rate-limit window. Caller must hold _lock."""
+        window_start = now - self.rate_window
+
+        if device_id not in self._device_timestamps:
+            self._device_timestamps[device_id] = []
+
+        self._device_timestamps[device_id] = [
+            ts for ts in self._device_timestamps[device_id]
+            if ts > window_start
+        ]
+
+    def is_device_rate_limited(self, device_id: str, record: bool = False) -> bool:
+        """Return True if device already used its active-window enqueue allowance."""
+        with self._lock:
+            now = time.time()
+            self._prune_device_timestamps_locked(device_id, now)
+            limited = len(self._device_timestamps[device_id]) >= self.rate_limit
+            if limited and record:
+                logger.warning(f"Rate limit exceeded for device: {device_id}")
+                self._stats['total_rate_limited'] += 1
+            return limited
+
     def _check_rate_limit(self, device_id: str) -> bool:
         """
         Check if device is within rate limit.
@@ -124,17 +147,8 @@ class ViolationQueueManager:
         """
         with self._lock:
             now = time.time()
-            window_start = now - self.rate_window
-            
-            if device_id not in self._device_timestamps:
-                self._device_timestamps[device_id] = []
-            
-            # Clean old timestamps
-            self._device_timestamps[device_id] = [
-                ts for ts in self._device_timestamps[device_id]
-                if ts > window_start
-            ]
-            
+            self._prune_device_timestamps_locked(device_id, now)
+
             # Check limit
             if len(self._device_timestamps[device_id]) >= self.rate_limit:
                 logger.warning(f"Rate limit exceeded for device: {device_id}")

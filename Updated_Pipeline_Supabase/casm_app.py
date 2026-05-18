@@ -33,7 +33,7 @@ import secrets
 from urllib.parse import urlparse, quote
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from threading import Lock, Thread
+from threading import Event, Lock, Semaphore, Thread
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import time
@@ -2189,8 +2189,19 @@ def ensure_queue_worker_running() -> bool:
 # =========================================================================
 # Semaphore to ensure only ONE Ollama call at a time (prevents VRAM exhaustion)
 # LLaVA needs ~3.6GB VRAM, multiple concurrent calls will fail
-from threading import Semaphore
 ollama_semaphore = Semaphore(1)  # Only 1 concurrent Ollama call allowed
+
+try:
+    REPORT_GENERATION_MAX_CONCURRENCY = int(os.getenv('REPORT_GENERATION_MAX_CONCURRENCY', '1') or '1')
+except (TypeError, ValueError):
+    REPORT_GENERATION_MAX_CONCURRENCY = 1
+REPORT_GENERATION_MAX_CONCURRENCY = max(1, min(REPORT_GENERATION_MAX_CONCURRENCY, 4))
+try:
+    REPORT_GENERATION_SLOT_WAIT_SECONDS = float(os.getenv('REPORT_GENERATION_SLOT_WAIT_SECONDS', '5') or '5')
+except (TypeError, ValueError):
+    REPORT_GENERATION_SLOT_WAIT_SECONDS = 5.0
+REPORT_GENERATION_SLOT_WAIT_SECONDS = max(0.0, min(REPORT_GENERATION_SLOT_WAIT_SECONDS, 30.0))
+report_generation_semaphore = Semaphore(REPORT_GENERATION_MAX_CONCURRENCY)
 
 # =========================================================================
 # ENVIRONMENT VALIDATION SETTINGS
@@ -4507,6 +4518,27 @@ def enqueue_violation(
             else ('upload_capture' if trigger_source == 'upload' else 'live_capture')
         )
 
+        if trigger_source == 'live' and violation_queue is not None:
+            try:
+                queue_stats_preflight = violation_queue.get_stats()
+                queue_size_preflight = int(queue_stats_preflight.get('current_size', 0) or 0)
+                queue_capacity_preflight = int(queue_stats_preflight.get('capacity', 0) or 0)
+                if queue_capacity_preflight > 0 and queue_size_preflight >= queue_capacity_preflight:
+                    logger.warning(
+                        "Live capture skipped before artifact write because the report queue is full "
+                        f"({queue_size_preflight}/{queue_capacity_preflight})"
+                    )
+                    return None
+                is_rate_limited = getattr(violation_queue, 'is_device_rate_limited', None)
+                if callable(is_rate_limited) and is_rate_limited(runtime_device_id, record=True):
+                    logger.warning(
+                        f"Live capture skipped before artifact write because {runtime_device_id} "
+                        "is rate-limited"
+                    )
+                    return None
+            except Exception as preflight_err:
+                logger.debug(f"Live queue preflight skipped due to error: {preflight_err}")
+
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
         report_id = timestamp.strftime('%Y%m%d_%H%M%S')
@@ -4712,14 +4744,15 @@ def enqueue_violation(
 
         if not success:
             # Most likely cause: per-device rate limit hit during a burst of live
-            # captures. The queue itself usually still has room, so retry once with
-            # a per-report unique device_id so a single busy webcam can't silently
-            # drop reports into a permanently stuck 'pending' state.
+            # captures. Uploads/reprocess actions are explicit user work, so retry
+            # those once with a per-report device_id. Live camera captures are an
+            # unbounded stream; let the device limiter apply so sustained detection
+            # floods cannot fill the report/model queue.
             queue_stats_check = violation_queue.get_stats()
             queue_size_check = int(queue_stats_check.get('current_size', 0) or 0)
             queue_capacity_check = int(queue_stats_check.get('capacity', 0) or 0)
             queue_full_check = queue_capacity_check > 0 and queue_size_check >= queue_capacity_check
-            if not queue_full_check:
+            if not queue_full_check and trigger_source != 'live':
                 fallback_device_id = (
                     f'local_capture_{report_id}_{time.time_ns()}'
                     if local_runtime_active
@@ -4734,9 +4767,14 @@ def enqueue_violation(
                 )
                 if success:
                     logger.warning(
-                        f"Live enqueue rate-limit fallback succeeded for {report_id} "
+                        f"Enqueue rate-limit fallback succeeded for {report_id} "
                         f"(original device_id={runtime_device_id}, fallback device_id={fallback_device_id})"
                     )
+            elif not queue_full_check:
+                logger.warning(
+                    f"Live enqueue rate-limit active for {report_id}; leaving capture unqueued "
+                    "to protect the report/model pipeline from continuous camera floods"
+                )
 
         if success:
             logger.info(f" Violation {report_id} added to processing queue")
@@ -4748,7 +4786,13 @@ def enqueue_violation(
         # violation never made it into the queue. Mark it as failed so the user (and
         # the stuck-report sweep) can recover via 'Reprocess Now' instead of leaving
         # it stuck at 'pending' forever.
-        logger.error("Failed to add violation to queue (capacity or sustained rate limit); marking report as failed")
+        if trigger_source == 'live':
+            logger.warning(
+                "Live capture not added to queue (capacity or sustained rate limit); "
+                "marking report as failed for retry/reprocess visibility"
+            )
+        else:
+            logger.error("Failed to add violation to queue (capacity or sustained rate limit); marking report as failed")
         if db_manager and not force_local_scope:
             try:
                 db_manager.update_detection_status(
@@ -6047,10 +6091,39 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     )
                     time.sleep(1.0)
 
+                slot_acquired = report_generation_semaphore.acquire(
+                    timeout=REPORT_GENERATION_SLOT_WAIT_SECONDS
+                )
+                if not slot_acquired:
+                    attempt_failure_reason = (
+                        "Report generator stayed busy for "
+                        f"{REPORT_GENERATION_SLOT_WAIT_SECONDS:.1f}s; skipped this model call "
+                        "to protect the pipeline from concurrent model-call flooding"
+                    )
+                    logger.warning(
+                        f" Report generation skipped for {report_id}: {attempt_failure_reason}"
+                    )
+                    result = None
+                    break
+
                 _gen_executor = _cf.ThreadPoolExecutor(
                     max_workers=1,
                     thread_name_prefix=f'report-gen-{report_id}-a{report_attempt}',
                 )
+                _slot_release_event = Event()
+                _gen_future = None
+
+                def _release_report_generation_slot(_future=None):
+                    if _slot_release_event.is_set():
+                        return
+                    _slot_release_event.set()
+                    try:
+                        report_generation_semaphore.release()
+                    except Exception as release_err:
+                        logger.warning(
+                            f"Could not release report generation slot for {report_id}: {release_err}"
+                        )
+
                 try:
                     _gen_future = _gen_executor.submit(report_generator.generate_report, report_data)
                     try:
@@ -6074,6 +6147,16 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         )
                         result = None
                 finally:
+                    if _gen_future is not None:
+                        if _gen_future.done():
+                            _release_report_generation_slot(_gen_future)
+                        else:
+                            # Keep the slot held until the abandoned provider call actually
+                            # returns. This prevents timeout storms from launching an
+                            # unbounded number of model calls under live-camera floods.
+                            _gen_future.add_done_callback(_release_report_generation_slot)
+                    else:
+                        _release_report_generation_slot()
                     # Don't block the queue worker waiting for the leaked thread to finish.
                     _gen_executor.shutdown(wait=False)
 

@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import os
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Semaphore
 
 # Default model path used in the project
 DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt')
@@ -40,6 +40,12 @@ _cached_model_path = None
 _cached_yolo_class = None
 _cached_model_lock = Lock()
 _cached_model_warm_paths = set()
+try:
+    _YOLO_PREDICT_MAX_CONCURRENCY = int(os.getenv('YOLO_PREDICT_MAX_CONCURRENCY', '1') or '1')
+except (TypeError, ValueError):
+    _YOLO_PREDICT_MAX_CONCURRENCY = 1
+_YOLO_PREDICT_MAX_CONCURRENCY = max(1, min(_YOLO_PREDICT_MAX_CONCURRENCY, 4))
+_yolo_predict_semaphore = Semaphore(_YOLO_PREDICT_MAX_CONCURRENCY)
 
 
 def _get_yolo_class():
@@ -199,7 +205,11 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
     # perform prediction with half=False to avoid dtype mismatch
     # Note: Default conf=0.25 reduces false positives (especially hardhat/hair confusion)
     # Can be overridden by caller if needed, but 0.25 is recommended for PPE detection
-    results = model.predict(img, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
+    _yolo_predict_semaphore.acquire()
+    try:
+        results = model.predict(img, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
+    finally:
+        _yolo_predict_semaphore.release()
     detections = []
     annotated = img.copy()
 

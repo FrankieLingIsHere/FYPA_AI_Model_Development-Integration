@@ -619,7 +619,19 @@ function cloudHeartbeatNeedsFollowup(state = provisioningStatusState) {
     const heartbeat = state && state.cloudHeartbeat && typeof state.cloudHeartbeat === 'object'
         ? state.cloudHeartbeat
         : {};
-    return !heartbeat.available || !heartbeat.isRecent;
+    const status = normalizeProvisioningStatus((state && state.status) || '', false);
+    const provisionStatus = normalizeProvisioningStatus((heartbeat && heartbeat.provisionStatus) || '', false);
+    const shouldExpectReadyHeartbeat = (
+        status === 'approved'
+        || status === 'provisioned'
+        || status === 'active'
+        || provisionStatus === 'approved'
+        || provisionStatus === 'provisioned'
+        || provisionStatus === 'active'
+    );
+    return !heartbeat.available
+        || !heartbeat.isRecent
+        || (shouldExpectReadyHeartbeat && !heartbeat.localModePossible);
 }
 
 function stopProvisioningHeartbeatRefreshBurst() {

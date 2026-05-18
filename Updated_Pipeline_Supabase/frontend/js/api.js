@@ -1899,6 +1899,13 @@ const API = {
         this.localDraftObjectUrls.delete(rid);
     },
 
+    scheduleLocalDraftObjectUrlRevoke(reportId, delayMs = 60000) {
+        const rid = String(reportId || '').trim();
+        if (!rid || !this.localDraftObjectUrls.has(rid)) return;
+        const timeoutMs = Math.max(5000, Math.min(Number(delayMs) || 60000, 180000));
+        setTimeout(() => this.revokeLocalDraftObjectUrl(rid), timeoutMs);
+    },
+
     attachLocalDraftImageUrls(drafts = []) {
         return drafts.map((draft) => {
             if (!draft || !draft.report_id) return draft;
@@ -1952,7 +1959,7 @@ const API = {
                 )
             );
             if (synced) {
-                this.revokeLocalDraftObjectUrl(draft.report_id);
+                this.scheduleLocalDraftObjectUrlRevoke(draft.report_id);
                 continue;
             }
             retained.push(draft);
@@ -2111,6 +2118,20 @@ const API = {
         ['has_original', 'has_annotated', 'has_report', 'has_local_artifacts', 'has_local_report'].forEach((key) => {
             if (existing[key] === true || incoming[key] === true) {
                 merged[key] = true;
+            }
+        });
+        [
+            'original_image_key',
+            'annotated_image_key',
+            'report_html_key',
+            'report_pdf_key',
+            'local_image_url',
+            'local_report_url',
+            'cloud_image_url',
+            'cloud_report_url'
+        ].forEach((key) => {
+            if ((merged[key] === undefined || merged[key] === null || merged[key] === '') && existing[key]) {
+                merged[key] = existing[key];
             }
         });
 

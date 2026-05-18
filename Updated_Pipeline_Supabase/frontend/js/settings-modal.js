@@ -997,7 +997,19 @@ const GlobalSettingsModal = {
     heartbeatNeedsRemoteRefresh() {
         if (!this.isLikelyRemoteBackend()) return false;
         const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
-        return !heartbeat.available || !heartbeat.isRecent;
+        const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
+        const provisionStatus = this.normalizeLocalProvisionStatus(heartbeat.provisionStatus || 'idle');
+        const shouldExpectReadyHeartbeat = (
+            status === 'approved'
+            || status === 'provisioned'
+            || status === 'active'
+            || provisionStatus === 'approved'
+            || provisionStatus === 'provisioned'
+            || provisionStatus === 'active'
+        );
+        return !heartbeat.available
+            || !heartbeat.isRecent
+            || (shouldExpectReadyHeartbeat && !heartbeat.localModePossible);
     },
 
     ensureHeartbeatRefreshPolling() {

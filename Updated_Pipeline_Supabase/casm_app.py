@@ -12337,6 +12337,7 @@ def api_local_mode_heartbeat():
         return jsonify({'success': False, 'error': 'Invalid provision_secret'}), 401
 
     diagnostics = payload.get('diagnostics') if isinstance(payload.get('diagnostics'), dict) else {}
+    diagnostics_present = bool(diagnostics)
     heartbeat_provision_status = _normalize_heartbeat_provision_status(
         payload.get('provision_status')
         or diagnostics.get('provision_status')
@@ -12348,13 +12349,16 @@ def api_local_mode_heartbeat():
         'last_seen_at': datetime.now(timezone.utc).isoformat(),
         'source': str(payload.get('source') or '').strip() or 'local-backend-worker',
         'provision_status': heartbeat_provision_status,
-        'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
-        'ollama_installed': bool(diagnostics.get('ollama_installed')),
-        'ollama_running': bool(diagnostics.get('ollama_running')),
-        'model_available': bool(diagnostics.get('model_available')),
-        'ollama_model': str(diagnostics.get('ollama_model') or '').strip(),
-        'error': str(diagnostics.get('error') or '').strip(),
     }
+    if diagnostics_present:
+        merged_record.update({
+            'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
+            'ollama_installed': bool(diagnostics.get('ollama_installed')),
+            'ollama_running': bool(diagnostics.get('ollama_running')),
+            'model_available': bool(diagnostics.get('model_available')),
+            'ollama_model': str(diagnostics.get('ollama_model') or '').strip(),
+            'error': str(diagnostics.get('error') or '').strip(),
+        })
 
     _upsert_local_mode_heartbeat(resolved_machine_id, merged_record)
 
@@ -18006,6 +18010,9 @@ def _upsert_local_mode_heartbeat(machine_id: str, record: Dict[str, Any]) -> Dic
 
     with LOCAL_MODE_HEARTBEAT_LOCK:
         records = _load_local_mode_heartbeats_from_file()
+        existing = records.get(normalized_machine_id)
+        if isinstance(existing, dict):
+            record = {**existing, **(record or {})}
         records[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
             normalized_machine_id,
             record,

@@ -253,6 +253,46 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
         self.assertTrue(rerequest_payload.get('active'))
 
+    def test_lean_heartbeat_preserves_previous_readiness_diagnostics(self):
+        machine_id = 'TEST-EDGE-LEAN-HEARTBEAT-001'
+        provision_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        ready_heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+                'ollama_model': 'gemma3:4b',
+            },
+        })
+        self.assertEqual(ready_heartbeat.status_code, 200)
+
+        lean_heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': provision_secret,
+            'provision_status': 'provisioned',
+            'source': 'local-backend-worker',
+        })
+        self.assertEqual(lean_heartbeat.status_code, 200)
+
+        status_response = self.client.get(
+            f'/api/local-mode/provisioning/status?machine_id={machine_id}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+        payload = status_response.json or {}
+        heartbeat = payload.get('cloud_local_heartbeat') or {}
+        self.assertTrue(heartbeat.get('available'))
+        self.assertTrue(heartbeat.get('is_recent'))
+        self.assertTrue(heartbeat.get('local_mode_possible'))
+        self.assertTrue(heartbeat.get('ollama_running'))
+        self.assertTrue(heartbeat.get('model_available'))
+        self.assertEqual(payload.get('status'), 'active')
+
     def test_cloud_heartbeat_visible_without_approving_wrong_browser_machine(self):
         host_machine_id = 'TEST-EDGE-HOST-HEARTBEAT-001'
         browser_machine_id = 'TEST-WEB-BROWSER-HEARTBEAT-001'

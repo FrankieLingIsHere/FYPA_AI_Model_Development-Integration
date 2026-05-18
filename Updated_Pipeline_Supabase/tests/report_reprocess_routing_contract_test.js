@@ -666,6 +666,41 @@ async function testCompletedLocalSyncCoercesQueuedState() {
   assert(syncEvent.detail.completed_report_ids.includes(reportId), 'completed local sync event should include completed id');
 }
 
+function testSyncedLocalMergeKeepsLocalThumbnailBridge() {
+  const context = loadApiContext(async () => createResponse(true, 200, {}));
+  const existingLocal = {
+    report_id: 'offline-local-sync-thumbnail-001',
+    status: 'completed',
+    has_report: true,
+    has_original: true,
+    has_annotated: true,
+    local_image_url: 'blob:local-preview',
+    source_scope: 'local',
+    source_label: 'Local',
+    source: 'offline_local_cache',
+    device_id: 'offline_local_cache',
+  };
+  const syncedPatch = {
+    report_id: 'offline-local-sync-thumbnail-001',
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    report_html_key: 'violations/offline-local-sync-thumbnail-001/report.html',
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    sync_source: 'sync_local_cache',
+    sync_state: 'cloud_completed',
+    local_image_url: null,
+  };
+
+  const merged = context.API.mergeOptimisticReportRecord(existingLocal, syncedPatch);
+  assertEqual(merged.source_scope, 'synced_local', 'completed sync patch should mark local row synced');
+  assertEqual(merged.source_label, 'Local Synced', 'completed sync patch label');
+  assertEqual(merged.local_image_url, 'blob:local-preview', 'local thumbnail bridge survives sync merge');
+  assertEqual(merged.has_original, true, 'original thumbnail evidence survives sync merge');
+  assertEqual(merged.has_annotated, true, 'annotated thumbnail evidence survives sync merge');
+}
+
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
@@ -680,6 +715,7 @@ async function main() {
     testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride,
     testCloudReportRejectsStaleLocalCachedHtml,
     testCompletedLocalSyncCoercesQueuedState,
+    testSyncedLocalMergeKeepsLocalThumbnailBridge,
   ];
   const failures = [];
   for (const testFn of tests) {

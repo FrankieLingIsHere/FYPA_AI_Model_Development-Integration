@@ -5696,6 +5696,8 @@ const CASMAssistant = {
         if (typeof window.requestAnimationFrame === 'function') {
             window.requestAnimationFrame(settle);
         }
+        window.setTimeout(settle, 80);
+        window.setTimeout(settle, 220);
     },
 
     buildTimestampToken() {

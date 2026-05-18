@@ -369,6 +369,16 @@ def test_assistant_revisited_report_controls_append_at_conversation_bottom():
         )
         last_text = page.evaluate("() => window.CASMAssistant.getActiveSession().messages.at(-1)?.text || ''")
         assert "Guided reports" in last_text
+        page.wait_for_timeout(300)
+        distance_from_bottom = page.evaluate(
+            """
+            () => {
+                const messages = document.querySelector('#assistantMessages');
+                return messages ? Math.abs(messages.scrollHeight - messages.clientHeight - messages.scrollTop) : 9999;
+            }
+            """
+        )
+        assert distance_from_bottom <= 4
         browser.close()
 
 

@@ -686,6 +686,16 @@ LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = max(
     min(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS, 30),
 )
 try:
+    LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = int(
+        os.getenv('LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS', '30')
+    )
+except (TypeError, ValueError):
+    LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = 30
+LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = max(
+    12,
+    min(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS, 60),
+)
+try:
     LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS', '2')
     )
@@ -11214,7 +11224,7 @@ def _send_local_mode_cloud_heartbeat_once(
                     f"{cloud_url}/api/provision/request",
                     json=refresh_body_payload,
                     headers=refresh_headers,
-                    timeout=12,
+                    timeout=max(12, int(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
                 )
                 refresh_body = refresh_response.json() if refresh_response.content else {}
                 refreshed_secret = str((refresh_body or {}).get('provision_secret') or '').strip()
@@ -11245,6 +11255,25 @@ def _send_local_mode_cloud_heartbeat_once(
                     )
                     retry_body = retry_response.json() if retry_response.content else {}
                     if retry_response.ok:
+                        retry_heartbeat_summary = (
+                            dict(retry_body.get('heartbeat') or {})
+                            if isinstance(retry_body, dict) and isinstance(retry_body.get('heartbeat'), dict)
+                            else {}
+                        )
+                        try:
+                            _upsert_local_mode_heartbeat(
+                                machine_id,
+                                retry_heartbeat_summary or {
+                                    'machine_id': machine_id,
+                                    'last_seen_at': datetime.now(timezone.utc).isoformat(),
+                                    'source': str(retry_payload.get('source') or '').strip() or 'local-backend-worker',
+                                    'provision_status': provision_status,
+                                },
+                            )
+                        except Exception as mirror_err:
+                            logger.debug(
+                                f"Unable to mirror retried cloud heartbeat locally for {machine_id}: {mirror_err}"
+                            )
                         logger.info(
                             f"Recovered stale provision_secret and retried local heartbeat for {machine_id}"
                         )
@@ -11253,6 +11282,7 @@ def _send_local_mode_cloud_heartbeat_once(
                             'status_code': int(retry_response.status_code),
                             'machine_id': machine_id,
                             'provision_status': provision_status,
+                            'cloud_local_heartbeat': retry_heartbeat_summary,
                             'authoritative_fetched': not skip_authoritative_fetch,
                         }
 
@@ -11284,11 +11314,37 @@ def _send_local_mode_cloud_heartbeat_once(
             'error': response_error,
         }
 
+    cloud_heartbeat_summary = {}
+    if isinstance(body, dict) and isinstance(body.get('heartbeat'), dict):
+        cloud_heartbeat_summary = dict(body.get('heartbeat') or {})
+
+    local_mirror_record = cloud_heartbeat_summary or {
+        'machine_id': machine_id,
+        'last_seen_at': datetime.now(timezone.utc).isoformat(),
+        'source': str(heartbeat_payload.get('source') or '').strip() or 'local-backend-worker',
+        'provision_status': provision_status,
+    }
+    if not cloud_heartbeat_summary and isinstance(heartbeat_payload.get('diagnostics'), dict):
+        payload_diagnostics = heartbeat_payload.get('diagnostics') or {}
+        local_mirror_record.update({
+            'local_mode_possible': bool(payload_diagnostics.get('local_mode_possible')),
+            'ollama_installed': bool(payload_diagnostics.get('ollama_installed')),
+            'ollama_running': bool(payload_diagnostics.get('ollama_running')),
+            'model_available': bool(payload_diagnostics.get('model_available')),
+            'ollama_model': str(payload_diagnostics.get('ollama_model') or '').strip(),
+            'error': str(payload_diagnostics.get('error') or '').strip(),
+        })
+    try:
+        _upsert_local_mode_heartbeat(machine_id, local_mirror_record)
+    except Exception as mirror_err:
+        logger.debug(f"Unable to mirror successful cloud heartbeat locally for {machine_id}: {mirror_err}")
+
     return {
         'sent': True,
         'status_code': int(response.status_code),
         'machine_id': machine_id,
         'provision_status': provision_status,
+        'cloud_local_heartbeat': cloud_heartbeat_summary,
         'authoritative_fetched': not skip_authoritative_fetch,
         'authoritative_skipped_reason': 'supabase_offline_backoff' if supabase_backoff_active else '',
     }
@@ -12082,7 +12138,7 @@ def _api_local_mode_auto_provisioning_impl():
                 f"{cloud_url}/api/provision/request",
                 json=request_body,
                 headers=request_headers,
-                timeout=12,
+                timeout=max(12, int(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
             )
             body = response.json() if response.content else {}
         except Exception as e:
@@ -12379,7 +12435,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'provision_secret': provision_secret,
                 'bootstrap_token': bootstrap_token,
             },
-            timeout=12,
+            timeout=max(12, int(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
         )
         exchange_body = exchange_response.json() if exchange_response.content else {}
     except Exception as e:

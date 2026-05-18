@@ -1278,6 +1278,74 @@ class ProvisioningActionTest(unittest.TestCase):
                 casm_app.supabase_offline_backoff_context = old_context
                 casm_app.supabase_offline_backoff_error = old_error
 
+    @patch('casm_app.requests.post')
+    @patch('casm_app._local_mode_fetch_authoritative_status')
+    @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
+    def test_successful_cloud_heartbeat_is_mirrored_for_local_status(
+        self,
+        mock_collect_submission,
+        mock_fetch_status,
+        mock_post,
+    ):
+        machine_id = 'TEST-EDGE-MIRROR-HEARTBEAT-001'
+        now_iso = casm_app.datetime.now(casm_app.timezone.utc).isoformat()
+        mock_collect_submission.return_value = {
+            'ready': True,
+            'cloud_url': 'https://cloud.example.test',
+            'machine_id': machine_id,
+            'provision_secret': 'local-secret-mirror-001',
+            'provision_status': 'provisioned',
+            'credentials_present': True,
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+                'ollama_model': 'gemma3:4b',
+            },
+        }
+        mock_fetch_status.return_value = {
+            'checked': True,
+            'status': 'provisioned',
+            'status_code': 200,
+        }
+        mock_post.return_value = self._mock_http_response(200, {
+            'success': True,
+            'status': 'stored',
+            'heartbeat': {
+                'available': True,
+                'machine_id': machine_id,
+                'status': 'recent_ready',
+                'provision_status': 'provisioned',
+                'is_recent': True,
+                'fresh_within_seconds': 180,
+                'last_seen_at': now_iso,
+                'age_seconds': 0,
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+                'ollama_model': 'gemma3:4b',
+                'source': 'local-backend-worker',
+                'error': '',
+                'requested_machine_id': machine_id,
+                'matches_requested_machine': True,
+            },
+        })
+
+        heartbeat_result = _send_local_mode_cloud_heartbeat_once()
+
+        self.assertTrue(heartbeat_result.get('sent'))
+        self.assertEqual(
+            (heartbeat_result.get('cloud_local_heartbeat') or {}).get('status'),
+            'recent_ready',
+        )
+        mirrored = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
+        self.assertTrue(mirrored.get('available'))
+        self.assertTrue(mirrored.get('is_recent'))
+        self.assertTrue(mirrored.get('local_mode_possible'))
+        self.assertEqual(mirrored.get('machine_id'), machine_id)
+
     @patch('casm_app._local_mode_save_provision_state')
     @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
     @patch('casm_app._local_mode_load_provision_state')
@@ -1470,6 +1538,10 @@ class ProvisioningActionTest(unittest.TestCase):
         request_headers = request_call.kwargs.get('headers') or {}
         self.assertEqual(request_json.get('machine_id'), machine_id)
         self.assertNotIn('current_provision_secret', request_json)
+        self.assertEqual(
+            request_call.kwargs.get('timeout'),
+            max(12, int(casm_app.LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
+        )
         self.assertTrue(request_headers.get('X-Provision-Credential-Proof'))
         self.assertTrue(request_headers.get('X-Provision-Credential-Proof-Timestamp'))
 

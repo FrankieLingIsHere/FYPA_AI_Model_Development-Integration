@@ -2949,7 +2949,7 @@ const API = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
-            }, 20000);
+            }, 45000);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
@@ -2997,7 +2997,7 @@ const API = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
-            }, 25000);
+            }, 35000);
 
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {

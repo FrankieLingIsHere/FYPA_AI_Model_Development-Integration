@@ -9195,6 +9195,78 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             'source_reason': str(reason or '').strip() or 'realtime_snapshot',
         }
 
+    def _normalize_realtime_source_scope(scope: Any) -> str:
+        normalized = str(scope or '').strip().lower()
+        return normalized if normalized in ('local', 'cloud', 'shared', 'synced_local') else ''
+
+    def _parse_realtime_detection_payload(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _infer_realtime_db_source_scope(row: Dict[str, Any]) -> str:
+        detection_payload = _parse_realtime_detection_payload(row.get('detection_data'))
+        device_id = str(
+            row.get('violation_device_id')
+            or row.get('device_id')
+            or ''
+        ).strip().lower()
+        source_marker = str(
+            detection_payload.get('origin')
+            or detection_payload.get('sync_source')
+            or detection_payload.get('source')
+            or ''
+        ).strip().lower()
+        sync_state = str(
+            detection_payload.get('sync_state')
+            or detection_payload.get('cloud_sync_state')
+            or row.get('sync_state')
+            or ''
+        ).strip().lower()
+        has_cloud_artifacts = bool(
+            row.get('original_image_key')
+            or row.get('annotated_image_key')
+            or row.get('report_html_key')
+            or row.get('report_pdf_key')
+        )
+        has_cloud_report_artifact = bool(row.get('report_html_key') or row.get('report_pdf_key'))
+        confirmed_synced_local = _has_confirmed_synced_local_evidence(
+            sync_source=source_marker,
+            device_id=device_id,
+            sync_state=sync_state,
+            has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
+            report_id=str(row.get('report_id') or ''),
+        )
+        explicit_scope = _normalize_realtime_source_scope(
+            detection_payload.get('source_scope')
+            or detection_payload.get('report_scope')
+            or detection_payload.get('scope')
+        )
+        if explicit_scope == 'synced_local':
+            return 'synced_local' if confirmed_synced_local else ('local' if _is_local_artifact_origin_device(device_id) else 'cloud')
+        if explicit_scope == 'local' and has_cloud_artifacts and not _is_local_artifact_origin_device(device_id):
+            return 'cloud'
+        if explicit_scope:
+            return explicit_scope
+        if confirmed_synced_local:
+            return 'synced_local'
+        if has_cloud_artifacts:
+            return 'cloud'
+        if _is_local_artifact_origin_device(device_id) or _is_local_pipeline_origin_marker(
+            source_scope='',
+            sync_source=source_marker,
+            device_id=device_id,
+        ):
+            return 'local'
+        return ''
+
     queue_data = {
         'available': violation_queue is not None,
         'worker_running': _is_queue_worker_alive(),
@@ -9243,9 +9315,22 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     with db_manager.conn.cursor() as cur:
                         cur.execute(
                             """
-                            SELECT report_id, status, error_message, timestamp, updated_at
-                            FROM public.detection_events
-                            ORDER BY COALESCE(updated_at, timestamp) DESC
+                            SELECT
+                                de.report_id,
+                                de.status,
+                                de.error_message,
+                                de.timestamp,
+                                de.updated_at,
+                                de.device_id,
+                                v.detection_data,
+                                v.original_image_key,
+                                v.annotated_image_key,
+                                v.report_html_key,
+                                v.report_pdf_key,
+                                v.device_id AS violation_device_id
+                            FROM public.detection_events de
+                            LEFT JOIN public.violations v ON de.report_id = v.report_id
+                            ORDER BY COALESCE(de.updated_at, de.timestamp) DESC
                             LIMIT %s
                             """,
                             (int(limit),)
@@ -9255,12 +9340,19 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     existing_realtime_rows = list(report_rows)
                     report_rows = existing_realtime_rows
                     for row in rows:
+                        source_scope = _infer_realtime_db_source_scope(row)
                         report_rows.append({
                             'report_id': row.get('report_id'),
                             'status': str(row.get('status') or '').strip().lower() or 'unknown',
                             'error_message': row.get('error_message'),
                             'timestamp': _iso_or_none(row.get('timestamp')),
-                            'updated_at': _iso_or_none(row.get('updated_at'))
+                            'updated_at': _iso_or_none(row.get('updated_at')),
+                            'device_id': row.get('violation_device_id') or row.get('device_id'),
+                            'has_report': bool(row.get('report_html_key') or row.get('report_pdf_key')),
+                            'has_cloud_artifacts': bool(row.get('original_image_key') or row.get('annotated_image_key') or row.get('report_html_key') or row.get('report_pdf_key')),
+                            'has_cloud_report_artifact': bool(row.get('report_html_key') or row.get('report_pdf_key')),
+                            'report_html_key': row.get('report_html_key'),
+                            **(_realtime_source_payload(source_scope, 'db_realtime_snapshot') if source_scope else {})
                         })
                     _set_realtime_supabase_cached_rows(report_rows)
                 except Exception as e:
@@ -10330,8 +10422,39 @@ def _local_mode_load_provision_state() -> Dict[str, Any]:
 
 
 def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
-    with open(LOCAL_MODE_PROVISION_STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=2)
+    incoming = state if isinstance(state, dict) else {}
+    existing = _local_mode_load_provision_state()
+    merged = dict(incoming)
+
+    # Status probes and self-heal paths sometimes write a partial state. Keep
+    # the security-sensitive launcher linkage unless a caller explicitly
+    # supplies an empty provision_secret to clear a known-stale token.
+    for key in (
+        'machine_id',
+        'provision_secret',
+        'cloud_url',
+        'requested_at',
+        'provisioned_at',
+    ):
+        if key not in merged and existing.get(key):
+            merged[key] = existing.get(key)
+
+    LOCAL_MODE_PROVISION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = LOCAL_MODE_PROVISION_STATE_FILE.with_name(
+        f"{LOCAL_MODE_PROVISION_STATE_FILE.name}.tmp.{uuid.uuid4().hex}"
+    )
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(merged, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, LOCAL_MODE_PROVISION_STATE_FILE)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
 
 def _mark_local_provision_secret_stale(
@@ -11438,8 +11561,20 @@ def api_local_mode_provisioning_status():
         and heartbeat_summary.get('local_mode_possible')
         and heartbeat_matches_requested
     )
-    device_status = normalized_status
-    response_status = normalized_status
+    cloud_device_status = normalized_status
+    missing_local_secret_for_cloud_device = bool(
+        not _is_hosted_runtime_environment()
+        and credentials_present
+        and not provision_secret
+        and cloud_device_status in ('approved', 'provisioned', 'active')
+        and not heartbeat_active
+    )
+    if missing_local_secret_for_cloud_device:
+        device_status = 'validation_required'
+        response_status = 'validation_required'
+    else:
+        device_status = normalized_status
+        response_status = normalized_status
     if (
         heartbeat_active
         and normalized_status in ('approved', 'provisioned', 'active', 'credentials_present')
@@ -11448,7 +11583,22 @@ def api_local_mode_provisioning_status():
         if device_status == 'credentials_present':
             device_status = 'provisioned'
 
-    if cloud_state.get('checked') and device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
+    if missing_local_secret_for_cloud_device:
+        current_cached_status = str(state.get('status') or '').strip().lower()
+        if current_cached_status != 'validation_required':
+            state['status'] = 'validation_required'
+            state['updated_at'] = datetime.now(timezone.utc).isoformat()
+            state['last_provision_secret_error'] = 'missing_for_cloud_approved_device'
+            state['last_provision_secret_error_at'] = state['updated_at']
+            try:
+                _local_mode_save_provision_state(state)
+            except Exception as persist_status_err:
+                logger.debug(f"Unable to mark local cached status as validation_required: {persist_status_err}")
+    elif (
+        provision_secret
+        and cloud_state.get('checked')
+        and device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected')
+    ):
         cached_status = 'pending' if device_status == 'pending_approval' else device_status
         current_cached_status = str(state.get('status') or '').strip().lower()
         if current_cached_status != cached_status:
@@ -11459,7 +11609,9 @@ def api_local_mode_provisioning_status():
             except Exception as persist_status_err:
                 logger.debug(f"Unable to sync local cached status from cloud authority: {persist_status_err}")
 
-    if (
+    if missing_local_secret_for_cloud_device:
+        status_source = 'validation_required'
+    elif (
         device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected')
         and bool(cloud_state.get('checked'))
     ):
@@ -11482,6 +11634,11 @@ def api_local_mode_provisioning_status():
         'admin_portal_url': f"{cloud_url}/admin/devices" if cloud_url else '',
         'credentials_present': credentials_present,
         'cloud_local_heartbeat': heartbeat_summary,
+        'cloud_device_status': cloud_device_status,
+        'local_provision_secret_present': bool(provision_secret),
+        'local_validation_required_reason': (
+            'missing_provision_secret' if missing_local_secret_for_cloud_device else ''
+        ),
         'cloud_status_checked': bool(cloud_state.get('checked')),
         'cloud_status_code': cloud_state.get('status_code'),
         'status_source': status_source,

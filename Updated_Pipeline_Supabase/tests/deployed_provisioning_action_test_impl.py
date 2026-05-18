@@ -713,6 +713,10 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(installer_bat, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
+        self.assertLess(
+            installer_bat.index('Seeded local provisioning heartbeat linkage for approved installer.'),
+            installer_bat.index('Handing off to managed local launcher:'),
+        )
 
         token_map_key = "'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"
         provision_token_map_key = "'__CASM_PROVISION_SECRET__'='CASM_PROVISION_SECRET'"
@@ -782,6 +786,71 @@ class ProvisioningActionTest(unittest.TestCase):
         persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(str(persisted.get('machine_id') or ''), canonical_machine_id)
         self.assertEqual(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8').strip(), canonical_machine_id)
+
+    def test_local_status_requires_secret_before_claiming_heartbeat_ready(self):
+        machine_id = 'TEST-EDGE-MISSING-SECRET-001'
+        _save_pending_devices({
+            machine_id: {
+                'status': 'approved',
+                'requested_at': '2026-04-16T00:00:00+00:00',
+                'token': 'test-token',
+                'provision_secret_hash': '',
+                'approved_at': '2026-04-16T00:00:00+00:00',
+                'provisioned_at': None,
+            }
+        })
+
+        LOCAL_MODE_PROVISION_STATE_FILE.write_text(
+            json.dumps({
+                'machine_id': machine_id,
+                'status': 'provisioned',
+                'updated_at': '2026-04-16T00:00:00+00:00',
+            }),
+            encoding='utf-8',
+        )
+        LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
+
+        with patch('casm_app._local_mode_fetch_authoritative_status', return_value={
+                'checked': True,
+                'status': 'approved',
+                'status_code': 200,
+            }), \
+             patch('casm_app._local_mode_has_supabase_credentials', return_value=True), \
+             patch('casm_app._is_hosted_runtime_environment', return_value=False):
+            response = self.client.get('/api/local-mode/provisioning/status')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json or {}
+        self.assertEqual(payload.get('status'), 'validation_required')
+        self.assertEqual(payload.get('device_status'), 'validation_required')
+        self.assertEqual(payload.get('cloud_device_status'), 'approved')
+        self.assertFalse(payload.get('local_provision_secret_present'))
+        self.assertEqual(payload.get('local_validation_required_reason'), 'missing_provision_secret')
+        self.assertEqual(payload.get('status_source'), 'validation_required')
+
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(str(persisted.get('status') or ''), 'validation_required')
+
+    def test_partial_local_provision_state_save_preserves_existing_secret(self):
+        LOCAL_MODE_PROVISION_STATE_FILE.write_text(
+            json.dumps({
+                'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
+                'provision_secret': 'secret-to-preserve-001',
+                'cloud_url': 'https://cloud.example.test',
+                'status': 'approved',
+            }),
+            encoding='utf-8',
+        )
+
+        casm_app._local_mode_save_provision_state({
+            'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
+            'status': 'provisioned',
+        })
+
+        persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        self.assertEqual(str(persisted.get('provision_secret') or ''), 'secret-to-preserve-001')
+        self.assertEqual(str(persisted.get('cloud_url') or ''), 'https://cloud.example.test')
+        self.assertEqual(str(persisted.get('status') or ''), 'provisioned')
 
     def test_installer_request_recovers_from_local_state_machine_id_drift(self):
         canonical_machine_id = 'Web-897DE863'

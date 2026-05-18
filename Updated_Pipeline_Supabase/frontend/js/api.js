@@ -2181,6 +2181,7 @@ const API = {
             ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
             : 10000;
         const noCache = !!options.noCache;
+        const skipRemoteMerge = !!options.skipRemoteMerge;
         const cacheScope = `violations:limit:${safeLimit}`;
 
         if (!noCache) {
@@ -2199,7 +2200,7 @@ const API = {
 
             // OPTIMISTIC UI MERGING: Merge cloud reports if in local mode
             const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
-            if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase && this.canUseRemoteCloudBackendFromPage(cloudUrlBase)) {
+            if (!skipRemoteMerge && cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase && this.canUseRemoteCloudBackendFromPage(cloudUrlBase)) {
                 try {
                     const cloudUrl = `${cloudUrlBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
                     const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });
@@ -2289,6 +2290,7 @@ const API = {
             ? Math.max(2000, Math.min(Math.floor(requestedTimeout), 30000))
             : 9000;
         const noCache = !!options.noCache;
+        const skipRemoteMerge = !!options.skipRemoteMerge;
         const cacheScope = 'reports:pending';
 
         if (!noCache) {
@@ -2305,7 +2307,7 @@ const API = {
 
             // OPTIMISTIC UI MERGING
             const cloudUrlBase = String((window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || window.PPE_API_URL || '').trim().replace(/\/+$/, '');
-            if (cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase && this.canUseRemoteCloudBackendFromPage(cloudUrlBase)) {
+            if (!skipRemoteMerge && cloudUrlBase && API_CONFIG.BASE_URL !== cloudUrlBase && this.canUseRemoteCloudBackendFromPage(cloudUrlBase)) {
                 try {
                     const cloudUrl = `${cloudUrlBase}/api/reports/pending`;
                     const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });

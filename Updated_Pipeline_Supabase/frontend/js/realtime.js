@@ -249,6 +249,7 @@ const RealtimeSync = {
             this.emitPageUpdate(payload);
             this.emitViolationDetectedNotifications(payload);
             this.emitStatusNotifications(payload);
+            this.forwardPayloadToViolationMonitor(payload);
         } catch (error) {
             console.warn('Failed to fetch realtime snapshot:', error);
         } finally {
@@ -328,19 +329,23 @@ const RealtimeSync = {
             this.emitPageUpdate(payload);
             this.emitViolationDetectedNotifications(payload);
             this.emitStatusNotifications(payload);
-            // Let the monitor consume the realtime rows directly. This keeps
-            // processing statuses live without forcing broad reports-list reads.
-            try {
-                if (typeof ViolationMonitor !== 'undefined'
-                    && ViolationMonitor.isMonitoring
-                    && typeof ViolationMonitor.applyRealtimePayload === 'function') {
-                    ViolationMonitor.applyRealtimePayload(payload);
-                }
-            } catch (vmErr) {
-                console.warn('Realtime -> ViolationMonitor refresh failed:', vmErr);
-            }
+            this.forwardPayloadToViolationMonitor(payload);
         } catch (error) {
             console.error('Invalid realtime payload:', error);
+        }
+    },
+
+    forwardPayloadToViolationMonitor(payload) {
+        // Let the monitor consume realtime rows directly. This keeps local/offline
+        // report-ready toasts alive without forcing broad reports-list reads.
+        try {
+            if (typeof ViolationMonitor !== 'undefined'
+                && ViolationMonitor.isMonitoring
+                && typeof ViolationMonitor.applyRealtimePayload === 'function') {
+                ViolationMonitor.applyRealtimePayload(payload);
+            }
+        } catch (vmErr) {
+            console.warn('Realtime -> ViolationMonitor refresh failed:', vmErr);
         }
     },
 

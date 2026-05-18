@@ -27,6 +27,7 @@ const ReportsPage = {
     },
     visualStatusTimers: new Map(),
     cacheWarmTimer: null,
+    localCacheReconcileTimer: null,
     hasLoadedOnce: false,
     modalRuntime: {
         reportId: null,
@@ -134,6 +135,7 @@ const ReportsPage = {
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
 
         await this.loadReports({ noCache: false });
+        this.scheduleLocalCacheReconcile('reports-mount');
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({ reason: 'reports-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
@@ -188,6 +190,10 @@ const ReportsPage = {
         if (this.cacheWarmTimer) {
             clearTimeout(this.cacheWarmTimer);
             this.cacheWarmTimer = null;
+        }
+        if (this.localCacheReconcileTimer) {
+            clearTimeout(this.localCacheReconcileTimer);
+            this.localCacheReconcileTimer = null;
         }
         if (this.visualStatusTimers && typeof this.visualStatusTimers.forEach === 'function') {
             this.visualStatusTimers.forEach((timer) => clearTimeout(timer));
@@ -282,6 +288,7 @@ const ReportsPage = {
 
     async loadReports(options = {}) {
         const noCache = !!options.noCache;
+        const skipRemoteMerge = !!options.skipRemoteMerge;
         const targetedReportId = String(options.targetedReportId || '').trim();
         const previousById = new Map(
             this.violations
@@ -290,8 +297,8 @@ const ReportsPage = {
         );
 
         const [violations, pendingReports] = await Promise.all([
-            API.getViolations({ noCache }),
-            API.getPendingReports({ noCache })
+            API.getViolations({ noCache, skipRemoteMerge }),
+            API.getPendingReports({ noCache, skipRemoteMerge })
         ]);
 
         this.violations = this.mergePendingReports(violations, pendingReports)
@@ -306,6 +313,31 @@ const ReportsPage = {
         this.renderReports();
         this.scheduleReportPrefetch({ reason: noCache ? 'fresh-load' : 'cached-load' });
         this.applyPendingFocusRequest();
+    },
+
+    shouldRunLocalCacheReconcile() {
+        try {
+            if (typeof API === 'undefined' || typeof API.isLocalBackendBase !== 'function') return false;
+            const activeBase = (typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) || (window.location && window.location.origin) || '';
+            return API.isLocalBackendBase(activeBase || (window.location && window.location.origin) || '');
+        } catch (error) {
+            return false;
+        }
+    },
+
+    scheduleLocalCacheReconcile(reason = 'local-cache-reconcile') {
+        if (!this.shouldRunLocalCacheReconcile()) return;
+        if (this.localCacheReconcileTimer) return;
+        this.localCacheReconcileTimer = setTimeout(() => {
+            this.localCacheReconcileTimer = null;
+            this.loadReports({
+                noCache: true,
+                skipRemoteMerge: true,
+                reason
+            }).catch((error) => {
+                console.debug('Local report cache reconcile skipped:', error);
+            });
+        }, 900);
     },
 
     applyRealtimePayload(payload = {}) {

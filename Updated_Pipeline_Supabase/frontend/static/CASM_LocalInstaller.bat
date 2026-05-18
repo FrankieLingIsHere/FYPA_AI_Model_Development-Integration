@@ -79,16 +79,6 @@ if not exist "!LOCAL_LAUNCHER_BAT!" (
 
 call :sync_launcher_aliases >nul 2>&1
 
-if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
-    if /I "!HAS_MANAGED_LAUNCHER!"=="true" (
-        echo Detected external launcher execution. Handing off to managed local launcher:
-        echo   !LOCAL_LAUNCHER_BAT!
-        set "CASM_SKIP_INTRO_PAUSE=true"
-        call "!LOCAL_LAUNCHER_BAT!"
-        exit /b !errorlevel!
-    )
-)
-
 if not "!CASM_MACHINE_ID!"=="" (
     if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!" >nul 2>&1
     >"!CASM_STATE_DIR_PATH!\machine_id.txt" echo !CASM_MACHINE_ID!
@@ -106,6 +96,17 @@ if not "!CASM_MACHINE_ID!"=="" if not "!CASM_PROVISION_SECRET!"=="" (
         echo Warning: Could not seed local provisioning heartbeat secret.
     ) else (
         echo Seeded local provisioning heartbeat linkage for approved installer.
+    )
+)
+
+if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
+    if /I "!HAS_MANAGED_LAUNCHER!"=="true" (
+        echo Detected external launcher execution. Fresh provisioning linkage was applied before handoff.
+        echo Handing off to managed local launcher:
+        echo   !LOCAL_LAUNCHER_BAT!
+        set "CASM_SKIP_INTRO_PAUSE=true"
+        call "!LOCAL_LAUNCHER_BAT!"
+        exit /b !errorlevel!
     )
 )
 

@@ -20,6 +20,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
         self.assertIn('warmDashboardCaches({ reason: \'startup\'', app_js)
         self.assertIn("API.warmDashboardCaches({ reason: 'reports-mount'", reports_js)
+        self.assertIn("this.scheduleLocalCacheReconcile('reports-mount')", reports_js)
+        self.assertIn('skipRemoteMerge: true', reports_js)
         self.assertIn("renderReportsListMarkup()", reports_js)
         self.assertIn("API.warmDashboardCaches({ reason: 'analytics-mount'", analytics_js)
         self.assertIn("renderCachedDataIfAvailable()", analytics_js)
@@ -82,6 +84,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('emitViolationDetectedNotifications(payload)', realtime_js)
         self.assertIn('eventType === \'violation_detected\'', realtime_js)
         self.assertIn('eventEpoch >= this.sessionStartedAtMs', realtime_js)
+        self.assertIn('forwardPayloadToViolationMonitor(payload)', realtime_js)
         self.assertIn('statusNotificationsHydrated', realtime_js)
         self.assertNotIn('isFreshLocalLifecycleRow', realtime_js)
         self.assertIn('ViolationMonitor._notifyViolationDetected(violation)', realtime_js)
@@ -110,6 +113,8 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('hasDurableLocalOriginEvidence(record = {})', reports_js)
         self.assertIn('hasSyncedLocalEvidence(existing)', reports_js)
         self.assertIn("status_info.get('source_scope') != 'local'", casm_app)
+        self.assertIn('def _infer_realtime_db_source_scope', casm_app)
+        self.assertIn("'db_realtime_snapshot'", casm_app)
 
     def test_local_sync_and_generation_quality_guards(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')

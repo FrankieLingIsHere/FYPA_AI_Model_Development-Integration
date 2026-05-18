@@ -20097,9 +20097,6 @@ def request_bootstrap_installer():
         if not device:
             return _json_error('Unknown machine_id', 404)
 
-        if provision_secret and not _is_valid_provision_secret(device, provision_secret):
-            return _json_error('Invalid provision_secret', 401)
-
         current_status = str(device.get('status') or 'pending').strip().lower()
         if current_status not in ('approved', 'provisioned'):
             return _json_error('Device is not approved for installer access', 403)
@@ -20109,6 +20106,50 @@ def request_bootstrap_installer():
         # only know a machine_id from downloading the installer package.
         if not provision_secret:
             return _json_error('provision_secret is required to download the installer', 401)
+
+        if not _is_valid_provision_secret(device, provision_secret):
+            heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(resolved_machine_id)
+            heartbeat_status = _normalize_heartbeat_provision_status(
+                heartbeat_summary.get('provision_status')
+            )
+            heartbeat_can_recover_secret = bool(
+                heartbeat_summary.get('available')
+                and heartbeat_summary.get('is_recent')
+                and heartbeat_summary.get('local_mode_possible')
+                and heartbeat_summary.get('matches_requested_machine', True)
+                and heartbeat_status in ('approved', 'provisioned', 'active', 'credentials_present')
+            )
+
+            if heartbeat_can_recover_secret:
+                refreshed_secret = secrets.token_urlsafe(48)
+                device['provision_secret_hash'] = _hash_provision_secret(refreshed_secret)
+                device['updated_at'] = datetime.now(timezone.utc).isoformat()
+                devices[resolved_machine_id] = device
+                if not _save_pending_devices(devices):
+                    return _json_error('Provisioning shared-state backend unavailable', 503)
+
+                _append_device_audit_event(
+                    resolved_machine_id,
+                    'installer_secret_recovered_by_heartbeat',
+                    actor='device',
+                    metadata={
+                        **_capture_request_metadata(),
+                        'status': current_status,
+                        'heartbeat_status': heartbeat_status,
+                    },
+                )
+                return _apply_no_cache_headers(
+                    _issue_installer_redirect(resolved_machine_id, refreshed_secret)
+                )
+
+            response = jsonify({
+                'error': 'Invalid provision_secret',
+                'machine_id': resolved_machine_id,
+                'status': current_status,
+                'requires_revalidation': True,
+            })
+            response.status_code = 401
+            return _apply_no_cache_headers(response)
 
         return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id, provision_secret))
 

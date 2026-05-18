@@ -2449,14 +2449,23 @@ const GlobalSettingsModal = {
         const apiBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
         const isRemoteBackend = this.isLikelyRemoteBackend();
 
-        if (isRemoteBackend && !this.getStoredProvisionSecretForMachine(machineId)) {
+        if (isRemoteBackend) {
             try {
-                this.setProviderStatus('Refreshing installer access for this approved device...', 'info');
-                await this.recoverRemoteInstallerCredentials(machineId);
+                this.setProviderStatus('Validating installer access for this approved device...', 'info');
+                const refreshedState = await this.refreshRemoteProvisioningStatus({
+                    allowRequest: true,
+                    machineIdHint: machineId
+                });
+                if (refreshedState && typeof refreshedState === 'object') {
+                    this.syncLocalProvisionStateFromPayload(refreshedState);
+                }
+                if (!this.getStoredProvisionSecretForMachine(machineId)) {
+                    await this.recoverRemoteInstallerCredentials(machineId);
+                }
                 status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
                 machineId = String(this.localProvisionState.machineId || machineId || '').trim();
             } catch (recoverErr) {
-                console.warn('GlobalSettingsModal: installer credential refresh failed', recoverErr);
+                console.warn('GlobalSettingsModal: installer credential validation failed', recoverErr);
             }
         }
 

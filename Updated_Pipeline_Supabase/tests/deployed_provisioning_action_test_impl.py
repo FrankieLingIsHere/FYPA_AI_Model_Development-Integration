@@ -740,6 +740,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('getStoredProvisionSecretForMachine', settings_js)
         self.assertIn("currentProvisionSecret: invalidSecret ? ''", settings_js)
         self.assertIn('attemptedSecretlessRecovery', settings_js)
+        self.assertIn("this.setProviderStatus('Validating installer access for this approved device...'", settings_js)
+        self.assertIn('allowRequest: true', settings_js)
+        self.assertIn('machineIdHint: machineId', settings_js)
 
         # Regression guard: the Home button must not navigate to the hardened
         # installer endpoint with only machine_id. Device-initiated downloads
@@ -898,6 +901,77 @@ class ProvisioningActionTest(unittest.TestCase):
         location = str(installer_redirect.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
+
+    def test_installer_request_recovers_stale_secret_when_fresh_heartbeat_exists(self):
+        machine_id = 'WEB-INSTALLER-STALE-HEARTBEAT-001'
+        stale_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        heartbeat = self.client.post('/api/local-mode/heartbeat', json={
+            'machine_id': machine_id,
+            'provision_secret': stale_secret,
+            'provision_status': 'provisioned',
+            'diagnostics': {
+                'local_mode_possible': True,
+                'ollama_installed': True,
+                'ollama_running': True,
+                'model_available': True,
+            },
+        })
+        self.assertEqual(heartbeat.status_code, 200)
+
+        devices = _load_pending_devices()
+        devices[machine_id]['provision_secret_hash'] = casm_app._hash_provision_secret(
+            'server-rotated-secret-001'
+        )
+        self.assertTrue(_save_pending_devices(devices))
+
+        installer_redirect = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={stale_secret}',
+            follow_redirects=False,
+        )
+        self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
+        self._assert_no_cache_headers(installer_redirect)
+        location = str(installer_redirect.headers.get('Location') or '')
+        self.assertIn('/api/bootstrap/installer?token=', location)
+        installer_redirect.close()
+
+        installer_download = self.client.get(location)
+        self.assertEqual(installer_download.status_code, 200)
+        rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
+        match = re.search(r'set "CASM_PROVISION_SECRET=([^"]+)"', rendered_installer)
+        self.assertIsNotNone(match)
+        recovered_secret = match.group(1)
+        self.assertTrue(recovered_secret)
+        self.assertNotEqual(recovered_secret, stale_secret)
+
+        status_response = self.client.get(
+            f'/api/provision/status?machine_id={machine_id}&provision_secret={recovered_secret}'
+        )
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual((status_response.json or {}).get('status'), 'approved')
+
+    def test_installer_request_does_not_recover_stale_secret_without_heartbeat(self):
+        machine_id = 'WEB-INSTALLER-STALE-NO-HEARTBEAT-001'
+        stale_secret = self._request_device(machine_id)
+        self._approve_device(machine_id)
+
+        devices = _load_pending_devices()
+        devices[machine_id]['provision_secret_hash'] = casm_app._hash_provision_secret(
+            'server-rotated-secret-002'
+        )
+        self.assertTrue(_save_pending_devices(devices))
+
+        installer_response = self.client.get(
+            f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={stale_secret}',
+            follow_redirects=False,
+        )
+        self.assertEqual(installer_response.status_code, 401)
+        self._assert_no_cache_headers(installer_response)
+        payload = installer_response.json or {}
+        self.assertEqual(payload.get('error'), 'Invalid provision_secret')
+        self.assertTrue(payload.get('requires_revalidation'))
+        installer_response.close()
 
     def test_installer_request_secret_overrides_pending_machine_id_collision(self):
         approved_machine_id = 'WEB-INSTALLER-APPROVED-SECRET-001'

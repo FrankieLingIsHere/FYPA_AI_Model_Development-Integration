@@ -158,9 +158,9 @@ const LivePage = {
                         <div id="cooldownSettingRow" style="margin-top: 1.25rem; padding: 0.85rem 1rem; background: var(--background-color, #f8f9fa); border: 1px solid var(--border-color, #dee2e6); border-radius: 8px; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
                             <i class="fas fa-stopwatch" style="color: var(--primary-color); font-size: 1rem;"></i>
                             <span style="font-weight: 600; font-size: 0.92rem; white-space: nowrap;">Violation Cooldown</span>
-                            <span style="color: var(--text-secondary); font-size: 0.82rem; flex: 1; min-width: 160px;">Minimum seconds between report captures</span>
+                            <span style="color: var(--text-secondary); font-size: 0.82rem; flex: 1; min-width: 160px;">Minimum seconds before re-capturing the same live violation</span>
                             <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                <input id="cooldownInput" type="number" min="1" max="300" step="1" value="3"
+                                <input id="cooldownInput" type="number" min="1" max="300" step="1" value="10"
                                     style="width: 70px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color, #dee2e6); font-size: 0.9rem; text-align: center;"
                                     title="1–300 seconds" />
                                 <span style="font-size: 0.82rem; color: var(--text-secondary);">sec</span>

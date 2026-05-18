@@ -66,6 +66,84 @@ def _moving_live_detections(index: int):
     ]
 
 
+def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_violation():
+    frame = np.zeros((180, 520, 3), dtype=np.uint8)
+    queue = ViolationQueueManager(max_size=50, rate_limit_per_device=20, rate_limit_window=60)
+
+    old_dir = casm_app.VIOLATIONS_DIR
+    old_queue = casm_app.violation_queue
+    old_db = casm_app.db_manager
+    old_cooldown = casm_app.VIOLATION_COOLDOWN
+    old_dedup_window = casm_app.LIVE_VIOLATION_DEDUP_WINDOW_SECONDS
+    old_last_violation = casm_app.last_violation_time
+    old_ensure_worker = casm_app.ensure_queue_worker_running
+    old_local_runtime_fn = casm_app._is_local_pipeline_runtime_active
+    old_get_local_time = casm_app.get_local_time
+    old_time_fn = casm_app.time.time
+
+    base_time = datetime(2026, 5, 18, 11, 0, 0, tzinfo=timezone.utc)
+    tick = {"value": 0}
+
+    def fake_local_time():
+        current = base_time + timedelta(seconds=tick["value"])
+        tick["value"] += 1
+        return current
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            casm_app.VIOLATIONS_DIR = Path(tmpdir)
+            casm_app.violation_queue = queue
+            casm_app.db_manager = None
+            casm_app.VIOLATION_COOLDOWN = 10
+            casm_app.LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = 10
+            casm_app.last_violation_time = 0
+            casm_app.ensure_queue_worker_running = lambda: True
+            casm_app._is_local_pipeline_runtime_active = lambda: False
+            casm_app.get_local_time = fake_local_time
+            casm_app.time.time = lambda: 1000.0
+            with casm_app.recent_live_violation_lock:
+                casm_app.recent_live_violation_signatures.clear()
+
+            first = casm_app.enqueue_violation(
+                frame.copy(),
+                _moving_live_detections(0),
+                trigger_source="live",
+                annotated_frame=frame.copy(),
+            )
+            duplicate = casm_app.enqueue_violation(
+                frame.copy(),
+                _moving_live_detections(0),
+                trigger_source="live",
+                annotated_frame=frame.copy(),
+            )
+            new_spatial = casm_app.enqueue_violation(
+                frame.copy(),
+                _moving_live_detections(5),
+                trigger_source="live",
+                annotated_frame=frame.copy(),
+            )
+
+            created_dirs = [item for item in Path(tmpdir).iterdir() if item.is_dir()]
+            _assert(first, "first live violation should queue")
+            _assert(duplicate is None, "same live violation should be suppressed inside 10s")
+            _assert(new_spatial, "new spatial live violation should not be blocked by the 10s interval")
+            _assert(len(created_dirs) == 2, f"expected only two report folders, got {[p.name for p in created_dirs]}")
+            _assert(queue.get_stats().get("current_size") == 2, f"unexpected queue stats: {queue.get_stats()}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_dir
+            casm_app.violation_queue = old_queue
+            casm_app.db_manager = old_db
+            casm_app.VIOLATION_COOLDOWN = old_cooldown
+            casm_app.LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = old_dedup_window
+            casm_app.last_violation_time = old_last_violation
+            casm_app.ensure_queue_worker_running = old_ensure_worker
+            casm_app._is_local_pipeline_runtime_active = old_local_runtime_fn
+            casm_app.get_local_time = old_get_local_time
+            casm_app.time.time = old_time_fn
+            with casm_app.recent_live_violation_lock:
+                casm_app.recent_live_violation_signatures.clear()
+
+
 def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass():
     frame = np.zeros((180, 240, 3), dtype=np.uint8)
     queue = ViolationQueueManager(max_size=50, rate_limit_per_device=3, rate_limit_window=60)
@@ -292,6 +370,7 @@ def test_report_model_calls_are_serialized_under_parallel_queue_pressure():
 
 def main():
     tests = [
+        test_live_default_interval_blocks_same_violation_but_allows_new_spatial_violation,
         test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass,
         test_yolo_model_calls_are_serialized_under_local_request_flood,
         test_report_model_calls_are_serialized_under_parallel_queue_pressure,

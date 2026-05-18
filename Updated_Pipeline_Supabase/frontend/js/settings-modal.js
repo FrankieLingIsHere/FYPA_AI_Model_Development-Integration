@@ -36,7 +36,7 @@ const GlobalSettingsModal = {
 
     RECOMMENDED_SETTINGS: {
         environment_validation_enabled: true,
-        cooldown_seconds: 3,
+        cooldown_seconds: 10,
         provider_routing: {
             routing_profile: 'local',
             model_api_enabled: false,
@@ -264,8 +264,8 @@ const GlobalSettingsModal = {
                             <div class="global-settings-card">
                                 <h4><i class="fas fa-clock" style="color: var(--warning-color);"></i> Capture Cooldown</h4>
                                 <div style="display: flex; align-items: center; gap: 0.7rem; margin-top: 0.4rem;">
-                                    <input type="range" id="globalCooldownSlider" min="1" max="30" value="3" style="flex: 1;">
-                                    <span id="globalCooldownValue" style="font-weight: 700; min-width: 54px; text-align: center;">3s</span>
+                                    <input type="range" id="globalCooldownSlider" min="1" max="30" value="10" style="flex: 1;">
+                                    <span id="globalCooldownValue" style="font-weight: 700; min-width: 54px; text-align: center;">10s</span>
                                 </div>
                                 <button id="globalApplyCooldownBtn" class="btn btn-primary" type="button" style="margin-top: 0.75rem; width: 100%;">
                                     <i class="fas fa-save"></i> Apply Cooldown
@@ -1577,7 +1577,7 @@ const GlobalSettingsModal = {
                 this.updateEnvValidationStatus(envToggle.checked);
             }
 
-            const resolvedCooldown = Number(cooldownData.cooldown_seconds || 3);
+            const resolvedCooldown = Number(cooldownData.cooldown_seconds || 10);
             if (cooldownSlider) {
                 cooldownSlider.value = String(resolvedCooldown);
             }

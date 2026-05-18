@@ -1699,10 +1699,20 @@ report_generator = None
 db_manager = None
 storage_manager = None
 last_violation_time = 0
-VIOLATION_COOLDOWN = 3  # seconds between violation CAPTURES (fast - queue handles processing)
+try:
+    VIOLATION_COOLDOWN = int(os.getenv('VIOLATION_COOLDOWN_SECONDS', '10') or 10)
+except (TypeError, ValueError):
+    VIOLATION_COOLDOWN = 10
+VIOLATION_COOLDOWN = max(1, min(VIOLATION_COOLDOWN, 300))  # seconds between repeated captures
 
 # Live-stream dedup window to reduce redundant captures for same standing violators.
-LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = 12
+try:
+    LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = int(
+        os.getenv('LIVE_VIOLATION_DEDUP_WINDOW_SECONDS', str(VIOLATION_COOLDOWN)) or VIOLATION_COOLDOWN
+    )
+except (TypeError, ValueError):
+    LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = VIOLATION_COOLDOWN
+LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = max(1, min(LIVE_VIOLATION_DEDUP_WINDOW_SECONDS, 300))
 LIVE_VIOLATION_DEDUP_IOU_THRESHOLD = 0.50
 LIVE_VIOLATION_DEDUP_CENTER_FACTOR = 0.65
 recent_live_violation_signatures: List[Dict[str, Any]] = []
@@ -4480,12 +4490,7 @@ def enqueue_violation(
             )
         )
 
-        # Check capture cooldown (shorter than processing time)
         current_time = time.time()
-        if current_time - last_violation_time < VIOLATION_COOLDOWN:
-            remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
-            logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
-            return None
 
         # Check for violations using unified matcher (same logic as upload/live paths)
         violation_detections = _extract_violation_detections(detections)
@@ -4494,23 +4499,6 @@ def enqueue_violation(
             logger.warning("No violations found in detections")
             return None
 
-        if trigger_source == 'live' and _is_redundant_live_violation(violation_detections, current_time):
-            logger.info(
-                "Live dedup active - skipping redundant stationary violation capture "
-                f"(window={LIVE_VIOLATION_DEDUP_WINDOW_SECONDS}s)"
-            )
-            return None
-
-        last_violation_time = current_time
-
-        violation_types_raw = [d['class_name'] for d in violation_detections]
-        violation_types = [format_violation_type(vt) for vt in violation_types_raw]
-        resolved_severity = _classify_violation_severity(
-            violation_types=violation_types_raw,
-            detections=detections,
-            violation_count=len(violation_detections),
-        )
-        logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         runtime_device_id = 'local_cache' if local_runtime_active else 'webcam_0'
         capture_sync_source = (
             'local_pipeline'
@@ -4538,6 +4526,37 @@ def enqueue_violation(
                     return None
             except Exception as preflight_err:
                 logger.debug(f"Live queue preflight skipped due to error: {preflight_err}")
+
+        if trigger_source == 'live':
+            live_has_spatial_signature = bool(_build_violation_spatial_signature(violation_detections))
+            if _is_redundant_live_violation(violation_detections, current_time):
+                logger.info(
+                    "Live dedup active - skipping redundant stationary violation capture "
+                    f"(window={LIVE_VIOLATION_DEDUP_WINDOW_SECONDS}s)"
+                )
+                return None
+            if (
+                not live_has_spatial_signature
+                and current_time - last_violation_time < VIOLATION_COOLDOWN
+            ):
+                remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
+                logger.info(f"Live capture cooldown active ({remaining}s remaining) - skipping")
+                return None
+        elif current_time - last_violation_time < VIOLATION_COOLDOWN:
+            remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
+            logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
+            return None
+
+        last_violation_time = current_time
+
+        violation_types_raw = [d['class_name'] for d in violation_detections]
+        violation_types = [format_violation_type(vt) for vt in violation_types_raw]
+        resolved_severity = _classify_violation_severity(
+            violation_types=violation_types_raw,
+            detections=detections,
+            violation_count=len(violation_detections),
+        )
+        logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
 
         # Create violation directory with timestamp (configurable timezone)
         timestamp = get_local_time()
@@ -9720,12 +9739,13 @@ def api_environment_validation():
 @app.route('/api/settings/cooldown', methods=['GET', 'POST'])
 def api_cooldown_setting():
     """Get or set the violation capture cooldown."""
-    global VIOLATION_COOLDOWN
+    global VIOLATION_COOLDOWN, LIVE_VIOLATION_DEDUP_WINDOW_SECONDS
 
     if request.method == 'GET':
         return jsonify({
             'cooldown_seconds': VIOLATION_COOLDOWN,
-            'description': 'Minimum seconds between capturing violations'
+            'live_dedup_window_seconds': LIVE_VIOLATION_DEDUP_WINDOW_SECONDS,
+            'description': 'Minimum seconds before re-capturing the same live violation'
         })
 
     # POST - update cooldown
@@ -9738,10 +9758,12 @@ def api_cooldown_setting():
             if new_cooldown > 300:
                 return jsonify({'error': 'Cooldown cannot exceed 300 seconds'}), 400
             VIOLATION_COOLDOWN = new_cooldown
+            LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = new_cooldown
             logger.info(f"Violation cooldown set to {VIOLATION_COOLDOWN} seconds")
             return jsonify({
                 'success': True,
                 'cooldown_seconds': VIOLATION_COOLDOWN,
+                'live_dedup_window_seconds': LIVE_VIOLATION_DEDUP_WINDOW_SECONDS,
                 'message': f"Cooldown set to {VIOLATION_COOLDOWN} seconds"
             })
         else:

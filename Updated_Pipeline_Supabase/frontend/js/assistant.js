@@ -414,18 +414,18 @@ const CASMAssistant = {
 
     renderShortcutStrip() {
         const actions = [
-            { type: 'route', label: 'Home', icon: 'fa-home', page: 'home' },
-            { type: 'route', label: 'Camera', icon: 'fa-video', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
-            { type: 'route', label: 'Image Check', icon: 'fa-image', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true },
-            { type: 'route', label: 'Reports', icon: 'fa-file-alt', page: 'reports' },
-            { type: 'route', label: 'Analytics', icon: 'fa-chart-line', page: 'analytics' },
-            { type: 'route', label: 'Settings', icon: 'fa-sliders-h', page: 'settings', collapsePanel: true },
-            { type: 'tutorial', label: 'Cloud demo', icon: 'fa-cloud', flow: 'cloud', stepIndex: 0 },
-            { type: 'tutorial', label: 'Local demo', icon: 'fa-laptop-code', flow: 'local', stepIndex: 0 },
-            { type: 'guided-start', label: 'Report Guide', icon: 'fa-list-check', guidedKind: 'reports' },
-            { type: 'guided-start', label: 'Analytics Guide', icon: 'fa-chart-pie', guidedKind: 'analytics' },
-            { type: 'export', label: 'Reports CSV', icon: 'fa-file-csv', exportKind: 'reports' },
-            { type: 'overview', label: 'Overview', icon: 'fa-signal', exportKind: '' }
+            { type: 'route', label: 'Home', icon: 'fa-home', page: 'home', prompt: 'open home' },
+            { type: 'route', label: 'Camera', icon: 'fa-video', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true, prompt: 'open camera' },
+            { type: 'route', label: 'Image Check', icon: 'fa-image', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true, prompt: 'open image analysis' },
+            { type: 'route', label: 'Reports', icon: 'fa-file-alt', page: 'reports', prompt: 'open reports' },
+            { type: 'route', label: 'Analytics', icon: 'fa-chart-line', page: 'analytics', prompt: 'open analytics' },
+            { type: 'route', label: 'Settings', icon: 'fa-sliders-h', page: 'settings', collapsePanel: true, prompt: 'open settings' },
+            { type: 'tutorial', label: 'Cloud demo', icon: 'fa-cloud', flow: 'cloud', stepIndex: 0, prompt: 'show cloud tutorial' },
+            { type: 'tutorial', label: 'Local demo', icon: 'fa-laptop-code', flow: 'local', stepIndex: 0, prompt: 'show local tutorial' },
+            { type: 'guided-start', label: 'Report Guide', icon: 'fa-list-check', guidedKind: 'reports', prompt: 'guided reports' },
+            { type: 'guided-start', label: 'Analytics Guide', icon: 'fa-chart-pie', guidedKind: 'analytics', prompt: 'guided analytics' },
+            { type: 'export', label: 'Reports CSV', icon: 'fa-file-csv', exportKind: 'reports', prompt: 'export reports csv' },
+            { type: 'overview', label: 'Overview', icon: 'fa-signal', exportKind: '', prompt: 'system overview' }
         ];
         this.ui.shortcutStrip.innerHTML = actions.map((action, index) => `
             <button class="assistant-shortcut-btn" type="button" data-shortcut-index="${index}">
@@ -826,19 +826,7 @@ const CASMAssistant = {
         if (this.handleBusyInteraction()) return;
         this.ui.input.value = '';
         this.autosizeInput();
-        this.pushMessage({
-            role: 'user',
-            text: raw
-        });
-        const session = this.getActiveSession();
-        if (session) {
-            session.context.lastUserPrompt = raw;
-            if (session.title === 'New session' || session.title === 'Getting started') {
-                session.title = this.deriveSessionTitle(raw);
-            }
-        }
-        this.renderSessionRail();
-        this.saveState();
+        this.recordUserPrompt(raw);
         const responseJobId = this.beginResponseFeedback(this.pickResponseFeedback(raw));
         try {
             await this.waitForFeedbackFrame();
@@ -851,7 +839,7 @@ const CASMAssistant = {
     pickResponseFeedback(raw) {
         const query = this.normalizeText(raw);
         if (/\b(export|download|csv)\b/.test(query)) return 'Preparing the export...';
-        if (/\b(reports?|report id|violation records?|case records?|evidence|latest reports?|recent reports?|local synced|synced local)\b/.test(query)) return 'Finding matching reports...';
+        if (/\b(reports?|report id|violation records?|case records?|evidence|latest reports?|recent reports?|local synced|synced local)\b/.test(query)) return 'Reading reports...';
         if (/\b(analytics|metric|metrics|trend|filter|severity|week|month|today)\b/.test(query)) return 'Checking the analytics view...';
         if (/\b(camera|live|monitor|monitoring|supervision|supervise|image|upload)\b/.test(query)) return 'Mapping that to the right workflow...';
         if (/\b(tutorial|guide|handbook|manual|docs)\b/.test(query)) return 'Looking through the guide...';
@@ -860,9 +848,18 @@ const CASMAssistant = {
 
     pickActionFeedback(action = {}) {
         const type = String(action.type || '').trim();
+        if (type === 'route') return `Opening ${action.label || 'the page'}...`;
+        if (type === 'handbook' || type === 'doc-result') return 'Opening the handbook...';
+        if (type === 'tutorial') return 'Loading the tutorial...';
         if (type === 'export') return 'Preparing the export preview...';
         if (type === 'overview') return 'Checking current metrics...';
-        if (type === 'guided-finish') return 'Building the guided result...';
+        if (type === 'guided-start') return `Starting guided ${this.getGuidedKind(action.guidedKind)}...`;
+        if (type === 'guided-finish') {
+            return this.getGuidedKind(action.guidedKind) === 'reports'
+                ? 'Reading reports...'
+                : 'Building the guided result...';
+        }
+        if (type === 'settings-profile') return 'Applying the selected settings...';
         if (type === 'report-review-explain') return 'Reading the selected report...';
         if (type === 'open-report') return 'Opening the selected report...';
         return '';
@@ -3659,7 +3656,7 @@ const CASMAssistant = {
         const filters = this.buildReportFilters(raw);
         const hasFilters = this.hasActiveReportFilters(filters);
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?reports?\b/.test(normalized);
-        const reviewCue = /\b(show|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|look|scan|know|understand|summari[sz]e|explain|interpret|latest|recent|current|so far|have a look|get|main|risk|risks|case|cases)\b/.test(normalized);
+        const reviewCue = /\b(show|shows|showing|see|view|review|check|browse|inspect|filter|find|list|display|slide|slideshow|carousel|walk through|look through|look|scan|know|understand|summari[sz]e|explain|interpret|latest|recent|current|so far|have a look|get|main|risk|risks|case|cases)\b/.test(normalized);
         const pluralLatestCue = /\b(latest|newest|most recent|last|recent)\s+(reports|cases|violations)\b/.test(normalized);
         const wantsLatestOnly = !pluralLatestCue && ((
             /\b(latest|newest|most recent|last)\s+(report|case|violation)\b/.test(normalized)
@@ -3710,7 +3707,7 @@ const CASMAssistant = {
         }
 
         try {
-            this.updateResponseFeedback('Fetching report rows...');
+            this.updateResponseFeedback('Reading report rows...');
             const rows = await API.getViolations({ limit: 1000 });
             this.updateResponseFeedback('Filtering matching reports...');
             const filters = intent.filters || this.buildReportFilters(intent.raw || intent.query || '');
@@ -4802,7 +4799,7 @@ const CASMAssistant = {
             if (Number.isFinite(index) && this.promptActions && this.promptActions[index]) {
                 const action = this.promptActions[index];
                 if (action.type && action.type !== 'prompt') {
-                    this.performAction(action);
+                    this.runActionAsUserPrompt(action);
                 } else {
                     this.runSuggestedPrompt(action.prompt || '');
                 }
@@ -4814,7 +4811,7 @@ const CASMAssistant = {
         if (shortcutButton) {
             const index = Number(shortcutButton.dataset.shortcutIndex || -1);
             if (Number.isFinite(index) && this.shortcutActions && this.shortcutActions[index]) {
-                this.performAction(this.shortcutActions[index]);
+                this.runActionAsUserPrompt(this.shortcutActions[index]);
             }
             return;
         }
@@ -4843,6 +4840,87 @@ const CASMAssistant = {
         this.ui.input.value = text;
         this.autosizeInput();
         await this.handleSubmit();
+    },
+
+    recordUserPrompt(raw) {
+        const text = String(raw || '').trim();
+        if (!text) return;
+        const session = this.getActiveSession();
+        if (session) {
+            session.context.lastUserPrompt = text;
+            if (session.title === 'New session' || session.title === 'Getting started') {
+                session.title = this.deriveSessionTitle(text);
+            }
+        }
+        this.pushMessage({
+            role: 'user',
+            text
+        });
+        this.renderSessionRail();
+        this.saveState();
+    },
+
+    buildPromptForAction(action = {}) {
+        const explicit = String(action.prompt || '').trim();
+        if (explicit) return explicit;
+        const type = String(action.type || '').trim();
+        if (type === 'route') {
+            if (action.focusLocalCheckup) return 'open settings checkup';
+            if (action.page === 'live' && action.liveMode === 'upload') return 'open image analysis';
+            if (action.page === 'live') return 'open camera';
+            if (action.page) return `open ${String(action.page).replace(/-/g, ' ')}`;
+        }
+        if (type === 'handbook' || type === 'doc-result') return 'open handbook';
+        if (type === 'tutorial') return `show ${action.flow === 'local' ? 'local' : 'cloud'} tutorial`;
+        if (type === 'guided-start') return `guided ${this.getGuidedKind(action.guidedKind)}`;
+        if (type === 'export') {
+            return `export ${String(action.exportKind || 'reports').trim().toLowerCase() === 'analytics' ? 'analytics' : 'reports'} csv`;
+        }
+        if (type === 'overview') return 'system overview';
+        if (type === 'settings-profile') {
+            const profile = String(action.profile || 'recommended').trim().toLowerCase();
+            if (profile === 'api') return 'switch to api mode';
+            if (profile === 'local') return 'apply local profile';
+            return 'recommend settings';
+        }
+        return String(action.label || '').trim();
+    },
+
+    buildActionAcknowledgement(action = {}, prompt = '') {
+        const label = String(action.label || action.page || 'That action').trim();
+        const preserved = prompt ? ` I also saved "${prompt}" as your prompt in this chat.` : '';
+        if (action.type === 'route') {
+            return `${label} is ready. I am opening it now.${preserved}`;
+        }
+        if (action.type === 'handbook' || action.type === 'doc-result') {
+            return `${label} is ready in the handbook. I am opening it now.${preserved}`;
+        }
+        return '';
+    },
+
+    async runActionAsUserPrompt(action = {}) {
+        if (!action || !action.type) return;
+        if (this.handleBusyInteraction()) return;
+        const prompt = this.buildPromptForAction(action);
+        if (prompt) {
+            this.recordUserPrompt(prompt);
+        }
+        const feedbackLabel = this.pickActionFeedback(action) || this.pickResponseFeedback(prompt) || 'Working on that...';
+        const responseJobId = this.beginResponseFeedback(feedbackLabel);
+        try {
+            await this.waitForFeedbackFrame();
+            const acknowledgement = this.buildActionAcknowledgement(action, prompt);
+            if (acknowledgement) {
+                this.pushMessage({
+                    role: 'assistant',
+                    text: acknowledgement,
+                    actions: [action]
+                });
+            }
+            await this.performAction(action);
+        } finally {
+            this.finishResponseFeedback(responseJobId);
+        }
     },
 
     pushMessage(message) {
@@ -5192,7 +5270,7 @@ const CASMAssistant = {
             searchTokens: this.tokenize(query)
                 .filter((token) => ![
                     'export', 'download', 'csv', 'reports', 'report', 'analytics', 'local', 'cloud', 'synced',
-                    'show', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
+                    'show', 'shows', 'showing', 'see', 'view', 'review', 'check', 'browse', 'inspect', 'filter', 'find', 'list', 'display',
                     'slide', 'slideshow', 'carousel', 'look', 'through', 'as', 'tag', 'tags', 'source',
                     'latest', 'newest', 'recent', 'recently', 'current', 'last', 'so', 'far', 'have', 'a', 'an', 'the', 'i', 'please',
                     'what', 'why', 'how', 'where', 'when', 'which', 'are', 'is', 'was', 'were', 'do', 'does', 'did',

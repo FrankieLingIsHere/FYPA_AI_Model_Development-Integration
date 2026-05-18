@@ -268,6 +268,70 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         browser.close()
 
 
+def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        page.set_content(_build_page_html(), wait_until="domcontentloaded")
+        page.wait_for_selector("#assistantTitle", state="attached")
+        page.locator("#assistantLauncher").click()
+
+        page.get_by_role("button", name="Reports", exact=True).click()
+        page.wait_for_function("() => window.CASMAssistant.isResponding === false", timeout=10000)
+        shortcut_messages = page.evaluate(
+            """
+            () => window.CASMAssistant.getActiveSession().messages.map((message) => ({
+                role: message.role,
+                text: message.text
+            }))
+            """
+        )
+        assert any(message["role"] == "user" and message["text"] == "open reports" for message in shortcut_messages)
+        assert any("I am opening it now" in message["text"] for message in shortcut_messages if message["role"] == "assistant")
+
+        page.wait_for_timeout(250)
+        if not page.locator("#assistantPanel").is_visible():
+            page.locator("#assistantLauncher").click()
+            page.locator("#assistantPanel").wait_for(state="visible", timeout=10000)
+
+        page.evaluate(
+            """
+            () => {
+                window.__resolveAssistantViolations = null;
+                window.API.getViolations = () => new Promise((resolve) => {
+                    window.__resolveAssistantViolations = () => resolve([
+                        {
+                            report_id: 'progress-report-001',
+                            timestamp: new Date().toISOString(),
+                            status: 'completed',
+                            severity: 'HIGH',
+                            device_id: 'progress-cam',
+                            violation_count: 1,
+                            missing_ppe: ['Hardhat'],
+                            source_scope: 'cloud',
+                            source_label: 'Cloud',
+                            violation_summary: 'PPE Violation Detected: Missing Hardhat'
+                        }
+                    ]);
+                });
+            }
+            """
+        )
+        _submit_prompt(page, "shows reports")
+        page.get_by_text("Reading report rows", exact=False).wait_for(timeout=10000)
+        assert page.evaluate("() => window.CASMAssistant.isResponding === true")
+        user_prompts = page.evaluate(
+            "window.CASMAssistant.getActiveSession().messages.filter((message) => message.role === 'user').map((message) => message.text)"
+        )
+        assert "shows reports" in user_prompts
+
+        page.evaluate("window.__resolveAssistantViolations()")
+        _wait_for_idle_after(page, "shows reports")
+        page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
+        assert "progress-report-001" in page.locator("#assistantMessages").inner_text()
+        browser.close()
+
+
 def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

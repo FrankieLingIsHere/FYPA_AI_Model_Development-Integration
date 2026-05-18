@@ -1164,22 +1164,29 @@ const ReportsPage = {
         }
     },
 
-    async prefetchReport(reportId, sourceHint = null) {
+    async prefetchReport(reportId, sourceHint = null, options = {}) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
-        if (this.prefetchState.completed.has(rid)) return;
-        if (this.prefetchState.inFlight.has(rid)) return;
+        const prefetchKey = options && options.offlineComplete === true
+            ? `${rid}:offline-complete`
+            : rid;
+        if (this.prefetchState.completed.has(prefetchKey)) return;
+        if (this.prefetchState.inFlight.has(prefetchKey)) return;
 
-        this.prefetchState.inFlight.add(rid);
+        this.prefetchState.inFlight.add(prefetchKey);
         try {
-            const result = await API.prefetchReport(rid, { source: sourceHint });
+            const result = await API.prefetchReport(rid, {
+                source: sourceHint,
+                offlineComplete: options && options.offlineComplete === true,
+                inlineImages: options && options.inlineImages === true
+            });
             if (result && result.success) {
-                this.prefetchState.completed.add(rid);
+                this.prefetchState.completed.add(prefetchKey);
             }
         } catch (error) {
             // Non-blocking optimization path.
         } finally {
-            this.prefetchState.inFlight.delete(rid);
+            this.prefetchState.inFlight.delete(prefetchKey);
         }
     },
 
@@ -1903,20 +1910,51 @@ const ReportsPage = {
             && typeof API !== 'undefined'
             && typeof API.getCachedReportUrl === 'function'
         ) {
-            const cachedUrl = await API.getCachedReportUrl(rid, resolvedSourceHint);
+            const needsOfflineCompleteCache = typeof API.reportNeedsEmbeddedImagesForOffline === 'function'
+                && API.reportNeedsEmbeddedImagesForOffline(resolvedSourceHint);
+            if (
+                needsOfflineCompleteCache
+                && typeof API.getCachedReportHtml === 'function'
+                && typeof API.cacheReportHtml === 'function'
+            ) {
+                const completeCached = await API.getCachedReportHtml(rid, resolvedSourceHint, {
+                    requireInlineImages: true
+                });
+                if (!completeCached) {
+                    const cachePromise = API.cacheReportHtml(rid, resolvedSourceHint, {
+                        offlineComplete: true
+                    }).catch(() => false);
+                    await Promise.race([
+                        cachePromise,
+                        new Promise((resolve) => setTimeout(resolve, 1600))
+                    ]);
+                }
+            }
+
+            const cachedUrl = await API.getCachedReportUrl(rid, resolvedSourceHint, {
+                requireInlineImages: needsOfflineCompleteCache
+            });
             if (cachedUrl) {
                 window.open(cachedUrl, '_blank');
                 this.notify(`Opening cached report ${rid}`, 'info');
                 if (typeof this.prefetchReport === 'function') {
-                    this.prefetchReport(rid, resolvedSourceHint).catch(() => {});
+                    this.prefetchReport(rid, resolvedSourceHint, {
+                        offlineComplete: needsOfflineCompleteCache
+                    }).catch(() => {});
                 }
                 return;
             }
         }
 
         try {
+            const needsOfflineCompleteCache = !offline
+                && typeof API !== 'undefined'
+                && typeof API.reportNeedsEmbeddedImagesForOffline === 'function'
+                && API.reportNeedsEmbeddedImagesForOffline(resolvedSourceHint);
             await Promise.race([
-                this.prefetchReport(rid, resolvedSourceHint),
+                this.prefetchReport(rid, resolvedSourceHint, {
+                    offlineComplete: needsOfflineCompleteCache
+                }),
                 new Promise((resolve) => setTimeout(resolve, 250))
             ]);
         } catch (error) {

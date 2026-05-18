@@ -477,6 +477,147 @@ function testSyncedLocalThumbnailRoutesToAvailableBackend() {
   );
 }
 
+function testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride() {
+  const localContext = loadApiContext(
+    async () => createResponse(true, 200, {}),
+    {
+      PPE_API_URL: 'http://127.0.0.1:5000',
+      __PPE_CONFIG__: { API_BASE_URL: 'https://cloud-api.example.test' },
+      location: {
+        origin: 'http://localhost:5000',
+        hostname: 'localhost',
+        protocol: 'http:',
+      },
+    },
+  );
+  localContext.API_CONFIG.BASE_URL = 'http://127.0.0.1:5000';
+
+  const cloudRow = {
+    report_id: 'cloud-local-view-001',
+    status: 'completed',
+    has_original: true,
+    has_annotated: true,
+    has_report: true,
+    has_cloud_artifacts: true,
+    has_cloud_report_artifact: true,
+    original_image_key: 'violation-images/cloud-local-view-001/original.jpg',
+    annotated_image_key: 'violation-images/cloud-local-view-001/annotated.jpg',
+    report_html_key: 'reports/cloud-local-view-001/report.html',
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  };
+
+  assertEqual(
+    localContext.API.getCloudBackendBaseUrl(),
+    'https://cloud-api.example.test',
+    'stale local PPE_API_URL must not replace runtime cloud URL for report assets',
+  );
+  assertEqual(
+    localContext.API.getImageUrl(cloudRow.report_id, 'annotated.jpg', cloudRow),
+    'https://cloud-api.example.test/image/cloud-local-view-001/annotated.jpg',
+    'cloud thumbnails on a localhost page should still use the cloud report asset backend',
+  );
+  assertEqual(
+    localContext.API.getReportNavigationUrl(cloudRow.report_id, cloudRow),
+    'https://cloud-api.example.test/report/cloud-local-view-001',
+    'cloud report navigation on a localhost page should still use the cloud backend',
+  );
+
+  const syncedLocalRow = {
+    ...cloudRow,
+    report_id: 'synced-local-view-001',
+    source_scope: 'synced_local',
+    source_label: 'Local Synced',
+    origin: 'local_synced',
+    sync_source: 'sync_local_cache',
+    device_id: 'local_cache_sync',
+    has_local_artifacts: true,
+    has_local_report: true,
+  };
+  assertEqual(
+    localContext.API.getImageUrl(syncedLocalRow.report_id, 'annotated.jpg', syncedLocalRow),
+    'http://127.0.0.1:5000/image/synced-local-view-001/annotated.jpg',
+    'confirmed local-synced reports with local artifacts should still read from local cache first',
+  );
+}
+
+async function testCloudReportRejectsStaleLocalCachedHtml() {
+  const localContext = loadApiContext(
+    async () => createResponse(true, 200, {}),
+    {
+      PPE_API_URL: 'http://127.0.0.1:5000',
+      __PPE_CONFIG__: { API_BASE_URL: 'https://cloud-api.example.test' },
+      location: {
+        origin: 'http://localhost:5000',
+        hostname: 'localhost',
+        protocol: 'http:',
+      },
+    },
+  );
+
+  const cloudRow = {
+    report_id: 'cloud-stale-html-001',
+    status: 'completed',
+    has_report: true,
+    has_cloud_report_artifact: true,
+    report_html_key: 'reports/cloud-stale-html-001/report.html',
+    source_scope: 'cloud',
+  };
+
+  await localContext.API.writeJsonCache('report-html:universal:cloud-stale-html-001', {
+    report_id: 'cloud-stale-html-001',
+    url: 'http://127.0.0.1:5000/report/cloud-stale-html-001',
+    source_scope: 'cloud',
+    html: '<!doctype html><html><body><img src="/image/cloud-stale-html-001/annotated.jpg"></body></html>',
+  });
+  const staleCached = await localContext.API.getCachedReportHtml('cloud-stale-html-001', cloudRow);
+  assertEqual(staleCached, null, 'cloud report should not reuse a localhost-captured HTML blob while online');
+
+  await localContext.API.writeJsonCache('report-html:universal:cloud-stale-html-001', {
+    report_id: 'cloud-stale-html-001',
+    url: 'https://cloud-api.example.test/report/cloud-stale-html-001',
+    source_scope: 'cloud',
+    html: '<!doctype html><html><body><img src="/image/cloud-stale-html-001/annotated.jpg"></body></html>',
+  });
+  const cloudCached = await localContext.API.getCachedReportHtml('cloud-stale-html-001', cloudRow);
+  assert(cloudCached && cloudCached.html, 'cloud report should keep cloud-captured cached HTML');
+  const cloudCachedRequireInline = await localContext.API.getCachedReportHtml('cloud-stale-html-001', cloudRow, {
+    requireInlineImages: true,
+  });
+  assertEqual(cloudCachedRequireInline, null, 'offline-complete cloud report cache should require embedded images');
+
+  await localContext.API.writeJsonCache('report-html:universal:cloud-stale-html-001', {
+    report_id: 'cloud-stale-html-001',
+    url: 'https://cloud-api.example.test/report/cloud-stale-html-001',
+    source_scope: 'cloud',
+    inline_images: true,
+    html: '<!doctype html><html><body><img src="data:image/jpeg;base64,abc"></body></html>',
+  });
+  const cloudCachedInline = await localContext.API.getCachedReportHtml('cloud-stale-html-001', cloudRow, {
+    requireInlineImages: true,
+  });
+  assert(cloudCachedInline && cloudCachedInline.inline_images === true, 'offline-complete cloud report cache should accept embedded images');
+
+  const syncedLocalRow = {
+    ...cloudRow,
+    report_id: 'synced-local-html-001',
+    source_scope: 'synced_local',
+    origin: 'local_synced',
+    sync_source: 'sync_local_cache',
+    device_id: 'local_cache_sync',
+    has_local_artifacts: true,
+    has_local_report: true,
+  };
+  await localContext.API.writeJsonCache('report-html:universal:synced-local-html-001', {
+    report_id: 'synced-local-html-001',
+    url: 'http://127.0.0.1:5000/report/synced-local-html-001',
+    source_scope: 'synced_local',
+    html: '<!doctype html><html><body><img src="/image/synced-local-html-001/annotated.jpg"></body></html>',
+  });
+  const syncedCached = await localContext.API.getCachedReportHtml('synced-local-html-001', syncedLocalRow);
+  assert(syncedCached && syncedCached.html, 'confirmed local-synced reports should keep local cached HTML');
+}
+
 async function testCompletedLocalSyncCoercesQueuedState() {
   const events = [];
   const context = loadApiContext(async () => createResponse(true, 200, {}));
@@ -536,6 +677,8 @@ async function main() {
     testCloudFallbackRepairsStaleLocalReportCaches,
     testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
     testSyncedLocalThumbnailRoutesToAvailableBackend,
+    testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride,
+    testCloudReportRejectsStaleLocalCachedHtml,
     testCompletedLocalSyncCoercesQueuedState,
   ];
   const failures = [];

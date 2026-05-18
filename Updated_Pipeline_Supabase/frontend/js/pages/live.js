@@ -80,7 +80,7 @@ const LivePage = {
                     <div class="card-content">
                         <div id="realsenseCapabilities" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;"></div>
                         <!-- Live Stream Container -->
-                        <div id="liveStreamContainer" style="background: transparent; border-radius: 8px; text-align: center; margin-bottom: 1.5rem; position: relative;">
+                        <div id="liveStreamContainer" style="background: #000; border-radius: 8px; text-align: center; margin-bottom: 1.5rem; position: relative; overflow: hidden;">
                             <div id="streamPlaceholder" style="padding: 2rem; background: #000; border-radius: 8px; width: 100%;">
                                 <i class="fas fa-video" style="font-size: 4rem; color: #fff; opacity: 0.3; margin-bottom: 1rem;"></i>
                                 <p style="color: #fff; margin: 0;">Click "Start" to begin live monitoring</p>
@@ -88,8 +88,8 @@ const LivePage = {
                                     Real-time YOLO detection with PPE compliance checking
                                 </p>
                             </div>
-                            <img id="liveStream" style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;" />
-                            <video id="phoneCameraPreview" autoplay playsinline muted style="display: none; width: auto; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px;"></video>
+                            <img id="liveStream" style="display: none; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; height: auto; margin: 0 auto; border-radius: 8px; object-fit: contain; background: #000;" />
+                            <video id="phoneCameraPreview" autoplay playsinline muted style="display: none; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; height: auto; margin: 0 auto; border-radius: 8px; object-fit: contain; background: #000;"></video>
                             <canvas id="liveOverlayCanvas" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
                             <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #4CAF50; padding: 8px 16px; border-radius: 20px; font-weight: bold; display: none;">
                                 <i class="fas fa-circle" style="animation: blink 1.5s infinite;"></i> LIVE

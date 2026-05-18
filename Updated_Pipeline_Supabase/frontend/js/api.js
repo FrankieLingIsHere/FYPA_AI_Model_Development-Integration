@@ -86,11 +86,19 @@ const API = {
     },
 
     getCloudBackendBaseUrl() {
-        return this._normalizeBaseUrl(
-            window.PPE_API_URL
-            || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL)
+        const explicitBase = this._normalizeBaseUrl(
+            (typeof window !== 'undefined' && window.PPE_API_URL) || ''
+        );
+        const configuredBase = this._normalizeBaseUrl(
+            (typeof window !== 'undefined'
+                && window.__PPE_CONFIG__
+                && window.__PPE_CONFIG__.API_BASE_URL)
             || ''
         );
+
+        if (explicitBase && !this.isLocalBackendBase(explicitBase)) return explicitBase;
+        if (configuredBase && !this.isLocalBackendBase(configuredBase)) return configuredBase;
+        return explicitBase || configuredBase || '';
     },
 
     getLocalBackendBaseUrl() {
@@ -1193,7 +1201,16 @@ const API = {
         const rid = String(reportId || '').trim();
         if (!rid) return false;
         if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
-        const inlineImages = !!(options && options.inlineImages === true);
+        const inlineImages = !!(
+            options
+            && (
+                options.inlineImages === true
+                || (
+                    options.offlineComplete === true
+                    && this.reportNeedsEmbeddedImagesForOffline(sourceHint)
+                )
+            )
+        );
 
         const sourceScope = this.inferReportSourceScope(sourceHint);
         const cloudBase = this.getCloudBackendBaseUrl();
@@ -1231,6 +1248,7 @@ const API = {
                 report_id: rid,
                 url,
                 source_scope: this.inferReportSourceScope(sourceHint) || '',
+                inline_images: inlineImages,
                 html: cachedHtml,
                 cached_at: new Date().toISOString()
             });
@@ -1353,18 +1371,61 @@ const API = {
         return `<!doctype html><html><head>${baseTag}</head><body>${raw}</body></html>`;
     },
 
-    async getCachedReportHtml(reportId, sourceHint = null) {
+    reportNeedsEmbeddedImagesForOffline(sourceHint = null) {
+        const scope = this.inferReportSourceScope(sourceHint);
+        return scope === 'cloud'
+            || scope === 'shared'
+            || (
+                scope === 'synced_local'
+                && !this.hasConcreteLocalReportArtifacts(sourceHint)
+            );
+    },
+
+    async getCachedReportHtml(reportId, sourceHint = null, options = {}) {
         const rid = String(reportId || '').trim();
         if (!rid) return null;
         const cached = await this.readJsonCache(this.reportHtmlCacheScope(rid, sourceHint));
         if (cached && cached.data && typeof cached.data.html === 'string' && cached.data.html.trim()) {
+            if (this.isCachedReportHtmlStaleForSource(cached.data, sourceHint)) {
+                await this.removeJsonCache(this.reportHtmlCacheScope(rid, sourceHint));
+                return null;
+            }
+            if (
+                options
+                && options.requireInlineImages === true
+                && this.reportNeedsEmbeddedImagesForOffline(sourceHint)
+                && cached.data.inline_images !== true
+            ) {
+                return null;
+            }
             return cached.data;
         }
         return null;
     },
 
-    async getCachedReportUrl(reportId, sourceHint = null) {
-        const cached = await this.getCachedReportHtml(reportId, sourceHint);
+    isCachedReportHtmlStaleForSource(cachedReport = {}, sourceHint = null) {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+
+        const needsCloudAssets = this.reportNeedsEmbeddedImagesForOffline(sourceHint);
+        if (!needsCloudAssets) return false;
+
+        const cloudBase = this.getCloudBackendBaseUrl();
+        if (!cloudBase || this.isLocalBackendBase(cloudBase)) return false;
+
+        const cachedUrl = String((cachedReport && cachedReport.url) || '').trim();
+        if (!cachedUrl) return false;
+
+        try {
+            const resolved = new URL(cachedUrl, window.location.origin);
+            const cachedBase = this._normalizeBaseUrl(resolved.origin);
+            return this.isLocalBackendBase(cachedBase);
+        } catch (error) {
+            return false;
+        }
+    },
+
+    async getCachedReportUrl(reportId, sourceHint = null, options = {}) {
+        const cached = await this.getCachedReportHtml(reportId, sourceHint, options);
         if (!cached || !cached.html) return null;
 
         const rid = String(reportId || '').trim();
@@ -1381,7 +1442,9 @@ const API = {
     },
 
     async getOfflineCachedReportUrl(reportId, sourceHint = null) {
-        return this.getCachedReportUrl(reportId, sourceHint);
+        return this.getCachedReportUrl(reportId, sourceHint, {
+            requireInlineImages: this.reportNeedsEmbeddedImagesForOffline(sourceHint)
+        });
     },
 
     prefetchReportHtmlFromList(list = [], options = {}) {
@@ -2511,7 +2574,10 @@ const API = {
                 headers: { 'Content-Type': 'application/json' },
                 cache: 'no-store'
             });
-            htmlCached = await this.cacheReportHtml(reportId, sourceHint);
+            htmlCached = await this.cacheReportHtml(reportId, sourceHint, {
+                offlineComplete: options.offlineComplete === true,
+                inlineImages: options.inlineImages === true
+            });
             if (!response.ok) {
                 return { success: htmlCached, html_cached: htmlCached, error: `Prefetch failed: ${response.status}` };
             }
@@ -2520,7 +2586,10 @@ const API = {
                 ? { ...data, html_cached: htmlCached, success: !!(data.success || htmlCached) }
                 : { success: htmlCached, html_cached: htmlCached, error: 'Invalid prefetch response' };
         } catch (error) {
-            htmlCached = await this.cacheReportHtml(reportId, sourceHint);
+            htmlCached = await this.cacheReportHtml(reportId, sourceHint, {
+                offlineComplete: options.offlineComplete === true,
+                inlineImages: options.inlineImages === true
+            });
             return {
                 success: htmlCached,
                 html_cached: htmlCached,

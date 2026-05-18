@@ -741,7 +741,6 @@ const API = {
         if (/SAFETY ?VEST|HI ?VIS|HIGH ?VIS|VEST/.test(simplified)) return 'NO-Safety Vest';
         if (/GLOVE/.test(simplified)) return 'NO-Gloves';
         if (/MASK|RESPIRATOR/.test(simplified)) return 'NO-Mask';
-        if (/GOGGLE|EYE/.test(simplified)) return 'NO-Goggles';
         if (/SAFETY ?SHOE|SAFETY ?BOOT|FOOTWEAR|BOOT/.test(simplified)) return 'NO-Safety Shoes';
 
         return null;
@@ -814,7 +813,6 @@ const API = {
         if (canonical === 'NO-Safety Vest') return 'Safety Vest';
         if (canonical === 'NO-Gloves') return 'Gloves';
         if (canonical === 'NO-Mask') return 'Mask';
-        if (canonical === 'NO-Goggles') return 'Goggles';
         if (canonical === 'NO-Safety Shoes') return 'Safety Shoes';
         return '';
     },
@@ -830,6 +828,7 @@ const API = {
         const raw = Array.isArray(violation?.missing_ppe) ? violation.missing_ppe : [];
         return [...new Set(raw
             .map((item) => String(item || '').replace(/^NO[-\s]+/i, '').trim())
+            .filter((item) => !/^(goggles?|eye protection|safety glasses|eyewear)$/i.test(item))
             .filter(Boolean))];
     },
 
@@ -866,7 +865,6 @@ const API = {
             'NO-Safety Vest': 0,
             'NO-Gloves': 0,
             'NO-Mask': 0,
-            'NO-Goggles': 0,
             'NO-Safety Shoes': 0
         };
 

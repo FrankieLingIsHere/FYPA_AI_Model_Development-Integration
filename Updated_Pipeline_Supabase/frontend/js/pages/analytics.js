@@ -305,7 +305,6 @@ const AnalyticsPage = {
             'NO-Safety Vest',
             'NO-Gloves',
             'NO-Mask',
-            'NO-Goggles',
             'NO-Safety Shoes'
         ]);
         const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
@@ -382,7 +381,6 @@ const AnalyticsPage = {
         if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
         if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
         if (/\b(no )?(mask|masks|respirator|respirators)\b/.test(normalized)) return 'NO-Mask';
-        if (/\b(no )?(goggles?|eye protection|eyewear)\b/.test(normalized)) return 'NO-Goggles';
         if (/\b(no )?(safety )?(shoe|shoes|boot|boots)\b/.test(normalized)) return 'NO-Safety Shoes';
         return String(label || '').trim();
     },
@@ -1145,7 +1143,6 @@ const AnalyticsPage = {
             { name: 'Missing Safety Vest', count: breakdown['NO-Safety Vest'] || 0, color: 'var(--warning-color)' },
             { name: 'Missing Gloves', count: breakdown['NO-Gloves'] || 0, color: 'var(--info-color)' },
             { name: 'Missing Mask', count: breakdown['NO-Mask'] || 0, color: '#9b59b6' },
-            { name: 'Missing Goggles', count: breakdown['NO-Goggles'] || 0, color: '#e67e22' },
             { name: 'Missing Safety Shoes', count: breakdown['NO-Safety Shoes'] || 0, color: '#16a085' }
         ];
 

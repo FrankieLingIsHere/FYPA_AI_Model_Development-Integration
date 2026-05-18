@@ -23,7 +23,7 @@ function extractPrompts(markdown) {
 
 function hasCasmSignal(prompt) {
   const query = normalize(prompt);
-  return /\b(casm|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|camera|cam|feed|stream|monitor|site|construction|zone|gate|warehouse|perimeter|entrance|dashboard|analytics|metric|chart|graph|trend|compliance|safe|safety|unsafe|violation|violations|incident|incidents|alert|alerts|report|reports|records?|audit|evidence|csv|spreadsheet|excel|export|download|data|log|logs|device|devices|edge|streamer|approval|approve|authorize|provision|filter|summary|manager|briefing|toolbox|worker|supervisor|admin|local mode|cloud mode|settings|hando?book|manual|documentation|tutorial|guide|screen|page|button|login|support|bug|error|offline|online|slow|broken|frozen|loading|status|health)\b/.test(query);
+  return /\b(casm|ppe|helmet|hardhat|vest|glove|mask|boot|shoe|camera|cam|feed|stream|monitor|site|construction|zone|gate|warehouse|perimeter|entrance|dashboard|analytics|metric|chart|graph|trend|compliance|safe|safety|unsafe|violation|violations|incident|incidents|alert|alerts|report|reports|records?|audit|evidence|csv|spreadsheet|excel|export|download|data|log|logs|device|devices|edge|streamer|approval|approve|authorize|provision|filter|summary|manager|briefing|toolbox|worker|supervisor|admin|local mode|cloud mode|settings|hando?book|manual|documentation|tutorial|guide|screen|page|button|login|support|bug|error|offline|online|slow|broken|frozen|loading|status|health)\b/.test(query);
 }
 
 function isGracefulFallbackAllowed(prompt) {

@@ -65,8 +65,8 @@ def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists()
         context_text="Worker exposed to silica dust and airborne respiratory contaminants.",
     ) == "HIGH"
     assert casm_app._classify_violation_severity(
-        violation_types=["NO-Goggles"],
-        context_text="Grinding and cutting work producing flying particles and debris.",
+        violation_types=["NO-Gloves"],
+        context_text="Grinding and cutting work producing sharp fragments and hot abrasive edges.",
     ) == "HIGH"
     assert casm_app._classify_violation_severity(
         violation_types=["NO-Mask", "NO-Gloves", "NO-Safety Shoes"],
@@ -88,6 +88,15 @@ def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists()
         violation_types=["NO-Safety Vest"],
         context_text="Public street scene near a bus stop with pedestrians.",
     ) == "MEDIUM"
+
+
+def test_removed_goggles_class_is_ignored_by_active_violation_taxonomy():
+    assert casm_app._is_violation_label("NO-Goggles") is False
+    assert casm_app._normalize_violation_type_label("NO-Goggles") == ""
+    assert casm_app._classify_violation_severity(
+        violation_types=["NO-Goggles"],
+        context_text="Grinding work producing flying particles.",
+    ) == "LOW"
 
 
 def test_report_severity_uses_detection_and_summary_fallbacks():

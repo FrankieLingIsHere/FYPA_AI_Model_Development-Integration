@@ -1129,7 +1129,7 @@ const CASMAssistant = {
                     'summarize risk this week',
                     'give me compliance score'
                 ],
-                keywords: ['analytics', 'metric', 'stats', 'trend', 'dashboard', 'summary', 'violation', 'incident', 'alert', 'unsafe', 'safety', 'risk', 'score', 'compliance', 'how many', 'issue', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'goggle', 'boot', 'shoe', 'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low']
+                keywords: ['analytics', 'metric', 'stats', 'trend', 'dashboard', 'summary', 'violation', 'incident', 'alert', 'unsafe', 'safety', 'risk', 'score', 'compliance', 'how many', 'issue', 'helmet', 'hardhat', 'vest', 'mask', 'glove', 'boot', 'shoe', 'today', 'yesterday', 'week', 'month', 'high', 'medium', 'low']
             },
             {
                 id: 'open-analytics',
@@ -1538,7 +1538,6 @@ const CASMAssistant = {
             'NO-Safety Vest',
             'NO-Gloves',
             'NO-Mask',
-            'NO-Goggles',
             'NO-Safety Shoes'
         ]);
         const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
@@ -1611,7 +1610,6 @@ const CASMAssistant = {
                 'NO-Safety Vest',
                 'NO-Gloves',
                 'NO-Mask',
-                'NO-Goggles',
                 'NO-Safety Shoes'
             ]);
             const currentPpe = Array.isArray(next.ppeTypes) ? next.ppeTypes : [];
@@ -1783,7 +1781,6 @@ const CASMAssistant = {
                     ['Missing vest', 'NO-Safety Vest'],
                     ['Missing mask', 'NO-Mask'],
                     ['Missing gloves', 'NO-Gloves'],
-                    ['Missing goggles', 'NO-Goggles'],
                     ['Missing shoes', 'NO-Safety Shoes']
                 ].map(([label, value]) => this.buildGuidedToggleAction(
                     this.buildChoiceLabel(label, selectedPpe.includes(value)),
@@ -2398,12 +2395,12 @@ const CASMAssistant = {
                     'what safety gear is checked',
                     'what missing ppe does it look for',
                     'can it check uploaded images for missing ppe',
-                    'can this system check whether workers are missing helmets vests gloves masks goggles or safety shoes',
+                    'can this system check whether workers are missing helmets vests gloves masks or safety shoes',
                     'can image analysis detect missing ppe',
                     'what ppe can it check from uploaded photos'
                 ],
-                keywords: ['detect', 'check', 'ppe', 'helmet', 'hardhat', 'vest', 'gloves', 'mask', 'goggles', 'boots', 'shoes', 'equipment', 'gear', 'missing', 'worker', 'upload', 'image'],
-                text: 'CASM focuses on PPE compliance. The dashboard and reports track missing hardhat or helmet, safety vest, gloves, mask or respirator, goggles, and safety shoes or boots where those classes are available in the detection result.',
+                keywords: ['detect', 'check', 'ppe', 'helmet', 'hardhat', 'vest', 'gloves', 'mask', 'boots', 'shoes', 'equipment', 'gear', 'missing', 'worker', 'upload', 'image'],
+                text: 'CASM focuses on PPE compliance. The dashboard and reports track missing hardhat or helmet, safety vest, gloves, mask or respirator, and safety shoes or boots where those classes are available in the detection result.',
                 bullets: [
                     'The exact classes shown depend on what the detector reports for a frame or image.',
                     'Reports keep the missing-PPE labels so the same evidence can be reviewed later.',
@@ -2542,7 +2539,7 @@ const CASMAssistant = {
     },
 
     hasCasmDomainSignal(query) {
-        return /\b(casm|system|app|assistant|mira|ppe|safety|construction|site|worker|monitor|camera|image|report|reports|analytics|violation|violations|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|local|cloud|sync|settings|handbook)\b/.test(query);
+        return /\b(casm|system|app|assistant|mira|ppe|safety|construction|site|worker|monitor|camera|image|report|reports|analytics|violation|violations|helmet|hardhat|vest|glove|mask|boot|shoe|local|cloud|sync|settings|handbook)\b/.test(query);
     },
 
     resolveSemanticAnswer(raw, query = '') {
@@ -2656,8 +2653,8 @@ const CASMAssistant = {
 
     getSemanticModelCueBoost(modelId, normalized) {
         if (modelId === 'ppe-detection'
-            && /\b(detect|check|missing|ppe|equipment|gear|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?|worker|image|upload)\b/.test(normalized)
-            && /\b(image|upload|camera|worksite|worker|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?|ppe|equipment|gear)\b/.test(normalized)) {
+            && /\b(detect|check|missing|ppe|equipment|gear|helmet|hardhat|vest|gloves?|mask|boots?|shoes?|worker|image|upload)\b/.test(normalized)
+            && /\b(image|upload|camera|worksite|worker|helmet|hardhat|vest|gloves?|mask|boots?|shoes?|ppe|equipment|gear)\b/.test(normalized)) {
             return 0.18;
         }
         if (modelId === 'local-cloud-offline'
@@ -3298,8 +3295,8 @@ const CASMAssistant = {
             && !/\b(camera|report|reports|analytics|metric|violation|violations|incident|alert|ppe|helmet|hardhat|vest|site|safety|safe|compliance|dashboard|system)\b/.test(query);
         if (offTopicOnly) return null;
         const directOpen = /\b(open|go to|take me to)\s+(the\s+)?analytics\b/.test(query);
-        const analyticsMatch = /\b(analytics|metric|metrics|data|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|issues?|problems?|bad stuff|ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|site|happen|happened|going on|important|main)\b/.test(query);
-        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|goggles?|boots?|shoes?)\b/.test(query);
+        const analyticsMatch = /\b(analytics|metric|metrics|data|ready rate|high severity|severity share|trend|trends|chart|graph|peak window|safety score|compliance score|dashboard stats?|violation count|how many violations|last violation|incident|incidents|alert|alerts|risk|unsafe|safety issue|issues?|problems?|bad stuff|ppe|helmet|hardhat|vest|glove|mask|boot|shoe|site|happen|happened|going on|important|main)\b/.test(query);
+        const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|boots?|shoes?)\b/.test(query);
         const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|compared|comparison|tell me|what is|what happened|what happen|how many|count|find|list|filter|only|just|latest|any|did|have|had|data|highlight|main|important|more|fewer|need|want)\b/.test(query);
         if (directOpen && !filterMatch) {
             return null;
@@ -3368,7 +3365,6 @@ const CASMAssistant = {
             'NO-Safety Vest',
             'NO-Gloves',
             'NO-Mask',
-            'NO-Goggles',
             'NO-Safety Shoes'
         ]);
         const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
@@ -3430,7 +3426,6 @@ const CASMAssistant = {
         if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
         if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
         if (/\b(no )?(mask|masks|respirator|respirators)\b/.test(normalized)) return 'NO-Mask';
-        if (/\b(no )?(goggles?|eye protection|eyewear)\b/.test(normalized)) return 'NO-Goggles';
         if (/\b(no )?(safety )?(shoe|shoes|boot|boots)\b/.test(normalized)) return 'NO-Safety Shoes';
         return String(label || '').trim();
     },
@@ -3445,7 +3440,6 @@ const CASMAssistant = {
         if (/\b(safety vest|vest|vests)\b/.test(query)) add('NO-Safety Vest');
         if (/\b(glove|gloves)\b/.test(query)) add('NO-Gloves');
         if (/\b(mask|masks|respirator|respirators)\b/.test(query)) add('NO-Mask');
-        if (/\b(goggle|goggles|eye protection|eyewear)\b/.test(query)) add('NO-Goggles');
         if (/\b(safety shoe|safety shoes|shoe|shoes|boot|boots)\b/.test(query)) add('NO-Safety Shoes');
         return labels;
     },
@@ -4020,8 +4014,6 @@ const CASMAssistant = {
             respirator: 'Mask',
             gloves: 'Gloves',
             glove: 'Gloves',
-            goggles: 'Goggles',
-            goggle: 'Goggles',
             boots: 'Safety Boots',
             boot: 'Safety Boots',
             shoes: 'Safety Shoes',
@@ -5288,7 +5280,7 @@ const CASMAssistant = {
                     'failed', 'failure', 'error', 'errored', 'skipped', 'partial', 'shared',
                     'violation', 'violations', 'incident', 'incidents', 'ppe',
                     'helmet', 'helmets', 'hardhat', 'hardhats', 'hard', 'hat', 'vest', 'vests',
-                    'glove', 'gloves', 'mask', 'masks', 'goggle', 'goggles', 'boot', 'boots', 'shoe', 'shoes',
+                    'glove', 'gloves', 'mask', 'masks', 'boot', 'boots', 'shoe', 'shoes',
                     'jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may', 'jun', 'june',
                     'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september', 'oct', 'october', 'nov', 'november', 'dec', 'december'
                 ].includes(token))

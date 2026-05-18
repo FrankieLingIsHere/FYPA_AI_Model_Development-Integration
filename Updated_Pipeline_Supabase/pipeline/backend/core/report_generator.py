@@ -163,16 +163,14 @@ _PPE_CANONICAL_LABELS = {
     'hardhat': 'Hardhat',
     'safety_vest': 'Safety Vest',
     'gloves': 'Gloves',
-    'goggles': 'Goggles',
     'footwear': 'Footwear',
     'mask': 'Mask',
 }
-_PPE_CANONICAL_ORDER = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
+_PPE_CANONICAL_ORDER = ['hardhat', 'safety_vest', 'gloves', 'footwear', 'mask']
 _PPE_CANONICAL_TERMS = {
     'hardhat': ('hardhat', 'hard hat', 'helmet', 'safety helmet'),
     'safety_vest': ('safety vest', 'vest', 'hi vis', 'hi-vis', 'high visibility', 'high-visibility'),
     'gloves': ('glove', 'gloves', 'hand protection'),
-    'goggles': ('goggle', 'goggles', 'safety glasses', 'eye protection'),
     'footwear': ('footwear', 'boot', 'boots', 'shoe', 'shoes', 'safety shoes', 'safety boots'),
     'mask': ('mask', 'respirator', 'face mask', 'n95'),
 }
@@ -1045,7 +1043,7 @@ class ReportGenerator:
                 # "No PPE is visible in a roadside work zone" is still positive
                 # roadside evidence; "no road, traffic cones, or roadside controls"
                 # is not.
-                if not re.search(r'\b(ppe|helmet|hardhat|vest|glove|mask|goggle|boot|shoe|harness)\b', between):
+                if not re.search(r'\b(ppe|helmet|hardhat|vest|glove|mask|boot|shoe|harness)\b', between):
                     continue
             return True
         return False
@@ -1510,7 +1508,6 @@ class ReportGenerator:
             'hardhat': ['hardhat', 'hard hat', 'safety helmet', 'helmet'],
             'safety_vest': ['vest', 'high-visibility', 'hi-vis', 'safety vest'],
             'gloves': ['gloves', 'hand protection'],
-            'goggles': ['goggles', 'eye protection', 'safety glasses'],
             'footwear': ['boots', 'safety boots', 'footwear', 'safety shoes'],
             'mask': ['mask', 'respirator', 'face mask']
         }
@@ -1680,8 +1677,7 @@ RESPONSE FORMAT (JSON):
                 "safety_vest": "Mentioned/Missing/Not Required",
                 "mask": "Mentioned/Missing/Not Required",
                 "gloves": "Mentioned/Missing/Not Required",
-                "footwear": "Mentioned/Missing/Not Required",
-                "goggles": "Mentioned/Missing/Not Required"
+                "footwear": "Mentioned/Missing/Not Required"
             }},
             "hazards_faced": [
                  {{ "type": "Hazard type", "source": "Source", "severity": "HIGH/MEDIUM/LOW" }}
@@ -2301,7 +2297,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                                     "mask": {"type": "string"},
                                     "gloves": {"type": "string"},
                                     "footwear": {"type": "string"},
-                                    "goggles": {"type": "string"},
                                 },
                             },
                             "hazards_faced": {
@@ -3605,17 +3600,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'penalty': 'General penalty under OSHA 1994 Section 15: Fine up to RM 50,000.',
                 'risk_tier': 'MEDIUM'  # Tier 2: End-of-Shift Batch
             },
-            'goggles': {
-                'hazard': 'Exposure to flying particles (grinding/chipping), chemical splashes, or intense light emissions.',
-                'risk': 'Severe: Corneal abrasion, chemical eye burns, or permanent vision loss.',
-                'action': 'ISSUE EYE PROTECTION: Worker exposed to flying particles/splashes. Provide MS 2050 compliant goggles.',
-                'legal_citation': 'BOWEC 1986 Reg. 13: Eye protection for hazardous processes.',
-                'technical_standard': 'MS 2050: Eye protectors for industrial use.',
-                'regulation': 'BOWEC 1986 Reg. 13 / MS 2050',
-                'requirement': 'Eye protection (MS 2050) is mandatory for processes involving flying particles (welding, cutting, grinding).',
-                'penalty': 'Strict liability offense under FMA 1967. Fine up to RM 5,000.',
-                'risk_tier': 'MEDIUM'  # Tier 2: End-of-Shift Batch
-            },
             'footwear': {
                 'hazard': 'Foot exposure to sharp objects (nails), crushing weights, or uneven terrain/slip hazards.',
                 'risk': 'Serious: Crushed toes, puncture wounds (tetanus risk), or skeletal fractures.',
@@ -3840,7 +3824,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             }
 
         # Build PPE status and collect data
-        ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']}
+        ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'footwear', 'mask']}
         hazards, risks, actions, regulations = [], [], [], []
 
         def _add_violation_signal(key: str, ppe_field: Optional[str] = None) -> None:
@@ -5574,8 +5558,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'mask': 'Mask',
             'respirator': 'Respirator',
             'glove': 'Gloves',
-            'goggle': 'Safety Goggles',
-            'eye protection': 'Safety Goggles',
             'boot': 'Safety Boots',
         }
         for keyword, label in missing_keyword_map.items():
@@ -5654,7 +5636,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Mask': 'Respiratory exposure risk from dust or airborne contaminants',
                 'Respirator': 'Respiratory exposure risk from hazardous airborne particles',
                 'Gloves': 'Hand injury risk from abrasion, sharp edges, or tool contact',
-                'Safety Goggles': 'Eye injury risk from dust, particles, or debris',
                 'Safety Boots': 'Foot injury risk from impact, puncture, or slip hazards',
             }
             for item in detected_missing_labels:
@@ -5682,7 +5663,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Mask': 'USECHH Regulations 2000 - Respiratory protection for airborne hazards',
                 'Respirator': 'USECHH Regulations 2000 - Respiratory protection for airborne hazards',
                 'Gloves': 'OSHA 1994 Section 15 - Duty to provide suitable protective equipment',
-                'Safety Goggles': 'OSHA 1994 Section 15 - Eye and face protection obligations',
                 'Safety Boots': 'OSHA 1994 Section 15 - Foot protection obligations',
             }
             for item in detected_missing_labels:
@@ -5984,7 +5964,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'safety_vest': 'High-visibility requirement requires supervisor verification; no active traffic, mobile plant, vehicle path, or controlled work-zone exposure is confirmed.',
             'mask': 'Respiratory-protection requirement requires supervisor verification; no dust, fume, chemical, smoke, or airborne contaminant source is confirmed.',
             'gloves': 'Hand-protection requirement requires task verification; no sharp, hot, abrasive, or chemical handling activity is confirmed.',
-            'goggles': 'Eye-protection requirement requires task verification; no grinding, cutting, splash, or flying-particle activity is confirmed.',
             'footwear': 'Foot-protection requirement requires task verification; no crushing, puncture, uneven-terrain, or slip hazard is confirmed.',
         }
         hazards = [hazards_by_key[key] for key in missing_keys if key in hazards_by_key]
@@ -6042,11 +6021,6 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 "The glove detector flag is a low-likelihood compliance concern because the frame does not show abrasive handling, sharp edges, hot work, or chemical contact. "
                 "Hand protection should be verified against the assigned task before the finding is escalated beyond routine corrective follow-up.",
                 "YOLO flagged missing Gloves; caption/scene evidence does not confirm hand-injury exposure.",
-            ),
-            'goggles': (
-                "The eye-protection detector flag is a low-likelihood compliance concern because the frame does not show grinding, cutting, splashing, or flying-particle activity. "
-                "Eye protection should be verified against the assigned task before treating the finding as a process-specific breach.",
-                "YOLO flagged missing Goggles; caption/scene evidence does not confirm eye-hazard exposure.",
             ),
             'footwear': (
                 "The footwear detector flag is a low-likelihood compliance concern because the frame does not show crushing loads, puncture hazards, uneven ground, or wet/slip exposure. "
@@ -6477,7 +6451,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             if not text.strip():
                 continue
             for match in re.finditer(
-                r'(?:NO[-_\s]*|Missing\s+)(Hardhat|Hard\s+Hat|Helmet|Safety\s+Helmet|Safety\s+Vest|Vest|Gloves?|Goggles?|Safety\s+Glasses|Footwear|Boots?|Shoes?|Mask|Respirator)',
+                r'(?:NO[-_\s]*|Missing\s+)(Hardhat|Hard\s+Hat|Helmet|Safety\s+Helmet|Safety\s+Vest|Vest|Gloves?|Footwear|Boots?|Shoes?|Mask|Respirator)',
                 text,
                 flags=re.IGNORECASE,
             ):
@@ -7189,8 +7163,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ppe_items = []
             has_missing_ppe = False
 
-            ppe_keys_order = ['hardhat', 'safety_vest', 'gloves', 'goggles', 'footwear', 'mask']
-            ppe_keys = [k for k in ppe_keys_order if k in ppe] + [k for k in ppe.keys() if k not in ppe_keys_order]
+            ppe_keys_order = ['hardhat', 'safety_vest', 'gloves', 'footwear', 'mask']
+            ppe_keys = [k for k in ppe_keys_order if k in ppe] + [
+                k for k in ppe.keys()
+                if k not in ppe_keys_order and _canonical_ppe_key(k)
+            ]
 
             person_missing_ppe: List[str] = []
             environment_type = str(nlp_analysis.get('environment_type') or 'work').strip() or 'work'

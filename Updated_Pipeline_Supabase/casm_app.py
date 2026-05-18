@@ -984,9 +984,11 @@ def _normalize_label(value: str) -> str:
 def _is_violation_label(class_name: str) -> bool:
     """Return True if class name indicates missing PPE."""
     normalized = _normalize_label(class_name)
+    if normalized in {'no-goggles', 'no-goggle', 'without-goggles', 'without-goggle', 'no-eye-protection', 'no-safety-glasses'}:
+        return False
     return (
         normalized.startswith('no-')
-        or normalized in {'without-hardhat', 'without-mask', 'without-goggles', 'without-gloves', 'without-safety-vest'}
+        or normalized in {'without-hardhat', 'without-mask', 'without-gloves', 'without-safety-vest'}
     )
 
 
@@ -1061,7 +1063,7 @@ def _normalize_violation_type_label(value: Any) -> str:
     if normalized in {'glove', 'gloves'}:
         return 'NO-Gloves'
     if normalized in {'goggle', 'goggles', 'eye-protection', 'safety-glasses'}:
-        return 'NO-Goggles'
+        return ''
     if normalized in {'safety-shoe', 'safety-shoes', 'safety-boot', 'safety-boots', 'footwear', 'boot', 'boots'}:
         return 'NO-Safety Shoes'
     if normalized in {'ppe', 'ppe-violation', 'missing-ppe', 'violation'}:
@@ -1210,10 +1212,6 @@ _PPE_HIGH_RISK_CONTEXT_TERMS = {
         'grinder', 'welding', 'hot work', 'burn', 'abrasive', 'handling',
         'glass', 'metal', 'machinery'
     },
-    'NO-Goggles': {
-        'chemical', 'solvent', 'splash', 'spray', 'dust', 'silica', 'grinder',
-        'cutting', 'saw', 'welding', 'hot work', 'flying particles', 'debris'
-    },
     'NO-Safety Shoes': {
         'construction', 'warehouse', 'loading bay', 'loading dock', 'forklift',
         'truck', 'vehicle', 'heavy material', 'falling object', 'machinery',
@@ -1258,7 +1256,7 @@ def _severity_from_violation_label(label: Any) -> str:
     normalized_key = normalized_label.lower()
     if normalized_key in {'no-hardhat', 'no-safety vest', 'no-safety-vest', 'no-harness'}:
         return 'HIGH'
-    if normalized_key in {'no-mask', 'no-gloves', 'no-goggles', 'no-safety shoes', 'no-safety-shoes'}:
+    if normalized_key in {'no-mask', 'no-gloves', 'no-safety shoes', 'no-safety-shoes'}:
         return 'MEDIUM'
     if normalized_key.startswith('no-'):
         return 'MEDIUM'
@@ -1340,10 +1338,10 @@ def _contextual_severity_for_label(label: str, base_severity: str, context_text:
     if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and environment_review_context:
         return 'MEDIUM'
 
-    # Respiratory, hand, eye, and footwear PPE become high only when the scene
+    # Respiratory, hand, and footwear PPE become high only when the scene
     # or caption names the matching exposure. Otherwise their configured medium
     # base remains a review-worthy but not automatically high-severity finding.
-    if normalized_label in {'NO-Mask', 'NO-Gloves', 'NO-Goggles', 'NO-Safety Shoes'}:
+    if normalized_label in {'NO-Mask', 'NO-Gloves', 'NO-Safety Shoes'}:
         if high_for_label:
             return 'HIGH'
         return 'MEDIUM' if base_severity in {'HIGH', 'MEDIUM'} else base_severity
@@ -2957,12 +2955,13 @@ def format_violation_type(class_name: str) -> str:
     class_name_upper = class_name.upper()
     if class_name_upper.startswith('NO-'):
         item = class_name[3:]  # Remove 'NO-' or 'no-'
+        if _normalize_label(item) in {'goggle', 'goggles', 'eye-protection', 'safety-glasses'}:
+            return ''
         # Format specific items
         item = item.replace('hardhat', 'Hard Hat').replace('Hardhat', 'Hard Hat')
         item = item.replace('safety vest', 'Safety Vest').replace('Safety Vest', 'Safety Vest')
         item = item.replace('gloves', 'Gloves').replace('Gloves', 'Gloves')
         item = item.replace('mask', 'Mask').replace('Mask', 'Mask')
-        item = item.replace('goggles', 'Goggles').replace('Goggles', 'Goggles')
         return f"Missing {item}"
     return class_name
 

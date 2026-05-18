@@ -26,7 +26,6 @@ class CaptionValidator:
         'mask': ['mask', 'face mask', 'respirator', 'protective mask'],
         'safety_vest': ['vest', 'safety vest', 'hi-vis', 'high visibility', 'reflective vest'],
         'gloves': ['glove', 'gloves', 'hand protection', 'safety gloves'],
-        'goggles': ['goggles', 'safety glasses', 'eye protection', 'protective eyewear'],
         'boots': ['boot', 'boots', 'safety boots', 'steel toe', 'work boots'],
     }
 
@@ -150,7 +149,6 @@ class CaptionValidator:
             'mask': False,
             'safety_vest': False,
             'gloves': False,
-            'goggles': False,
             'boots': False
         }
 
@@ -240,7 +238,7 @@ class CaptionValidator:
         contradictions = []
 
         # Check PPE items (HIGH PRIORITY - these are critical)
-        ppe_items = ['hardhat', 'mask', 'safety_vest', 'gloves', 'goggles', 'boots']
+        ppe_items = ['hardhat', 'mask', 'safety_vest', 'gloves', 'boots']
 
         for item_type in ppe_items:
             detected = detected_items.get(item_type, False)
@@ -325,7 +323,7 @@ class CaptionValidator:
         ppe_agreements = 0
         ppe_checks = 0
 
-        ppe_items = ['hardhat', 'mask', 'safety_vest', 'gloves', 'goggles', 'boots']
+        ppe_items = ['hardhat', 'mask', 'safety_vest', 'gloves', 'boots']
 
         for item_type in ppe_items:
             detected = detected_items.get(item_type, False)

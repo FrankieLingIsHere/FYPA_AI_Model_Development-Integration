@@ -21,7 +21,6 @@ def calculate_iou(boxA, boxB):
 # Project class names
 PROJECT_CLASSES = [
     'Gloves', 'No-Gloves',
-    'Goggles', 'No-Goggles',
     'Hardhat', 'No-Hardhat',
     'Mask', 'No-Mask',
     'Safety Vest', 'No-Safety Vest',

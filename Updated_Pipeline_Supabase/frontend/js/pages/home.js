@@ -9,6 +9,13 @@ const HomePage = {
     _latestProvisioningStatus: null,
     _realtimeRefreshTimer: null,
     _fallbackInterval: null,
+    VIOLATION_TYPE_COLORS: {
+        hardhat: '#D55E00',
+        safetyVest: '#0072B2',
+        gloves: '#009E73',
+        mask: '#CC79A7',
+        safetyShoes: '#E69F00'
+    },
 
     render() {
         return `
@@ -681,11 +688,11 @@ const HomePage = {
 
         // Data mapping
         const types = [
-            { name: "Missing Hardhat", count: breakdown['NO-Hardhat'] || 0, color: "var(--error-color)" },
-            { name: "Missing Vest", count: breakdown['NO-Safety Vest'] || 0, color: "var(--warning-color)" },
-            { name: "Missing Gloves", count: breakdown['NO-Gloves'] || 0, color: "var(--info-color)" },
-            { name: "Missing Mask", count: breakdown['NO-Mask'] || 0, color: "#9b59b6" },
-            { name: "Missing Safety Shoes", count: breakdown['NO-Safety Shoes'] || 0, color: "#16a085" }
+            { name: "Missing Hardhat", count: breakdown['NO-Hardhat'] || 0, color: this.VIOLATION_TYPE_COLORS.hardhat },
+            { name: "Missing Vest", count: breakdown['NO-Safety Vest'] || 0, color: this.VIOLATION_TYPE_COLORS.safetyVest },
+            { name: "Missing Gloves", count: breakdown['NO-Gloves'] || 0, color: this.VIOLATION_TYPE_COLORS.gloves },
+            { name: "Missing Mask", count: breakdown['NO-Mask'] || 0, color: this.VIOLATION_TYPE_COLORS.mask },
+            { name: "Missing Safety Shoes", count: breakdown['NO-Safety Shoes'] || 0, color: this.VIOLATION_TYPE_COLORS.safetyShoes }
         ];
 
         // Calculate total for percentages

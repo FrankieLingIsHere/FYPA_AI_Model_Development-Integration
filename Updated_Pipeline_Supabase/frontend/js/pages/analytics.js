@@ -8,6 +8,13 @@ const AnalyticsPage = {
     _assistantIntentHandler: null,
     assistantFilterState: null,
     _overviewMode: 'risk',
+    VIOLATION_TYPE_COLORS: {
+        hardhat: '#D55E00',
+        safetyVest: '#0072B2',
+        gloves: '#009E73',
+        mask: '#CC79A7',
+        safetyShoes: '#E69F00'
+    },
 
     render() {
         return `
@@ -1139,11 +1146,11 @@ const AnalyticsPage = {
         if (!container) return;
         const breakdown = stats.breakdown || {};
         const types = [
-            { name: 'Missing Hardhat', count: breakdown['NO-Hardhat'] || 0, color: 'var(--error-color)' },
-            { name: 'Missing Safety Vest', count: breakdown['NO-Safety Vest'] || 0, color: 'var(--warning-color)' },
-            { name: 'Missing Gloves', count: breakdown['NO-Gloves'] || 0, color: 'var(--info-color)' },
-            { name: 'Missing Mask', count: breakdown['NO-Mask'] || 0, color: '#9b59b6' },
-            { name: 'Missing Safety Shoes', count: breakdown['NO-Safety Shoes'] || 0, color: '#16a085' }
+            { name: 'Missing Hardhat', count: breakdown['NO-Hardhat'] || 0, color: this.VIOLATION_TYPE_COLORS.hardhat },
+            { name: 'Missing Safety Vest', count: breakdown['NO-Safety Vest'] || 0, color: this.VIOLATION_TYPE_COLORS.safetyVest },
+            { name: 'Missing Gloves', count: breakdown['NO-Gloves'] || 0, color: this.VIOLATION_TYPE_COLORS.gloves },
+            { name: 'Missing Mask', count: breakdown['NO-Mask'] || 0, color: this.VIOLATION_TYPE_COLORS.mask },
+            { name: 'Missing Safety Shoes', count: breakdown['NO-Safety Shoes'] || 0, color: this.VIOLATION_TYPE_COLORS.safetyShoes }
         ];
 
         const total = types.reduce((sum, type) => sum + type.count, 0);
@@ -1209,13 +1216,38 @@ const AnalyticsPage = {
                 labels: types.map(t => t.name),
                 datasets: [{
                     data: types.map(t => t.count),
-                    backgroundColor: types.map(t => t.color)
+                    backgroundColor: types.map(t => t.color),
+                    borderColor: '#ffffff',
+                    borderWidth: 2,
+                    hoverOffset: 6
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { position: 'right' } }
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            boxWidth: 12,
+                            boxHeight: 12,
+                            padding: 14,
+                            usePointStyle: true,
+                            pointStyle: 'rectRounded'
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label(context) {
+                                const label = context.label || '';
+                                const value = Number(context.parsed || 0);
+                                const total = context.dataset.data.reduce((sum, item) => sum + Number(item || 0), 0);
+                                const percent = total > 0 ? Math.round((value / total) * 100) : 0;
+                                return ` ${label}: ${value} (${percent}%)`;
+                            }
+                        }
+                    }
+                }
             }
         });
     },

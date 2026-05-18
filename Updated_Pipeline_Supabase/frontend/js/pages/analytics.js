@@ -252,14 +252,30 @@ const AnalyticsPage = {
 
     sanitizeAssistantFilters(filters = {}) {
         const cleaned = {};
-        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
-        if (['cloud', 'local', 'synced_local'].includes(source)) {
-            cleaned.source = source;
+        const sources = this.normalizeAssistantFilterValues(
+            [
+                ...(Array.isArray(filters.sources) ? filters.sources : []),
+                filters.source
+            ],
+            ['cloud', 'local', 'synced_local']
+        );
+        if (sources.length === 1) {
+            cleaned.source = sources[0];
+        } else if (sources.length > 1) {
+            cleaned.sources = sources;
         }
 
-        const severity = String(filters.severity || '').trim().toLowerCase();
-        if (['high', 'medium', 'low'].includes(severity)) {
-            cleaned.severity = severity;
+        const severities = this.normalizeAssistantFilterValues(
+            [
+                ...(Array.isArray(filters.severities) ? filters.severities : []),
+                filters.severity
+            ],
+            ['high', 'medium', 'low']
+        );
+        if (severities.length === 1) {
+            cleaned.severity = severities[0];
+        } else if (severities.length > 1) {
+            cleaned.severities = severities;
         }
 
         const dateRange = String(filters.dateRange || '').trim().toLowerCase();
@@ -311,7 +327,9 @@ const AnalyticsPage = {
             && typeof filters === 'object'
             && (
                 filters.source
+                || (Array.isArray(filters.sources) && filters.sources.length > 0)
                 || filters.severity
+                || (Array.isArray(filters.severities) && filters.severities.length > 0)
                 || filters.dateRange
                 || filters.dateExact
                 || filters.dateFrom
@@ -319,6 +337,16 @@ const AnalyticsPage = {
                 || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length > 0)
             )
         );
+    },
+
+    normalizeAssistantFilterValues(values, allowedValues = []) {
+        const allowed = new Set(allowedValues);
+        const rawValues = Array.isArray(values) ? values : [values];
+        return Array.from(new Set(
+            rawValues
+                .map((value) => String(value || '').trim().toLowerCase().replace(/-/g, '_'))
+                .filter((value) => allowed.has(value))
+        ));
     },
 
     normalizeAssistantDateKey(value) {
@@ -490,14 +518,28 @@ const AnalyticsPage = {
     matchesAssistantFilters(row, filters = {}) {
         const safeFilters = this.sanitizeAssistantFilters(filters);
         if (!this.hasActiveAssistantFilters(safeFilters)) return true;
-        if (safeFilters.source) {
+        const sourceValues = this.normalizeAssistantFilterValues(
+            [
+                ...(Array.isArray(safeFilters.sources) ? safeFilters.sources : []),
+                safeFilters.source
+            ],
+            ['cloud', 'local', 'synced_local']
+        );
+        if (sourceValues.length) {
             const scope = this.normalizeSourceScope(row);
-            if (scope !== String(safeFilters.source || '').trim().toLowerCase()) return false;
+            if (!sourceValues.includes(scope)) return false;
         }
 
-        if (safeFilters.severity) {
+        const severityValues = this.normalizeAssistantFilterValues(
+            [
+                ...(Array.isArray(safeFilters.severities) ? safeFilters.severities : []),
+                safeFilters.severity
+            ],
+            ['high', 'medium', 'low']
+        );
+        if (severityValues.length) {
             const severity = String(row?.severity || '').trim().toLowerCase();
-            if (severity !== String(safeFilters.severity || '').trim().toLowerCase()) return false;
+            if (!severityValues.includes(severity)) return false;
         }
 
         if (safeFilters.dateRange) {
@@ -538,7 +580,7 @@ const AnalyticsPage = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
-            if (!safeFilters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
+            if (!safeFilters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
         return true;

@@ -259,6 +259,7 @@ const CASMAssistant = {
             actions: Array.isArray(message.actions) ? message.actions.slice(0, 8) : [],
             docs: Array.isArray(message.docs) ? message.docs.slice(0, 4) : [],
             tutorial: message.tutorial && typeof message.tutorial === 'object' ? message.tutorial : null,
+            guided: message.guided && typeof message.guided === 'object' ? message.guided : null,
             reportCarousel: message.reportCarousel && typeof message.reportCarousel === 'object' ? message.reportCarousel : null,
             metrics: Array.isArray(message.metrics) ? message.metrics.slice(0, 6) : [],
             sections: Array.isArray(message.sections) ? message.sections.slice(0, 6) : []
@@ -1440,20 +1441,77 @@ const CASMAssistant = {
         return this.getGuidedKind(kind) === 'reports' ? 'reports' : 'analytics';
     },
 
+    normalizeFilterValues(values, allowedValues = []) {
+        const allowed = new Set(allowedValues);
+        const rawValues = Array.isArray(values) ? values : [values];
+        return Array.from(new Set(
+            rawValues
+                .map((value) => String(value || '').trim().toLowerCase().replace(/-/g, '_'))
+                .filter((value) => allowed.has(value))
+        ));
+    },
+
+    normalizeSourceFilterValues(filters = {}, includeShared = false) {
+        const rawValues = [];
+        if (Array.isArray(filters.sources)) rawValues.push(...filters.sources);
+        if (filters.source) rawValues.push(filters.source);
+        return this.normalizeFilterValues(
+            rawValues,
+            includeShared ? ['cloud', 'local', 'synced_local', 'shared'] : ['cloud', 'local', 'synced_local']
+        );
+    },
+
+    normalizeSeverityFilterValues(filters = {}) {
+        const rawValues = [];
+        if (Array.isArray(filters.severities)) rawValues.push(...filters.severities);
+        if (filters.severity) rawValues.push(filters.severity);
+        return this.normalizeFilterValues(rawValues, ['high', 'medium', 'low']);
+    },
+
+    getSourceScope(row = {}) {
+        const explicitScope = String(row?.source_scope || '').trim().toLowerCase().replace(/-/g, '_');
+        const labelScope = String(row?.source_label || '').trim().toLowerCase();
+        if (explicitScope === 'synced_local' || labelScope === 'local synced') return 'synced_local';
+        return explicitScope || labelScope.replace(/\s+/g, '_');
+    },
+
+    formatSourceFilterLabel(value = '') {
+        const labels = {
+            cloud: 'Cloud',
+            local: 'Local',
+            synced_local: 'Local Synced',
+            shared: 'Shared'
+        };
+        return labels[String(value || '').trim()] || String(value || '').replace(/_/g, ' ');
+    },
+
+    formatSeverityFilterLabel(value = '') {
+        const normalized = String(value || '').trim().toLowerCase();
+        return normalized ? `${normalized.slice(0, 1).toUpperCase()}${normalized.slice(1)}` : '';
+    },
+
+    buildChoiceLabel(label, selected = false) {
+        return selected ? `${label} (selected)` : label;
+    },
+
     sanitizeGuidedFilters(kind = '', filters = {}) {
         if (this.getGuidedKind(kind) === 'analytics') {
             return this.sanitizeAnalyticsFilters(filters);
         }
 
         const cleaned = {};
-        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
-        if (['cloud', 'local', 'synced_local', 'shared'].includes(source)) {
-            cleaned.source = source;
+        const sources = this.normalizeSourceFilterValues(filters, true);
+        if (sources.length === 1) {
+            cleaned.source = sources[0];
+        } else if (sources.length > 1) {
+            cleaned.sources = sources;
         }
 
-        const severity = String(filters.severity || '').trim().toLowerCase();
-        if (['high', 'medium', 'low'].includes(severity)) {
-            cleaned.severity = severity;
+        const severities = this.normalizeSeverityFilterValues(filters);
+        if (severities.length === 1) {
+            cleaned.severity = severities[0];
+        } else if (severities.length > 1) {
+            cleaned.severities = severities;
         }
 
         const dateRange = String(filters.dateRange || '').trim().toLowerCase();
@@ -1500,6 +1558,7 @@ const CASMAssistant = {
     },
 
     mergeGuidedFilters(kind = '', filters = {}, update = {}) {
+        const guidedKind = this.getGuidedKind(kind);
         const next = {
             ...this.sanitizeGuidedFilters(kind, filters)
         };
@@ -1510,13 +1569,93 @@ const CASMAssistant = {
             delete next.dateFrom;
             delete next.dateTo;
         }
+
+        if (update.resetSources) {
+            delete next.source;
+            delete next.sources;
+        }
+        if (update.toggleSource) {
+            const sources = this.normalizeSourceFilterValues(next, guidedKind === 'reports');
+            const value = this.normalizeFilterValues(update.toggleSource, guidedKind === 'reports'
+                ? ['cloud', 'local', 'synced_local', 'shared']
+                : ['cloud', 'local', 'synced_local'])[0];
+            if (value) {
+                const nextSources = sources.includes(value)
+                    ? sources.filter((item) => item !== value)
+                    : [...sources, value];
+                delete next.source;
+                delete next.sources;
+                if (nextSources.length === 1) next.source = nextSources[0];
+                if (nextSources.length > 1) next.sources = nextSources;
+            }
+        }
+
+        if (update.resetSeverities) {
+            delete next.severity;
+            delete next.severities;
+        }
+        if (update.toggleSeverity) {
+            const severities = this.normalizeSeverityFilterValues(next);
+            const value = this.normalizeFilterValues(update.toggleSeverity, ['high', 'medium', 'low'])[0];
+            if (value) {
+                const nextSeverities = severities.includes(value)
+                    ? severities.filter((item) => item !== value)
+                    : [...severities, value];
+                delete next.severity;
+                delete next.severities;
+                if (nextSeverities.length === 1) next.severity = nextSeverities[0];
+                if (nextSeverities.length > 1) next.severities = nextSeverities;
+            }
+        }
+
+        if (update.togglePpe) {
+            const validPpe = new Set([
+                'NO-Hardhat',
+                'NO-Safety Vest',
+                'NO-Gloves',
+                'NO-Mask',
+                'NO-Goggles',
+                'NO-Safety Shoes'
+            ]);
+            const currentPpe = Array.isArray(next.ppeTypes) ? next.ppeTypes : [];
+            const value = this.normalizePpeFilterLabel(update.togglePpe);
+            if (validPpe.has(value)) {
+                const nextPpe = currentPpe.includes(value)
+                    ? currentPpe.filter((item) => item !== value)
+                    : [...currentPpe, value];
+                if (nextPpe.length) next.ppeTypes = nextPpe;
+                else delete next.ppeTypes;
+            }
+        }
+
         Object.entries(update || {}).forEach(([key, value]) => {
+            if (['toggleSource', 'toggleSeverity', 'togglePpe', 'resetSources', 'resetSeverities'].includes(key)) {
+                return;
+            }
             if (key === 'ppeTypes') {
                 if (Array.isArray(value) && value.length) {
                     next.ppeTypes = value.slice(0, 6);
                 } else {
                     delete next.ppeTypes;
                 }
+                return;
+            }
+            if (key === 'sources') {
+                const sources = this.normalizeFilterValues(value, guidedKind === 'reports'
+                    ? ['cloud', 'local', 'synced_local', 'shared']
+                    : ['cloud', 'local', 'synced_local']);
+                delete next.source;
+                delete next.sources;
+                if (sources.length === 1) next.source = sources[0];
+                if (sources.length > 1) next.sources = sources;
+                return;
+            }
+            if (key === 'severities') {
+                const severities = this.normalizeFilterValues(value, ['high', 'medium', 'low']);
+                delete next.severity;
+                delete next.severities;
+                if (severities.length === 1) next.severity = severities[0];
+                if (severities.length > 1) next.severities = severities;
                 return;
             }
             if (value) {
@@ -1548,40 +1687,80 @@ const CASMAssistant = {
         };
     },
 
+    buildGuidedToggleAction(label, kind, step, filters, update = {}) {
+        return {
+            type: 'guided-toggle',
+            label,
+            guidedKind: this.getGuidedKind(kind),
+            guidedStep: step,
+            guidedFilters: this.sanitizeGuidedFilters(kind, filters),
+            guidedUpdate: update
+        };
+    },
+
+    buildGuidedContinueAction(label, kind, nextStep, filters) {
+        return {
+            type: 'guided-continue',
+            label,
+            guidedKind: this.getGuidedKind(kind),
+            guidedNextStep: nextStep,
+            guidedFilters: this.sanitizeGuidedFilters(kind, filters)
+        };
+    },
+
     buildGuidedStepMessage(kind = 'analytics', step = 'source', filters = {}) {
         const guidedKind = this.getGuidedKind(kind);
         const safeFilters = this.sanitizeGuidedFilters(guidedKind, filters);
         const kindLabel = this.getGuidedKindLabel(guidedKind);
         const summary = this.describeGuidedFilters(guidedKind, safeFilters);
+        const sourceChoices = guidedKind === 'reports'
+            ? ['cloud', 'local', 'synced_local', 'shared']
+            : ['cloud', 'local', 'synced_local'];
+        const selectedSources = this.normalizeSourceFilterValues(safeFilters, guidedKind === 'reports');
+        const selectedSeverities = this.normalizeSeverityFilterValues(safeFilters);
+        const selectedPpe = Array.isArray(safeFilters.ppeTypes) ? safeFilters.ppeTypes : [];
         const base = {
             role: 'assistant',
             text: `Guided ${kindLabel}: ${step === 'review' ? 'review the filter set' : `choose the ${step} filter`}.`,
+            guided: {
+                kind: guidedKind,
+                step
+            },
             bullets: [
                 `Current filter: ${summary}.`,
-                'Use the buttons below; free-text prompts still work anytime.'
+                ['source', 'severity', 'ppe'].includes(step)
+                    ? 'Pick one or more choices, then press Continue.'
+                    : 'Use the buttons below; free-text prompts still work anytime.'
             ],
             actions: []
         };
 
         if (step === 'source') {
             base.actions = [
-                this.buildGuidedAction('All sources', guidedKind, step, safeFilters, { source: '' }, 'severity'),
-                this.buildGuidedAction('Cloud', guidedKind, step, safeFilters, { source: 'cloud' }, 'severity'),
-                this.buildGuidedAction('Local', guidedKind, step, safeFilters, { source: 'local' }, 'severity'),
-                this.buildGuidedAction('Local Synced', guidedKind, step, safeFilters, { source: 'synced_local' }, 'severity')
+                this.buildGuidedToggleAction('All sources', guidedKind, step, safeFilters, { resetSources: true }),
+                ...sourceChoices.map((value) => this.buildGuidedToggleAction(
+                    this.buildChoiceLabel(this.formatSourceFilterLabel(value), selectedSources.includes(value)),
+                    guidedKind,
+                    step,
+                    safeFilters,
+                    { toggleSource: value }
+                )),
+                this.buildGuidedContinueAction('Continue', guidedKind, 'severity', safeFilters)
             ];
-            if (guidedKind === 'reports') {
-                base.actions.push(this.buildGuidedAction('Shared', guidedKind, step, safeFilters, { source: 'shared' }, 'severity'));
-            }
             return base;
         }
 
         if (step === 'severity') {
             base.actions = [
-                this.buildGuidedAction('All severities', guidedKind, step, safeFilters, { severity: '' }, 'date'),
-                this.buildGuidedAction('High', guidedKind, step, safeFilters, { severity: 'high' }, 'date'),
-                this.buildGuidedAction('Medium', guidedKind, step, safeFilters, { severity: 'medium' }, 'date'),
-                this.buildGuidedAction('Low', guidedKind, step, safeFilters, { severity: 'low' }, 'date')
+                this.buildGuidedToggleAction('All severities', guidedKind, step, safeFilters, { resetSeverities: true }),
+                ...['high', 'medium', 'low'].map((value) => this.buildGuidedToggleAction(
+                    this.buildChoiceLabel(this.formatSeverityFilterLabel(value), selectedSeverities.includes(value)),
+                    guidedKind,
+                    step,
+                    safeFilters,
+                    { toggleSeverity: value }
+                )),
+                this.buildGuidedContinueAction('Continue', guidedKind, 'date', safeFilters)
             ];
             return base;
         }
@@ -1601,13 +1780,22 @@ const CASMAssistant = {
 
         if (step === 'ppe') {
             base.actions = [
-                this.buildGuidedAction('All violations', guidedKind, step, safeFilters, { ppeTypes: [] }, 'review'),
-                this.buildGuidedAction('Missing hardhat', guidedKind, step, safeFilters, { ppeTypes: ['NO-Hardhat'] }, 'review'),
-                this.buildGuidedAction('Missing vest', guidedKind, step, safeFilters, { ppeTypes: ['NO-Safety Vest'] }, 'review'),
-                this.buildGuidedAction('Missing mask', guidedKind, step, safeFilters, { ppeTypes: ['NO-Mask'] }, 'review'),
-                this.buildGuidedAction('Missing gloves', guidedKind, step, safeFilters, { ppeTypes: ['NO-Gloves'] }, 'review'),
-                this.buildGuidedAction('Missing goggles', guidedKind, step, safeFilters, { ppeTypes: ['NO-Goggles'] }, 'review'),
-                this.buildGuidedAction('Missing shoes', guidedKind, step, safeFilters, { ppeTypes: ['NO-Safety Shoes'] }, 'review')
+                this.buildGuidedToggleAction('All violations', guidedKind, step, safeFilters, { ppeTypes: [] }),
+                ...[
+                    ['Missing hardhat', 'NO-Hardhat'],
+                    ['Missing vest', 'NO-Safety Vest'],
+                    ['Missing mask', 'NO-Mask'],
+                    ['Missing gloves', 'NO-Gloves'],
+                    ['Missing goggles', 'NO-Goggles'],
+                    ['Missing shoes', 'NO-Safety Shoes']
+                ].map(([label, value]) => this.buildGuidedToggleAction(
+                    this.buildChoiceLabel(label, selectedPpe.includes(value)),
+                    guidedKind,
+                    step,
+                    safeFilters,
+                    { togglePpe: value }
+                )),
+                this.buildGuidedContinueAction('Continue', guidedKind, 'review', safeFilters)
             ];
             return base;
         }
@@ -1657,7 +1845,7 @@ const CASMAssistant = {
         const guidedKind = this.getGuidedKind(kind);
         const filters = {};
         this.setGuidedFlowState(guidedKind, 'source', filters);
-        this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'source', filters));
+        this.upsertGuidedStepMessage(guidedKind, 'source', filters);
     },
 
     handleGuidedSelection(action = {}) {
@@ -1665,7 +1853,56 @@ const CASMAssistant = {
         const filters = this.mergeGuidedFilters(guidedKind, action.guidedFilters || {}, action.guidedUpdate || {});
         const nextStep = String(action.guidedNextStep || 'source').trim() || 'source';
         this.setGuidedFlowState(guidedKind, nextStep, filters);
-        this.pushMessage(this.buildGuidedStepMessage(guidedKind, nextStep, filters));
+        this.upsertGuidedStepMessage(guidedKind, nextStep, filters);
+    },
+
+    handleGuidedToggle(action = {}) {
+        const guidedKind = this.getGuidedKind(action.guidedKind);
+        const step = String(action.guidedStep || 'source').trim() || 'source';
+        const filters = this.mergeGuidedFilters(guidedKind, action.guidedFilters || {}, action.guidedUpdate || {});
+        this.setGuidedFlowState(guidedKind, step, filters);
+        this.upsertGuidedStepMessage(guidedKind, step, filters);
+    },
+
+    handleGuidedContinue(action = {}) {
+        const guidedKind = this.getGuidedKind(action.guidedKind);
+        const filters = this.sanitizeGuidedFilters(guidedKind, action.guidedFilters || {});
+        const nextStep = String(action.guidedNextStep || 'source').trim() || 'source';
+        this.setGuidedFlowState(guidedKind, nextStep, filters);
+        this.upsertGuidedStepMessage(guidedKind, nextStep, filters);
+    },
+
+    getLatestGuidedMessageIndex(session, kind = '') {
+        if (!session || !Array.isArray(session.messages)) return -1;
+        const guidedKind = this.getGuidedKind(kind);
+        for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+            const message = session.messages[index];
+            if (message && message.role === 'assistant' && message.guided && message.guided.kind === guidedKind) {
+                return index;
+            }
+        }
+        return -1;
+    },
+
+    upsertGuidedStepMessage(kind = 'analytics', step = 'source', filters = {}) {
+        const session = this.getActiveSession();
+        if (!session) return;
+        const guidedKind = this.getGuidedKind(kind);
+        const nextMessage = this.buildGuidedStepMessage(guidedKind, step, filters);
+        const existingIndex = this.getLatestGuidedMessageIndex(session, guidedKind);
+        if (existingIndex >= 0) {
+            const existing = session.messages[existingIndex] || {};
+            session.messages[existingIndex] = this.normalizeMessage({
+                ...existing,
+                ...nextMessage,
+                id: existing.id,
+                createdAt: existing.createdAt
+            });
+            session.updatedAt = Date.now();
+            this.refreshSessionUi();
+            return;
+        }
+        this.pushMessage(nextMessage);
     },
 
     requestGuidedDateInput(action = {}) {
@@ -1716,7 +1953,7 @@ const CASMAssistant = {
         if (/\b(cancel|skip|all dates|no date)\b/.test(normalized)) {
             const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' });
             this.setGuidedFlowState(guidedKind, 'ppe', filters);
-            this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'ppe', filters));
+            this.upsertGuidedStepMessage(guidedKind, 'ppe', filters);
             return true;
         }
 
@@ -1739,7 +1976,7 @@ const CASMAssistant = {
 
         const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, parsed.filters);
         this.setGuidedFlowState(guidedKind, 'ppe', filters);
-        this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'ppe', filters));
+        this.upsertGuidedStepMessage(guidedKind, 'ppe', filters);
         return true;
     },
 
@@ -3088,14 +3325,18 @@ const CASMAssistant = {
 
     sanitizeAnalyticsFilters(filters = {}) {
         const cleaned = {};
-        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
-        if (['cloud', 'local', 'synced_local'].includes(source)) {
-            cleaned.source = source;
+        const sources = this.normalizeSourceFilterValues(filters, false);
+        if (sources.length === 1) {
+            cleaned.source = sources[0];
+        } else if (sources.length > 1) {
+            cleaned.sources = sources;
         }
 
-        const severity = String(filters.severity || '').trim().toLowerCase();
-        if (['high', 'medium', 'low'].includes(severity)) {
-            cleaned.severity = severity;
+        const severities = this.normalizeSeverityFilterValues(filters);
+        if (severities.length === 1) {
+            cleaned.severity = severities[0];
+        } else if (severities.length > 1) {
+            cleaned.severities = severities;
         }
 
         const dateRange = String(filters.dateRange || '').trim().toLowerCase();
@@ -3147,7 +3388,9 @@ const CASMAssistant = {
             && typeof filters === 'object'
             && (
                 filters.source
+                || (Array.isArray(filters.sources) && filters.sources.length > 0)
                 || filters.severity
+                || (Array.isArray(filters.severities) && filters.severities.length > 0)
                 || filters.dateRange
                 || filters.dateExact
                 || filters.dateFrom
@@ -3209,18 +3452,16 @@ const CASMAssistant = {
         const safeFilters = this.sanitizeAnalyticsFilters(filters);
         if (!this.hasActiveAnalyticsFilters(safeFilters)) return true;
 
-        if (safeFilters.source) {
-            const explicitScope = String(row?.source_scope || '').trim().toLowerCase().replace(/-/g, '_');
-            const labelScope = String(row?.source_label || '').trim().toLowerCase();
-            const scope = explicitScope === 'synced_local' || labelScope === 'local synced'
-                ? 'synced_local'
-                : explicitScope || labelScope.replace(/\s+/g, '_');
-            if (scope !== safeFilters.source) return false;
+        const sourceValues = this.normalizeSourceFilterValues(safeFilters, false);
+        if (sourceValues.length) {
+            const scope = this.getSourceScope(row);
+            if (!sourceValues.includes(scope)) return false;
         }
 
-        if (safeFilters.severity) {
+        const severityValues = this.normalizeSeverityFilterValues(safeFilters);
+        if (severityValues.length) {
             const severity = String(row?.severity || '').trim().toLowerCase();
-            if (severity !== safeFilters.severity) return false;
+            if (!severityValues.includes(severity)) return false;
         }
 
         if (safeFilters.dateRange) {
@@ -3262,7 +3503,7 @@ const CASMAssistant = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
-            if (!safeFilters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
+            if (!safeFilters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
         return true;
@@ -3270,10 +3511,14 @@ const CASMAssistant = {
 
     describeAnalyticsFilters(filters = {}) {
         const parts = [];
-        if (filters.source === 'cloud') parts.push('cloud rows');
-        if (filters.source === 'local') parts.push('local rows');
-        if (filters.source === 'synced_local') parts.push('local-synced rows');
-        if (filters.severity) parts.push(`${filters.severity} severity`);
+        const sources = this.normalizeSourceFilterValues(filters, false);
+        if (sources.length) {
+            parts.push(`${sources.map((value) => this.formatSourceFilterLabel(value)).join(' or ')} rows`);
+        }
+        const severities = this.normalizeSeverityFilterValues(filters);
+        if (severities.length) {
+            parts.push(`${severities.map((value) => this.formatSeverityFilterLabel(value)).join(' or ')} severity`);
+        }
         if (filters.dateRange === 'today') parts.push('today');
         if (filters.dateRange === 'yesterday') parts.push('yesterday');
         if (filters.dateRange === 'week') parts.push('this week');
@@ -3369,6 +3614,7 @@ const CASMAssistant = {
                 role: 'assistant',
                 text: `${outcome.message || 'I could not fetch analytics right now.'}${label ? ` (${label.trim()})` : ''}`,
                 actions: [
+                    { type: 'guided-start', label: 'Choose filters', guidedKind: 'analytics' },
                     { type: 'route', label: 'Open full analytics', page: 'analytics', collapsePanel: true },
                     { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' }
                 ]
@@ -3386,6 +3632,7 @@ const CASMAssistant = {
             metrics: outcome.metrics || [],
             bullets: outcome.bullets || [],
             actions: [
+                { type: 'guided-start', label: 'Refine by clicking filters', guidedKind: 'analytics' },
                 analyticsRoute,
                 { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' },
                 { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
@@ -3438,7 +3685,9 @@ const CASMAssistant = {
     hasActiveReportFilters(filters = {}) {
         return !!(
             filters.source
+            || (Array.isArray(filters.sources) && filters.sources.length > 0)
             || filters.severity
+            || (Array.isArray(filters.severities) && filters.severities.length > 0)
             || filters.status
             || filters.dateRange
             || filters.dateExact
@@ -3478,6 +3727,7 @@ const CASMAssistant = {
                         'You can still open the Reports page to inspect all rows manually.'
                     ],
                     actions: [
+                        { type: 'guided-start', label: 'Choose report filters', guidedKind: 'reports' },
                         { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true },
                         { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
                     ]
@@ -3512,6 +3762,7 @@ const CASMAssistant = {
                 role: 'assistant',
                 text: 'I could not fetch the filtered reports right now.',
                 actions: [
+                    { type: 'guided-start', label: 'Choose report filters', guidedKind: 'reports' },
                     { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }
                 ]
             });
@@ -3523,7 +3774,7 @@ const CASMAssistant = {
         const sourceCounts = { cloud: 0, local: 0, synced_local: 0, shared: 0, unknown: 0 };
         const severityCounts = { high: 0, medium: 0, low: 0, unknown: 0 };
         list.forEach((row) => {
-            const source = String(row?.source_scope || row?.source_label || '').trim().toLowerCase().replace(/\s+/g, '_');
+            const source = this.getSourceScope(row);
             const sourceKey = Object.prototype.hasOwnProperty.call(sourceCounts, source) ? source : 'unknown';
             sourceCounts[sourceKey] += 1;
 
@@ -3631,6 +3882,7 @@ const CASMAssistant = {
             { type: 'report-review-prev', label: 'Previous report' },
             { type: 'report-review-next', label: 'Next report' },
             { type: 'report-review-explain', label: 'Explain this report' },
+            { type: 'guided-start', label: 'Refine by clicking filters', guidedKind: 'reports' },
             { type: 'open-report', label: 'Open report', reportId: report.reportId },
             { type: 'route', label: 'Open reports page', page: 'reports', collapsePanel: true }
         ];
@@ -3649,7 +3901,8 @@ const CASMAssistant = {
                 : 'Use Previous report and Next report to move through the filtered set.',
             selection.severityText ? `Severity mix in this match set: ${selection.severityText}.` : '',
             selection.sourceText ? `Source mix in this match set: ${selection.sourceText}.` : '',
-            'Select Explain this report when you want Mira to interpret the selected row.'
+            'Select Explain this report when you want Mira to interpret the selected row.',
+            'Use Refine by clicking filters if you prefer choosing report filters without typing.'
         ].filter(Boolean);
         return {
             role: 'assistant',
@@ -4486,6 +4739,14 @@ const CASMAssistant = {
                 this.handleGuidedSelection(action);
                 return;
             }
+            case 'guided-toggle': {
+                this.handleGuidedToggle(action);
+                return;
+            }
+            case 'guided-continue': {
+                this.handleGuidedContinue(action);
+                return;
+            }
             case 'guided-date-request': {
                 this.requestGuidedDateInput(action);
                 return;
@@ -4999,21 +5260,16 @@ const CASMAssistant = {
     },
 
     matchesReportFilters(row, filters) {
-        if (filters.source) {
-            const explicitScope = String(row?.source_scope || '').trim().toLowerCase().replace(/-/g, '_');
-            const labelScope = String(row?.source_label || '').trim().toLowerCase();
-            const scope = explicitScope === 'synced_local' || labelScope === 'local synced'
-                ? 'synced_local'
-                : explicitScope || labelScope.replace(/\s+/g, '_');
-            if (filters.source === 'cloud' && scope !== 'cloud') return false;
-            if (filters.source === 'local' && scope !== 'local') return false;
-            if (filters.source === 'synced_local' && scope !== 'synced_local') return false;
-            if (filters.source === 'shared' && scope !== 'shared') return false;
+        const sourceValues = this.normalizeSourceFilterValues(filters, true);
+        if (sourceValues.length) {
+            const scope = this.getSourceScope(row);
+            if (!sourceValues.includes(scope)) return false;
         }
 
-        if (filters.severity) {
+        const severityValues = this.normalizeSeverityFilterValues(filters);
+        if (severityValues.length) {
             const severity = String(row?.severity || '').trim().toLowerCase();
-            if (severity !== filters.severity) return false;
+            if (!severityValues.includes(severity)) return false;
         }
 
         if (filters.status) {
@@ -5090,7 +5346,7 @@ const CASMAssistant = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
-            if (!filters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
+            if (!filters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
         return true;
@@ -5098,11 +5354,14 @@ const CASMAssistant = {
 
     describeReportFilters(filters) {
         const parts = [];
-        if (filters.source === 'cloud') parts.push('cloud rows');
-        if (filters.source === 'local') parts.push('local rows');
-        if (filters.source === 'synced_local') parts.push('local-synced rows');
-        if (filters.source === 'shared') parts.push('shared rows');
-        if (filters.severity) parts.push(`${filters.severity} severity`);
+        const sources = this.normalizeSourceFilterValues(filters, true);
+        if (sources.length) {
+            parts.push(`${sources.map((value) => this.formatSourceFilterLabel(value)).join(' or ')} rows`);
+        }
+        const severities = this.normalizeSeverityFilterValues(filters);
+        if (severities.length) {
+            parts.push(`${severities.map((value) => this.formatSeverityFilterLabel(value)).join(' or ')} severity`);
+        }
         if (filters.status) parts.push(`${filters.status === 'completed' ? 'ready' : filters.status} status`);
         if (filters.dateExact) parts.push(filters.dateExact);
         if (filters.dateRange) parts.push(filters.dateRange);

@@ -2131,6 +2131,29 @@ const API = {
             || incoming.routed_via_cloud_fallback
             || incoming.source_reason === 'manual_cloud_reprocess_fallback'
         );
+        const incomingStrongLocalDraft = !!(
+            this.hasLocalReportIdPrefix(incoming.report_id || incoming.id)
+            || incoming.local_report_url
+            || incoming.original_blob
+            || incoming.annotated_blob
+            || incoming.report_blob
+            || incoming.report_html_blob
+            || incoming.cached_report_html
+        );
+        const incomingCloudEvidence = this.hasCloudReportArtifacts(incoming)
+            || this.hasCloudReportArtifactEvidence(incoming);
+        const existingCloudEvidence = this.hasCloudReportArtifacts(existing)
+            || this.hasCloudReportArtifactEvidence(existing)
+            || !!existingProtectedScope;
+        const localMirrorShouldNotOverrideProtectedScope = !!(
+            !forceCloudRuntime
+            && existingProtectedScope
+            && incomingScope === 'local'
+            && existingCloudEvidence
+            && !incomingCloudEvidence
+            && !incomingStrongLocalDraft
+            && !this.hasConfirmedSyncedLocalReport(incoming)
+        );
         const syncedLocal = (
             existingScope === 'synced_local'
             || incomingScope === 'synced_local'
@@ -2185,7 +2208,12 @@ const API = {
             return merged;
         }
 
-        if (!forceCloudRuntime && incomingScope === 'local' && !incomingLocalAnchor && existingProtectedScope) {
+        if (
+            !forceCloudRuntime
+            && incomingScope === 'local'
+            && existingProtectedScope
+            && (!incomingLocalAnchor || localMirrorShouldNotOverrideProtectedScope)
+        ) {
             merged.source_scope = existingProtectedScope;
             merged.source_label = existingProtectedScope === 'synced_local'
                 ? 'Local Synced'

@@ -1572,10 +1572,15 @@ const ReportsPage = {
         );
     },
 
+    localReportIdLooksLocal(reportId = '') {
+        const normalized = String(reportId || '').trim().toLowerCase();
+        return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(normalized);
+    },
+
     hasStrictLocalArtifactOrigin(record = {}) {
         if (!record || typeof record !== 'object') return false;
         const reportId = String((record && (record.report_id || record.id)) || '').trim().toLowerCase();
-        if (/^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(reportId)) return true;
+        if (this.localReportIdLooksLocal(reportId)) return true;
         return this.hasLocalArtifactOriginDevice(this.getDeviceKey(record));
     },
 
@@ -1808,6 +1813,29 @@ const ReportsPage = {
             || this.hasCloudArtifactEvidence(sourceRecord);
         if (!cloudAnchored) {
             return normalizedCandidate;
+        }
+
+        const patchStrongLocalDraft = !!(
+            this.localReportIdLooksLocal((patch && (patch.report_id || patch.id)) || '')
+            || (patch && (
+                patch.local_report_url
+                || patch.original_blob
+                || patch.annotated_blob
+                || patch.report_blob
+                || patch.report_html_blob
+                || patch.cached_report_html
+            ))
+        );
+        const protectedScope = ['cloud', 'shared', 'synced_local'].includes(anchoredScope)
+            ? anchoredScope
+            : '';
+        if (
+            protectedScope
+            && !this.hasCloudArtifactEvidence(patch)
+            && !this.hasSyncedLocalEvidence(patch)
+            && !patchStrongLocalDraft
+        ) {
+            return protectedScope;
         }
 
         const mergedForMarker = { ...sourceRecord, ...existing, ...patch };

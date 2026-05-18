@@ -291,8 +291,12 @@ function testLocalModeMirrorSnapshotsDoNotPoisonCachedTags() {
     status: 'completed',
     has_report: true,
     has_local_report: true,
+    has_local_artifacts: true,
     source_scope: 'local',
     source_label: 'Local',
+    origin: 'local',
+    source: 'local_pipeline',
+    source_reason: 'filesystem_fallback_offline_backoff',
   }));
 
   const merged = API._mergeOptimistically(cachedRows, localMirrorRows, 20);

@@ -332,6 +332,46 @@ def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
         browser.close()
 
 
+def test_assistant_revisited_report_controls_append_at_conversation_bottom():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        page.set_content(_build_page_html(), wait_until="domcontentloaded")
+        page.wait_for_selector("#assistantTitle", state="attached")
+        page.locator("#assistantLauncher").click()
+
+        page.locator(".assistant-action-btn", has_text="Guided Reports").first.click()
+        page.wait_for_function(
+            "() => window.CASMAssistant.getActiveSession().messages.at(-1)?.guided?.kind === 'reports'",
+            timeout=10000,
+        )
+
+        _submit_prompt(page, "i wanna know what is the main risks of each case")
+        page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
+        _wait_for_idle_after(page, "i wanna know what is the main risks of each case")
+
+        page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
+        page.wait_for_function(
+            "() => String(window.CASMAssistant.getActiveSession().messages.at(-1)?.text || '').includes('Here is a fuller read')",
+            timeout=10000,
+        )
+
+        page.locator(".assistant-action-btn", has_text="Next report").last.click()
+        page.wait_for_function(
+            "() => window.CASMAssistant.getActiveSession().messages.at(-1)?.reportCarousel?.report?.reportId === 'loading-bay-002'",
+            timeout=10000,
+        )
+
+        page.locator(".assistant-action-btn", has_text="Refine by clicking filters").last.click()
+        page.wait_for_function(
+            "() => window.CASMAssistant.getActiveSession().messages.at(-1)?.guided?.kind === 'reports'",
+            timeout=10000,
+        )
+        last_text = page.evaluate("() => window.CASMAssistant.getActiveSession().messages.at(-1)?.text || ''")
+        assert "Guided reports" in last_text
+        browser.close()
+
+
 def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

@@ -1887,7 +1887,7 @@ const CASMAssistant = {
         const guidedKind = this.getGuidedKind(kind);
         const nextMessage = this.buildGuidedStepMessage(guidedKind, step, filters);
         const existingIndex = this.getLatestGuidedMessageIndex(session, guidedKind);
-        if (existingIndex >= 0) {
+        if (this.shouldUpdateInteractiveMessageInPlace(session, existingIndex)) {
             const existing = session.messages[existingIndex] || {};
             session.messages[existingIndex] = this.normalizeMessage({
                 ...existing,
@@ -3185,12 +3185,17 @@ const CASMAssistant = {
         this.saveState();
     },
 
+    shouldUpdateInteractiveMessageInPlace(session, existingIndex) {
+        if (!session || !Array.isArray(session.messages)) return false;
+        return existingIndex >= 0 && existingIndex === session.messages.length - 1;
+    },
+
     upsertTutorialMessage(flow, index, steps) {
         const session = this.getActiveSession();
         if (!session) return;
         const tutorialMessage = this.buildTutorialMessage(flow, index, steps);
         const existingIndex = this.getLatestTutorialMessageIndex(session);
-        if (existingIndex >= 0) {
+        if (this.shouldUpdateInteractiveMessageInPlace(session, existingIndex)) {
             const existing = session.messages[existingIndex];
             session.messages[existingIndex] = this.normalizeMessage({
                 ...existing,
@@ -3928,7 +3933,7 @@ const CASMAssistant = {
         if (!session || !context) return;
         const baseMessage = this.buildReportReviewMessage(context);
         const existingIndex = this.getLatestReportReviewMessageIndex(session);
-        if (existingIndex >= 0) {
+        if (this.shouldUpdateInteractiveMessageInPlace(session, existingIndex)) {
             const existing = session.messages[existingIndex] || {};
             session.messages[existingIndex] = {
                 ...existing,

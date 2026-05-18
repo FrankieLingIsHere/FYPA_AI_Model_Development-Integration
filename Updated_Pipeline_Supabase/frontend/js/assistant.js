@@ -223,6 +223,18 @@ const CASMAssistant = {
                 lastDocsResults: Array.isArray(session?.context?.lastDocsResults) ? session.context.lastDocsResults.slice(0, 6) : [],
                 lastExportKind: String(session?.context?.lastExportKind || ''),
                 lastUserPrompt: String(session?.context?.lastUserPrompt || ''),
+                guidedFlow: session?.context?.guidedFlow && typeof session.context.guidedFlow === 'object'
+                    ? {
+                        kind: ['reports', 'analytics'].includes(String(session.context.guidedFlow.kind || '').trim())
+                            ? String(session.context.guidedFlow.kind || '').trim()
+                            : 'analytics',
+                        step: String(session.context.guidedFlow.step || '').trim(),
+                        awaiting: String(session.context.guidedFlow.awaiting || '').trim(),
+                        filters: session.context.guidedFlow.filters && typeof session.context.guidedFlow.filters === 'object'
+                            ? { ...session.context.guidedFlow.filters }
+                            : {}
+                    }
+                    : null,
                 reportReview: session?.context?.reportReview && typeof session.context.reportReview === 'object'
                     ? {
                         ...session.context.reportReview,
@@ -300,7 +312,8 @@ const CASMAssistant = {
                 lastDocsQuery: '',
                 lastDocsResults: [],
                 lastExportKind: '',
-                lastUserPrompt: ''
+                lastUserPrompt: '',
+                guidedFlow: null
             },
             messages: []
         };
@@ -315,9 +328,12 @@ const CASMAssistant = {
                     'Show cloud or local tutorial steps in one guided card and jump into the handbook.',
                     'Open Camera Stream or Image Analysis, then collapse so the page stays usable.',
                     'Export analytics or report CSV files from prompts like "export cloud reports csv month".',
+                    'Use Guided Reports or Guided Analytics when you want step-by-step filter choices.',
                     'Session memory stays on this browser, and only admins can review synced copies.'
                 ],
                 actions: [
+                    { type: 'guided-start', label: 'Guided Reports', guidedKind: 'reports' },
+                    { type: 'guided-start', label: 'Guided Analytics', guidedKind: 'analytics' },
                     { type: 'tutorial', label: 'Cloud tutorial', flow: 'cloud', stepIndex: 0 },
                     { type: 'tutorial', label: 'Local tutorial', flow: 'local', stepIndex: 0 },
                     { type: 'route', label: 'Open camera', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true },
@@ -405,6 +421,8 @@ const CASMAssistant = {
             { type: 'route', label: 'Settings', icon: 'fa-sliders-h', page: 'settings', collapsePanel: true },
             { type: 'tutorial', label: 'Cloud demo', icon: 'fa-cloud', flow: 'cloud', stepIndex: 0 },
             { type: 'tutorial', label: 'Local demo', icon: 'fa-laptop-code', flow: 'local', stepIndex: 0 },
+            { type: 'guided-start', label: 'Report Guide', icon: 'fa-list-check', guidedKind: 'reports' },
+            { type: 'guided-start', label: 'Analytics Guide', icon: 'fa-chart-pie', guidedKind: 'analytics' },
             { type: 'export', label: 'Reports CSV', icon: 'fa-file-csv', exportKind: 'reports' },
             { type: 'overview', label: 'Overview', icon: 'fa-signal', exportKind: '' }
         ];
@@ -452,7 +470,7 @@ const CASMAssistant = {
                 this.buildPromptSuggestion("I'm new here", 'i dont know what should i do first'),
                 this.buildPromptSuggestion('Open camera', 'help me start live monitoring'),
                 this.buildPromptSuggestion('Check image', 'can you check if this image has violations'),
-                this.buildPromptSuggestion('Show analytics', 'show analytics overview')
+                { type: 'guided-start', label: 'Guided Analytics', guidedKind: 'analytics' }
             ];
             return promptModel;
         }
@@ -562,10 +580,10 @@ const CASMAssistant = {
             promptModel.mode = 'reports';
             promptModel.actions = [
                 this.buildPromptSuggestion('Open reports', 'open reports'),
+                { type: 'guided-start', label: 'Guided Reports', guidedKind: 'reports' },
                 this.buildPromptSuggestion('Explain Cloud Tag', 'what should cloud tag mean'),
                 this.buildPromptSuggestion('Export cloud CSV', 'export cloud reports csv month'),
-                this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial'),
-                this.buildPromptSuggestion('Find report tag docs', 'find docs about cloud local synced tags')
+                this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial')
             ];
             return promptModel;
         }
@@ -576,10 +594,10 @@ const CASMAssistant = {
             promptModel.mode = 'analytics';
             promptModel.actions = [
                 this.buildPromptSuggestion('System overview', 'system overview'),
+                { type: 'guided-start', label: 'Guided Analytics', guidedKind: 'analytics' },
                 this.buildPromptSuggestion('Export analytics CSV', 'export analytics csv'),
                 this.buildPromptSuggestion('Open reports', 'open reports'),
-                this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean'),
-                this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial')
+                this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean')
             ];
             return promptModel;
         }
@@ -843,6 +861,7 @@ const CASMAssistant = {
         const type = String(action.type || '').trim();
         if (type === 'export') return 'Preparing the export preview...';
         if (type === 'overview') return 'Checking current metrics...';
+        if (type === 'guided-finish') return 'Building the guided result...';
         if (type === 'report-review-explain') return 'Reading the selected report...';
         if (type === 'open-report') return 'Opening the selected report...';
         return '';
@@ -916,6 +935,9 @@ const CASMAssistant = {
         const query = this.normalizeText(raw);
         const session = this.getActiveSession();
         if (!session) return;
+        if (await this.handlePendingGuidedDateInput(raw)) {
+            return;
+        }
         const localIntent = this.resolveLocalIntent(raw);
         const exportIntent = this.isExportIntent(query) || (localIntent && /^export-/.test(localIntent.id));
         const docsIntent = this.isDocsIntent(query) || (localIntent && localIntent.id === 'docs-search' && localIntent.confidence >= 0.64);
@@ -1408,6 +1430,354 @@ const CASMAssistant = {
                 { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
             ]
         };
+    },
+
+    getGuidedKind(kind = '') {
+        return String(kind || '').trim() === 'reports' ? 'reports' : 'analytics';
+    },
+
+    getGuidedKindLabel(kind = '') {
+        return this.getGuidedKind(kind) === 'reports' ? 'reports' : 'analytics';
+    },
+
+    sanitizeGuidedFilters(kind = '', filters = {}) {
+        if (this.getGuidedKind(kind) === 'analytics') {
+            return this.sanitizeAnalyticsFilters(filters);
+        }
+
+        const cleaned = {};
+        const source = String(filters.source || '').trim().toLowerCase().replace(/-/g, '_');
+        if (['cloud', 'local', 'synced_local', 'shared'].includes(source)) {
+            cleaned.source = source;
+        }
+
+        const severity = String(filters.severity || '').trim().toLowerCase();
+        if (['high', 'medium', 'low'].includes(severity)) {
+            cleaned.severity = severity;
+        }
+
+        const dateRange = String(filters.dateRange || '').trim().toLowerCase();
+        if (['today', 'yesterday', 'week', 'month'].includes(dateRange)) {
+            cleaned.dateRange = dateRange;
+        }
+
+        const dateExact = this.normalizeDateKey(filters.dateExact);
+        const dateFrom = this.normalizeDateKey(filters.dateFrom);
+        const dateTo = this.normalizeDateKey(filters.dateTo);
+        if (dateExact) {
+            cleaned.dateExact = dateExact;
+            delete cleaned.dateRange;
+        } else {
+            if (dateFrom) {
+                cleaned.dateFrom = dateFrom;
+                delete cleaned.dateRange;
+            }
+            if (dateTo) {
+                cleaned.dateTo = dateTo;
+                delete cleaned.dateRange;
+            }
+        }
+
+        const validPpe = new Set([
+            'NO-Hardhat',
+            'NO-Safety Vest',
+            'NO-Gloves',
+            'NO-Mask',
+            'NO-Goggles',
+            'NO-Safety Shoes'
+        ]);
+        const ppeTypes = Array.isArray(filters.ppeTypes) ? filters.ppeTypes : [];
+        const normalizedPpe = Array.from(new Set(
+            ppeTypes
+                .map((label) => this.normalizePpeFilterLabel(label))
+                .filter((label) => validPpe.has(label))
+        ));
+        if (normalizedPpe.length) {
+            cleaned.ppeTypes = normalizedPpe;
+        }
+
+        return cleaned;
+    },
+
+    mergeGuidedFilters(kind = '', filters = {}, update = {}) {
+        const next = {
+            ...this.sanitizeGuidedFilters(kind, filters)
+        };
+        const updateKeys = Object.keys(update || {});
+        if (updateKeys.some((key) => ['dateRange', 'dateExact', 'dateFrom', 'dateTo'].includes(key))) {
+            delete next.dateRange;
+            delete next.dateExact;
+            delete next.dateFrom;
+            delete next.dateTo;
+        }
+        Object.entries(update || {}).forEach(([key, value]) => {
+            if (key === 'ppeTypes') {
+                if (Array.isArray(value) && value.length) {
+                    next.ppeTypes = value.slice(0, 6);
+                } else {
+                    delete next.ppeTypes;
+                }
+                return;
+            }
+            if (value) {
+                next[key] = value;
+            } else {
+                delete next[key];
+            }
+        });
+        return this.sanitizeGuidedFilters(kind, next);
+    },
+
+    describeGuidedFilters(kind = '', filters = {}) {
+        const safeFilters = this.sanitizeGuidedFilters(kind, filters);
+        const summary = this.getGuidedKind(kind) === 'reports'
+            ? this.describeReportFilters(safeFilters)
+            : this.describeAnalyticsFilters(safeFilters);
+        return summary || 'all rows';
+    },
+
+    buildGuidedAction(label, kind, step, filters, update = {}, nextStep = '') {
+        return {
+            type: 'guided-select',
+            label,
+            guidedKind: this.getGuidedKind(kind),
+            guidedStep: step,
+            guidedFilters: this.sanitizeGuidedFilters(kind, filters),
+            guidedUpdate: update,
+            guidedNextStep: nextStep
+        };
+    },
+
+    buildGuidedStepMessage(kind = 'analytics', step = 'source', filters = {}) {
+        const guidedKind = this.getGuidedKind(kind);
+        const safeFilters = this.sanitizeGuidedFilters(guidedKind, filters);
+        const kindLabel = this.getGuidedKindLabel(guidedKind);
+        const summary = this.describeGuidedFilters(guidedKind, safeFilters);
+        const base = {
+            role: 'assistant',
+            text: `Guided ${kindLabel}: ${step === 'review' ? 'review the filter set' : `choose the ${step} filter`}.`,
+            bullets: [
+                `Current filter: ${summary}.`,
+                'Use the buttons below; free-text prompts still work anytime.'
+            ],
+            actions: []
+        };
+
+        if (step === 'source') {
+            base.actions = [
+                this.buildGuidedAction('All sources', guidedKind, step, safeFilters, { source: '' }, 'severity'),
+                this.buildGuidedAction('Cloud', guidedKind, step, safeFilters, { source: 'cloud' }, 'severity'),
+                this.buildGuidedAction('Local', guidedKind, step, safeFilters, { source: 'local' }, 'severity'),
+                this.buildGuidedAction('Local Synced', guidedKind, step, safeFilters, { source: 'synced_local' }, 'severity')
+            ];
+            if (guidedKind === 'reports') {
+                base.actions.push(this.buildGuidedAction('Shared', guidedKind, step, safeFilters, { source: 'shared' }, 'severity'));
+            }
+            return base;
+        }
+
+        if (step === 'severity') {
+            base.actions = [
+                this.buildGuidedAction('All severities', guidedKind, step, safeFilters, { severity: '' }, 'date'),
+                this.buildGuidedAction('High', guidedKind, step, safeFilters, { severity: 'high' }, 'date'),
+                this.buildGuidedAction('Medium', guidedKind, step, safeFilters, { severity: 'medium' }, 'date'),
+                this.buildGuidedAction('Low', guidedKind, step, safeFilters, { severity: 'low' }, 'date')
+            ];
+            return base;
+        }
+
+        if (step === 'date') {
+            base.bullets.push('For a typed date, use YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD.');
+            base.actions = [
+                this.buildGuidedAction('All dates', guidedKind, step, safeFilters, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' }, 'ppe'),
+                this.buildGuidedAction('Today', guidedKind, step, safeFilters, { dateRange: 'today' }, 'ppe'),
+                this.buildGuidedAction('Yesterday', guidedKind, step, safeFilters, { dateRange: 'yesterday' }, 'ppe'),
+                this.buildGuidedAction('Last 7 days', guidedKind, step, safeFilters, { dateRange: 'week' }, 'ppe'),
+                this.buildGuidedAction('Last 30 days', guidedKind, step, safeFilters, { dateRange: 'month' }, 'ppe'),
+                { type: 'guided-date-request', label: 'Type strict date', guidedKind, guidedFilters: safeFilters }
+            ];
+            return base;
+        }
+
+        if (step === 'ppe') {
+            base.actions = [
+                this.buildGuidedAction('All violations', guidedKind, step, safeFilters, { ppeTypes: [] }, 'review'),
+                this.buildGuidedAction('Missing hardhat', guidedKind, step, safeFilters, { ppeTypes: ['NO-Hardhat'] }, 'review'),
+                this.buildGuidedAction('Missing vest', guidedKind, step, safeFilters, { ppeTypes: ['NO-Safety Vest'] }, 'review'),
+                this.buildGuidedAction('Missing mask', guidedKind, step, safeFilters, { ppeTypes: ['NO-Mask'] }, 'review'),
+                this.buildGuidedAction('Missing gloves', guidedKind, step, safeFilters, { ppeTypes: ['NO-Gloves'] }, 'review'),
+                this.buildGuidedAction('Missing goggles', guidedKind, step, safeFilters, { ppeTypes: ['NO-Goggles'] }, 'review'),
+                this.buildGuidedAction('Missing shoes', guidedKind, step, safeFilters, { ppeTypes: ['NO-Safety Shoes'] }, 'review')
+            ];
+            return base;
+        }
+
+        base.text = guidedKind === 'reports'
+            ? 'Guided reports: ready to fetch matching reports.'
+            : 'Guided analytics: ready to compute this filtered slice.';
+        base.sections = [{
+            title: 'Chosen filters',
+            items: [summary]
+        }];
+        base.actions = guidedKind === 'reports'
+            ? [
+                { type: 'guided-finish', label: 'Show reports', guidedKind, guidedFilters: safeFilters, guidedMode: 'browse' },
+                { type: 'guided-finish', label: 'Explain first match', guidedKind, guidedFilters: safeFilters, guidedMode: 'explain' },
+                { type: 'guided-start', label: 'Start over', guidedKind }
+            ]
+            : [
+                { type: 'guided-finish', label: 'Build analytics snapshot', guidedKind, guidedFilters: safeFilters, guidedMode: 'snapshot' },
+                { type: 'guided-finish', label: 'Open filtered dashboard', guidedKind, guidedFilters: safeFilters, guidedMode: 'dashboard' },
+                { type: 'guided-start', label: 'Start over', guidedKind }
+            ];
+        return base;
+    },
+
+    setGuidedFlowState(kind = 'analytics', step = 'source', filters = {}, awaiting = '') {
+        const session = this.getActiveSession();
+        if (!session) return;
+        const guidedKind = this.getGuidedKind(kind);
+        session.context.guidedFlow = {
+            kind: guidedKind,
+            step: String(step || 'source'),
+            awaiting: String(awaiting || ''),
+            filters: this.sanitizeGuidedFilters(guidedKind, filters)
+        };
+        this.saveState();
+    },
+
+    clearGuidedFlowState() {
+        const session = this.getActiveSession();
+        if (!session) return;
+        session.context.guidedFlow = null;
+        this.saveState();
+    },
+
+    startGuidedFlow(kind = 'analytics') {
+        const guidedKind = this.getGuidedKind(kind);
+        const filters = {};
+        this.setGuidedFlowState(guidedKind, 'source', filters);
+        this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'source', filters));
+    },
+
+    handleGuidedSelection(action = {}) {
+        const guidedKind = this.getGuidedKind(action.guidedKind);
+        const filters = this.mergeGuidedFilters(guidedKind, action.guidedFilters || {}, action.guidedUpdate || {});
+        const nextStep = String(action.guidedNextStep || 'source').trim() || 'source';
+        this.setGuidedFlowState(guidedKind, nextStep, filters);
+        this.pushMessage(this.buildGuidedStepMessage(guidedKind, nextStep, filters));
+    },
+
+    requestGuidedDateInput(action = {}) {
+        const guidedKind = this.getGuidedKind(action.guidedKind);
+        const filters = this.sanitizeGuidedFilters(guidedKind, action.guidedFilters || {});
+        this.setGuidedFlowState(guidedKind, 'date', filters, 'date');
+        this.pushMessage({
+            role: 'assistant',
+            text: 'Type one strict date or date range for this guided filter.',
+            bullets: [
+                'Exact date format: YYYY-MM-DD, for example 2026-05-18.',
+                'Range format: YYYY-MM-DD..YYYY-MM-DD, for example 2026-05-01..2026-05-18.'
+            ],
+            actions: [
+                this.buildGuidedAction('Use all dates', guidedKind, 'date', filters, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' }, 'ppe'),
+                this.buildGuidedAction('Back to date choices', guidedKind, 'date', filters, {}, 'date')
+            ]
+        });
+    },
+
+    parseGuidedDateInput(raw = '') {
+        const source = String(raw || '').trim();
+        const single = source.match(/^(20\d{2}-\d{2}-\d{2})$/);
+        if (single) {
+            const dateExact = this.normalizeDateKey(single[1]);
+            return dateExact ? { success: true, filters: { dateExact } } : { success: false };
+        }
+
+        const range = source.match(/^(20\d{2}-\d{2}-\d{2})\s*(?:\.\.|\s+to\s+|\s+-\s+)\s*(20\d{2}-\d{2}-\d{2})$/i);
+        if (range) {
+            const dateFrom = this.normalizeDateKey(range[1]);
+            const dateTo = this.normalizeDateKey(range[2]);
+            if (dateFrom && dateTo && dateFrom <= dateTo) {
+                return { success: true, filters: { dateFrom, dateTo } };
+            }
+        }
+
+        return { success: false };
+    },
+
+    async handlePendingGuidedDateInput(raw = '') {
+        const session = this.getActiveSession();
+        const flow = session?.context?.guidedFlow;
+        if (!flow || flow.awaiting !== 'date') return false;
+
+        const guidedKind = this.getGuidedKind(flow.kind);
+        const normalized = this.normalizeText(raw);
+        if (/\b(cancel|skip|all dates|no date)\b/.test(normalized)) {
+            const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' });
+            this.setGuidedFlowState(guidedKind, 'ppe', filters);
+            this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'ppe', filters));
+            return true;
+        }
+
+        const parsed = this.parseGuidedDateInput(raw);
+        if (!parsed.success) {
+            this.pushMessage({
+                role: 'assistant',
+                text: 'That date did not match the strict guided format.',
+                bullets: [
+                    'Use YYYY-MM-DD for one date.',
+                    'Use YYYY-MM-DD..YYYY-MM-DD for a date range.'
+                ],
+                actions: [
+                    this.buildGuidedAction('Use all dates', guidedKind, 'date', flow.filters || {}, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' }, 'ppe'),
+                    this.buildGuidedAction('Back to date choices', guidedKind, 'date', flow.filters || {}, {}, 'date')
+                ]
+            });
+            return true;
+        }
+
+        const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, parsed.filters);
+        this.setGuidedFlowState(guidedKind, 'ppe', filters);
+        this.pushMessage(this.buildGuidedStepMessage(guidedKind, 'ppe', filters));
+        return true;
+    },
+
+    async finishGuidedFlow(action = {}) {
+        const guidedKind = this.getGuidedKind(action.guidedKind);
+        const filters = this.sanitizeGuidedFilters(guidedKind, action.guidedFilters || {});
+        const filterSummary = this.describeGuidedFilters(guidedKind, filters);
+        this.clearGuidedFlowState();
+
+        if (guidedKind === 'reports') {
+            await this.handleReportReviewIntent({
+                type: 'browse',
+                raw: 'guided reports',
+                query: 'guided reports',
+                filters,
+                filterSummary: filterSummary === 'all rows' ? '' : filterSummary,
+                selection: action.guidedMode === 'explain' ? 'latest' : '',
+                autoExplain: action.guidedMode === 'explain'
+            });
+            return;
+        }
+
+        await this.handleAnalyticsIntent({
+            raw: 'guided analytics',
+            query: 'guided analytics',
+            filters,
+            filterSummary: filterSummary === 'all rows' ? '' : filterSummary
+        });
+
+        if (action.guidedMode === 'dashboard') {
+            this.performRouteNavigation({
+                type: 'route',
+                page: 'analytics',
+                analyticsFilters: filters,
+                analyticsSummary: filterSummary === 'all rows' ? 'Guided analytics view' : filterSummary,
+                collapsePanel: true
+            });
+        }
     },
 
     handleIntentClarification(raw, intent) {
@@ -2733,6 +3103,23 @@ const CASMAssistant = {
             cleaned.dateRange = dateRange;
         }
 
+        const dateExact = this.normalizeDateKey(filters.dateExact);
+        const dateFrom = this.normalizeDateKey(filters.dateFrom);
+        const dateTo = this.normalizeDateKey(filters.dateTo);
+        if (dateExact) {
+            cleaned.dateExact = dateExact;
+            delete cleaned.dateRange;
+        } else {
+            if (dateFrom) {
+                cleaned.dateFrom = dateFrom;
+                delete cleaned.dateRange;
+            }
+            if (dateTo) {
+                cleaned.dateTo = dateTo;
+                delete cleaned.dateRange;
+            }
+        }
+
         const validPpe = new Set([
             'NO-Hardhat',
             'NO-Safety Vest',
@@ -2762,9 +3149,34 @@ const CASMAssistant = {
                 filters.source
                 || filters.severity
                 || filters.dateRange
+                || filters.dateExact
+                || filters.dateFrom
+                || filters.dateTo
                 || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length > 0)
             )
         );
+    },
+
+    normalizeDateKey(value) {
+        const raw = String(value || '').trim();
+        const match = raw.match(/^(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/);
+        if (!match) return '';
+        const [, year, month, day] = match;
+        const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+        if (
+            parsed.getFullYear() !== Number(year)
+            || parsed.getMonth() !== Number(month) - 1
+            || parsed.getDate() !== Number(day)
+        ) {
+            return '';
+        }
+        return `${year}-${month}-${day}`;
+    },
+
+    getRowDateKey(row = {}) {
+        const rowDate = new Date(row?.timestamp || 0);
+        if (Number.isNaN(rowDate.getTime())) return '';
+        return `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}-${String(rowDate.getDate()).padStart(2, '0')}`;
     },
 
     normalizePpeFilterLabel(label) {
@@ -2793,6 +3205,69 @@ const CASMAssistant = {
         return labels;
     },
 
+    matchesAnalyticsFilters(row, filters = {}) {
+        const safeFilters = this.sanitizeAnalyticsFilters(filters);
+        if (!this.hasActiveAnalyticsFilters(safeFilters)) return true;
+
+        if (safeFilters.source) {
+            const explicitScope = String(row?.source_scope || '').trim().toLowerCase().replace(/-/g, '_');
+            const labelScope = String(row?.source_label || '').trim().toLowerCase();
+            const scope = explicitScope === 'synced_local' || labelScope === 'local synced'
+                ? 'synced_local'
+                : explicitScope || labelScope.replace(/\s+/g, '_');
+            if (scope !== safeFilters.source) return false;
+        }
+
+        if (safeFilters.severity) {
+            const severity = String(row?.severity || '').trim().toLowerCase();
+            if (severity !== safeFilters.severity) return false;
+        }
+
+        if (safeFilters.dateRange) {
+            const rowDate = new Date(row?.timestamp || 0);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            if (safeFilters.dateRange === 'today' && rowDate < today) return false;
+            if (safeFilters.dateRange === 'yesterday') {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (rowDate < yesterday || rowDate >= today) return false;
+            }
+            if (safeFilters.dateRange === 'week') {
+                const weekAgo = new Date(today);
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                if (rowDate < weekAgo) return false;
+            }
+            if (safeFilters.dateRange === 'month') {
+                const monthAgo = new Date(today);
+                monthAgo.setMonth(monthAgo.getMonth() - 1);
+                if (rowDate < monthAgo) return false;
+            }
+        }
+
+        if (safeFilters.dateExact || safeFilters.dateFrom || safeFilters.dateTo) {
+            const rowDateKey = this.getRowDateKey(row);
+            if (!rowDateKey) return false;
+            if (safeFilters.dateExact && rowDateKey !== safeFilters.dateExact) return false;
+            if (safeFilters.dateFrom && rowDateKey < safeFilters.dateFrom) return false;
+            if (safeFilters.dateTo && rowDateKey > safeFilters.dateTo) return false;
+        }
+
+        if (Array.isArray(safeFilters.ppeTypes) && safeFilters.ppeTypes.length) {
+            const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
+            const ppeTags = Array.isArray(row?.ppe_tags) ? row.ppe_tags : [];
+            const breakdownLabels = row?.breakdown && typeof row.breakdown === 'object'
+                ? Object.entries(row.breakdown)
+                    .filter(([, value]) => Number(value) > 0)
+                    .map(([label]) => label)
+                : [];
+            const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            if (!safeFilters.ppeTypes.every((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
+        }
+
+        return true;
+    },
+
     describeAnalyticsFilters(filters = {}) {
         const parts = [];
         if (filters.source === 'cloud') parts.push('cloud rows');
@@ -2803,6 +3278,10 @@ const CASMAssistant = {
         if (filters.dateRange === 'yesterday') parts.push('yesterday');
         if (filters.dateRange === 'week') parts.push('this week');
         if (filters.dateRange === 'month') parts.push('this month');
+        if (filters.dateExact) parts.push(filters.dateExact);
+        if (filters.dateFrom && filters.dateTo) parts.push(`${filters.dateFrom} to ${filters.dateTo}`);
+        else if (filters.dateFrom) parts.push(`from ${filters.dateFrom}`);
+        else if (filters.dateTo) parts.push(`until ${filters.dateTo}`);
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const labels = filters.ppeTypes.map((label) => String(label || '')
                 .replace(/^NO-/, '')
@@ -2813,9 +3292,11 @@ const CASMAssistant = {
         return parts.join(', ');
     },
 
-    async fetchAnalyticsSnapshot(rawQuery = '') {
+    async fetchAnalyticsSnapshot(rawQuery = '', overrideFilters = null) {
         try {
-            const filters = this.buildAnalyticsFilters(rawQuery);
+            const filters = overrideFilters && typeof overrideFilters === 'object'
+                ? this.sanitizeAnalyticsFilters(overrideFilters)
+                : this.buildAnalyticsFilters(rawQuery);
             const [stats, violations] = await Promise.all([
                 API.getStats(),
                 API.getViolations({ limit: 1000 })
@@ -2823,7 +3304,7 @@ const CASMAssistant = {
             const hasFilters = this.hasActiveAnalyticsFilters(filters);
             const allRows = Array.isArray(violations) ? violations : [];
             const filteredRows = hasFilters
-                ? allRows.filter((row) => this.matchesReportFilters(row, filters))
+                ? allRows.filter((row) => this.matchesAnalyticsFilters(row, filters))
                 : allRows;
             if (!filteredRows.length) {
                 return {
@@ -2866,18 +3347,21 @@ const CASMAssistant = {
             };
         } catch (error) {
             console.error('Assistant analytics snapshot failed:', error);
+            const fallbackFilters = overrideFilters && typeof overrideFilters === 'object'
+                ? this.sanitizeAnalyticsFilters(overrideFilters)
+                : this.buildAnalyticsFilters(rawQuery);
             return {
                 success: false,
-                filters: this.buildAnalyticsFilters(rawQuery),
-                hasFilters: this.hasActiveAnalyticsFilters(this.buildAnalyticsFilters(rawQuery)),
-                filterSummary: this.describeAnalyticsFilters(this.buildAnalyticsFilters(rawQuery)),
+                filters: fallbackFilters,
+                hasFilters: this.hasActiveAnalyticsFilters(fallbackFilters),
+                filterSummary: this.describeAnalyticsFilters(fallbackFilters),
                 message: 'I could not fetch the analytics snapshot right now.'
             };
         }
     },
 
     async handleAnalyticsIntent(intent) {
-        const outcome = await this.fetchAnalyticsSnapshot(intent.raw || intent.query || '');
+        const outcome = await this.fetchAnalyticsSnapshot(intent.raw || intent.query || '', intent.filters || null);
         const filterSummary = outcome.filterSummary || intent.filterSummary || '';
         const label = filterSummary ? ` for ${filterSummary}` : '';
         if (!outcome.success) {
@@ -2958,6 +3442,8 @@ const CASMAssistant = {
             || filters.status
             || filters.dateRange
             || filters.dateExact
+            || filters.dateFrom
+            || filters.dateTo
             || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length)
             || (Array.isArray(filters.searchTokens) && filters.searchTokens.length)
         );
@@ -3992,6 +4478,22 @@ const CASMAssistant = {
                 await this.handleOverviewIntent();
                 return;
             }
+            case 'guided-start': {
+                this.startGuidedFlow(action.guidedKind || 'analytics');
+                return;
+            }
+            case 'guided-select': {
+                this.handleGuidedSelection(action);
+                return;
+            }
+            case 'guided-date-request': {
+                this.requestGuidedDateInput(action);
+                return;
+            }
+            case 'guided-finish': {
+                await this.finishGuidedFlow(action);
+                return;
+            }
             case 'settings-profile': {
                 await this.applySettingsProfile(String(action.profile || 'recommended').trim().toLowerCase());
                 return;
@@ -4037,7 +4539,12 @@ const CASMAssistant = {
         if (promptButton) {
             const index = Number(promptButton.dataset.promptIndex || -1);
             if (Number.isFinite(index) && this.promptActions && this.promptActions[index]) {
-                this.runSuggestedPrompt(this.promptActions[index].prompt || '');
+                const action = this.promptActions[index];
+                if (action.type && action.type !== 'prompt') {
+                    this.performAction(action);
+                } else {
+                    this.runSuggestedPrompt(action.prompt || '');
+                }
             }
             return;
         }
@@ -4412,7 +4919,9 @@ const CASMAssistant = {
                 ? ''
                 : /\btoday\b/.test(query)
                 ? 'today'
-                : /\bweek\b|\bthis week\b|\blast seven days\b|\bseven days\b|\b7 days\b|\blast 7 days\b/.test(query)
+                : /\byesterday\b|\blast 24 hours\b/.test(query)
+                    ? 'yesterday'
+                    : /\bweek\b|\bthis week\b|\blast seven days\b|\bseven days\b|\b7 days\b|\blast 7 days\b/.test(query)
                         ? 'week'
                         : /\bmonth\b|\bthis month\b|\blast 30 days\b|\b30 days\b/.test(query)
                             ? 'month'
@@ -4491,7 +5000,11 @@ const CASMAssistant = {
 
     matchesReportFilters(row, filters) {
         if (filters.source) {
-            const scope = String(row?.source_scope || '').trim().toLowerCase() || String(row?.source_label || '').trim().toLowerCase().replace(/\s+/g, '_');
+            const explicitScope = String(row?.source_scope || '').trim().toLowerCase().replace(/-/g, '_');
+            const labelScope = String(row?.source_label || '').trim().toLowerCase();
+            const scope = explicitScope === 'synced_local' || labelScope === 'local synced'
+                ? 'synced_local'
+                : explicitScope || labelScope.replace(/\s+/g, '_');
             if (filters.source === 'cloud' && scope !== 'cloud') return false;
             if (filters.source === 'local' && scope !== 'local') return false;
             if (filters.source === 'synced_local' && scope !== 'synced_local') return false;
@@ -4518,9 +5031,8 @@ const CASMAssistant = {
         }
 
         if (filters.dateExact) {
-            const rowDate = new Date(row?.timestamp || 0);
-            if (Number.isNaN(rowDate.getTime())) return false;
-            const rowDateKey = `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}-${String(rowDate.getDate()).padStart(2, '0')}`;
+            const rowDateKey = this.getRowDateKey(row);
+            if (!rowDateKey) return false;
             if (rowDateKey !== filters.dateExact) return false;
         }
 
@@ -4529,6 +5041,11 @@ const CASMAssistant = {
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             if (filters.dateRange === 'today' && rowDate < today) return false;
+            if (filters.dateRange === 'yesterday') {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (rowDate < yesterday || rowDate >= today) return false;
+            }
             if (filters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
@@ -4539,6 +5056,13 @@ const CASMAssistant = {
                 monthAgo.setMonth(monthAgo.getMonth() - 1);
                 if (rowDate < monthAgo) return false;
             }
+        }
+
+        if (filters.dateFrom || filters.dateTo) {
+            const rowDateKey = this.getRowDateKey(row);
+            if (!rowDateKey) return false;
+            if (filters.dateFrom && rowDateKey < filters.dateFrom) return false;
+            if (filters.dateTo && rowDateKey > filters.dateTo) return false;
         }
 
         if (Array.isArray(filters.searchTokens) && filters.searchTokens.length) {
@@ -4582,6 +5106,9 @@ const CASMAssistant = {
         if (filters.status) parts.push(`${filters.status === 'completed' ? 'ready' : filters.status} status`);
         if (filters.dateExact) parts.push(filters.dateExact);
         if (filters.dateRange) parts.push(filters.dateRange);
+        if (filters.dateFrom && filters.dateTo) parts.push(`${filters.dateFrom} to ${filters.dateTo}`);
+        else if (filters.dateFrom) parts.push(`from ${filters.dateFrom}`);
+        else if (filters.dateTo) parts.push(`until ${filters.dateTo}`);
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const labels = filters.ppeTypes.map((label) => String(label || '')
                 .replace(/^NO-/, '')

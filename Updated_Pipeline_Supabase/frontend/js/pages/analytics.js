@@ -267,6 +267,23 @@ const AnalyticsPage = {
             cleaned.dateRange = dateRange;
         }
 
+        const dateExact = this.normalizeAssistantDateKey(filters.dateExact);
+        const dateFrom = this.normalizeAssistantDateKey(filters.dateFrom);
+        const dateTo = this.normalizeAssistantDateKey(filters.dateTo);
+        if (dateExact) {
+            cleaned.dateExact = dateExact;
+            delete cleaned.dateRange;
+        } else {
+            if (dateFrom) {
+                cleaned.dateFrom = dateFrom;
+                delete cleaned.dateRange;
+            }
+            if (dateTo) {
+                cleaned.dateTo = dateTo;
+                delete cleaned.dateRange;
+            }
+        }
+
         const validPpe = new Set([
             'NO-Hardhat',
             'NO-Safety Vest',
@@ -296,9 +313,34 @@ const AnalyticsPage = {
                 filters.source
                 || filters.severity
                 || filters.dateRange
+                || filters.dateExact
+                || filters.dateFrom
+                || filters.dateTo
                 || (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length > 0)
             )
         );
+    },
+
+    normalizeAssistantDateKey(value) {
+        const raw = String(value || '').trim();
+        const match = raw.match(/^(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/);
+        if (!match) return '';
+        const [, year, month, day] = match;
+        const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+        if (
+            parsed.getFullYear() !== Number(year)
+            || parsed.getMonth() !== Number(month) - 1
+            || parsed.getDate() !== Number(day)
+        ) {
+            return '';
+        }
+        return `${year}-${month}-${day}`;
+    },
+
+    getAssistantRowDateKey(row) {
+        const rowDate = new Date(row?.timestamp || 0);
+        if (Number.isNaN(rowDate.getTime())) return '';
+        return `${rowDate.getFullYear()}-${String(rowDate.getMonth() + 1).padStart(2, '0')}-${String(rowDate.getDate()).padStart(2, '0')}`;
     },
 
     normalizePpeFilterLabel(label) {
@@ -480,6 +522,14 @@ const AnalyticsPage = {
             }
         }
 
+        if (safeFilters.dateExact || safeFilters.dateFrom || safeFilters.dateTo) {
+            const rowDateKey = this.getAssistantRowDateKey(row);
+            if (!rowDateKey) return false;
+            if (safeFilters.dateExact && rowDateKey !== safeFilters.dateExact) return false;
+            if (safeFilters.dateFrom && rowDateKey < safeFilters.dateFrom) return false;
+            if (safeFilters.dateTo && rowDateKey > safeFilters.dateTo) return false;
+        }
+
         if (Array.isArray(safeFilters.ppeTypes) && safeFilters.ppeTypes.length) {
             const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
             const breakdownLabels = row?.breakdown && typeof row.breakdown === 'object'
@@ -602,18 +652,29 @@ const AnalyticsPage = {
         const sourceMix = derivedMetrics.sourceMix || {};
         const timeDistribution = derivedMetrics.timeDistribution || {};
         const timeEntries = Object.entries(timeDistribution);
+        const timeRows = timeEntries.map(([label, value]) => {
+            const normalizedLabel = String(label || '').trim();
+            const match = normalizedLabel.match(/^([^()]+)\s*\(([^)]+)\)$/);
+            return {
+                label: match ? match[1].trim() : normalizedLabel,
+                range: match ? match[2].trim() : '',
+                value: Number(value) || 0
+            };
+        });
         const timeMax = Math.max(1, ...timeEntries.map(([, value]) => Number(value) || 0));
-        const sourceTotal = Math.max(1,
+        const sourceActualTotal = Math.max(0,
             Number(sourceMix.local || 0)
             + Number(sourceMix.synced_local || 0)
             + Number(sourceMix.cloud || 0)
             + Number(sourceMix.shared || 0)
             + Number(sourceMix.unknown || 0)
         );
+        const sourceTotal = Math.max(1, sourceActualTotal);
         const rowCount = Array.isArray(violations) ? violations.length : 0;
         const riskTone = derivedMetrics.highShare >= 40 ? 'danger' : derivedMetrics.highShare >= 18 ? 'warning' : 'stable';
         const readyTone = derivedMetrics.readyRate >= 80 ? 'stable' : derivedMetrics.readyRate >= 50 ? 'warning' : 'danger';
         const safePercent = (value, total) => Math.max(0, Math.min(100, (Number(value) || 0) / Math.max(1, Number(total) || 1) * 100));
+        const displayPercent = (value, total) => `${Math.round(safePercent(value, total))}%`;
         const modeModels = {
             risk: {
                 kicker: 'Risk Focus',
@@ -656,12 +717,13 @@ const AnalyticsPage = {
         };
         const model = modeModels[mode] || modeModels.risk;
         const sourceSegments = [
-            { label: 'local', value: Number(sourceMix.local || 0), className: 'local' },
-            { label: 'synced local', value: Number(sourceMix.synced_local || 0), className: 'synced' },
-            { label: 'cloud', value: Number(sourceMix.cloud || 0), className: 'cloud' },
-            { label: 'shared', value: Number(sourceMix.shared || 0), className: 'shared' },
-            { label: 'unknown', value: Number(sourceMix.unknown || 0), className: 'unknown' }
+            { label: 'Local', value: Number(sourceMix.local || 0), className: 'local' },
+            { label: 'Local Synced', value: Number(sourceMix.synced_local || 0), className: 'synced' },
+            { label: 'Cloud', value: Number(sourceMix.cloud || 0), className: 'cloud' },
+            { label: 'Shared', value: Number(sourceMix.shared || 0), className: 'shared' },
+            { label: 'Unknown', value: Number(sourceMix.unknown || 0), className: 'unknown' }
         ];
+        const totalTimeRows = timeRows.reduce((sum, item) => sum + item.value, 0);
 
         container.innerHTML = `
             <div class="analytics-overview-hero tone-${model.tone}">
@@ -704,6 +766,10 @@ const AnalyticsPage = {
                     </div>
 
                     <div class="analytics-severity-mix" aria-label="Severity mix">
+                        <div class="analytics-panel-title">
+                            <span>Severity mix</span>
+                            <strong>${high + medium + low} rows</strong>
+                        </div>
                         <div class="analytics-severity-strip">
                             <span class="severity-high" style="width:${safePercent(high, severityTotal)}%"></span>
                             <span class="severity-medium" style="width:${safePercent(medium, severityTotal)}%"></span>
@@ -716,20 +782,37 @@ const AnalyticsPage = {
                         </div>
                     </div>
 
-                    <div class="analytics-source-stack" aria-label="Source mix">
+                    <div class="analytics-source-breakdown" aria-label="Source mix">
+                        <div class="analytics-panel-title">
+                            <span>Source mix</span>
+                            <strong>${sourceActualTotal} rows</strong>
+                        </div>
+                        <div class="analytics-source-rows">
                         ${sourceSegments.map((item) => `
-                            <span class="${item.className}" style="width:${safePercent(item.value, sourceTotal)}%" title="${item.label}: ${item.value}"></span>
+                            <div class="analytics-source-row">
+                                <span class="analytics-source-label"><i class="analytics-source-swatch ${item.className}" aria-hidden="true"></i>${item.label}</span>
+                                <span class="analytics-source-meter" aria-hidden="true"><i class="${item.className}" style="width:${Math.max(item.value > 0 ? 7 : 0, safePercent(item.value, sourceTotal))}%"></i></span>
+                                <strong class="analytics-source-value">${item.value} <em>${displayPercent(item.value, sourceTotal)}</em></strong>
+                            </div>
                         `).join('')}
+                        </div>
                     </div>
 
                     <div class="analytics-time-bars" aria-label="Time distribution">
-                        ${timeEntries.map(([label, value]) => `
-                            <div>
-                                <span style="height:${Math.max(12, Math.round(((Number(value) || 0) / timeMax) * 58))}px"></span>
-                                <strong>${Number(value) || 0}</strong>
-                                <em>${String(label).split(' ')[0]}</em>
+                        <div class="analytics-panel-title">
+                            <span>Time distribution</span>
+                            <strong>${totalTimeRows} rows</strong>
+                        </div>
+                        <div class="analytics-time-bar-grid">
+                        ${timeRows.map((item) => `
+                            <div class="analytics-time-bar">
+                                <span style="height:${Math.max(12, Math.round((item.value / timeMax) * 58))}px"></span>
+                                <strong>${item.value}</strong>
+                                <em>${item.label}</em>
+                                <small>${item.range}</small>
                             </div>
                         `).join('')}
+                        </div>
                     </div>
 
                     <div class="analytics-overview-mini-grid">

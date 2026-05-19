@@ -26,12 +26,29 @@ from typing import Dict, Any, Optional, Union, List
 
 logger = logging.getLogger(__name__)
 GEMINI_REQUIRED_BY_DEFAULT = str(os.getenv('GEMINI_REQUIRED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
-DEFAULT_GEMINI_MODEL_CANDIDATES = (
-    "gemini-2.5-flash,"
-    "gemini-2.5-flash-lite,"
-    "gemini-flash-latest,"
-    "gemini-flash-lite-latest"
+STABLE_GEMINI_MODEL_CANDIDATES = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 )
+LATEST_GEMINI_MODEL_ALIASES = (
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+)
+
+
+def _build_default_gemini_model_candidates(include_latest_aliases: Optional[bool] = None) -> str:
+    if include_latest_aliases is None:
+        include_latest_aliases = (
+            str(os.getenv('GEMINI_ENABLE_LATEST_MODEL_ALIASES', 'false')).strip().lower()
+            in ('1', 'true', 'yes', 'on')
+        )
+    candidates = list(STABLE_GEMINI_MODEL_CANDIDATES)
+    if include_latest_aliases:
+        candidates.extend(LATEST_GEMINI_MODEL_ALIASES)
+    return ",".join(candidates)
+
+
+DEFAULT_GEMINI_MODEL_CANDIDATES = _build_default_gemini_model_candidates()
 
 # Try to import the Google GenAI SDK
 GEMINI_AVAILABLE = False

@@ -173,6 +173,14 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('WEBCAM_NEGATIVE_PROBE_CACHE_SECONDS', live_source_adapter)
         self.assertIn('cache_valid = self._webcam_probe_cache_ts > 0', live_source_adapter)
 
+    def test_cloud_pending_recovery_does_not_auto_requeue_terminal_failures(self):
+        supabase_db = (ROOT / 'pipeline' / 'backend' / 'core' / 'supabase_db.py').read_text(encoding='utf-8')
+        recovery_fn = supabase_db.split('def get_cloud_pending_recovery_candidates', 1)[1].split('def get_detection_event', 1)[0]
+
+        self.assertIn('Failed/partial reports are deliberately excluded', recovery_fn)
+        self.assertIn("'pending', 'generating', 'unknown'", recovery_fn)
+        self.assertNotIn("'failed', 'partial'", recovery_fn)
+
     def test_cloud_heartbeat_and_provisioning_labels_stay_visible(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         app_js = (ROOT / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')

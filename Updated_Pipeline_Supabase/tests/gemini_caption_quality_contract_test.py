@@ -16,6 +16,7 @@ from pipeline.backend.integration.gemini_client import (
     DEFAULT_GEMINI_MODEL_CANDIDATES,
     GEMINI_AVAILABLE,
     GeminiClient,
+    _build_default_gemini_model_candidates,
 )
 
 
@@ -130,9 +131,18 @@ def test_caption_normalization_keeps_descriptive_opening_and_filters_inference()
     _assert("hazards" not in cleaned.lower(), cleaned)
 
 
-def test_default_model_candidates_include_current_flash_aliases():
-    _assert("gemini-flash-lite-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
-    _assert("gemini-flash-latest" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+def test_default_model_candidates_stay_on_stable_flash_models():
+    _assert("gemini-2.5-flash" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+    _assert("gemini-2.5-flash-lite" in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+    _assert("gemini-flash-latest" not in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+    _assert("gemini-flash-lite-latest" not in DEFAULT_GEMINI_MODEL_CANDIDATES, DEFAULT_GEMINI_MODEL_CANDIDATES)
+
+
+def test_latest_model_aliases_are_explicit_opt_in():
+    candidates = _build_default_gemini_model_candidates(include_latest_aliases=True)
+
+    _assert("gemini-flash-latest" in candidates, candidates)
+    _assert("gemini-flash-lite-latest" in candidates, candidates)
 
 
 def test_caption_failover_switches_vision_model_name():
@@ -177,7 +187,8 @@ def main():
         test_rich_caption_passes_quality_floor,
         test_default_cloud_caption_prompt_matches_descriptive_style,
         test_caption_normalization_keeps_descriptive_opening_and_filters_inference,
-        test_default_model_candidates_include_current_flash_aliases,
+        test_default_model_candidates_stay_on_stable_flash_models,
+        test_latest_model_aliases_are_explicit_opt_in,
         test_caption_failover_switches_vision_model_name,
         test_truncated_report_json_keeps_grounding_fields_for_schema_completion,
     ]

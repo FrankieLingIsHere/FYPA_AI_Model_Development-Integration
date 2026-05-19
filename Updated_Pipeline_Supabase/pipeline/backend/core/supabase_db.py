@@ -647,6 +647,10 @@ class SupabaseDatabaseManager:
         cloud storage but no report HTML yet.  These are safely recoverable by
         downloading the image and re-running the report worker.
 
+        Failed/partial reports are deliberately excluded. Once generation has
+        reached a terminal failure state, another attempt must come from an
+        explicit user action such as Process/Reprocess Now.
+
         Args:
             min_age_minutes: Minimum age (minutes) before a report is
                 considered stalled and eligible for recovery.
@@ -676,7 +680,7 @@ class SupabaseDatabaseManager:
                     FROM public.detection_events de
                     JOIN public.violations v ON de.report_id = v.report_id
                     WHERE (de.status IS NULL OR de.status IN
-                           ('pending', 'generating', 'unknown', 'failed', 'partial'))
+                           ('pending', 'generating', 'unknown'))
                       AND v.original_image_key IS NOT NULL
                       AND v.report_html_key IS NULL
                       AND (

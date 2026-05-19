@@ -959,7 +959,24 @@ const LivePage = {
                         const now = Date.now();
                         if (now - this.phoneLastViolationNoticeAt > 10000) {
                             this.phoneLastViolationNoticeAt = now;
-                            showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
+                            const violationMessage = `Phone camera: ${result.violation_count || 1} violation(s) detected`;
+                            if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.violation === 'function') {
+                                NotificationManager.violation(violationMessage, null, {
+                                    title: 'PPE Violation Detected',
+                                    action: {
+                                        text: 'View Live',
+                                        onClickFn: () => {
+                                            if (typeof Router !== 'undefined' && typeof Router.navigate === 'function') {
+                                                Router.navigate('live');
+                                            }
+                                        }
+                                    },
+                                    dedupeKey: `phone-live-violation:${Math.floor(now / 10000)}`,
+                                    dedupeTtlMs: 10000
+                                });
+                            } else {
+                                showNotification(violationMessage, 'warning');
+                            }
                         }
                     }
                     if (reportQueued) {
@@ -1055,7 +1072,22 @@ const LivePage = {
                             if (typeof ViolationMonitor !== 'undefined'
                                 && typeof ViolationMonitor._notifyViolationDetected === 'function'
                                 && synthViolation.report_id) {
-                                ViolationMonitor._notifyViolationDetected(synthViolation);
+                                try {
+                                    ViolationMonitor._notifyViolationDetected(synthViolation);
+                                    monitorNotified = true;
+                                } catch (monitorErr) {
+                                    console.warn('Violation monitor notice failed; falling back to direct toast:', monitorErr);
+                                }
+                            }
+                            if (!monitorNotified
+                                && typeof NotificationManager !== 'undefined'
+                                && typeof NotificationManager.violation === 'function'
+                                && synthViolation.report_id) {
+                                NotificationManager.violation(
+                                    synthViolation.violation_summary || 'PPE Violation Detected',
+                                    synthViolation.report_id,
+                                    { title: 'PPE Violation Detected' }
+                                );
                                 monitorNotified = true;
                             }
                             if (!monitorNotified

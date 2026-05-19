@@ -60,7 +60,40 @@ function assertEqual(actual, expected, message) {
   }
 }
 
-function testReadyBackfillsGeneratingToast() {
+function testGeneratingBackfillsViolationDetectedToast() {
+  const calls = [];
+  const reportId = 'toast-fast-generating-001';
+  const ViolationMonitor = loadViolationMonitor({
+    NotificationManager: {
+      reportGenerating: (rid, options = {}) => calls.push({
+        type: 'generating',
+        reportId: rid,
+        title: options.title,
+        actionText: options.action && options.action.text,
+      }),
+      reportReady: (rid) => calls.push({ type: 'ready', reportId: rid }),
+      show: (message, type) => calls.push({ type, message }),
+    },
+  });
+
+  ViolationMonitor.notifiedEvents = new Set();
+  ViolationMonitor._notifyReportGenerating({
+    report_id: reportId,
+    timestamp: new Date().toISOString(),
+    status: 'generating',
+    has_report: false,
+  });
+
+  assertEqual(
+    calls.map((item) => item.type).join(','),
+    'violation,generating',
+    'generating notification should backfill violation detected toast first',
+  );
+  assertEqual(ViolationMonitor.notifiedEvents.has(`detected_${reportId}`), true, 'detected event marked notified');
+  assertEqual(ViolationMonitor.notifiedEvents.has(`generating_${reportId}`), true, 'generating event marked notified');
+}
+
+function testReadyBackfillsViolationAndGeneratingToasts() {
   const calls = [];
   const reportId = 'toast-fast-ready-001';
   const ViolationMonitor = loadViolationMonitor({
@@ -91,14 +124,15 @@ function testReadyBackfillsGeneratingToast() {
 
   assertEqual(
     calls.map((item) => item.type).join(','),
-    'generating,ready',
-    'ready notification should backfill missing generating toast first',
+    'violation,generating,ready',
+    'ready notification should backfill missing violation and generating toasts first',
   );
+  assertEqual(ViolationMonitor.notifiedEvents.has(`detected_${reportId}`), true, 'detected event marked notified');
   assertEqual(ViolationMonitor.notifiedEvents.has(`generating_${reportId}`), true, 'generating event marked notified');
   assertEqual(ViolationMonitor.notifiedEvents.has(`ready_${reportId}`), true, 'ready event marked notified');
 }
 
-function testReadyDoesNotDuplicateExistingGeneratingToast() {
+function testReadyDoesNotDuplicateExistingGeneratingToastButRestoresViolation() {
   const calls = [];
   const reportId = 'toast-existing-generating-001';
   const ViolationMonitor = loadViolationMonitor({
@@ -119,15 +153,43 @@ function testReadyDoesNotDuplicateExistingGeneratingToast() {
 
   assertEqual(
     calls.map((item) => item.type).join(','),
+    'violation,ready',
+    'ready notification should not duplicate generating but should restore missing violation detected toast',
+  );
+}
+
+function testReadyDoesNotDuplicateExistingDetectedOrGeneratingToasts() {
+  const calls = [];
+  const reportId = 'toast-existing-detected-generating-001';
+  const ViolationMonitor = loadViolationMonitor({
+    NotificationManager: {
+      reportGenerating: (rid) => calls.push({ type: 'generating', reportId: rid }),
+      reportReady: (rid) => calls.push({ type: 'ready', reportId: rid }),
+      show: (message, type) => calls.push({ type, message }),
+    },
+  });
+
+  ViolationMonitor.notifiedEvents = new Set([`detected_${reportId}`, `generating_${reportId}`]);
+  ViolationMonitor._notifyReportReady({
+    report_id: reportId,
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+    has_report: true,
+  });
+
+  assertEqual(
+    calls.map((item) => item.type).join(','),
     'ready',
-    'ready notification should not duplicate an existing generating toast',
+    'ready notification should not duplicate already-fired detected or generating toasts',
   );
 }
 
 function main() {
   const tests = [
-    testReadyBackfillsGeneratingToast,
-    testReadyDoesNotDuplicateExistingGeneratingToast,
+    testGeneratingBackfillsViolationDetectedToast,
+    testReadyBackfillsViolationAndGeneratingToasts,
+    testReadyDoesNotDuplicateExistingGeneratingToastButRestoresViolation,
+    testReadyDoesNotDuplicateExistingDetectedOrGeneratingToasts,
   ];
   const failures = [];
   tests.forEach((testFn) => {

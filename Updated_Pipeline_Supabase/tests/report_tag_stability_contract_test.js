@@ -16,7 +16,7 @@ const vm = require('vm');
 const ROOT = path.resolve(__dirname, '..');
 const REPORTS_JS = path.join(ROOT, 'frontend', 'js', 'pages', 'reports.js');
 
-function loadReportsPage() {
+function loadReportsPage(extraContext = {}) {
   const code = `${fs.readFileSync(REPORTS_JS, 'utf8')}\nglobalThis.ReportsPage = ReportsPage;`;
   const context = {
     console,
@@ -25,6 +25,7 @@ function loadReportsPage() {
     document: {
       getElementById: () => null,
     },
+    ...extraContext,
   };
   vm.createContext(context);
   vm.runInContext(code, context, { filename: REPORTS_JS });
@@ -712,6 +713,60 @@ function testReportStatusProbeDoesNotReplayReadyToastForReadyCard() {
   assertEqual(readyToastCalls, 0, 'already-ready status refresh must not replay ready toast');
 }
 
+async function testFastCompletionPollEmitsGeneratingBeforeReadyToast() {
+  const notifications = [];
+  const reportId = 'tag-fast-toast-sequence-001';
+  const ReportsPage = loadReportsPage({
+    API: {
+      getReportStatus: async () => ({
+        report_id: reportId,
+        status: 'completed',
+        has_report: true,
+        has_local_report: true,
+        ready_source: 'local_report_html',
+        source_scope: 'cloud',
+      }),
+    },
+    NotificationManager: {
+      reportGenerating: (rid, options = {}) => notifications.push({
+        type: 'generating',
+        reportId: rid,
+        title: options.title,
+      }),
+      reportReady: (rid, options = {}) => notifications.push({
+        type: 'ready',
+        reportId: rid,
+        actionText: options.action && options.action.text,
+      }),
+    },
+  });
+
+  ReportsPage.violations = [{
+    report_id: reportId,
+    timestamp: new Date().toISOString(),
+    status: 'pending',
+    has_report: false,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+  }];
+  ReportsPage.renderReports = () => {};
+  ReportsPage.loadReports = async () => {};
+  ReportsPage.setProviderWarning = () => {};
+  ReportsPage.setModalStage = () => {};
+  ReportsPage.setModalStatusText = () => {};
+  ReportsPage.openReport = () => {};
+
+  const done = await ReportsPage.pollReportProgress(reportId, { autoOpen: false });
+
+  assertEqual(done, true, 'fast completion poll finishes');
+  assertEqual(
+    notifications.map((item) => item.type).join(','),
+    'generating,ready',
+    'fast completion poll emits generating before ready toast',
+  );
+  assertEqual(ReportsPage.modalRuntime.sawGeneratingStage, true, 'implicit generating toast records lifecycle stage');
+}
+
 function testLocalSyncCompletionToastFiresForAlreadySyncedCache() {
   const ReportsPage = loadReportsPage();
   const notifications = [];
@@ -776,7 +831,7 @@ function testRealtimePayloadDoesNotForceFullListRefresh() {
   assertEqual(prefetchCalls, 0, 'generating realtime payload must not warm report HTML');
 }
 
-function main() {
+async function main() {
   const tests = [
     testMergeMatrix,
     testRuntimePatchMatrix,
@@ -787,19 +842,20 @@ function main() {
     testSyncedLocalBadgeWinsOverQueuedSyncState,
     testReportStatusProbeDoesNotForceFullListRefresh,
     testReportStatusProbeDoesNotReplayReadyToastForReadyCard,
+    testFastCompletionPollEmitsGeneratingBeforeReadyToast,
     testLocalSyncCompletionToastFiresForAlreadySyncedCache,
     testRealtimePayloadDoesNotForceFullListRefresh,
   ];
   const failures = [];
-  tests.forEach((testFn) => {
+  for (const testFn of tests) {
     try {
-      testFn();
+      await testFn();
       console.log(`PASS: ${testFn.name}`);
     } catch (error) {
       failures.push(`${testFn.name}: ${error.message || error}`);
       console.error(`FAIL: ${testFn.name}: ${error.message || error}`);
     }
-  });
+  }
 
   if (failures.length) {
     process.exit(1);
@@ -808,4 +864,7 @@ function main() {
   console.log('Report tag stability contract test passed');
 }
 
-main();
+main().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});

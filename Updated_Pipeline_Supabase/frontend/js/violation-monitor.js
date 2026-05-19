@@ -799,19 +799,29 @@ const ViolationMonitor = {
 
         this.notifiedEvents.add(notifKey);
         const reportId = violation.report_id;
+        const action = {
+            text: 'View Progress',
+            onClickFn: () => this.navigateToReport(reportId)
+        };
 
-        NotificationManager.show(
-            `Analyzing violation and generating safety report...`,
-            'report',
-            10000,
-            {
+        if (typeof NotificationManager.reportGenerating === 'function') {
+            NotificationManager.reportGenerating(reportId, {
                 title: 'Generating Report',
-                action: {
-                    text: 'View Progress',
-                    onClickFn: () => this.navigateToReport(reportId)
+                action
+            });
+        } else {
+            NotificationManager.show(
+                `Analyzing violation and generating safety report...`,
+                'report',
+                10000,
+                {
+                    title: 'Generating Report',
+                    action,
+                    dedupeKey: reportId ? `report-generating:${reportId}` : 'report-generating:unknown',
+                    dedupeTtlMs: reportId ? 45000 : 8000
                 }
-            }
-        );
+            );
+        }
 
         console.log(`[ViolationMonitor] GENERATING: ${violation.report_id}`);
     },
@@ -821,6 +831,12 @@ const ViolationMonitor = {
         const notifKey = `ready_${violation.report_id}`;
         if (this.notifiedEvents.has(notifKey)) return;
 
+        if (!this.notifiedEvents.has(`generating_${violation.report_id}`)) {
+            this._notifyReportGenerating({
+                ...violation,
+                status: 'generating'
+            });
+        }
         this.notifiedEvents.add(notifKey);
 
         const action = {

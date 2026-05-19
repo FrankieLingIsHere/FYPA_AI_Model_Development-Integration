@@ -1891,6 +1891,29 @@ const ReportsPage = {
         }
     },
 
+    notifyReportGenerating(reportId, options = {}) {
+        const rid = String(reportId || '').trim();
+        if (!rid) return;
+        const action = {
+            text: 'View Progress',
+            onClickFn: () => this.focusReport(rid, { openModal: true })
+        };
+        if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
+            NotificationManager.reportGenerating(rid, {
+                title: 'Generating Report',
+                action,
+                ...options
+            });
+        } else {
+            this.notify(`Report ${rid} is generating.`, 'info', {
+                action,
+                dedupeKey: `report-generating:${rid}`,
+                dedupeTtlMs: 45000,
+                ...options
+            });
+        }
+    },
+
     async openReport(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
@@ -2693,6 +2716,9 @@ const ReportsPage = {
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
         const runtime = this.ensureModalRuntime(reportId);
+        const previousPollStatus = runtime.lastPollStatus;
+        const sourceHintStatus = this.normalizeStatus(sourceHint);
+        const previousObservedStatus = previousPollStatus || sourceHintStatus;
         const latestSourceHint = this.upsertReportRuntimeState(reportId, {
             ...(data && typeof data === 'object' ? data : {}),
             status,
@@ -2704,16 +2730,18 @@ const ReportsPage = {
             if (status === 'pending' || status === 'queued') {
                 this.notify(`Report ${reportId} is queued for generation.`, 'info');
             } else if (status === 'generating' || status === 'processing') {
-                if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
-                    NotificationManager.reportGenerating(reportId, {
-                        title: 'Generating Report',
-                        action: {
-                            text: 'View Progress',
-                            onClickFn: () => this.focusReport(reportId, { openModal: true })
-                        }
-                    });
-                }
+                this.notifyReportGenerating(reportId);
             } else if (status === 'completed' && dataHasReport) {
+                if (
+                    !runtime.sawGeneratingStage
+                    && previousObservedStatus
+                    && previousObservedStatus !== 'generating'
+                    && previousObservedStatus !== 'processing'
+                    && previousObservedStatus !== 'completed'
+                ) {
+                    this.notifyReportGenerating(reportId);
+                    runtime.sawGeneratingStage = true;
+                }
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
                     NotificationManager.reportReady(reportId, {
                         action: {
@@ -2963,15 +2991,9 @@ const ReportsPage = {
                 source_reason: result.routed_via_cloud_fallback ? 'manual_cloud_reprocess_fallback' : '',
                 routed_via_cloud_fallback: !!result.routed_via_cloud_fallback
             }, sourceHint);
-            if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
-                NotificationManager.reportGenerating(reportId, {
-                    title: options.force ? 'Reprocessing Started' : 'Generation Started',
-                    action: {
-                        text: 'View Progress',
-                        onClickFn: () => this.focusReport(reportId, { openModal: true })
-                    }
-                });
-            }
+            this.notifyReportGenerating(reportId, {
+                title: options.force ? 'Reprocessing Started' : 'Generation Started'
+            });
             await this.refreshReports();
             this.startModalPolling(reportId, { autoOpen: true });
         } catch (error) {

@@ -40,10 +40,10 @@ const ReportsPage = {
         pollStartedAt: 0,
         maxRetries: 5,
         cooldownSeconds: 8,
-        pollIntervalMs: 2500,
+        pollIntervalMs: 1200,
         maxWaitMs: 420000,
         expectedDurationSec: 180,
-        minGeneratingDisplayMs: 1800,
+        minGeneratingDisplayMs: 650,
         sawGeneratingStage: false
     },
 
@@ -2770,9 +2770,13 @@ const ReportsPage = {
             }
             this.setModalStage('completed');
             this.setModalStatusText('Report completed. Opening now...');
-            await this.loadReports({ noCache: true, targetedReportId: reportId });
+            this.loadReports({ noCache: true, targetedReportId: reportId }).catch((error) => {
+                console.debug('Post-completion reports refresh skipped:', error);
+            });
             if (autoOpen) {
-                const refreshedSourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || latestSourceHint;
+                const refreshedSourceHint = latestSourceHint
+                    || this.violations.find((v) => String(v.report_id) === String(reportId))
+                    || sourceHint;
                 this.openReport(reportId, refreshedSourceHint);
                 this.closeModal();
             }

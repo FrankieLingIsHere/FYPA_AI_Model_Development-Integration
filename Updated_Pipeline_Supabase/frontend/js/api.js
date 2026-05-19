@@ -509,6 +509,13 @@ const API = {
         );
     },
 
+    hasOpenableLocalReportMirror(sourceHint = null) {
+        return !!(
+            this.hasConcreteLocalReportArtifacts(sourceHint)
+            && !this.hasCloudReportArtifactEvidence(sourceHint)
+        );
+    },
+
     hasLocalReportIdPrefix(reportId) {
         const id = String(reportId || '').trim().toLowerCase();
         return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(id);
@@ -648,6 +655,14 @@ const API = {
         const localBase = this.getLocalBackendBaseUrl();
 
         if (
+            (scope === 'cloud' || scope === 'shared')
+            && this.isPageServedFromLocalHost()
+            && this.hasOpenableLocalReportMirror(sourceHint)
+        ) {
+            return localBase || currentBase;
+        }
+
+        if (
             scope === 'synced_local'
             && typeof navigator !== 'undefined'
             && navigator.onLine === false
@@ -703,6 +718,7 @@ const API = {
     isCloudReportUnavailableOffline(sourceHint = null) {
         if (typeof navigator === 'undefined' || navigator.onLine !== false) return false;
         const scope = this.inferReportSourceScope(sourceHint);
+        if ((scope === 'cloud' || scope === 'shared') && this.hasOpenableLocalReportMirror(sourceHint)) return false;
         if (scope === 'synced_local' && this.hasConcreteLocalReportArtifacts(sourceHint)) return false;
         return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
     },
@@ -1371,6 +1387,9 @@ const API = {
 
     reportNeedsEmbeddedImagesForOffline(sourceHint = null) {
         const scope = this.inferReportSourceScope(sourceHint);
+        if ((scope === 'cloud' || scope === 'shared') && this.hasOpenableLocalReportMirror(sourceHint)) {
+            return false;
+        }
         return scope === 'cloud'
             || scope === 'shared'
             || (
@@ -2578,6 +2597,14 @@ const API = {
         }
 
         if (scope === 'local') {
+            return `${localBase || currentBase || ''}${path}`;
+        }
+
+        if (
+            (scope === 'cloud' || scope === 'shared')
+            && this.isPageServedFromLocalHost()
+            && this.hasOpenableLocalReportMirror(sourceHint)
+        ) {
             return `${localBase || currentBase || ''}${path}`;
         }
 

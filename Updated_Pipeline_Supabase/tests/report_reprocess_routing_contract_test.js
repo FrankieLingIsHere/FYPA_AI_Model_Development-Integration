@@ -541,6 +541,51 @@ function testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride() {
   );
 }
 
+function testFreshCloudLocalMirrorOpensWithoutCloudEgress() {
+  const localContext = loadApiContext(
+    async () => createResponse(true, 200, {}),
+    {
+      PPE_API_URL: 'http://127.0.0.1:5000',
+      __PPE_CONFIG__: { API_BASE_URL: 'https://cloud-api.example.test' },
+      location: {
+        origin: 'http://localhost:5000',
+        hostname: 'localhost',
+        protocol: 'http:',
+      },
+    },
+  );
+  localContext.API_CONFIG.BASE_URL = 'http://127.0.0.1:5000';
+
+  const freshCloudReadyRow = {
+    report_id: 'cloud-local-ready-001',
+    status: 'completed',
+    has_report: true,
+    has_local_report: true,
+    local_report_available: true,
+    has_original: true,
+    has_annotated: true,
+    source_scope: 'cloud',
+    source_label: 'Cloud',
+    ready_source: 'local_report_html',
+  };
+
+  assertEqual(
+    localContext.API.getReportNavigationUrl(freshCloudReadyRow.report_id, freshCloudReadyRow),
+    'http://127.0.0.1:5000/report/cloud-local-ready-001',
+    'fresh cloud-mode local report.html should open from local backend before cloud artifact persistence',
+  );
+  assertEqual(
+    localContext.API.getImageUrl(freshCloudReadyRow.report_id, 'annotated.jpg', freshCloudReadyRow),
+    'http://127.0.0.1:5000/image/cloud-local-ready-001/annotated.jpg',
+    'fresh cloud-mode local mirror thumbnails should avoid cloud egress before upload completes',
+  );
+  assertEqual(
+    localContext.API.reportNeedsEmbeddedImagesForOffline(freshCloudReadyRow),
+    false,
+    'fresh local mirror should not spend extra time building an offline-complete cloud cache before opening',
+  );
+}
+
 async function testCloudReportRejectsStaleLocalCachedHtml() {
   const localContext = loadApiContext(
     async () => createResponse(true, 200, {}),
@@ -713,6 +758,7 @@ async function main() {
     testCloudInferenceResultDoesNotCreateBrowserLocalDraft,
     testSyncedLocalThumbnailRoutesToAvailableBackend,
     testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride,
+    testFreshCloudLocalMirrorOpensWithoutCloudEgress,
     testCloudReportRejectsStaleLocalCachedHtml,
     testCompletedLocalSyncCoercesQueuedState,
     testSyncedLocalMergeKeepsLocalThumbnailBridge,

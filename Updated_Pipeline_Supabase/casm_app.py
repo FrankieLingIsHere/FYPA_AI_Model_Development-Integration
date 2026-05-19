@@ -435,6 +435,16 @@ def _set_cached_report_html_content(report_id: str, report_html_key: str, conten
                 report_html_cache.pop(key, None)
 
 
+def _invalidate_report_html_caches(report_id: str) -> None:
+    report_id = str(report_id or '').strip()
+    if not report_id:
+        return
+    with report_html_cache_lock:
+        report_html_cache.pop(report_id, None)
+    with report_rendered_cache_lock:
+        report_rendered_cache.pop(report_id, None)
+
+
 def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
     if not report_id:
         return
@@ -6202,6 +6212,16 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         report_generation_model = result_nlp_analysis.get('model') or report_generation_model
                     target_html = violation_dir / 'report.html'
                     if target_html.exists():
+                        if _local_report_html_is_fallback_template(target_html):
+                            attempt_failure_reason = (
+                                "Report generator wrote fallback/placeholder HTML instead of a model-generated report"
+                            )
+                            failure_reason = attempt_failure_reason
+                            logger.warning(
+                                f"Blocked fallback/placeholder HTML result for {report_id}; "
+                                "report will remain failed until a real model-generated report is available."
+                            )
+                            break
                         logger.info(f" Report generated: {target_html}")
                         report_created = True
 
@@ -6234,27 +6254,50 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             failure_reason = f"{type(e).__name__}: {e}"
     _record_generation_timing('report_generation', report_generation_started_at)
 
-    if not report_created and (violation_dir / 'report.html').exists():
-        logger.warning(
-            f"Report artifact exists for {report_id} despite missing generator result; "
-            "treating the report as completed to keep local status consistent"
-        )
-        report_created = True
-        failure_reason = None
-        failure_path = violation_dir / 'generation_failure.txt'
-        try:
-            if failure_path.exists():
-                failure_path.unlink()
-        except Exception as cleanup_err:
-            logger.debug(f"Could not remove stale generation failure file for {report_id}: {cleanup_err}")
-        if should_update_cloud_status and not report_ready_signal_sent:
+    existing_report_html = violation_dir / 'report.html'
+    if not report_created and existing_report_html.exists():
+        if _local_report_html_is_fallback_template(existing_report_html):
+            failure_reason = failure_reason or (
+                "Report artifact is fallback/placeholder output, not a model-generated report."
+            )
+            logger.warning(
+                f"Blocked fallback/placeholder report artifact for {report_id}; "
+                "leaving status failed so the UI does not open it as a completed report."
+            )
+        elif force_reprocess_requested:
+            failure_reason = failure_reason or (
+                "Forced reprocess failed before writing a fresh model-generated report."
+            )
+            logger.warning(
+                f"Report artifact exists for {report_id} after forced reprocess failure; "
+                "not treating it as completed because it may be stale."
+            )
+        else:
+            logger.warning(
+                f"Report artifact exists for {report_id} despite missing generator result; "
+                "treating the report as completed to keep local status consistent"
+            )
+            report_created = True
+            failure_reason = None
+            failure_path = violation_dir / 'generation_failure.txt'
             try:
-                db_manager.update_detection_status(report_id, 'completed')
-            except Exception as status_err:
-                _activate_local_offline_runtime('process_queued_violation.artifact_completed', status_err)
-                logger.warning(f"Could not update completed status after report artifact detection: {status_err}")
+                if failure_path.exists():
+                    failure_path.unlink()
+            except Exception as cleanup_err:
+                logger.debug(f"Could not remove stale generation failure file for {report_id}: {cleanup_err}")
+            if should_update_cloud_status and not report_ready_signal_sent:
+                try:
+                    db_manager.update_detection_status(report_id, 'completed')
+                except Exception as status_err:
+                    _activate_local_offline_runtime('process_queued_violation.artifact_completed', status_err)
+                    logger.warning(f"Could not update completed status after report artifact detection: {status_err}")
 
-    if not report_created and allow_placeholder_report and force_reprocess_requested:
+    if (
+        not report_created
+        and allow_placeholder_report
+        and force_reprocess_requested
+        and _allow_synthetic_reprocess_placeholder_artifacts()
+    ):
         try:
             logger.warning(
                 f"Placeholder report fallback activated for {report_id} (forced reprocess); "
@@ -6280,6 +6323,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         logger.warning(f"Could not update completed status after placeholder fallback: {status_err}")
         except Exception as fallback_err:
             logger.warning(f"Forced reprocess placeholder fallback failed for {report_id}: {fallback_err}")
+    elif not report_created and allow_placeholder_report and force_reprocess_requested:
+        failure_reason = failure_reason or (
+            "Placeholder fallback report suppressed; waiting for a real source image and model-generated report."
+        )
+        logger.warning(
+            f"Placeholder report fallback suppressed for {report_id}; "
+            "CASM_ALLOW_SYNTHETIC_REPROCESS_PLACEHOLDER is disabled."
+        )
 
     # Do not auto-create fallback report for regular processing paths.
     if not report_created:
@@ -6401,7 +6452,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
 
     if report_created and is_local_cache_sync_job and not cloud_upload_skipped:
         local_has_annotated = annotated_path.exists()
-        local_has_report = (violation_dir / 'report.html').exists()
+        local_report_path = violation_dir / 'report.html'
+        local_has_report = (
+            local_report_path.exists()
+            and not _local_report_html_is_fallback_template(local_report_path)
+        )
         if _local_sync_has_complete_cloud_artifacts(
             result_storage_keys,
             local_has_annotated=local_has_annotated,
@@ -6443,8 +6498,8 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
     else:
         placeholder_warning_message = (
             "The cloud NLP report generator (Gemini) was unavailable for this run. "
-            "This placeholder was produced so the violation is still recorded; the report will be "
-            "regenerated automatically once the cloud provider is reachable again."
+            "This placeholder was produced so the violation is still recorded. Retry manually once "
+            "the cloud provider is reachable again."
         )
     placeholder_severity = _classify_violation_severity(
         detections=detections if isinstance(detections, list) else [],
@@ -7112,7 +7167,8 @@ def api_violations():
                     with open(metadata_file, 'r') as f:
                         metadata = json.load(f)
 
-                has_report = (violation_dir / 'report.html').exists()
+                local_report_path = violation_dir / 'report.html'
+                has_report = local_report_path.exists() and not _local_report_html_is_fallback_template(local_report_path)
                 has_original = (violation_dir / 'original.jpg').exists()
                 has_annotated = (violation_dir / 'annotated.jpg').exists()
                 metadata_missing_ppe = [
@@ -7243,7 +7299,11 @@ def api_violations():
             local_violation_dir = VIOLATIONS_DIR / str(report_id)
             local_has_original = (local_violation_dir / 'original.jpg').exists()
             local_has_annotated = (local_violation_dir / 'annotated.jpg').exists()
-            local_has_report = (local_violation_dir / 'report.html').exists()
+            local_report_path = local_violation_dir / 'report.html'
+            local_has_report = (
+                local_report_path.exists()
+                and not _local_report_html_is_fallback_template(local_report_path)
+            )
             has_local_artifacts = local_has_original or local_has_annotated or local_has_report
             has_cloud_artifacts = bool(v.get('original_image_key')) or bool(v.get('annotated_image_key')) or bool(v.get('report_html_key'))
             has_cloud_report_artifact = bool(v.get('report_html_key') or v.get('report_pdf_key'))
@@ -8156,13 +8216,16 @@ def api_get_violation(report_id):
 
         timestamp = _parse_report_id_timestamp(report_id)
 
+        local_report_path = violation_dir / 'report.html'
+        has_report = local_report_path.exists() and not _local_report_html_is_fallback_template(local_report_path)
+
         return jsonify({
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
             'has_original': (violation_dir / 'original.jpg').exists(),
             'has_annotated': (violation_dir / 'annotated.jpg').exists(),
-            'has_report': (violation_dir / 'report.html').exists(),
-            'status': 'completed' if (violation_dir / 'report.html').exists() else 'pending',
+            'has_report': has_report,
+            'status': 'completed' if has_report else 'pending',
             **metadata
         })
 
@@ -8345,7 +8408,9 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
     if not violation_dir.exists():
         return None
 
-    has_report = (violation_dir / 'report.html').exists()
+    report_html_path = violation_dir / 'report.html'
+    has_fallback_report = _local_report_html_is_fallback_template(report_html_path)
+    has_report = report_html_path.exists() and not has_fallback_report
     has_original = (violation_dir / 'original.jpg').exists()
     has_annotated = (violation_dir / 'annotated.jpg').exists()
     has_caption = (violation_dir / 'caption.txt').exists()
@@ -8363,6 +8428,9 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
     error_message = None
     if has_report:
         status = 'completed'
+    elif has_fallback_report:
+        status = 'failed'
+        error_message = 'Report artifact is fallback/placeholder output. Regenerate after provider recovery.'
     elif failure_path.exists():
         status = 'failed'
         error_message = _read_generation_failure_reason(failure_path)
@@ -8637,7 +8705,11 @@ def api_report_status(report_id):
             status_info = db_manager.get_status(report_id)
         else:
             event, violation = _get_report_event_and_violation(report_id)
-            local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists())
+            status_report_html_path = VIOLATIONS_DIR / report_id / 'report.html'
+            local_report_exists = bool(
+                status_report_html_path.exists()
+                and not _local_report_html_is_fallback_template(status_report_html_path)
+            )
 
             if not event and not violation:
                 status_info = None
@@ -12720,6 +12792,12 @@ def _read_local_violation_metadata(violation_dir: Path) -> Dict[str, Any]:
         return {}
 
 
+def _allow_synthetic_reprocess_placeholder_artifacts() -> bool:
+    """Allow legacy synthetic reprocess artifacts only when explicitly enabled."""
+    raw = str(os.getenv('CASM_ALLOW_SYNTHETIC_REPROCESS_PLACEHOLDER', 'false')).strip().lower()
+    return raw in {'1', 'true', 'yes', 'on'}
+
+
 def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path, reason: str = '') -> bool:
     """Create a deterministic placeholder image for forced reprocess recovery paths."""
     try:
@@ -14725,6 +14803,15 @@ def api_generate_report_now(report_id):
         violation = None
         placeholder_reprocess_recovery_used = False
 
+        if force_reprocess:
+            _invalidate_report_html_caches(report_id)
+            for stale_path in (report_html_path, violation_dir / 'generation_failure.txt'):
+                try:
+                    if stale_path.exists():
+                        stale_path.unlink()
+                except Exception as stale_err:
+                    logger.debug(f"Could not remove stale reprocess artifact for {report_id}: {stale_err}")
+
         if db_manager is not None:
             try:
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
@@ -14745,10 +14832,11 @@ def api_generate_report_now(report_id):
                         'worker_running': _is_queue_worker_alive()
                     })
 
-                if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
+                if storage_manager is not None and isinstance(violation, dict):
                     try:
                         original_key = violation.get('original_image_key')
-                        if original_key:
+                        should_recover_original = bool(original_key and (force_reprocess or not original_path.exists()))
+                        if should_recover_original:
                             blob = storage_manager.download_file_content(original_key)
                             if blob:
                                 violation_dir.mkdir(parents=True, exist_ok=True)
@@ -14788,7 +14876,11 @@ def api_generate_report_now(report_id):
                 'report_id': report_id,
             })
 
-        if not original_path.exists() and force_reprocess:
+        if (
+            not original_path.exists()
+            and force_reprocess
+            and _allow_synthetic_reprocess_placeholder_artifacts()
+        ):
             placeholder_reason = (
                 "Original image missing for forced reprocess; generated synthetic placeholder "
                 "to unblock queue execution"
@@ -14815,6 +14907,29 @@ def api_generate_report_now(report_id):
                         )
                     except Exception as log_err:
                         logger.debug(f"Could not log placeholder recovery event for {report_id}: {log_err}")
+        elif not original_path.exists() and force_reprocess:
+            missing_original_reason = (
+                "Original image artifact is missing and cloud recovery did not provide it; "
+                "regeneration was not started to avoid creating a placeholder-quality report."
+            )
+            if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+                try:
+                    db_manager.update_detection_status(
+                        report_id,
+                        'failed',
+                        missing_original_reason
+                    )
+                except Exception as status_err:
+                    _activate_local_offline_runtime('api_generate_report_now.missing_original_status', status_err)
+                    logger.warning(f"Could not update missing-original status for {report_id}: {status_err}")
+            return jsonify({
+                'success': False,
+                'error': missing_original_reason,
+                'rejected_reason': 'missing_original_image',
+                'report_id': report_id,
+                'force_reprocess': force_reprocess,
+                'worker_running': _is_queue_worker_alive(),
+            }), 409
 
         if not original_path.exists():
             return jsonify({
@@ -15519,7 +15634,31 @@ def _looks_like_fallback_template_html(html_content: str) -> bool:
             or f'ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'.lower() in lowered
             or 'ollama pull llama3' in lowered
         )
-        return has_fallback_label and has_setup_instructions
+        has_placeholder_message = (
+            'this placeholder was produced' in lowered
+            or 'cloud nlp report generator' in lowered
+            or 'placeholder fallback report' in lowered
+        )
+        has_synthetic_reprocess_source = (
+            'casm reprocess placeholder' in lowered
+            or 'forced reprocess fallback: source image missing' in lowered
+            or 'synthetic placeholder to unblock queue execution' in lowered
+        )
+        return bool(
+            (has_fallback_label and (has_setup_instructions or has_placeholder_message))
+            or has_synthetic_reprocess_source
+        )
+
+
+def _local_report_html_is_fallback_template(report_html_path: Path) -> bool:
+        try:
+            if not report_html_path.exists():
+                return False
+            return _looks_like_fallback_template_html(
+                report_html_path.read_text(encoding='utf-8', errors='ignore')
+            )
+        except Exception:
+            return False
 
 
 def _render_regenerate_report_page(report_id: str, reason: str, status_code: int = 409):
@@ -17455,7 +17594,10 @@ def api_reliability_stats():
         fallback_markers = (
             'report generator not available',
             'fallback report',
-            'explicit failed-report fallback'
+            'explicit failed-report fallback',
+            'this placeholder was produced',
+            'casm reprocess placeholder',
+            'forced reprocess fallback: source image missing'
         )
 
         def _is_fallback_content(report_id: str) -> bool:
@@ -17483,7 +17625,12 @@ def api_reliability_stats():
             status = str(row.get('status') or '').strip().lower()
             error_message = (row.get('error_message') or '').strip()
 
-            local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists()) if report_id else False
+            local_report_path = VIOLATIONS_DIR / str(report_id or '') / 'report.html'
+            local_report_exists = bool(
+                report_id
+                and local_report_path.exists()
+                and not _local_report_html_is_fallback_template(local_report_path)
+            )
             has_report = bool(row.get('report_html_key')) or local_report_exists
             fallback_content = _is_fallback_content(report_id) if has_report and report_id else False
 

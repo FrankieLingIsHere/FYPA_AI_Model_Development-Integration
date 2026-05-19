@@ -1892,22 +1892,22 @@ const ReportsPage = {
     },
 
     notifyReportGenerating(reportId, options = {}) {
-        const rid = String(reportId || '').trim();
-        if (!rid) return;
+        reportId = String(reportId || '').trim();
+        if (!reportId) return;
         const action = {
             text: 'View Progress',
-            onClickFn: () => this.focusReport(rid, { openModal: true })
+            onClickFn: () => this.focusReport(reportId, { openModal: true })
         };
         if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
-            NotificationManager.reportGenerating(rid, {
+            NotificationManager.reportGenerating(reportId, {
                 title: 'Generating Report',
                 action,
                 ...options
             });
         } else {
-            this.notify(`Report ${rid} is generating.`, 'info', {
+            this.notify(`Report ${reportId} is generating.`, 'info', {
                 action,
-                dedupeKey: `report-generating:${rid}`,
+                dedupeKey: `report-generating:${reportId}`,
                 dedupeTtlMs: 45000,
                 ...options
             });

@@ -1221,20 +1221,20 @@ const ReportsPage = {
             const capacity = data.capacity || {};
 
             const rawProvider = (nlp.last_provider || '').trim();
-            const provider = rawProvider || 'Gemini pending first success';
-            const model = nlp.last_model || '';
+            const provider = rawProvider || 'awaiting-first-success';
+            const model = nlp.last_model || '-';
             const estimate = capacity.estimate_reports_remaining;
             const estimateText = estimate == null ? 'unknown' : String(estimate);
-            const modelText = model ? `Model: ${model}` : 'Model: pending';
-            const latestAliasActive = /-latest$/i.test(model);
 
             let state = 'info';
             if (capacity.status === 'depleted') state = 'error';
             else if (capacity.status === 'limited') state = 'warn';
             else if (capacity.status === 'sustainable') state = 'ok';
-            if (latestAliasActive && state === 'ok') state = 'warn';
 
-            this.setProviderBadgeText(`Provider: ${provider} | ${modelText} | Remaining: ${estimateText}`, state);
+            const providerLabel = rawProvider
+                ? provider
+                : 'awaiting first successful generation';
+            this.setProviderBadgeText(`Provider: ${providerLabel} (${model}) | Remaining: ${estimateText}`, state);
         } catch (error) {
             this.setProviderBadgeText('Provider: unavailable', 'error');
         }

@@ -2444,7 +2444,6 @@ const ReportsPage = {
             this.modalRuntime.cooldownUntil = 0;
             this.modalRuntime.pollStartedAt = 0;
             this.modalRuntime.sawGeneratingStage = false;
-            this.modalRuntime.forceReprocessActive = false;
         }
         return this.modalRuntime;
     },
@@ -2712,13 +2711,11 @@ const ReportsPage = {
     async pollReportProgress(reportId, { autoOpen = false } = {}) {
         const sourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
         const data = await API.getReportStatus(reportId, { source: sourceHint, noCache: true, timeoutMs: 6000 });
-        const runtime = this.ensureModalRuntime(reportId);
-        const dataHasReport = this.hasReadableReportEvidence(data) || (
-            !runtime.forceReprocessActive && this.hasReadableReportEvidence(sourceHint)
-        );
+        const dataHasReport = this.hasReadableReportEvidence(data) || this.hasReadableReportEvidence(sourceHint);
         const status = this.normalizeStatusValue(data && data.status, dataHasReport);
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
+        const runtime = this.ensureModalRuntime(reportId);
         const previousPollStatus = runtime.lastPollStatus;
         const sourceHintStatus = this.normalizeStatus(sourceHint);
         const previousObservedStatus = previousPollStatus || sourceHintStatus;
@@ -2726,8 +2723,7 @@ const ReportsPage = {
             ...(data && typeof data === 'object' ? data : {}),
             status,
             has_report: dataHasReport,
-            source_scope: (data && data.source_scope) || (sourceHint && sourceHint.source_scope) || '',
-            force_status_downgrade: !!runtime.forceReprocessActive
+            source_scope: (data && data.source_scope) || (sourceHint && sourceHint.source_scope) || ''
         }, sourceHint) || sourceHint;
 
         if (runtime.lastPollStatus !== status) {
@@ -2910,7 +2906,6 @@ const ReportsPage = {
         this.setModalProcessButtonEnabled(false);
         this.setModalStage('queued');
         this.setModalStatusText('Submitting request to queue...');
-        runtime.forceReprocessActive = !!options.force;
 
         try {
             const sourceHint = options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
@@ -2918,8 +2913,7 @@ const ReportsPage = {
             this.upsertReportRuntimeState(reportId, {
                 status: 'pending',
                 has_report: false,
-                source_scope: sourceScope,
-                force_status_downgrade: !!options.force
+                source_scope: sourceScope
             }, sourceHint);
             const result = await API.generateReportNow(reportId, {
                 force: !!options.force,
@@ -2939,20 +2933,6 @@ const ReportsPage = {
                 if (this.isQuotaOrRateLimitError(errorText)) {
                     this.setProviderWarning('Provider quota/rate limit detected. Awaiting your recovery choice.');
                     await this.promptQuotaRecovery(reportId, errorText);
-                }
-
-                if (rejectedReason === 'missing_original_image') {
-                    this.setModalStatusText(errorText);
-                    this.upsertReportRuntimeState(reportId, {
-                        status: 'failed',
-                        has_report: false,
-                        error_message: errorText,
-                        source_scope: sourceScope,
-                        force_status_downgrade: true
-                    }, sourceHint);
-                    this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
-                    this.notify(errorText, 'error');
-                    return;
                 }
 
                 if (httpStatus === 503 || result?.worker_running === false) {
@@ -3009,8 +2989,7 @@ const ReportsPage = {
                 source_scope: result.source_scope || sourceScope,
                 source_label: result.source_label || '',
                 source_reason: result.routed_via_cloud_fallback ? 'manual_cloud_reprocess_fallback' : '',
-                routed_via_cloud_fallback: !!result.routed_via_cloud_fallback,
-                force_status_downgrade: !!options.force && !result.already_completed
+                routed_via_cloud_fallback: !!result.routed_via_cloud_fallback
             }, sourceHint);
             this.notifyReportGenerating(reportId, {
                 title: options.force ? 'Reprocessing Started' : 'Generation Started'

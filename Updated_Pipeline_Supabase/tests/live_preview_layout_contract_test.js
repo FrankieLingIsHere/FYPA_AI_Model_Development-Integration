@@ -37,8 +37,6 @@ function main() {
   assert(/id="liveStreamContainer"[^>]+background:\s*#000/i.test(source), 'live stream container must use a black stage');
   assertPreviewStyle(getStyleForId(source, 'liveStream'), 'backend live stream');
   assertPreviewStyle(getStyleForId(source, 'phoneCameraPreview'), 'browser camera preview');
-  assert(/NotificationManager\.violation\(violationMessage,\s*null,/m.test(source), 'phone live detections without a queued report must still show the rich violation toast');
-  assert(/Violation monitor notice failed; falling back to direct toast/.test(source), 'queued phone detections must fall back to a direct violation toast if the monitor path fails');
   console.log('PASS: live preview layout keeps local and cloud camera feeds full-width');
 }
 

@@ -40,10 +40,10 @@ const ReportsPage = {
         pollStartedAt: 0,
         maxRetries: 5,
         cooldownSeconds: 8,
-        pollIntervalMs: 1200,
+        pollIntervalMs: 2500,
         maxWaitMs: 420000,
         expectedDurationSec: 180,
-        minGeneratingDisplayMs: 650,
+        minGeneratingDisplayMs: 1800,
         sawGeneratingStage: false
     },
 
@@ -1891,29 +1891,6 @@ const ReportsPage = {
         }
     },
 
-    notifyReportGenerating(reportId, options = {}) {
-        reportId = String(reportId || '').trim();
-        if (!reportId) return;
-        const action = {
-            text: 'View Progress',
-            onClickFn: () => this.focusReport(reportId, { openModal: true })
-        };
-        if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
-            NotificationManager.reportGenerating(reportId, {
-                title: 'Generating Report',
-                action,
-                ...options
-            });
-        } else {
-            this.notify(`Report ${reportId} is generating.`, 'info', {
-                action,
-                dedupeKey: `report-generating:${reportId}`,
-                dedupeTtlMs: 45000,
-                ...options
-            });
-        }
-    },
-
     async openReport(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
@@ -2716,9 +2693,6 @@ const ReportsPage = {
         const providerError = data && data.error_message ? String(data.error_message) : '';
         const alertMessage = data && data.alert_message ? String(data.alert_message) : '';
         const runtime = this.ensureModalRuntime(reportId);
-        const previousPollStatus = runtime.lastPollStatus;
-        const sourceHintStatus = this.normalizeStatus(sourceHint);
-        const previousObservedStatus = previousPollStatus || sourceHintStatus;
         const latestSourceHint = this.upsertReportRuntimeState(reportId, {
             ...(data && typeof data === 'object' ? data : {}),
             status,
@@ -2730,18 +2704,16 @@ const ReportsPage = {
             if (status === 'pending' || status === 'queued') {
                 this.notify(`Report ${reportId} is queued for generation.`, 'info');
             } else if (status === 'generating' || status === 'processing') {
-                this.notifyReportGenerating(reportId);
-            } else if (status === 'completed' && dataHasReport) {
-                if (
-                    !runtime.sawGeneratingStage
-                    && previousObservedStatus
-                    && previousObservedStatus !== 'generating'
-                    && previousObservedStatus !== 'processing'
-                    && previousObservedStatus !== 'completed'
-                ) {
-                    this.notifyReportGenerating(reportId);
-                    runtime.sawGeneratingStage = true;
+                if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
+                    NotificationManager.reportGenerating(reportId, {
+                        title: 'Generating Report',
+                        action: {
+                            text: 'View Progress',
+                            onClickFn: () => this.focusReport(reportId, { openModal: true })
+                        }
+                    });
                 }
+            } else if (status === 'completed' && dataHasReport) {
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
                     NotificationManager.reportReady(reportId, {
                         action: {
@@ -2798,13 +2770,9 @@ const ReportsPage = {
             }
             this.setModalStage('completed');
             this.setModalStatusText('Report completed. Opening now...');
-            this.loadReports({ noCache: true, targetedReportId: reportId }).catch((error) => {
-                console.debug('Post-completion reports refresh skipped:', error);
-            });
+            await this.loadReports({ noCache: true, targetedReportId: reportId });
             if (autoOpen) {
-                const refreshedSourceHint = latestSourceHint
-                    || this.violations.find((v) => String(v.report_id) === String(reportId))
-                    || sourceHint;
+                const refreshedSourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || latestSourceHint;
                 this.openReport(reportId, refreshedSourceHint);
                 this.closeModal();
             }
@@ -2991,9 +2959,15 @@ const ReportsPage = {
                 source_reason: result.routed_via_cloud_fallback ? 'manual_cloud_reprocess_fallback' : '',
                 routed_via_cloud_fallback: !!result.routed_via_cloud_fallback
             }, sourceHint);
-            this.notifyReportGenerating(reportId, {
-                title: options.force ? 'Reprocessing Started' : 'Generation Started'
-            });
+            if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
+                NotificationManager.reportGenerating(reportId, {
+                    title: options.force ? 'Reprocessing Started' : 'Generation Started',
+                    action: {
+                        text: 'View Progress',
+                        onClickFn: () => this.focusReport(reportId, { openModal: true })
+                    }
+                });
+            }
             await this.refreshReports();
             this.startModalPolling(reportId, { autoOpen: true });
         } catch (error) {

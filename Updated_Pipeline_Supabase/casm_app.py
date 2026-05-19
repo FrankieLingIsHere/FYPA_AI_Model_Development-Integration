@@ -8406,8 +8406,6 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
     return {
         'status': status,
         'has_report': has_report,
-        'has_local_report': has_report,
-        'local_report_available': has_report,
         'has_original': has_original,
         'has_annotated': has_annotated,
         'error_message': error_message,
@@ -8416,75 +8414,6 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
         'source_label': 'Local',
         **queue_context,
     }
-
-
-def _local_ready_status_scope(report_id: str) -> str:
-    """Resolve the source badge for a local report.html ready shortcut."""
-    active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
-    fallback_scope = 'local' if active_profile == 'local' else 'cloud'
-    try:
-        metadata = _read_local_violation_metadata(VIOLATIONS_DIR / str(report_id or '').strip())
-    except Exception:
-        metadata = {}
-
-    if isinstance(metadata, dict):
-        metadata_scope = str(
-            metadata.get('source_scope')
-            or metadata.get('report_scope')
-            or metadata.get('scope')
-            or ''
-        ).strip().lower()
-        if metadata_scope in {'local', 'cloud', 'shared', 'synced_local'}:
-            return metadata_scope
-
-    return fallback_scope
-
-
-def _local_ready_status_payload(report_id: str, local_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a fast status response when local report.html is already openable."""
-    payload = dict(local_payload)
-    scope = _local_ready_status_scope(report_id)
-    label_map = {
-        'local': 'Local',
-        'cloud': 'Cloud',
-        'shared': 'Shared',
-        'synced_local': 'Local Synced',
-    }
-    payload.update({
-        'status': 'completed',
-        'has_report': True,
-        'has_local_report': True,
-        'local_report_available': True,
-        'source_scope': scope,
-        'source_label': label_map.get(scope, 'Cloud'),
-        'message': 'Report is ready to view',
-        'ready_source': 'local_report_html',
-    })
-    return payload
-
-
-def _should_short_circuit_local_ready_status(report_id: str, local_payload: Optional[Dict[str, Any]]) -> bool:
-    """Skip cloud DB/status lookups only for the active fresh ready signal."""
-    if not local_payload:
-        return False
-    if str(local_payload.get('status') or '').strip().lower() != 'completed':
-        return False
-    if not local_payload.get('has_report'):
-        return False
-
-    try:
-        progress = get_report_progress() or {}
-    except Exception:
-        progress = {}
-
-    progress_current = str(progress.get('current') or '').strip()
-    progress_status = str(progress.get('status') or '').strip().lower()
-    progress_step = str(progress.get('current_step') or '').strip().lower()
-    return bool(
-        progress_current == str(report_id or '').strip()
-        and progress_status == 'completed'
-        and progress_step in {'report ready', 'completed'}
-    )
 
 
 @app.route('/api/report/<report_id>/status')
@@ -8499,9 +8428,6 @@ def api_report_status(report_id):
             })
 
         return jsonify(local_payload)
-
-    if _should_short_circuit_local_ready_status(report_id, local_payload):
-        return jsonify(_local_ready_status_payload(report_id, local_payload))
 
     def _normalize_status_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()

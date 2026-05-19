@@ -66,16 +66,6 @@ class CloudDB:
         }
 
 
-class SlowCompletedLocalDB:
-    def __init__(self):
-        self.bundle_calls = 0
-
-    def get_report_status_bundle(self, report_id):
-        self.bundle_calls += 1
-        time.sleep(0.25)
-        return None
-
-
 class LocalUnsyncedDB:
     def get_detection_event(self, report_id):
         return {
@@ -362,53 +352,6 @@ def test_cloud_status_keeps_cloud_source_while_local_staging_files_exist():
             _assert(payload.get("has_original") is True, "Cloud original image was not surfaced")
             _assert(payload.get("source_scope") == "cloud", f"Cloud source scope drifted: {payload}")
             _assert(payload.get("source_label") == "Cloud", f"Cloud source label drifted: {payload}")
-        finally:
-            casm_app.VIOLATIONS_DIR = old_violations_dir
-            casm_app.db_manager = old_db_manager
-            if old_profile is None:
-                os.environ.pop("CASM_ROUTING_PROFILE", None)
-            else:
-                os.environ["CASM_ROUTING_PROFILE"] = old_profile
-            casm_app.reset_report_progress()
-
-
-def test_completed_local_report_status_skips_cloud_db_roundtrip():
-    report_id = "20260519_101212"
-    with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir)
-        report_dir = root / report_id
-        report_dir.mkdir(parents=True, exist_ok=True)
-        (report_dir / "original.jpg").write_bytes(b"cloud-job-staged-original")
-        (report_dir / "report.html").write_text("<html>ready immediately</html>", encoding="utf-8")
-        fake_db = SlowCompletedLocalDB()
-
-        old_violations_dir = casm_app.VIOLATIONS_DIR
-        old_db_manager = casm_app.db_manager
-        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
-        try:
-            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
-            casm_app.VIOLATIONS_DIR = root
-            casm_app.db_manager = fake_db
-            casm_app.update_report_progress(
-                current=report_id,
-                status="completed",
-                current_step="Report ready",
-            )
-
-            started = time.perf_counter()
-            with casm_app.app.test_client() as client:
-                response = client.get(f"/api/report/{report_id}/status")
-                payload = response.get_json() or {}
-            elapsed = time.perf_counter() - started
-
-            _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
-            _assert(payload.get("status") == "completed", f"Unexpected payload status: {payload}")
-            _assert(payload.get("has_report") is True, "Completed local report was not surfaced")
-            _assert(payload.get("has_local_report") is True, "Local report mirror was not marked")
-            _assert(payload.get("source_scope") == "cloud", f"Cloud source scope drifted: {payload}")
-            _assert(payload.get("ready_source") == "local_report_html", f"Ready shortcut missing: {payload}")
-            _assert(fake_db.bundle_calls == 0, f"Status endpoint waited on DB despite local report.html: {fake_db.bundle_calls}")
-            _assert(elapsed < 0.5, f"Local ready status endpoint was too slow: {elapsed:.3f}s")
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
@@ -1432,7 +1375,6 @@ def main():
     tests = [
         test_status_endpoint_uses_local_artifacts_during_db_backoff,
         test_cloud_status_keeps_cloud_source_while_local_staging_files_exist,
-        test_completed_local_report_status_skips_cloud_db_roundtrip,
         test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_profile_does_not_promote_backoff_to_local_pipeline,
         test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud,

@@ -1160,6 +1160,48 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
             casm_app.reset_report_progress()
 
 
+def test_local_pending_recovery_skips_terminal_failures():
+    report_id = "local_recovery_terminal_failure_contract_001"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "generation_failure.txt").write_text("provider returned 503", encoding="utf-8")
+        stale_epoch = time.time() - 3600
+        os.utime(report_dir, (stale_epoch, stale_epoch))
+
+        fake_queue = CaptureQueue()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_violation_queue = casm_app.violation_queue
+        old_ensure_runtime_ready = casm_app._ensure_violation_queue_runtime_ready
+        old_recovery_enabled = casm_app.LOCAL_PENDING_RECOVERY_ENABLED
+        old_recovery_stale = casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS
+        old_recovery_max = casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP
+        try:
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = None
+            casm_app.violation_queue = fake_queue
+            casm_app._ensure_violation_queue_runtime_ready = lambda reason='': True
+            casm_app.LOCAL_PENDING_RECOVERY_ENABLED = True
+            casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = 1
+            casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = 1
+
+            summary = casm_app._run_local_pending_recovery_sweep(reason="terminal_contract")
+
+            _assert(summary.get("enqueued") == 0, f"Terminal failure was re-enqueued: {summary}")
+            _assert(not fake_queue.items, "Terminal failure should not enter local recovery queue")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.violation_queue = old_violation_queue
+            casm_app._ensure_violation_queue_runtime_ready = old_ensure_runtime_ready
+            casm_app.LOCAL_PENDING_RECOVERY_ENABLED = old_recovery_enabled
+            casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = old_recovery_stale
+            casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = old_recovery_max
+            casm_app.reset_report_progress()
+
+
 def test_strict_local_augmented_caption_allows_model_report():
     class RealCaptionGenerator:
         def generate_caption(self, _image_path):
@@ -1390,6 +1432,7 @@ def main():
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,
         test_local_pending_recovery_preserves_metadata_ppe_labels,
+        test_local_pending_recovery_skips_terminal_failures,
         test_strict_local_augmented_caption_allows_model_report,
         test_strict_local_caption_failure_blocks_detection_only_report,
     ]

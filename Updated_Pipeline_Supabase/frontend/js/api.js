@@ -2133,6 +2133,47 @@ const API = {
             }
         });
 
+        const normalizeStatus = (record) => String(record && record.status || '').trim().toLowerCase();
+        const hasReportEvidence = (record) => !!(
+            record
+            && (
+                record.has_report === true
+                || record.has_local_report === true
+                || record.report_html_key
+                || record.report_pdf_key
+                || record.local_report_url
+                || record.cloud_report_url
+                || this.hasCloudReportArtifactEvidence(record)
+            )
+        );
+        const existingStatus = normalizeStatus(existing);
+        const incomingStatus = normalizeStatus(incoming);
+        const existingTerminalNoReport = ['failed', 'partial', 'skipped', 'cancelled', 'canceled'].includes(existingStatus)
+            && !hasReportEvidence(existing);
+        const incomingInFlightNoReport = ['pending', 'queued', 'queue', 'waiting', 'enqueued', 'processing', 'generating', 'in_progress', 'in-progress', 'running'].includes(incomingStatus)
+            && !hasReportEvidence(incoming);
+        const incomingAcceptedRetry = !!(
+            incoming.force_reprocess
+            || incoming.manual_reprocess_accepted
+            || incoming.source_reason === 'manual_cloud_reprocess_fallback'
+            || incoming.routed_via_cloud_fallback
+        );
+        const existingUpdatedAt = new Date(existing.updated_at || existing.timestamp || 0).getTime() || 0;
+        const incomingUpdatedAt = new Date(incoming.updated_at || incoming.timestamp || 0).getTime() || 0;
+        if (
+            existingTerminalNoReport
+            && incomingInFlightNoReport
+            && !incomingAcceptedRetry
+            && incomingUpdatedAt <= existingUpdatedAt
+        ) {
+            merged.status = existingStatus;
+            merged.error_message = existing.error_message || merged.error_message;
+            merged.terminal_generation_failure = !!(
+                existing.terminal_generation_failure
+                || merged.terminal_generation_failure
+            );
+        }
+
         const existingScope = this.inferReportSourceScope(existing);
         const incomingScope = this.inferReportSourceScope(incoming);
         const existingLabel = String(existing.source_label || '').trim().toLowerCase();

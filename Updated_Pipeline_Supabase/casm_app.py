@@ -551,6 +551,20 @@ try:
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     FULL_PIPELINE_AVAILABLE = False
+    try:
+        from pipeline.backend.core.violation_queue import QueuedViolation
+    except Exception:
+        from dataclasses import dataclass, field
+
+        @dataclass(order=True)
+        class QueuedViolation:
+            priority: int
+            timestamp: float = field(compare=True)
+            data: Dict[str, Any] = field(compare=False)
+            device_id: str = field(compare=False, default='unknown')
+            report_id: str = field(compare=False, default='')
+            retry_count: int = field(compare=False, default=0)
+
     VIOLATION_RULES = {}
     LLAVA_CONFIG = {}
     OLLAMA_CONFIG = {}
@@ -3438,6 +3452,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             violation_dir / 'SKIPPED_NO_RETRY.txt',
             violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
             violation_dir / 'SYNCED.txt',  # Skip reports already synced to cloud
+            violation_dir / 'generation_failure.txt',
         )
         if any(marker.exists() for marker in skip_markers):
             continue
@@ -3455,8 +3470,12 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 event = db_manager.get_detection_event(report_id)
                 if isinstance(event, dict):
                     status = str(event.get('status') or '').strip().lower()
-                    if status in {'completed', 'synced', 'generating', 'processing'}:
-                        # Already done or being handled by another worker
+                    if status in {
+                        'completed', 'synced',
+                        'generating', 'processing',
+                        'failed', 'partial', 'skipped', 'cancelled', 'canceled',
+                    }:
+                        # Already done, terminal, or being handled by another worker.
                         continue
             except Exception as e:
                 logger.debug(f"Could not check DB status for recovery candidate {report_id}: {e}")
@@ -15622,7 +15641,13 @@ def _render_regenerate_report_page(report_id: str, reason: str, status_code: int
                     if (!res.ok || !data.success) {{
                         retryCount += 1;
                         updateRetryLabel();
-                        if (res.status === 409 || res.status === 429 || res.status === 503) {{
+                        if (res.status === 503) {{
+                            setStage('idle');
+                            setStatus(data.error || 'Queue worker is not running. Regeneration stopped.');
+                            regenBtn.disabled = true;
+                            return;
+                        }}
+                        if (res.status === 409 || res.status === 429) {{
                             setStatus(`Regeneration queued failed (${{data.error || 'queue busy'}}).`);
                             startCooldown(COOLDOWN_SECONDS);
                             return;

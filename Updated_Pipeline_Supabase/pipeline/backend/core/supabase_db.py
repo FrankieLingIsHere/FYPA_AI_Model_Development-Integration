@@ -643,9 +643,10 @@ class SupabaseDatabaseManager:
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
         """
-        Return stuck pending/generating reports that have an original image in
-        cloud storage but no report HTML yet.  These are safely recoverable by
-        downloading the image and re-running the report worker.
+        Return stuck in-flight reports that have an original image in cloud
+        storage but no report HTML yet. Failed/partial/skipped rows are
+        terminal here; they require a manual reprocess so recovery sweeps don't
+        loop on provider/worker failures.
 
         Args:
             min_age_minutes: Minimum age (minutes) before a report is
@@ -676,7 +677,7 @@ class SupabaseDatabaseManager:
                     FROM public.detection_events de
                     JOIN public.violations v ON de.report_id = v.report_id
                     WHERE (de.status IS NULL OR de.status IN
-                           ('pending', 'generating', 'unknown', 'failed', 'partial'))
+                           ('pending', 'queued', 'generating', 'processing', 'unknown'))
                       AND v.original_image_key IS NOT NULL
                       AND v.report_html_key IS NULL
                       AND (

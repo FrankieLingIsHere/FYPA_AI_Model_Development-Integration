@@ -512,17 +512,9 @@ const ViolationMonitor = {
             if (existing) {
                 const existingHasReport = this.hasReadableReportEvidence(existing);
                 const existingStatus = this.normalizeStatusValue(existing.status, existingHasReport);
-                const allowRetryTransition = (
-                    (pendingStatus === 'pending' || pendingStatus === 'generating')
-                    && !existingHasReport
-                    && (existingStatus === 'failed' || existingStatus === 'skipped')
-                );
                 if (
-                    (
-                        this.getStatusPriority(pendingStatus) > this.getStatusPriority(existingStatus)
-                        && !existingHasReport
-                    )
-                    || allowRetryTransition
+                    this.getStatusPriority(pendingStatus) > this.getStatusPriority(existingStatus)
+                    && !existingHasReport
                 ) {
                     existing.status = pendingStatus;
                 }

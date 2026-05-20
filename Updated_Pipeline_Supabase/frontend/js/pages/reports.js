@@ -134,7 +134,7 @@ const ReportsPage = {
         this.timezoneChangeHandler = () => this.renderReports();
         window.addEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
 
-        await this.loadReports({ noCache: false });
+        await this.loadReports({ noCache: true });
         this.scheduleLocalCacheReconcile('reports-mount');
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({ reason: 'reports-mount', timeoutMs: 10000, minIntervalMs: 90000 });
@@ -1019,11 +1019,7 @@ const ReportsPage = {
                 const existingHasReport = this.hasReadableReportEvidence(existing);
                 const pendingPriority = this.getStatusPriority(pendingStatus);
                 const existingPriority = this.getStatusPriority(existingStatus);
-                const allowRetryTransition = this.isPendingLikeStatus(pendingStatus)
-                    && !existingHasReport
-                    && (existingStatus === 'failed' || existingStatus === 'skipped');
-
-                if ((pendingPriority > existingPriority && !existingHasReport) || allowRetryTransition) {
+                if (pendingPriority > existingPriority && !existingHasReport) {
                     existing.status = pendingStatus;
                 }
                 if (!existing.timestamp && item.timestamp) {
@@ -2904,9 +2900,31 @@ const ReportsPage = {
                 }
 
                 if (httpStatus === 503 || result?.worker_running === false) {
-                    this.setModalStatusText('Queue worker is not running. Please restart local backend and retry.');
-                    this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
-                    this.notify('Queue worker is not running. Restart backend and retry.', 'error');
+                    const workerMessage = errorText || 'Queue worker is not running. Restart backend before retrying.';
+                    this.stopModalPolling();
+                    this.stopModalCooldown();
+                    this.setModalStage('ready');
+                    this.setModalStatusText(workerMessage);
+                    this.upsertReportRuntimeState(reportId, {
+                        status: 'failed',
+                        has_report: false,
+                        error_message: workerMessage,
+                        terminal_generation_failure: true,
+                        source_scope: sourceScope
+                    }, sourceHint);
+                    if (typeof API !== 'undefined' && typeof API.upsertPendingReportCache === 'function') {
+                        await API.upsertPendingReportCache({
+                            ...(sourceHint && typeof sourceHint === 'object' ? sourceHint : {}),
+                            report_id: reportId,
+                            status: 'failed',
+                            has_report: false,
+                            error_message: workerMessage,
+                            terminal_generation_failure: true,
+                            source_scope: sourceScope
+                        });
+                    }
+                    this.setModalProcessButtonEnabled(false);
+                    this.notify('Queue worker is not running. Generation stopped for this report.', 'error');
                     return;
                 }
 

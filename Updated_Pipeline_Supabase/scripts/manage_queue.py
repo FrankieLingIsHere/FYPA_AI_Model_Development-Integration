@@ -90,7 +90,22 @@ def inspect_report(report_id):
     try:
         with conn.cursor() as cur:
             # Check detection_events
-            cur.execute("SELECT * FROM public.detection_events WHERE report_id = %s", (report_id,))
+            cur.execute("""
+                SELECT
+                    report_id,
+                    timestamp,
+                    device_id,
+                    person_count,
+                    violation_count,
+                    severity,
+                    status,
+                    error_message,
+                    created_at,
+                    updated_at
+                FROM public.detection_events
+                WHERE report_id = %s
+                LIMIT 1
+            """, (report_id,))
             de = cur.fetchone()
             print(f"\n--- Detection Event ({report_id}) ---")
             if de:
@@ -100,7 +115,25 @@ def inspect_report(report_id):
                 print("No detection event found.")
             
             # Check violations
-            cur.execute("SELECT * FROM public.violations WHERE report_id = %s", (report_id,))
+            cur.execute("""
+                SELECT
+                    id,
+                    report_id,
+                    violation_summary,
+                    caption,
+                    nlp_analysis,
+                    detection_data,
+                    original_image_key,
+                    annotated_image_key,
+                    report_html_key,
+                    report_pdf_key,
+                    device_id,
+                    created_at,
+                    updated_at
+                FROM public.violations
+                WHERE report_id = %s
+                LIMIT 1
+            """, (report_id,))
             v = cur.fetchone()
             print(f"\n--- Violation Record ({report_id}) ---")
             if v:

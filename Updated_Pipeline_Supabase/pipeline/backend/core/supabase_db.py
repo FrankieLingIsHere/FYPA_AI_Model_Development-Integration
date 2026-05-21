@@ -22,6 +22,29 @@ from psycopg2.extras import RealDictCursor, Json
 
 logger = logging.getLogger(__name__)
 
+_LIST_DETECTION_DATA_SQL = """
+CASE
+    WHEN v.detection_data IS NULL THEN NULL
+    ELSE jsonb_strip_nulls(jsonb_build_object(
+        'caption_validation', v.detection_data->'caption_validation',
+        'detections', v.detection_data->'detections',
+        'missing_ppe', v.detection_data->'missing_ppe',
+        'origin', v.detection_data->>'origin',
+        'ppe_tags', v.detection_data->'ppe_tags',
+        'source', v.detection_data->>'source',
+        'source_scope', v.detection_data->>'source_scope',
+        'report_scope', v.detection_data->>'report_scope',
+        'scope', v.detection_data->>'scope',
+        'sync_source', v.detection_data->>'sync_source',
+        'sync_state', v.detection_data->>'sync_state',
+        'cloud_sync_state', v.detection_data->>'cloud_sync_state',
+        'violation_summary', v.detection_data->'violation_summary',
+        'violation_types', v.detection_data->'violation_types',
+        'violations', v.detection_data->'violations'
+    ))
+END AS detection_data
+"""
+
 
 class SupabaseDatabaseManager:
     """
@@ -738,8 +761,20 @@ class SupabaseDatabaseManager:
         try:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    SELECT * FROM public.detection_events
+                    SELECT
+                        report_id,
+                        timestamp,
+                        device_id,
+                        person_count,
+                        violation_count,
+                        severity,
+                        status,
+                        error_message,
+                        created_at,
+                        updated_at
+                    FROM public.detection_events
                     WHERE report_id = %s
+                    LIMIT 1
                 """, (report_id,))
                 
                 result = cur.fetchone()
@@ -817,7 +852,18 @@ class SupabaseDatabaseManager:
             with self.conn.cursor() as cur:
                 cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                 cur.execute("""
-                    SELECT * FROM public.detection_events
+                    SELECT
+                        report_id,
+                        timestamp,
+                        device_id,
+                        person_count,
+                        violation_count,
+                        severity,
+                        status,
+                        error_message,
+                        created_at,
+                        updated_at
+                    FROM public.detection_events
                     ORDER BY timestamp DESC
                     LIMIT %s
                 """, (limit,))
@@ -855,7 +901,7 @@ class SupabaseDatabaseManager:
                 with self.conn.cursor() as cur:
                     cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                     cur.execute("SET LOCAL lock_timeout = %s", (max(500, _stmt_ms // 2),))
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT 
                             de.report_id,
                             de.timestamp,
@@ -868,8 +914,7 @@ class SupabaseDatabaseManager:
                             v.id as violation_id,
                             v.violation_summary,
                             v.caption,
-                            v.nlp_analysis,
-                            v.detection_data,
+                            {_LIST_DETECTION_DATA_SQL},
                             v.original_image_key,
                             v.annotated_image_key,
                             v.report_html_key,
@@ -889,7 +934,7 @@ class SupabaseDatabaseManager:
                 )
                 with self.conn.cursor() as fallback_cur:
                     fallback_cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
-                    fallback_cur.execute("""
+                    fallback_cur.execute(f"""
                         SELECT 
                             de.report_id,
                             de.timestamp,
@@ -902,8 +947,7 @@ class SupabaseDatabaseManager:
                             v.id as violation_id,
                             v.violation_summary,
                             v.caption,
-                            v.nlp_analysis,
-                            v.detection_data,
+                            {_LIST_DETECTION_DATA_SQL},
                             v.original_image_key,
                             v.annotated_image_key,
                             v.report_html_key,
@@ -1058,10 +1102,30 @@ class SupabaseDatabaseManager:
         try:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    SELECT v.*, de.timestamp, de.person_count, de.violation_count, de.severity
+                    SELECT
+                        v.id,
+                        v.report_id,
+                        v.violation_summary,
+                        v.caption,
+                        v.nlp_analysis,
+                        v.detection_data,
+                        v.original_image_key,
+                        v.annotated_image_key,
+                        v.report_html_key,
+                        v.report_pdf_key,
+                        COALESCE(v.device_id, de.device_id) AS device_id,
+                        v.created_at,
+                        v.updated_at,
+                        de.timestamp,
+                        de.person_count,
+                        de.violation_count,
+                        de.severity,
+                        de.status,
+                        de.error_message
                     FROM public.violations v
                     JOIN public.detection_events de ON v.report_id = de.report_id
                     WHERE v.report_id = %s
+                    LIMIT 1
                 """, (report_id,))
                 
                 result = cur.fetchone()
@@ -1088,7 +1152,26 @@ class SupabaseDatabaseManager:
         try:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    SELECT v.*, de.timestamp, de.person_count, de.violation_count, de.severity
+                    SELECT
+                        v.id,
+                        v.report_id,
+                        v.violation_summary,
+                        v.caption,
+                        v.nlp_analysis,
+                        v.detection_data,
+                        v.original_image_key,
+                        v.annotated_image_key,
+                        v.report_html_key,
+                        v.report_pdf_key,
+                        COALESCE(v.device_id, de.device_id) AS device_id,
+                        v.created_at,
+                        v.updated_at,
+                        de.timestamp,
+                        de.person_count,
+                        de.violation_count,
+                        de.severity,
+                        de.status,
+                        de.error_message
                     FROM public.violations v
                     JOIN public.detection_events de ON v.report_id = de.report_id
                     ORDER BY de.timestamp DESC
@@ -1102,6 +1185,50 @@ class SupabaseDatabaseManager:
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_recent_violations')
             logger.error(f"Failed to get recent violations: {e}")
+            return []
+
+    def get_recent_violation_refs(
+        self,
+        limit: int = 100,
+        since: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve lightweight report identifiers for bulk jobs.
+
+        This intentionally avoids violation JSON/text payloads so maintenance
+        scripts can page through IDs without pulling every report's NLP and
+        detection blobs through the pooler.
+        """
+        self._ensure_connection()
+        safe_limit = max(1, min(10000, int(limit or 100)))
+
+        try:
+            with self.conn.cursor() as cur:
+                if since is not None:
+                    cur.execute("""
+                        SELECT de.report_id, de.timestamp
+                        FROM public.detection_events de
+                        JOIN public.violations v ON de.report_id = v.report_id
+                        WHERE de.timestamp >= %s
+                        ORDER BY de.timestamp DESC
+                        LIMIT %s
+                    """, (since, safe_limit))
+                else:
+                    cur.execute("""
+                        SELECT de.report_id, de.timestamp
+                        FROM public.detection_events de
+                        JOIN public.violations v ON de.report_id = v.report_id
+                        ORDER BY de.timestamp DESC
+                        LIMIT %s
+                    """, (safe_limit,))
+
+                results = cur.fetchall()
+                return [dict(row) for row in results]
+
+        except Exception as e:
+            self._safe_rollback()
+            self._raise_if_connection_failure(e, 'get_recent_violation_refs')
+            logger.error(f"Failed to get recent violation refs: {e}")
             return []
     
     def update_violation_storage_keys(
@@ -1487,14 +1614,34 @@ class SupabaseDatabaseManager:
             with self.conn.cursor() as cur:
                 if event_type:
                     cur.execute("""
-                        SELECT * FROM public.flood_logs
+                        SELECT
+                            id,
+                            event_type,
+                            report_id,
+                            device_id,
+                            user_id,
+                            message,
+                            metadata,
+                            ip_address,
+                            created_at
+                        FROM public.flood_logs
                         WHERE event_type = %s
                         ORDER BY created_at DESC
                         LIMIT %s
                     """, (event_type, limit))
                 else:
                     cur.execute("""
-                        SELECT * FROM public.flood_logs
+                        SELECT
+                            id,
+                            event_type,
+                            report_id,
+                            device_id,
+                            user_id,
+                            message,
+                            metadata,
+                            ip_address,
+                            created_at
+                        FROM public.flood_logs
                         ORDER BY created_at DESC
                         LIMIT %s
                     """, (limit,))
@@ -1544,6 +1691,7 @@ for _db_method_name in (
     'insert_violation',
     'get_violation',
     'get_recent_violations',
+    'get_recent_violation_refs',
     'update_violation_storage_keys',
     'update_violation',
     'delete_violation',

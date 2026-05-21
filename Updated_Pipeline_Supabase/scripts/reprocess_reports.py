@@ -345,11 +345,14 @@ def reprocess_all_reports(since_date=None):
     temp_dir.mkdir(exist_ok=True)
     
     try:
-        # Get all violations from database
-        violations = db_manager.get_recent_violations(limit=10000)
-        
-        if since_date:
-            violations = [v for v in violations if v.get('timestamp') and v['timestamp'] >= since_date]
+        # Get only lightweight report refs for the bulk list. Full violation
+        # rows are fetched one-at-a-time inside reprocess_single_report().
+        if hasattr(db_manager, 'get_recent_violation_refs'):
+            violations = db_manager.get_recent_violation_refs(limit=10000, since=since_date)
+        else:
+            violations = db_manager.get_recent_violations(limit=10000)
+            if since_date:
+                violations = [v for v in violations if v.get('timestamp') and v['timestamp'] >= since_date]
         
         total = len(violations)
         logger.info(f"📊 Found {total} reports to reprocess")

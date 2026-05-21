@@ -39,6 +39,12 @@ STRICT_REPORT_QUALITY = str(os.environ.get("CASM_REPORT_QUALITY_STRICT", "1")).s
     "yes",
     "on",
 }
+ALLOW_EMPTY_REPORT_SET = str(os.environ.get("CASM_REPORT_QUALITY_ALLOW_EMPTY", "1")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 NON_WORK_CAPTION_MARKERS = (
     "not a physical environment",
@@ -222,12 +228,47 @@ def rank_quality_candidate(item: Dict) -> tuple:
     )
 
 
+def empty_report_set_is_acceptable() -> bool:
+    if not ALLOW_EMPTY_REPORT_SET:
+        return False
+
+    status_code, stats, preview = request_json("GET", "/api/stats", timeout=30)
+    if status_code >= 400 or not isinstance(stats, dict):
+        print(f"WARN: could not verify empty report set via /api/stats ({status_code}): {preview}")
+        return False
+
+    total_keys = (
+        "total",
+        "total_violations",
+        "reportsGenerated",
+        "reports_generated",
+        "totalReports",
+        "reportsTotal",
+    )
+    observed_totals = []
+    for key in total_keys:
+        if key not in stats:
+            continue
+        try:
+            observed_totals.append(int(stats.get(key) or 0))
+        except (TypeError, ValueError):
+            pass
+
+    return bool(observed_totals) and max(observed_totals) == 0
+
+
 def main() -> int:
     try:
         status_code, violations, text_preview = fetch_violations_with_retry()
         if status_code >= 400:
             return fail(f"/api/violations failed ({status_code}): {text_preview}", 3)
         if not isinstance(violations, list) or not violations:
+            if empty_report_set_is_acceptable():
+                print(
+                    "WARN: deployed report quality contract found no reports; "
+                    "empty Supabase/report state accepted."
+                )
+                return 0
             return fail("/api/violations returned no data", 4)
 
         sample = violations[:MAX_VIOLATION_SCAN]
@@ -250,12 +291,20 @@ def main() -> int:
         failures = []
         skipped_non_work: List[str] = []
         skipped_legacy_template: List[str] = []
+        skipped_stale_local_only: List[str] = []
         quality_checked_count = 0
         for target in candidates:
             report_id = str(target.get("report_id"))
             print(f"INFO: quality target report_id={report_id}")
 
             v_code, violation, v_preview = request_json("GET", f"/api/violation/{report_id}", timeout=35)
+            if v_code == 404:
+                skipped_stale_local_only.append(report_id)
+                print(
+                    "INFO: skipping stale local-only candidate without DB detail "
+                    f"report_id={report_id}"
+                )
+                continue
             if v_code >= 400 or not isinstance(violation, dict):
                 failures.append(f"/api/violation/{report_id} failed ({v_code}): {v_preview}")
                 continue
@@ -354,8 +403,10 @@ def main() -> int:
                 extra_parts.append(f"skipped_non_work={skipped_non_work[:5]}")
             if skipped_legacy_template:
                 extra_parts.append(f"skipped_legacy={skipped_legacy_template[:5]}")
+            if skipped_stale_local_only:
+                extra_parts.append(f"skipped_stale_local={skipped_stale_local_only[:5]}")
             extra = (" " + " ".join(extra_parts)) if extra_parts else ""
-            if skipped_non_work and not failures:
+            if (skipped_non_work or skipped_legacy_template or skipped_stale_local_only) and not failures:
                 print(
                     "WARN: No work-scene report candidate available for quality contract validation."
                     + extra

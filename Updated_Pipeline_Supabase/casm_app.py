@@ -7465,6 +7465,8 @@ def api_violations():
             if item_report_id:
                 by_id[item_report_id] = item
 
+        active_listing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+        allow_standalone_local_rows = active_listing_profile == 'local'
         local_rows = _collect_local_report_state_rows(limit=max(limit, 250))
         for local_row in local_rows:
             local_report_id = str(local_row.get('report_id') or '').strip()
@@ -7524,6 +7526,14 @@ def api_violations():
                     existing.update(_build_source_payload(local_row_scope or 'local', 'local_cache_row'))
                     if (local_row_scope or 'local') == 'local':
                         existing['origin'] = existing.get('origin') or 'local'
+                continue
+
+            # In cloud mode, a reachable Supabase database is the source of
+            # truth for the report list. Standalone local files can be stale
+            # Railway/container cache artifacts and should not make an empty
+            # Supabase project look like it still has reports. Local mode and
+            # Supabase-offline paths still use these rows as intended.
+            if not allow_standalone_local_rows:
                 continue
 
             local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or 'local'
@@ -7915,6 +7925,10 @@ def api_stats():
 
             existing = by_report.get(report_id)
             if existing is None:
+                if active_stats_profile != 'local' and not (
+                    cloud_storage_authoritative and report_id in storage_artifact_ids
+                ):
+                    continue
                 local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or (
                     'cloud' if (cloud_storage_authoritative and report_id in storage_artifact_ids) else 'local'
                 )
@@ -9462,7 +9476,19 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                                 de.timestamp,
                                 de.updated_at,
                                 de.device_id,
-                                v.detection_data,
+                                CASE
+                                    WHEN v.detection_data IS NULL THEN NULL
+                                    ELSE jsonb_strip_nulls(jsonb_build_object(
+                                        'origin', v.detection_data->>'origin',
+                                        'source', v.detection_data->>'source',
+                                        'source_scope', v.detection_data->>'source_scope',
+                                        'report_scope', v.detection_data->>'report_scope',
+                                        'scope', v.detection_data->>'scope',
+                                        'sync_source', v.detection_data->>'sync_source',
+                                        'sync_state', v.detection_data->>'sync_state',
+                                        'cloud_sync_state', v.detection_data->>'cloud_sync_state'
+                                    ))
+                                END AS detection_data,
                                 v.original_image_key,
                                 v.annotated_image_key,
                                 v.report_html_key,
@@ -9508,6 +9534,12 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
         else:
             report_rows = list(report_rows) + list(cached_rows)
 
+    active_realtime_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
+    supabase_realtime_authoritative = (
+        db_manager is not None
+        and not _is_supabase_offline_backoff_active()
+        and active_realtime_profile != 'local'
+    )
     local_rows = _collect_local_report_state_rows(limit=max(40, int(limit) * 2))
     if local_rows:
         by_id: Dict[str, Dict[str, Any]] = {}
@@ -9567,6 +9599,9 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     or (local_status == 'completed' and local_row.get('has_report'))
                 ) and local_row.get('updated_at'):
                     existing['updated_at'] = local_row.get('updated_at')
+                continue
+
+            if supabase_realtime_authoritative:
                 continue
 
             snapshot_row = {

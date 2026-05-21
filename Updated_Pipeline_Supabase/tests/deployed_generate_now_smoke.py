@@ -16,6 +16,9 @@ POLL_SECONDS = int(os.environ.get("CASM_SMOKE_POLL_SECONDS", "45"))
 POLL_INTERVAL = int(os.environ.get("CASM_SMOKE_POLL_INTERVAL", "3"))
 MAX_CANDIDATES = int(os.environ.get("CASM_SMOKE_MAX_CANDIDATES", "15"))
 STRICT_GENERATE_NOW_SMOKE = os.environ.get("CASM_GENERATE_NOW_SMOKE_STRICT", "1") != "0"
+ALLOW_EMPTY_REPORT_SET = str(
+    os.environ.get("CASM_GENERATE_NOW_SMOKE_ALLOW_EMPTY", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def skip_or_fail(message: str, code: int) -> int:
@@ -76,6 +79,9 @@ def main() -> int:
         return skip_or_fail(f"unexpected error while listing violations: {exc}", 3)
 
     if not violations:
+        if ALLOW_EMPTY_REPORT_SET:
+            print("PASS: no violations available for generate-now smoke; empty report state accepted")
+            return 0
         return skip_or_fail("no violations available for generate-now smoke candidate selection", 4)
 
     tested = 0

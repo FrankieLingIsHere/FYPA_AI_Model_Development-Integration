@@ -32,6 +32,9 @@ INFRA_BLOCK_CODES = {402, 429, 503}
 ALLOW_SINGLE_CANDIDATE_SOFT_PASS = str(
     os.environ.get("CASM_REPORT_OPEN_SINGLE_CANDIDATE_SOFT_PASS", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
+ALLOW_EMPTY_REPORT_SET = str(
+    os.environ.get("CASM_REPORT_OPEN_ALLOW_EMPTY", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 SINGLE_CANDIDATE_SOFT_P95_S = max(
     0.0,
     float(os.environ.get("CASM_REPORT_OPEN_SINGLE_CANDIDATE_SOFT_P95_S", "3.0")),
@@ -100,6 +103,52 @@ def measure_network_baseline_seconds() -> Optional[float]:
     if not samples:
         return None
     return statistics.median(samples)
+
+
+def empty_report_set_is_acceptable() -> bool:
+    if not ALLOW_EMPTY_REPORT_SET:
+        return False
+
+    try:
+        status_code, stats, preview, _elapsed, block_reason = request_json(
+            "GET",
+            "/api/stats",
+            timeout=REQUEST_TIMEOUT,
+        )
+    except Exception as exc:
+        print(f"WARN: empty report set confirmation failed: {exc}")
+        return False
+
+    if block_reason:
+        print(f"WARN: empty report set confirmation blocked ({status_code}): {block_reason}")
+        return False
+    if status_code >= 400 or not isinstance(stats, dict):
+        print(f"WARN: empty report set confirmation failed ({status_code}): {preview[:180]}")
+        return False
+
+    total_keys = (
+        "total",
+        "total_violations",
+        "reportsGenerated",
+        "reports_generated",
+        "totalReports",
+        "reportsTotal",
+    )
+    observed_totals: List[int] = []
+    for key in total_keys:
+        value = stats.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            observed_totals.append(int(value))
+            continue
+        if isinstance(value, str) and value.strip().isdigit():
+            observed_totals.append(int(value.strip()))
+
+    if not observed_totals:
+        print(f"WARN: empty report set confirmation had no known total keys: {stats}")
+        return False
+    return max(observed_totals) == 0
 
 
 def choose_candidates(rows: List[Dict]) -> List[str]:
@@ -219,6 +268,12 @@ def run_once() -> int:
         if code >= 400:
             return fail(f"/api/violations failed ({code}): {preview}", 3)
         if not isinstance(payload, list) or not payload:
+            if empty_report_set_is_acceptable():
+                print(
+                    "WARN: report open latency contract found no reports; "
+                    "empty Supabase/report state accepted."
+                )
+                return 0
             return fail("/api/violations returned no data", 4)
 
         candidates = choose_candidates(payload)

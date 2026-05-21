@@ -222,6 +222,16 @@ class CaptureQueue:
         return len(self.items)
 
 
+class FakeImageStorageManager:
+    def __init__(self, blobs):
+        self.blobs = dict(blobs)
+        self.downloads = []
+
+    def download_file_content(self, key):
+        self.downloads.append(key)
+        return self.blobs.get(key)
+
+
 class CaptureProcessingDB:
     def __init__(self):
         self.inserts = []
@@ -595,6 +605,174 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
             casm_app.db_manager = old_db_manager
             casm_app.violation_queue = old_violation_queue
             casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
+def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
+    report_id = "uploaded_reprocess_image_001"
+
+    class UploadedImageDB(CaptureUpdateDB):
+        def __init__(self):
+            super().__init__()
+            self.status_updates = []
+
+        def get_detection_event(self, _report_id):
+            return {
+                "report_id": report_id,
+                "status": "completed",
+                "device_id": "webcam_0",
+                "timestamp": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+
+        def get_violation(self, _report_id):
+            return {
+                "report_id": report_id,
+                "original_image_key": f"violation-images/{report_id}/original.jpg",
+                "annotated_image_key": f"violation-images/{report_id}/annotated.jpg",
+                "report_html_key": f"reports/{report_id}/report.html",
+                "detection_data": {
+                    "source_scope": "cloud",
+                    "source": "cloud_live",
+                    "detections": [{"class_name": "no-hardhat", "confidence": 0.92}],
+                },
+            }
+
+        def update_detection_status(self, report_id, status, error_message=None):
+            self.status_updates.append((report_id, status, error_message))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        ok, original_buf = casm_app.cv2.imencode(
+            ".jpg",
+            casm_app.np.full((12, 12, 3), 128, dtype=casm_app.np.uint8),
+        )
+        _assert(ok, "Could not build original test image")
+        ok, annotated_buf = casm_app.cv2.imencode(
+            ".jpg",
+            casm_app.np.full((12, 12, 3), 192, dtype=casm_app.np.uint8),
+        )
+        _assert(ok, "Could not build annotated test image")
+
+        original_key = f"violation-images/{report_id}/original.jpg"
+        annotated_key = f"violation-images/{report_id}/annotated.jpg"
+        fake_storage = FakeImageStorageManager({
+            original_key: original_buf.tobytes(),
+            annotated_key: annotated_buf.tobytes(),
+        })
+        fake_db = UploadedImageDB()
+        fake_queue = CaptureQueue()
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_storage_manager = casm_app.storage_manager
+        old_violation_queue = casm_app.violation_queue
+        old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.storage_manager = fake_storage
+            casm_app.violation_queue = fake_queue
+            casm_app.ensure_queue_worker_running = lambda: True
+
+            with casm_app.app.test_client() as client:
+                response = client.post(
+                    f"/api/report/{report_id}/generate-now",
+                    json={"force": True},
+                )
+                payload = response.get_json() or {}
+
+            _assert(response.status_code == 200, f"generate-now failed: {response.status_code} {payload}")
+            _assert((report_dir / "original.jpg").exists(), "Original image was not recovered locally")
+            _assert((report_dir / "annotated.jpg").exists(), "Annotated image was not recovered locally")
+            _assert(original_key in fake_storage.downloads, f"Original image was not requested: {fake_storage.downloads}")
+            _assert(annotated_key in fake_storage.downloads, f"Annotated image was not requested: {fake_storage.downloads}")
+            _assert(payload.get("placeholder_reprocess_recovery_used") is False, f"Placeholder should not be used: {payload}")
+            _assert(fake_queue.items, "Recovered-image reprocess did not enqueue")
+            queue_payload = fake_queue.items[0]["violation_data"]
+            _assert(queue_payload.get("original_image_path") == str(report_dir / "original.jpg"), queue_payload)
+            _assert(not queue_payload.get("placeholder_original_used"), f"Queue payload marked placeholder: {queue_payload}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.storage_manager = old_storage_manager
+            casm_app.violation_queue = old_violation_queue
+            casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
+def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
+    report_id = "local-visible-sync-001"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"local-original")
+        (report_dir / "report.html").write_text("<html>local report</html>", encoding="utf-8")
+        (report_dir / "metadata.json").write_text(
+            json.dumps({
+                "source_scope": "local",
+                "source": "local_pipeline",
+                "device_id": "offline_local_cache",
+                "violation_types": ["NO-Hardhat"],
+                "violation_count": 1,
+            }),
+            encoding="utf-8",
+        )
+
+        class EmptyCloudDB:
+            def get_all_violations_with_status(self, limit=200):
+                return []
+
+        sync_calls = []
+
+        def capture_visible_sync(reason, **kwargs):
+            sync_calls.append((reason, kwargs))
+            return {"started": True, "reason": reason}
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_storage_manager = casm_app.storage_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        old_visible_sync = casm_app._maybe_attempt_visible_local_cache_sync
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "cloud"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = EmptyCloudDB()
+            casm_app.storage_manager = object()
+            casm_app._maybe_attempt_visible_local_cache_sync = capture_visible_sync
+            casm_app._invalidate_dashboard_snapshot_cache()
+            casm_app._invalidate_local_report_state_cache()
+
+            with casm_app.app.test_client() as client:
+                response = client.get("/api/violations?limit=20")
+                payload = response.get_json() or []
+
+            _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            row = next((item for item in payload if item.get("report_id") == report_id), None)
+            _assert(row is not None, f"Visible local report was hidden: {payload}")
+            _assert(row.get("source_scope") == "local", f"Visible local scope drifted: {row}")
+            _assert(sync_calls, "Visible local report did not trigger a Supabase sync attempt")
+            _assert(sync_calls[0][0] == "api_violations_visible_local", f"Unexpected sync reason: {sync_calls}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.storage_manager = old_storage_manager
+            casm_app._maybe_attempt_visible_local_cache_sync = old_visible_sync
+            casm_app._invalidate_dashboard_snapshot_cache()
+            casm_app._invalidate_local_report_state_cache()
             if old_profile is None:
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
@@ -1423,6 +1601,8 @@ def main():
         test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers,
         test_manual_cloud_reprocess_persists_source_scope_repair,
         test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope,
+        test_generate_now_recovers_uploaded_images_before_placeholder_reprocess,
+        test_visible_local_filesystem_report_triggers_supabase_sync_attempt,
         test_pending_reports_repairs_stale_browser_handoff_to_cloud_scope,
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,

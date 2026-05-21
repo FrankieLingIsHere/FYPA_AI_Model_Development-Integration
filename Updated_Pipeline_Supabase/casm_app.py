@@ -1900,6 +1900,21 @@ SUPABASE_AUTO_SYNC_BATCH_SIZE = max(
     0,
     min(120, int(os.getenv('SUPABASE_AUTO_SYNC_BATCH_SIZE', '4') or 4))
 )
+VISIBLE_LOCAL_CACHE_SYNC_ENABLED = os.getenv(
+    'VISIBLE_LOCAL_CACHE_SYNC_ENABLED',
+    'true'
+).strip().lower() in ('1', 'true', 'yes', 'on')
+VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS = max(
+    5,
+    int(os.getenv('VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS', '20') or 20)
+)
+VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE = max(
+    0,
+    min(
+        50,
+        int(os.getenv('VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE', str(SUPABASE_AUTO_SYNC_BATCH_SIZE or 4)) or 4)
+    )
+)
 LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
     'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
     'true'
@@ -1932,6 +1947,8 @@ LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS = max(
     0,
     int(os.getenv('LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS', '0') or 0)
 )
+visible_local_cache_sync_lock = Lock()
+last_visible_local_cache_sync_epoch = 0.0
 supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
 supabase_offline_backoff_context = ''
@@ -4971,6 +4988,198 @@ def _is_local_pipeline_origin_marker(
     )
 
 
+def _parse_detection_payload_for_origin(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _has_local_report_id_prefix(report_id: Any) -> bool:
+    return bool(
+        re.match(
+            r'^(local|offline|browser_local|local-cache|offline-cache)[_-]',
+            str(report_id or '').strip().lower()
+        )
+    )
+
+
+def _is_visible_local_cache_sync_candidate(record: Dict[str, Any]) -> bool:
+    """Return True when a visible filesystem row is safe to reconcile upward."""
+    if not isinstance(record, dict):
+        return False
+
+    report_id = str(record.get('report_id') or '').strip()
+    if _has_local_report_id_prefix(report_id):
+        return True
+
+    nested_payload = _parse_detection_payload_for_origin(record.get('detection_data'))
+    if nested_payload:
+        nested_payload.setdefault('report_id', report_id)
+        nested_payload.setdefault('device_id', record.get('device_id'))
+        if _is_visible_local_cache_sync_candidate(nested_payload):
+            return True
+
+    scope = str(record.get('source_scope') or record.get('report_scope') or record.get('scope') or '').strip().lower()
+    if scope in {'local', 'synced_local'}:
+        return True
+
+    source_marker = str(
+        record.get('origin')
+        or record.get('sync_source')
+        or record.get('source')
+        or record.get('source_reason')
+        or ''
+    ).strip().lower()
+    local_markers = {
+        'local',
+        'local_pipeline',
+        'local_pending_recovery',
+        'offline_local',
+        'offline_local_cache',
+        'browser_local_draft',
+        'browser_local_draft_handoff',
+        'sync_local_cache',
+        'sync_local_cache_partial',
+        'local_cache',
+        'local_cache_sync',
+        'local_synced',
+    }
+    if (
+        source_marker in local_markers
+        or source_marker.startswith('local_')
+        or source_marker.startswith('offline_')
+        or source_marker.startswith('browser_local')
+    ):
+        return True
+
+    device_id = str(record.get('device_id') or '').strip().lower()
+    if _is_local_artifact_origin_device(device_id):
+        return True
+
+    return str(record.get('source_label') or '').strip().lower() in {'local', 'local synced'}
+
+
+def _local_artifact_sync_probe_row(report_id: str, violation_dir: Path) -> Dict[str, Any]:
+    row: Dict[str, Any] = {
+        'report_id': report_id,
+        'has_original': bool((violation_dir / 'original.jpg').exists()),
+        'has_annotated': bool((violation_dir / 'annotated.jpg').exists()),
+        'has_report': bool((violation_dir / 'report.html').exists()),
+    }
+    metadata_path = violation_dir / 'metadata.json'
+    if metadata_path.exists():
+        try:
+            parsed = json.loads(metadata_path.read_text(encoding='utf-8', errors='ignore') or '{}')
+            if isinstance(parsed, dict):
+                for key in (
+                    'device_id',
+                    'source_scope',
+                    'report_scope',
+                    'scope',
+                    'source',
+                    'sync_source',
+                    'origin',
+                    'sync_state',
+                    'source_label',
+                    'source_reason',
+                    'detection_data',
+                ):
+                    if key in parsed:
+                        row[key] = parsed.get(key)
+        except Exception as metadata_err:
+            logger.debug(f"Could not read local sync probe metadata for {report_id}: {metadata_err}")
+    return row
+
+
+def _maybe_attempt_visible_local_cache_sync(
+    reason: str,
+    *,
+    local_rows: Optional[List[Dict[str, Any]]] = None,
+    allow_unmarked_local: bool = False,
+    max_items: Optional[int] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Best-effort, throttled sync trigger for filesystem rows shown by the app."""
+    global last_visible_local_cache_sync_epoch
+
+    if not VISIBLE_LOCAL_CACHE_SYNC_ENABLED:
+        return {'started': False, 'reason': 'disabled'}
+    batch_size = int(max_items or VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE or SUPABASE_AUTO_SYNC_BATCH_SIZE or 0)
+    if batch_size <= 0:
+        return {'started': False, 'reason': 'batch_size_zero'}
+    if _is_supabase_offline_backoff_active():
+        return {'started': False, 'reason': 'supabase_offline_backoff'}
+
+    rows = [row for row in (local_rows or []) if isinstance(row, dict)]
+    if rows:
+        has_candidate = False
+        for row in rows:
+            has_artifact = bool(row.get('has_original') or row.get('has_annotated') or row.get('has_report'))
+            if not has_artifact:
+                continue
+            if allow_unmarked_local or _is_visible_local_cache_sync_candidate(row):
+                has_candidate = True
+                break
+        if not has_candidate:
+            return {'started': False, 'reason': 'no_visible_sync_candidates'}
+
+    now_epoch = time.time()
+    if not force and (now_epoch - last_visible_local_cache_sync_epoch) < VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS:
+        return {'started': False, 'reason': 'throttled'}
+    if not visible_local_cache_sync_lock.acquire(blocking=False):
+        return {'started': False, 'reason': 'already_running'}
+
+    last_visible_local_cache_sync_epoch = now_epoch
+    sync_reason = str(reason or 'visible_local_cache').strip() or 'visible_local_cache'
+
+    def _run_visible_sync() -> None:
+        try:
+            summary = _sync_local_cache_candidates(
+                max_items=batch_size,
+                dry_run=False,
+                reconcile_reason=sync_reason,
+                require_worker=False,
+                allow_local_mode_sync=True,
+            )
+            if int(summary.get('enqueued', 0) or 0) > 0 or int(summary.get('partial_handoffs', 0) or 0) > 0:
+                logger.info(
+                    "Visible local-cache sync started for %s: enqueued=%s partial_handoffs=%s",
+                    sync_reason,
+                    summary.get('enqueued', 0),
+                    summary.get('partial_handoffs', 0),
+                )
+            elif not summary.get('success'):
+                logger.debug(
+                    "Visible local-cache sync skipped for %s: %s",
+                    sync_reason,
+                    summary.get('error') or summary,
+                )
+        except Exception as sync_err:
+            logger.debug(f"Visible local-cache sync attempt failed for {sync_reason}: {sync_err}")
+        finally:
+            try:
+                visible_local_cache_sync_lock.release()
+            except RuntimeError:
+                pass
+
+    try:
+        Thread(target=_run_visible_sync, name=f"visible-local-sync-{sync_reason[:32]}", daemon=True).start()
+        return {'started': True, 'reason': sync_reason}
+    except Exception as thread_err:
+        try:
+            visible_local_cache_sync_lock.release()
+        except RuntimeError:
+            pass
+        logger.debug(f"Could not start visible local-cache sync worker for {sync_reason}: {thread_err}")
+        return {'started': False, 'reason': 'thread_start_failed', 'error': str(thread_err)}
+
+
 def _local_sync_has_complete_cloud_artifacts(
     storage_keys: Dict[str, Any],
     *,
@@ -5763,7 +5972,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     logger.info(f" Processing queued violation: {report_id}")
     _push_processing_status('generating')
 
-    if is_local_cache_sync_job:
+    if is_local_cache_sync_job and not force_reprocess_requested:
         handled_sync_job = _handle_local_cache_sync_job(
             report_id=report_id,
             violation_dir=violation_dir,
@@ -7468,12 +7677,16 @@ def api_violations():
         active_listing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         allow_standalone_local_rows = active_listing_profile == 'local'
         local_rows = _collect_local_report_state_rows(limit=max(limit, 250))
+        visible_sync_probe_rows: List[Dict[str, Any]] = []
         for local_row in local_rows:
             local_report_id = str(local_row.get('report_id') or '').strip()
             if not local_report_id:
                 continue
 
             local_status = str(local_row.get('status') or '').strip().lower() or 'pending'
+            local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
+            if local_visible_sync_candidate:
+                visible_sync_probe_rows.append(local_row)
             existing = by_id.get(local_report_id)
             if existing:
                 existing['has_original'] = bool(existing.get('has_original')) or bool(local_row.get('has_original'))
@@ -7530,10 +7743,10 @@ def api_violations():
 
             # In cloud mode, a reachable Supabase database is the source of
             # truth for the report list. Standalone local files can be stale
-            # Railway/container cache artifacts and should not make an empty
-            # Supabase project look like it still has reports. Local mode and
-            # Supabase-offline paths still use these rows as intended.
-            if not allow_standalone_local_rows:
+            # Railway/container cache artifacts. Strict local-origin rows are
+            # still shown so local/offline work remains visible; a throttled
+            # sync attempt below tries to reconcile them into Supabase first.
+            if not allow_standalone_local_rows and not local_visible_sync_candidate:
                 continue
 
             local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or 'local'
@@ -7579,8 +7792,17 @@ def api_violations():
                 'origin': local_row.get('origin') or ('local' if local_row_scope == 'local' else None),
                 'sync_source': local_row.get('sync_source') or local_row.get('source'),
                 'detection_data': None,
-                **_build_source_payload(local_row_scope, 'local_cache_row')
+                **_build_source_payload(
+                    local_row_scope,
+                    'local_cache_row' if allow_standalone_local_rows else 'visible_local_cache_sync_pending'
+                )
             })
+
+        if visible_sync_probe_rows and active_listing_profile != 'local':
+            _maybe_attempt_visible_local_cache_sync(
+                'api_violations_visible_local',
+                local_rows=visible_sync_probe_rows,
+            )
 
         formatted_violations.sort(
             key=lambda item: str(item.get('timestamp') or ''),
@@ -7908,12 +8130,17 @@ def api_stats():
         local_rows = _collect_local_report_state_rows(
             limit=max(500, len(by_report) + 600)
         )
+        visible_sync_probe_rows: List[Dict[str, Any]] = []
         for local_row in local_rows:
             report_id = str(local_row.get('report_id') or '').strip()
             if not report_id:
                 continue
+            local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
+            if local_visible_sync_candidate:
+                visible_sync_probe_rows.append(local_row)
             if cloud_storage_authoritative and active_stats_profile != 'local' and report_id not in storage_artifact_ids:
-                continue
+                if not local_visible_sync_candidate:
+                    continue
 
             local_dir = VIOLATIONS_DIR / report_id
             local_status = str(local_row.get('status') or 'pending').strip().lower()
@@ -7927,6 +8154,8 @@ def api_stats():
             if existing is None:
                 if active_stats_profile != 'local' and not (
                     cloud_storage_authoritative and report_id in storage_artifact_ids
+                ) and not (
+                    local_visible_sync_candidate
                 ):
                     continue
                 local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or (
@@ -7956,6 +8185,12 @@ def api_stats():
                 existing['source_scope'] = 'cloud'
             elif not existing.get('source_scope'):
                 existing['source_scope'] = _normalize_source_scope(local_row.get('source_scope')) or 'local'
+
+        if visible_sync_probe_rows and active_stats_profile != 'local':
+            _maybe_attempt_visible_local_cache_sync(
+                'api_stats_visible_local',
+                local_rows=visible_sync_probe_rows,
+            )
 
         stats = _build_stats_payload(list(by_report.values()))
         if isinstance(storage_index, dict):
@@ -9548,11 +9783,15 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             if report_id:
                 by_id[report_id] = row
 
+        visible_sync_probe_rows: List[Dict[str, Any]] = []
         for local_row in local_rows:
             report_id = str(local_row.get('report_id') or '').strip()
             if not report_id:
                 continue
 
+            local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
+            if local_visible_sync_candidate:
+                visible_sync_probe_rows.append(local_row)
             existing = by_id.get(report_id)
             local_status = str(local_row.get('status') or '').strip().lower() or 'unknown'
             local_row_scope = str(local_row.get('source_scope') or '').strip().lower()
@@ -9601,7 +9840,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     existing['updated_at'] = local_row.get('updated_at')
                 continue
 
-            if supabase_realtime_authoritative:
+            if supabase_realtime_authoritative and not local_visible_sync_candidate:
                 continue
 
             snapshot_row = {
@@ -9628,6 +9867,12 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             }
             report_rows.append(snapshot_row)
             by_id[report_id] = snapshot_row
+
+        if visible_sync_probe_rows and supabase_realtime_authoritative:
+            _maybe_attempt_visible_local_cache_sync(
+                'realtime_visible_local',
+                local_rows=visible_sync_probe_rows,
+            )
 
     if report_rows:
         status_priority = {
@@ -12721,12 +12966,99 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
         saved = bool(cv2.imwrite(str(output_path), canvas))
         if not saved:
             logger.warning(f"Could not write placeholder image for {report_id}: {output_path}")
+        else:
+            try:
+                marker_name = (
+                    'REPROCESS_PLACEHOLDER_ORIGINAL.txt'
+                    if output_path.name == 'original.jpg'
+                    else 'REPROCESS_PLACEHOLDER_ANNOTATED.txt'
+                )
+                (output_path.parent / marker_name).write_text(
+                    f"{datetime.now(timezone.utc).isoformat()}\n{reason_text}\n",
+                    encoding='utf-8'
+                )
+            except Exception as marker_err:
+                logger.debug(f"Could not write reprocess placeholder marker for {report_id}: {marker_err}")
         return saved
     except Exception as placeholder_err:
         logger.warning(
             f"Could not create placeholder image for {report_id} at {output_path}: {placeholder_err}"
         )
         return False
+
+
+def _recover_reprocess_images_from_storage(
+    report_id: str,
+    violation_dir: Path,
+    violation: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Best-effort rehydrate original/annotated images before manual reprocess."""
+    result: Dict[str, Any] = {
+        'original_recovered': False,
+        'annotated_recovered': False,
+        'used_annotated_as_original': False,
+        'errors': [],
+    }
+    if storage_manager is None or not isinstance(violation, dict):
+        return result
+
+    original_path = violation_dir / 'original.jpg'
+    annotated_path = violation_dir / 'annotated.jpg'
+    original_marker = violation_dir / 'REPROCESS_PLACEHOLDER_ORIGINAL.txt'
+    annotated_marker = violation_dir / 'REPROCESS_PLACEHOLDER_ANNOTATED.txt'
+    original_key = violation.get('original_image_key')
+    annotated_key = violation.get('annotated_image_key')
+
+    def _download_to_path(storage_key: Any, target_path: Path) -> bool:
+        key = str(storage_key or '').strip()
+        if not key:
+            return False
+        try:
+            blob = storage_manager.download_file_content(key)
+            if not blob:
+                return False
+            if isinstance(blob, str):
+                blob = blob.encode('utf-8')
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(blob)
+            return True
+        except Exception as download_err:
+            result['errors'].append(f"{target_path.name}:{download_err}")
+            logger.warning(
+                f"Could not recover {target_path.name} from Supabase for {report_id}: {download_err}"
+            )
+            return False
+
+    should_refresh_original = (not original_path.exists()) or original_marker.exists()
+    if should_refresh_original and _download_to_path(original_key, original_path):
+        result['original_recovered'] = True
+        try:
+            if original_marker.exists():
+                original_marker.unlink()
+        except Exception:
+            pass
+
+    should_refresh_annotated = (not annotated_path.exists()) or annotated_marker.exists()
+    if should_refresh_annotated and _download_to_path(annotated_key, annotated_path):
+        result['annotated_recovered'] = True
+        try:
+            if annotated_marker.exists():
+                annotated_marker.unlink()
+        except Exception:
+            pass
+
+    if not original_path.exists() and annotated_path.exists():
+        try:
+            original_path.write_bytes(annotated_path.read_bytes())
+            result['original_recovered'] = True
+            result['used_annotated_as_original'] = True
+            logger.info(
+                f"Recovered reprocess source for {report_id} from annotated image because original image was unavailable"
+            )
+        except Exception as copy_err:
+            result['errors'].append(f"annotated_as_original:{copy_err}")
+
+    return result
 
 
 def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
@@ -13839,12 +14171,13 @@ def _sync_local_cache_candidates(
             skipped += 1
             continue
 
-        if not _is_strict_local_sync_candidate(
+        strict_local_sync_candidate = _is_strict_local_sync_candidate(
             report_id=report_id,
             event=event,
             violation=violation,
             metadata=metadata,
-        ):
+        )
+        if not strict_local_sync_candidate and not (local_mode_sync_allowed and active_profile == 'local'):
             skipped += 1
             logger.debug(
                 "Skipping local-cache sync for %s: no strict local-origin marker "
@@ -13859,9 +14192,10 @@ def _sync_local_cache_candidates(
             # that has just finished writing report.html locally and is now
             # uploading to Supabase. Auto-healing the status here and then
             # enqueuing a sync job races the live worker and mistags the
-            # report as "Local Synced". Only auto-heal in local mode where
-            # there's no concurrent cloud worker.
-            if cloud_mode_orphans_only:
+            # report as "Local Synced". Strict local-origin candidates are
+            # the exception: those are visible local cache reports that need
+            # to be reconciled upward now that Supabase is reachable.
+            if cloud_mode_orphans_only and not strict_local_sync_candidate:
                 skipped += 1
                 continue
             try:
@@ -13899,11 +14233,16 @@ def _sync_local_cache_candidates(
             # created by the live cloud worker and any missing key is a
             # mid-flight upload that will finish on its own.
             event_detection_data = _parse_detection_payload((event or {}).get('detection_data')) if event else {}
+            violation_detection_data = _parse_detection_payload((violation or {}).get('detection_data')) if violation else {}
             event_source_scope = str(event_detection_data.get('source_scope') or '').strip().lower()
             event_sync_source = str(event_detection_data.get('sync_source') or '').strip().lower()
+            violation_source_scope = str(violation_detection_data.get('source_scope') or '').strip().lower()
+            violation_sync_source = str(violation_detection_data.get('sync_source') or '').strip().lower()
             is_local_origin = (
                 event_source_scope in ('local', 'synced_local')
                 or 'local' in event_sync_source
+                or violation_source_scope in ('local', 'synced_local')
+                or 'local' in violation_sync_source
             )
 
             needs_sync = (
@@ -13934,20 +14273,99 @@ def _sync_local_cache_candidates(
         if dry_run:
             continue
 
-        if not local_has_report:
-            skipped += 1
-            logger.info(
-                f"Skipping local-cache sync for {report_id}: local report.html not ready; "
-                "local generation will finish first and sync on the next reconnect/reconcile pass"
-            )
-            continue
-
         detections = []
         detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
         if isinstance(detection_data, dict):
             detections = detection_data.get('detections', []) or []
         else:
             detection_data = {}
+
+        metadata_detection_payload = _parse_detection_payload(metadata.get('detection_data'))
+        if not detections and isinstance(metadata_detection_payload.get('detections'), list):
+            detections = [
+                item for item in metadata_detection_payload.get('detections') or []
+                if isinstance(item, dict)
+            ]
+        if not detections and isinstance(metadata.get('detections'), list):
+            detections = [item for item in metadata.get('detections') or [] if isinstance(item, dict)]
+
+        if not local_has_report:
+            ts_value = None
+            if event and event.get('timestamp'):
+                ts = event.get('timestamp')
+                ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
+            else:
+                try:
+                    ts_obj = _parse_report_id_timestamp(report_id)
+                    ts_value = ts_obj.isoformat()
+                except Exception:
+                    ts_value = get_local_time().isoformat()
+
+            violation_summary_text = ''
+            if isinstance(violation, dict):
+                violation_summary_text = str(violation.get('violation_summary') or '').strip()
+            if not violation_summary_text:
+                violation_summary_text = str(metadata.get('violation_summary') or '').strip()
+
+            violation_types, resolved_violation_count = _resolve_violation_types_and_count(
+                detections,
+                event=event,
+                violation_summary=violation_summary_text,
+                fallback_count=event.get('violation_count') if isinstance(event, dict) else metadata.get('violation_count'),
+            )
+            local_metadata_violation_types = _normalize_violation_type_list(
+                metadata.get('violation_types'),
+                metadata.get('ppe_tags'),
+                [f"NO-{item}" for item in (metadata.get('missing_ppe') or [])],
+                _extract_violation_types_from_summary(violation_summary_text),
+                detection_data.get('violation_types') if isinstance(detection_data, dict) else [],
+                detection_data.get('ppe_tags') if isinstance(detection_data, dict) else [],
+                metadata_detection_payload.get('violation_types') if isinstance(metadata_detection_payload, dict) else [],
+                metadata_detection_payload.get('ppe_tags') if isinstance(metadata_detection_payload, dict) else [],
+            )
+            if local_metadata_violation_types and _violation_types_are_generic(violation_types):
+                violation_types = local_metadata_violation_types
+            elif local_metadata_violation_types:
+                violation_types = _normalize_violation_type_list(violation_types, local_metadata_violation_types)
+            resolved_violation_count = max(int(resolved_violation_count or 0), len(violation_types), 1)
+            missing_ppe_values = _missing_ppe_from_violation_types(violation_types)
+            handoff_device_id = str(
+                (event or {}).get('device_id')
+                or (violation or {}).get('device_id')
+                or metadata.get('device_id')
+                or 'local_cache_sync'
+            ).strip() or 'local_cache_sync'
+
+            handoff_summary = _handoff_partial_local_report_to_cloud(
+                report_id=report_id,
+                violation_dir=violation_dir,
+                timestamp=ts_value,
+                detections=detections,
+                queued_violation_count=resolved_violation_count,
+                queued_violation_types=violation_types,
+                queued_missing_ppe=missing_ppe_values,
+                queued_ppe_tags=violation_types,
+                original_path=original_path,
+                annotated_path=annotated_path,
+                device_id=handoff_device_id,
+                source_scope='cloud',
+                sync_source='sync_local_cache_partial',
+                reason=reason,
+            )
+            if handoff_summary.get('success'):
+                partial_handoffs += 1
+                partial_handoff_report_ids.append(report_id)
+                logger.info(
+                    f"Partial local-cache handoff uploaded image artifacts for {report_id}; "
+                    "report generation can continue locally and cloud recovery can adopt if needed"
+                )
+            else:
+                skipped += 1
+                errors.append(
+                    f"{report_id}: partial handoff failed "
+                    f"({handoff_summary.get('error') or 'unknown error'})"
+                )
+            continue
 
         source_scope_marker = str(
             detection_data.get('source_scope')
@@ -14487,11 +14905,14 @@ def api_pending_reports():
     local_rows = _collect_local_report_state_rows(limit=300)
     queue_snapshot = _get_queue_context_snapshot()
     completed_local_report_ids = set()
+    visible_sync_probe_rows: List[Dict[str, Any]] = []
     for row in local_rows:
         report_id = str(row.get('report_id') or '').strip()
         status = _normalize_pending_status(row.get('status'), has_report=bool(row.get('has_report')))
         if not report_id:
             continue
+        if _is_visible_local_cache_sync_candidate(row):
+            visible_sync_probe_rows.append(row)
         if status == 'completed':
             completed_local_report_ids.add(report_id)
             pending_by_id.pop(report_id, None)
@@ -14533,6 +14954,12 @@ def api_pending_reports():
             'active_status': row.get('active_status'),
             'worker_heartbeat_age_seconds': row.get('worker_heartbeat_age_seconds'),
         }
+
+    if visible_sync_probe_rows and active_profile != 'local':
+        _maybe_attempt_visible_local_cache_sync(
+            'api_pending_visible_local',
+            local_rows=visible_sync_probe_rows,
+        )
 
     if db_manager is not None:
         try:
@@ -14725,20 +15152,18 @@ def api_generate_report_now(report_id):
                         'worker_running': _is_queue_worker_alive()
                     })
 
-                if not original_path.exists() and storage_manager is not None and isinstance(violation, dict):
+                if storage_manager is not None and isinstance(violation, dict):
                     try:
-                        original_key = violation.get('original_image_key')
-                        if original_key:
-                            blob = storage_manager.download_file_content(original_key)
-                            if blob:
-                                violation_dir.mkdir(parents=True, exist_ok=True)
-                                if isinstance(blob, str):
-                                    blob = blob.encode('utf-8')
-                                original_path.write_bytes(blob)
-                                logger.info(f"Recovered original image from Supabase for report {report_id}")
+                        recovered_images = _recover_reprocess_images_from_storage(
+                            report_id,
+                            violation_dir,
+                            violation,
+                        )
+                        if recovered_images.get('original_recovered'):
+                            logger.info(f"Recovered original image from Supabase for report {report_id}")
                     except Exception as recover_err:
-                        _activate_local_offline_runtime('api_generate_report_now.recover_original', recover_err)
-                        logger.warning(f"Could not recover original image from Supabase for {report_id}: {recover_err}")
+                        _activate_local_offline_runtime('api_generate_report_now.recover_images', recover_err)
+                        logger.warning(f"Could not recover report images from Supabase for {report_id}: {recover_err}")
             except Exception as db_lookup_err:
                 _activate_local_offline_runtime('api_generate_report_now.db_lookup', db_lookup_err)
                 logger.warning(
@@ -15121,15 +15546,29 @@ def view_report(report_id):
         if cached_rendered:
             return _report_html_response(cached_rendered)
 
+    local_violation_dir = VIOLATIONS_DIR / report_id
+    local_report_html = local_violation_dir / 'report.html'
+
+    def _try_sync_visible_local_report(reason: str) -> None:
+        if not local_violation_dir.exists():
+            return
+        probe_row = _local_artifact_sync_probe_row(report_id, local_violation_dir)
+        _maybe_attempt_visible_local_cache_sync(
+            reason,
+            local_rows=[probe_row],
+            max_items=1,
+        )
+
     if storage_manager is None or db_manager is None:
         # Fallback to local filesystem
-        violation_dir = VIOLATIONS_DIR / report_id
+        violation_dir = local_violation_dir
 
         if not violation_dir.exists():
             abort(404, description="Report not found")
 
         report_html = violation_dir / 'report.html'
         if report_html.exists():
+            _try_sync_visible_local_report('view_report_local_fallback')
             trace_payload = _build_traceability_payload(
                 report_id=report_id,
                 violation={},
@@ -15141,10 +15580,8 @@ def view_report(report_id):
         else:
             abort(404, description="Report HTML not found")
 
-    local_violation_dir = VIOLATIONS_DIR / report_id
-    local_report_html = local_violation_dir / 'report.html'
-
     if local_report_html.exists() and not failed_view:
+        _try_sync_visible_local_report('view_report_fast_cache')
         try:
             trace_payload = _build_traceability_payload(
                 report_id=report_id,

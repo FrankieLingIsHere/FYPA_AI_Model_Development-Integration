@@ -7224,6 +7224,31 @@ def api_violations():
             'source_reason': str(reason or '').strip() or 'inferred',
         }
 
+    def _attach_violation_image_urls(row: Dict[str, Any]) -> Dict[str, Any]:
+        report_id = str((row or {}).get('report_id') or '').strip()
+        if not report_id:
+            return row
+
+        original_url = f"/image/{report_id}/original.jpg" if row.get('has_original') else None
+        annotated_url = f"/image/{report_id}/annotated.jpg" if row.get('has_annotated') else None
+        primary_url = annotated_url or original_url
+        if not primary_url:
+            return row
+
+        if original_url and not row.get('original_image_url'):
+            row['original_image_url'] = original_url
+        if annotated_url and not row.get('annotated_image_url'):
+            row['annotated_image_url'] = annotated_url
+        if not row.get('image_url'):
+            row['image_url'] = primary_url
+        if not row.get('thumbnail_url'):
+            row['thumbnail_url'] = primary_url
+
+        source_scope = _normalize_source_scope(row.get('source_scope'))
+        if source_scope in ('local', 'synced_local') and row.get('has_local_artifacts') and not row.get('local_image_url'):
+            row['local_image_url'] = primary_url
+        return row
+
     def _infer_report_source_scope(
         *,
         device_id: Any,
@@ -7405,12 +7430,14 @@ def api_violations():
                 else:
                     status = 'pending'
 
-                local_violations.append({
+                local_row = {
                     'report_id': report_id,
                     'timestamp': timestamp.isoformat(),
                     'has_original': has_original,
                     'has_annotated': has_annotated,
                     'has_report': has_report,
+                    'has_local_report': has_report,
+                    'has_local_artifacts': has_original or has_annotated or has_report,
                     'status': status,
                     'severity': metadata_severity,
                     'person_count': int(metadata.get('person_count') or 0) if isinstance(metadata.get('person_count'), (int, float)) else 0,
@@ -7426,7 +7453,8 @@ def api_violations():
                     'origin': metadata.get('origin'),
                     'sync_source': metadata.get('sync_source') or metadata.get('source'),
                     **_build_source_payload(metadata_source_scope or 'local', metadata_source_reason)
-                })
+                }
+                local_violations.append(_attach_violation_image_urls(local_row))
             except ValueError:
                 logger.warning(f"Skipping invalid report directory: {report_id}")
                 continue
@@ -7640,6 +7668,10 @@ def api_violations():
             except Exception:
                 pass
 
+            row_has_original = bool(v.get('original_image_key')) or local_has_original
+            row_has_annotated = bool(v.get('annotated_image_key')) or local_has_annotated
+            row_has_report = bool(v.get('report_html_key')) or local_has_report
+
             formatted_violations.append({
                 'report_id': report_id,
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
@@ -7653,9 +7685,9 @@ def api_violations():
                 'missing_ppe': missing_ppe,
                 'ppe_tags': ppe_tags,
                 'violation_type': 'PPE Violation',
-                'has_original': bool(v.get('original_image_key')) or local_has_original,
-                'has_annotated': bool(v.get('annotated_image_key')) or local_has_annotated,
-                'has_report': bool(v.get('report_html_key')) or local_has_report,
+                'has_original': row_has_original,
+                'has_annotated': row_has_annotated,
+                'has_report': row_has_report,
                 'has_local_report': local_has_report,
                 'has_local_artifacts': has_local_artifacts,
                 'has_cloud_artifacts': has_cloud_artifacts,
@@ -7773,7 +7805,7 @@ def api_violations():
                 continue
 
             local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or 'local'
-            formatted_violations.append({
+            local_formatted_row = {
                 'report_id': local_report_id,
                 'timestamp': local_row.get('timestamp'),
                 'person_count': int(local_row.get('person_count') or 0),
@@ -7819,7 +7851,8 @@ def api_violations():
                     local_row_scope,
                     'local_cache_row' if allow_standalone_local_rows else 'visible_local_cache_sync_pending'
                 )
-            })
+            }
+            formatted_violations.append(_attach_violation_image_urls(local_formatted_row))
 
         if visible_sync_probe_rows and active_listing_profile != 'local':
             _maybe_attempt_visible_local_cache_sync(
@@ -7832,6 +7865,7 @@ def api_violations():
             reverse=True
         )
         formatted_violations = formatted_violations[:max(1, int(limit or 1))]
+        formatted_violations = [_attach_violation_image_urls(item) for item in formatted_violations]
 
         _set_cached_dashboard_snapshot(
             'violations',

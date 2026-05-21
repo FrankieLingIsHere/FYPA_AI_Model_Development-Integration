@@ -1037,6 +1037,73 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
             casm_app.reset_report_progress()
 
 
+def test_violations_list_exposes_thumbnail_url_for_synced_local_images():
+    report_id = "20260513_182255"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"local-synced-original")
+        (report_dir / "annotated.jpg").write_bytes(b"local-synced-annotated")
+        (report_dir / "report.html").write_text("<html>local synced report</html>", encoding="utf-8")
+
+        synced_record = {
+            "report_id": report_id,
+            "status": "completed",
+            "device_id": "offline_local_cache",
+            "sync_state": "cloud_sync_queued",
+            "timestamp": datetime.now(timezone.utc),
+            "original_image_key": f"violations/{report_id}/original.jpg",
+            "annotated_image_key": f"violations/{report_id}/annotated.jpg",
+            "report_html_key": f"violations/{report_id}/report.html",
+            "detection_data": {
+                "source_scope": "synced_local",
+                "source": "sync_local_cache",
+                "sync_source": "sync_local_cache",
+                "device_id": "offline_local_cache",
+                "sync_state": "cloud_sync_queued",
+                "missing_ppe": ["Hardhat"],
+            },
+            "person_count": 1,
+            "violation_count": 1,
+            "severity": "HIGH",
+            "violation_summary": "Missing Hardhat",
+        }
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = TagMatrixDB([synced_record])
+            casm_app._invalidate_dashboard_snapshot_cache()
+
+            with casm_app.app.test_client() as client:
+                response = client.get("/api/violations?limit=10")
+                payload = response.get_json() or []
+
+            row = next((item for item in payload if item.get("report_id") == report_id), None)
+            expected_thumb = f"/image/{report_id}/annotated.jpg"
+            _assert(response.status_code == 200, f"Unexpected list status: {response.status_code}")
+            _assert(row is not None, f"Synced local report missing from list: {payload}")
+            _assert(row.get("source_scope") == "synced_local", f"Synced local scope drifted: {row}")
+            _assert(row.get("thumbnail_url") == expected_thumb, f"Thumbnail URL missing: {row}")
+            _assert(row.get("image_url") == expected_thumb, f"Primary image URL missing: {row}")
+            _assert(row.get("annotated_image_url") == expected_thumb, f"Annotated URL missing: {row}")
+            _assert(row.get("original_image_url") == f"/image/{report_id}/original.jpg", f"Original URL missing: {row}")
+            _assert(row.get("local_image_url") == expected_thumb, f"Local synced image bridge missing: {row}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app._invalidate_dashboard_snapshot_cache()
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            casm_app.reset_report_progress()
+
+
 def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
     with tempfile.TemporaryDirectory() as tmpdir:
         old_violations_dir = casm_app.VIOLATIONS_DIR
@@ -1818,6 +1885,7 @@ def main():
         test_report_response_injects_summary_readability_styles_for_legacy_reports,
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
+        test_violations_list_exposes_thumbnail_url_for_synced_local_images,
         test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile,
         test_reconnect_sync_requeues_completed_local_report_after_partial_handoff,
         test_report_source_tag_matrix_preserves_local_and_synced_local_cases,

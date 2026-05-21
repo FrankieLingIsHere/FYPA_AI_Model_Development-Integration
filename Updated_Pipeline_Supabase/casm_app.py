@@ -14263,6 +14263,54 @@ def _sync_local_cache_candidates(
         has_cloud_original = bool((violation or {}).get('original_image_key'))
         has_cloud_annotated = bool((violation or {}).get('annotated_image_key'))
         has_cloud_report = bool((violation or {}).get('report_html_key'))
+        has_cloud_artifacts = bool(has_cloud_original or has_cloud_annotated or has_cloud_report)
+        has_cloud_report_artifact = bool(has_cloud_report or (violation or {}).get('report_pdf_key'))
+        event_detection_data = _parse_detection_payload((event or {}).get('detection_data')) if event else {}
+        violation_detection_data = _parse_detection_payload((violation or {}).get('detection_data')) if violation else {}
+        sync_state_marker = str(
+            (event or {}).get('sync_state')
+            or event_detection_data.get('sync_state')
+            or event_detection_data.get('cloud_sync_state')
+            or violation_detection_data.get('sync_state')
+            or violation_detection_data.get('cloud_sync_state')
+            or metadata.get('sync_state')
+            or metadata.get('cloud_sync_state')
+            or ''
+        ).strip().lower()
+        sync_source_marker_for_evidence = str(
+            violation_detection_data.get('sync_source')
+            or violation_detection_data.get('source')
+            or violation_detection_data.get('origin')
+            or event_detection_data.get('sync_source')
+            or event_detection_data.get('source')
+            or event_detection_data.get('origin')
+            or metadata.get('sync_source')
+            or metadata.get('source')
+            or metadata.get('origin')
+            or ''
+        ).strip().lower()
+        sync_device_key = str(
+            (event or {}).get('device_id')
+            or (violation or {}).get('device_id')
+            or violation_detection_data.get('device_id')
+            or event_detection_data.get('device_id')
+            or metadata.get('device_id')
+            or ''
+        ).strip().lower()
+        already_confirmed_synced_local = _has_confirmed_synced_local_evidence(
+            sync_source=sync_source_marker_for_evidence,
+            device_id=sync_device_key,
+            sync_state=sync_state_marker,
+            has_cloud_artifacts=has_cloud_artifacts,
+            has_cloud_report_artifact=has_cloud_report_artifact,
+            report_id=report_id,
+        )
+        needs_synced_local_repair = bool(
+            local_has_report
+            and strict_local_sync_candidate
+            and has_cloud_artifacts
+            and not already_confirmed_synced_local
+        )
 
         if cloud_mode_orphans_only:
             # Cloud routing profile: reconcile two kinds of unsynced reports:
@@ -14279,8 +14327,6 @@ def _sync_local_cache_candidates(
             # We must NOT sync events whose source_scope is 'cloud': those were
             # created by the live cloud worker and any missing key is a
             # mid-flight upload that will finish on its own.
-            event_detection_data = _parse_detection_payload((event or {}).get('detection_data')) if event else {}
-            violation_detection_data = _parse_detection_payload((violation or {}).get('detection_data')) if violation else {}
             event_source_scope = str(event_detection_data.get('source_scope') or '').strip().lower()
             event_sync_source = str(event_detection_data.get('sync_source') or '').strip().lower()
             violation_source_scope = str(violation_detection_data.get('source_scope') or '').strip().lower()
@@ -14300,6 +14346,7 @@ def _sync_local_cache_candidates(
                         not has_cloud_original
                         or (annotated_path.exists() and not has_cloud_annotated)
                         or (local_has_report and not has_cloud_report)
+                        or needs_synced_local_repair
                     )
                 )
             )
@@ -14309,6 +14356,7 @@ def _sync_local_cache_candidates(
                 or not has_cloud_original
                 or (annotated_path.exists() and not has_cloud_annotated)
                 or (local_has_report and not has_cloud_report)
+                or needs_synced_local_repair
             )
 
         if not needs_sync:
@@ -14414,11 +14462,16 @@ def _sync_local_cache_candidates(
                 )
             continue
 
-        source_scope_marker = str(
+        existing_source_scope_marker = str(
             detection_data.get('source_scope')
             or detection_data.get('report_scope')
-            or 'synced_local'
+            or ''
         ).strip().lower()
+        source_scope_marker = (
+            'synced_local'
+            if (needs_synced_local_repair or strict_local_sync_candidate)
+            else (existing_source_scope_marker or 'synced_local')
+        )
         original_sync_source = str(
             detection_data.get('sync_source')
             or detection_data.get('source')

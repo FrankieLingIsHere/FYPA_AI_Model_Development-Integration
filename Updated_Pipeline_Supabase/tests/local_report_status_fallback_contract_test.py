@@ -1079,6 +1079,103 @@ def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
 
 
+def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
+    report_id = "local-reconnect-sync-repair-001"
+
+    class PartialCloudHandoffDB:
+        def __init__(self):
+            self.status_updates = []
+
+        def get_detection_event(self, _report_id):
+            return {
+                "report_id": report_id,
+                "status": "completed",
+                "device_id": "local_cache",
+                "timestamp": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+
+        def get_violation(self, _report_id):
+            return {
+                "report_id": report_id,
+                "original_image_key": f"violation-images/{report_id}/original.jpg",
+                "annotated_image_key": f"violation-images/{report_id}/annotated.jpg",
+                "report_html_key": f"reports/{report_id}/report.html",
+                "detection_data": {
+                    "source_scope": "cloud",
+                    "source": "cloud_pending_local_handoff",
+                    "sync_source": "sync_local_cache_partial",
+                    "device_id": "local_cache",
+                },
+            }
+
+        def update_detection_status(self, report_id_arg, status, error_message=None):
+            self.status_updates.append((report_id_arg, status, error_message))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"local-original")
+        (report_dir / "annotated.jpg").write_bytes(b"local-annotated")
+        (report_dir / "report.html").write_text("<html>local model report</html>", encoding="utf-8")
+        (report_dir / "metadata.json").write_text(
+            json.dumps({
+                "source_scope": "local",
+                "source": "local_pipeline",
+                "sync_source": "local_pipeline",
+                "device_id": "local_cache",
+                "violation_types": ["Missing Hardhat"],
+                "ppe_tags": ["NO-Hardhat"],
+                "missing_ppe": ["Hardhat"],
+                "violation_count": 1,
+                "violation_summary": "PPE Violation Detected: Missing Hardhat",
+            }),
+            encoding="utf-8",
+        )
+
+        fake_db = PartialCloudHandoffDB()
+        fake_queue = CaptureQueue()
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_storage_manager = casm_app.storage_manager
+        old_violation_queue = casm_app.violation_queue
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = fake_db
+            casm_app.storage_manager = object()
+            casm_app.violation_queue = fake_queue
+
+            result = casm_app._sync_local_cache_candidates(
+                max_items=10,
+                dry_run=False,
+                reconcile_reason="reconnect_auto",
+                require_worker=False,
+            )
+
+            _assert(result.get("success") is True, result)
+            _assert(result.get("candidates") == 1, result)
+            _assert(result.get("enqueued") == 1, result)
+            _assert(report_id in result.get("queued_report_ids", []), result)
+            _assert(fake_queue.items, "Reconnect sync did not queue the local report")
+            queued_payload = fake_queue.items[0]["violation_data"]
+            _assert(queued_payload.get("source_scope") == "synced_local", queued_payload)
+            _assert(queued_payload.get("sync_source") == "sync_local_cache", queued_payload)
+            _assert(fake_queue.items[0]["device_id"].startswith(f"local_cache_sync_{report_id}_"), fake_queue.items[0])
+            _assert(fake_db.status_updates, "Reconnect sync should mark the row queued for reconciliation")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app.storage_manager = old_storage_manager
+            casm_app.violation_queue = old_violation_queue
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
+
+
 def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
     cases = [
         {
@@ -1722,6 +1819,7 @@ def main():
         test_local_db_status_stays_local_until_reconnect_sync_evidence_exists,
         test_local_db_status_becomes_local_synced_after_reconnect_sync_signal,
         test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile,
+        test_reconnect_sync_requeues_completed_local_report_after_partial_handoff,
         test_report_source_tag_matrix_preserves_local_and_synced_local_cases,
         test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff,
         test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation,

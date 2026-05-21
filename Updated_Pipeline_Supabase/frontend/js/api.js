@@ -681,6 +681,18 @@ const API = {
         return `${base || ''}${path}`;
     },
 
+    resolveReportAssetUrl(url, sourceHint = null) {
+        const raw = String(url || '').trim();
+        if (!raw) return '';
+        if (/^(blob:|data:|https?:\/\/)/i.test(raw)) {
+            return raw;
+        }
+        if (raw.startsWith('/')) {
+            return this.buildReportScopedUrl(raw, sourceHint);
+        }
+        return raw;
+    },
+
     getCloudReportScopedUrl(path) {
         const cloudBase = this.getCloudBackendBaseUrl();
         if (cloudBase && this.canUseRemoteCloudBackendFromPage(cloudBase)) {

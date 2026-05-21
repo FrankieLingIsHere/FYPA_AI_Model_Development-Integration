@@ -14,9 +14,11 @@ class ReportRoutingStaticTest(unittest.TestCase):
         analytics_js = (ROOT / 'frontend' / 'js' / 'pages' / 'analytics.js').read_text(encoding='utf-8')
 
         self.assertIn('getReportBackendBase(sourceHint = null)', api_js)
+        self.assertIn('resolveReportAssetUrl(url, sourceHint = null)', api_js)
         self.assertIn("scope === 'cloud' || scope === 'synced_local'", api_js)
         self.assertIn('configuredCloudBase && configuredCloudBase === normalized', api_js)
         self.assertIn("API.getImageUrl(violation.report_id, 'annotated.jpg', violation)", reports_js)
+        self.assertIn('API.resolveReportAssetUrl', reports_js)
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
         self.assertIn('warmDashboardCaches({ reason: \'startup\'', app_js)
         self.assertIn("API.warmDashboardCaches({ reason: 'reports-mount'", reports_js)

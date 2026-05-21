@@ -445,6 +445,11 @@ function testSyncedLocalThumbnailRoutesToAvailableBackend() {
     'https://cloud-api.example.test/image/synced-thumb-001/annotated.jpg',
     'cloud page should show local-synced thumbnails through the cloud backend',
   );
+  assertEqual(
+    cloudContext.API.resolveReportAssetUrl('/image/synced-thumb-001/annotated.jpg', syncedLocalRow),
+    'https://cloud-api.example.test/image/synced-thumb-001/annotated.jpg',
+    'cloud page should resolve API-provided relative thumbnail paths through the cloud backend',
+  );
 
   const localContext = loadApiContext(
     async () => createResponse(true, 200, {}),
@@ -464,6 +469,14 @@ function testSyncedLocalThumbnailRoutesToAvailableBackend() {
     }),
     '/image/synced-thumb-001/annotated.jpg',
     'local page should show local-synced thumbnails through local cached artifacts',
+  );
+  assertEqual(
+    localContext.API.resolveReportAssetUrl('/image/synced-thumb-001/annotated.jpg', {
+      ...syncedLocalRow,
+      has_local_artifacts: true,
+    }),
+    '/image/synced-thumb-001/annotated.jpg',
+    'local page should keep API-provided relative thumbnail paths on the local backend',
   );
 
   assertEqual(

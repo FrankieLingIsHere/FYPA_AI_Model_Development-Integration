@@ -3014,11 +3014,17 @@ const ReportsPage = {
             : 'Unknown time';
         const originalImageUrl = API.getImageUrl(violation.report_id, 'original.jpg', violation);
         const annotatedImageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg', violation);
-        const imageUrl = violation.local_image_url || (violation.has_annotated ? annotatedImageUrl : originalImageUrl);
-        const fallbackImageUrl = (!violation.local_image_url && violation.has_annotated && violation.has_original)
+        const explicitImageUrl = (typeof API.resolveReportAssetUrl === 'function')
+            ? API.resolveReportAssetUrl(
+                violation.local_image_url || violation.thumbnail_url || violation.image_url || violation.annotated_image_url || violation.original_image_url,
+                violation
+            )
+            : (violation.local_image_url || violation.thumbnail_url || violation.image_url || violation.annotated_image_url || violation.original_image_url || '');
+        const imageUrl = explicitImageUrl || (violation.has_annotated ? annotatedImageUrl : originalImageUrl);
+        const fallbackImageUrl = (violation.has_annotated && violation.has_original && imageUrl !== originalImageUrl)
             ? originalImageUrl
             : '';
-        const hasPreviewImage = Boolean(violation.local_image_url || violation.has_annotated || violation.has_original);
+        const hasPreviewImage = Boolean(imageUrl || violation.has_annotated || violation.has_original);
         const statusInfo = this.getStatusInfo(violation);
         const sourceInfo = this.getSourceInfo(violation);
         const sourceScope = this.inferSourceScope(violation);

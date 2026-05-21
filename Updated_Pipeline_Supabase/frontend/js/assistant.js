@@ -3828,9 +3828,13 @@ const CASMAssistant = {
     },
 
     resolveReportThumbnailUrl(row = {}) {
-        if (row.local_image_url) return row.local_image_url;
-        if (row.thumbnail_url) return row.thumbnail_url;
-        if (row.image_url) return row.image_url;
+        const directUrl = row.local_image_url || row.thumbnail_url || row.image_url || row.annotated_image_url || row.original_image_url || '';
+        if (directUrl) {
+            if (window.API && typeof API.resolveReportAssetUrl === 'function') {
+                return API.resolveReportAssetUrl(directUrl, row) || '';
+            }
+            return directUrl;
+        }
         const reportId = String(row.report_id || row.id || '').trim();
         if (!reportId || !window.API || typeof API.getImageUrl !== 'function') return '';
         const filename = row.has_annotated ? 'annotated.jpg' : row.has_original ? 'original.jpg' : '';

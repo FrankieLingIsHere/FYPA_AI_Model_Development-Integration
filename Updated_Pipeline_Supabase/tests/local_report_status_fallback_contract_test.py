@@ -297,6 +297,58 @@ class PendingStaleHandoffDB:
         }]
 
 
+class PartialHandoffPendingDB:
+    def get_status(self, report_id):
+        return {
+            "report_id": report_id,
+            "status": "completed",
+            "device_id": "local_cache",
+            "error_message": None,
+            "has_original": True,
+            "has_annotated": True,
+            "has_report": True,
+            "has_cloud_artifacts": True,
+            "has_cloud_report_artifact": True,
+            "source_scope": "cloud",
+            "source_label": "Cloud",
+        }
+
+    def get_detection_event(self, report_id):
+        return {
+            "report_id": report_id,
+            "status": "completed",
+            "device_id": "local_cache",
+            "error_message": None,
+            "timestamp": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    def get_violation(self, report_id):
+        return {
+            "report_id": report_id,
+            "original_image_key": f"violations/{report_id}/original.jpg",
+            "annotated_image_key": f"violations/{report_id}/annotated.jpg",
+            "report_html_key": f"violations/{report_id}/report.html",
+            "detection_data": {
+                "source_scope": "cloud",
+                "source": "sync_local_cache_partial",
+                "sync_source": "sync_local_cache_partial",
+                "device_id": "local_cache",
+            },
+        }
+
+    def get_all_violations_with_status(self, limit=200):
+        report_id = "20260521_114336"
+        return [{
+            **self.get_detection_event(report_id),
+            **self.get_violation(report_id),
+            "person_count": 0,
+            "violation_count": 3,
+            "severity": "MEDIUM",
+            "violation_summary": "Missing PPE Violation",
+        }]
+
+
 def _assert(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -333,6 +385,67 @@ def test_status_endpoint_uses_local_artifacts_during_db_backoff():
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
+            casm_app.reset_report_progress()
+
+
+def test_local_generation_failure_overrides_partial_cloud_handoff_status():
+    report_id = "20260521_114336"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        report_dir = root / report_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "original.jpg").write_bytes(b"local-original")
+        (report_dir / "annotated.jpg").write_bytes(b"local-annotated")
+        (report_dir / "generation_failure.txt").write_text(
+            "Report ID: 20260521_114336\n"
+            "Reason: RuntimeError: NLP output missing required model-authored report cells: "
+            "persons[].corrective_actions\n",
+            encoding="utf-8",
+        )
+
+        old_violations_dir = casm_app.VIOLATIONS_DIR
+        old_db_manager = casm_app.db_manager
+        old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        try:
+            os.environ["CASM_ROUTING_PROFILE"] = "local"
+            casm_app.VIOLATIONS_DIR = root
+            casm_app.db_manager = PartialHandoffPendingDB()
+            casm_app._invalidate_dashboard_snapshot_cache()
+
+            with casm_app.app.test_client() as client:
+                response = client.get(f"/api/report/{report_id}/status")
+                payload = response.get_json() or {}
+                list_response = client.get("/api/violations?limit=10")
+                list_payload = list_response.get_json() or []
+
+            _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            _assert(payload.get("status") == "failed", f"Local failure was hidden by cloud handoff: {payload}")
+            _assert(payload.get("has_original") is True, f"Local original missing from status: {payload}")
+            _assert(payload.get("has_annotated") is True, f"Local annotated missing from status: {payload}")
+            _assert(payload.get("has_report") is False, f"Failed report should not claim report HTML: {payload}")
+            _assert(payload.get("has_cloud_report_artifact") is False, f"Stale cloud report key should be hidden: {payload}")
+            _assert(payload.get("source_scope") == "local", f"Local failure scope drifted: {payload}")
+            _assert(payload.get("source_label") == "Local", f"Local failure label drifted: {payload}")
+            _assert(
+                "corrective_actions" in str(payload.get("error_message") or ""),
+                f"Failure reason was not surfaced: {payload}",
+            )
+            _assert(list_response.status_code == 200, f"Unexpected list status code: {list_response.status_code}")
+            row = next((item for item in list_payload if item.get("report_id") == report_id), None)
+            _assert(row is not None, f"Failed local report disappeared from list: {list_payload}")
+            _assert(row.get("status") == "failed", f"List hid local terminal status: {row}")
+            _assert(row.get("has_report") is False, f"List exposed stale report key as readable: {row}")
+            _assert(row.get("has_cloud_report_artifact") is False, f"List kept stale cloud report artifact: {row}")
+            _assert(row.get("source_scope") == "local", f"List failure scope drifted: {row}")
+            _assert(row.get("source_label") == "Local", f"List failure label drifted: {row}")
+        finally:
+            casm_app.VIOLATIONS_DIR = old_violations_dir
+            casm_app.db_manager = old_db_manager
+            casm_app._invalidate_dashboard_snapshot_cache()
+            if old_profile is None:
+                os.environ.pop("CASM_ROUTING_PROFILE", None)
+            else:
+                os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
@@ -1594,6 +1707,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
 def main():
     tests = [
         test_status_endpoint_uses_local_artifacts_during_db_backoff,
+        test_local_generation_failure_overrides_partial_cloud_handoff_status,
         test_cloud_status_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exist,
         test_cloud_profile_does_not_promote_backoff_to_local_pipeline,

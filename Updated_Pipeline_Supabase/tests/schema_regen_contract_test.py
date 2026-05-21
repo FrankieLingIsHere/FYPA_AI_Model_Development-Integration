@@ -6,7 +6,9 @@ This test is intentionally lightweight and offline:
 - It verifies required-field schema gating behavior in _call_gemini_api.
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Ensure project root is importable
@@ -231,6 +233,134 @@ def test_schema_incomplete_payload_skips_regen_for_downstream_completion():
     _assert(len(fake.calls) == 1, "Expected no schema-regeneration call for marked partial payload")
 
 
+def test_strict_gate_recovers_missing_corrective_actions_with_grounded_fallback():
+    old_env = {
+        key: os.environ.get(key)
+        for key in (
+            "CASM_ROUTING_PROFILE",
+            "STRICT_PROVIDER_MODE_SPLIT",
+            "STRICT_REPORT_GENERATION",
+            "STRICT_MODEL_REPORT_CELLS",
+            "ALLOW_NLP_FALLBACK",
+            "GEMINI_BUDGET_STATE_PATH",
+        )
+    }
+    try:
+        os.environ["CASM_ROUTING_PROFILE"] = "local"
+        os.environ["STRICT_PROVIDER_MODE_SPLIT"] = "true"
+        os.environ["STRICT_REPORT_GENERATION"] = "true"
+        os.environ["STRICT_MODEL_REPORT_CELLS"] = "true"
+        os.environ["ALLOW_NLP_FALLBACK"] = "false"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            os.environ["GEMINI_BUDGET_STATE_PATH"] = str(root / "gemini_budget_state.json")
+
+            subject = ReportGenerator({
+                "GEMINI_CONFIG": {"enabled": False},
+                "OLLAMA_CONFIG": {"model": "gemma3:4b", "use_local_model": False},
+                "MODEL_API_CONFIG": {"nlp_provider_order": ["ollama"]},
+                "RAG_CONFIG": {"enabled": False, "use_chroma": False},
+                "REPORT_CONFIG": {"format": "html", "enable_pdf_generation": False},
+                "REPORTS_DIR": root,
+                "VIOLATIONS_DIR": root,
+            })
+
+            def fake_ollama_response(*_args, **_kwargs):
+                return {
+                    "environment_type": "Indoor workspace",
+                    "visual_evidence": (
+                        "The frame shows one visible person in an indoor workspace. "
+                        "YOLO detection identified missing hardhat PPE deficiencies."
+                    ),
+                    "persons": [
+                        {
+                            "id": "Person 1",
+                            "description": "Person 1 is visible in the monitored work area.",
+                            "ppe": {"hardhat": "Missing"},
+                            "hazards_faced": [
+                                {
+                                    "type": "PPE non-compliance",
+                                    "source": "YOLO detected missing Hardhat",
+                                    "severity": "HIGH",
+                                }
+                            ],
+                            "risks": [
+                                {
+                                    "risk_category": "PPE",
+                                    "risk": "The person remains exposed to head-impact hazards while hardhat protection is missing.",
+                                    "likelihood": "HIGH",
+                                    "evidence": "YOLO detected NO-Hardhat for the visible person.",
+                                    "regulation_citation": "BOWEC 1986",
+                                    "mitigation_steps": ["Stop work until compliant head protection is worn."],
+                                }
+                            ],
+                        }
+                    ],
+                    "summary": "One visible person is missing required hardhat protection and needs immediate correction.",
+                    "severity_level": "HIGH",
+                    "dosh_regulations_cited": [
+                        {
+                            "regulation": "BOWEC 1986",
+                            "requirement": "Protective head equipment is required where workers face head-impact hazards.",
+                            "explanation": "The visible person is missing hardhat protection.",
+                            "penalty": "Corrective evidence and enforcement action may be required if unresolved.",
+                        }
+                    ],
+                }
+
+            captured = {}
+
+            def fake_html_report(report_data, nlp_analysis):
+                captured["nlp_analysis"] = nlp_analysis
+                html_path = Path(report_data["violation_dir"]) / "report.html"
+                html_path.write_text("<html>report complete</html>", encoding="utf-8")
+                return html_path
+
+            subject._call_ollama_api = fake_ollama_response
+            subject._generate_html_report = fake_html_report
+            subject._write_traceability_sidecar = lambda **_kwargs: None
+
+            report_dir = root / "strict_action_recovery_001"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_data = {
+                "report_id": "strict_action_recovery_001",
+                "timestamp": "2026-05-21T11:43:36+08:00",
+                "caption": (
+                    "One person is visible indoors. YOLO detection identified 1 person(s) "
+                    "with PPE deficiencies: Missing Hardhat."
+                ),
+                "detections": [
+                    {"class_name": "Person", "confidence": 0.91, "bbox": [0, 0, 10, 10]},
+                    {"class_name": "NO-Hardhat", "confidence": 0.88, "bbox": [1, 1, 8, 8]},
+                ],
+                "violation_summary": "PPE Violation Detected: Missing Hardhat",
+                "violation_types": ["Missing Hardhat"],
+                "person_count": 1,
+                "violation_count": 1,
+                "severity": "HIGH",
+                "force_local_nlp": True,
+                "allow_local_nlp_fallback": False,
+                "violation_dir": str(report_dir),
+                "original_image_path": str(report_dir / "original.jpg"),
+                "annotated_image_path": str(report_dir / "annotated.jpg"),
+            }
+
+            result = subject.generate_report(report_data)
+
+            actions = ((captured.get("nlp_analysis") or {}).get("persons") or [{}])[0].get("corrective_actions")
+            _assert(result.get("html") and result["html"].exists(), "Report HTML should be generated")
+            _assert(actions and len(actions) >= 1, f"Corrective actions were not recovered: {captured}")
+            _assert(subject.last_nlp_provider == "ollama", f"Expected model provider to remain Ollama: {subject.last_nlp_provider}")
+            _assert(not subject.last_nlp_fallback_reason, f"Recoverable action injection should not become NLP fallback: {subject.last_nlp_fallback_reason}")
+    finally:
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def main():
     tests = [
         test_schema_regen_success,
@@ -240,6 +370,7 @@ def main():
         test_semantic_regen_rejects_missing_detector_ppe_and_actions,
         test_semantic_regen_failure_returns_none_by_default,
         test_schema_incomplete_payload_skips_regen_for_downstream_completion,
+        test_strict_gate_recovers_missing_corrective_actions_with_grounded_fallback,
     ]
     failures = []
 

@@ -3324,6 +3324,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         and str(self.routing_profile or '').strip().lower() != 'local'
                     )
                 )
+                recoverable_model_cells = {'persons[].corrective_actions'}
+                if (
+                    missing_model_cells
+                    and provider_is_model
+                    and self.strict_report_generation
+                    and self.strict_model_report_cells
+                    and not allow_cell_fallback
+                    and set(missing_model_cells).issubset(recoverable_model_cells)
+                ):
+                    allow_cell_fallback = True
+                    logger.warning(
+                        "NLP output for report %s is missing only recoverable action cells; "
+                        "injecting grounded corrective actions instead of failing local report generation",
+                        report_id,
+                    )
                 if (
                     missing_model_cells
                     and provider_is_model

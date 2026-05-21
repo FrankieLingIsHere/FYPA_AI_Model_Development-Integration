@@ -7698,10 +7698,35 @@ def api_violations():
                 )
 
                 existing_status = str(existing.get('status') or '').strip().lower()
+                existing_device_key = str(existing.get('device_id') or '').strip().lower()
+                existing_local_device = (
+                    existing_device_key in ('local_cache', 'offline_local_cache', 'local_cache_sync')
+                    or existing_device_key.startswith('local_')
+                    or existing_device_key.startswith('offline_')
+                )
+                local_profile_terminal_override = bool(
+                    active_listing_profile == 'local'
+                    and existing_local_device
+                    and local_status in ('failed', 'skipped')
+                    and not local_row.get('has_report')
+                )
                 if local_status in ('completed', 'failed', 'skipped'):
                     existing['status'] = local_status
                 elif local_status in ('pending', 'queued', 'processing', 'generating') and existing_status in ('unknown', ''):
                     existing['status'] = local_status
+
+                local_terminal_without_report = bool(
+                    local_status in ('failed', 'skipped')
+                    and not local_row.get('has_report')
+                    and (
+                        existing_status not in ('completed', 'ready')
+                        or local_profile_terminal_override
+                    )
+                )
+                if local_terminal_without_report:
+                    existing['has_report'] = False
+                    existing['has_local_report'] = False
+                    existing['has_cloud_report_artifact'] = False
 
                 if local_row.get('error_message') and not existing.get('error_message'):
                     existing['error_message'] = local_row.get('error_message')
@@ -7725,15 +7750,13 @@ def api_violations():
                     existing['violation_count'] = local_count_int
 
                 existing_scope = str(existing.get('source_scope') or '').strip().lower()
-                existing_device_key = str(existing.get('device_id') or '').strip().lower()
-                existing_local_device = (
-                    existing_device_key in ('local_cache', 'offline_local_cache', 'local_cache_sync')
-                    or existing_device_key.startswith('local_')
-                    or existing_device_key.startswith('offline_')
-                )
 
                 local_row_scope = _normalize_source_scope(local_row.get('source_scope'))
-                if existing_scope == 'cloud':
+                if local_terminal_without_report and active_listing_profile == 'local':
+                    existing.update(_build_source_payload(local_row_scope or 'local', 'local_terminal_artifact_state'))
+                    if (local_row_scope or 'local') == 'local':
+                        existing['origin'] = existing.get('origin') or 'local'
+                elif existing_scope == 'cloud':
                     existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
                     existing.update(_build_source_payload(local_row_scope or 'local', 'local_cache_row'))
@@ -8970,7 +8993,31 @@ def api_report_status(report_id):
             status_info['has_report'] = bool(status_info.get('has_report')) or bool(local_payload.get('has_report'))
             status_info['has_original'] = bool(status_info.get('has_original')) or bool(local_payload.get('has_original'))
             status_info['has_annotated'] = bool(status_info.get('has_annotated')) or bool(local_payload.get('has_annotated'))
-            if local_status == 'completed' and local_payload.get('has_report'):
+            remote_status_before_local_merge = str(status_info.get('status') or '').strip().lower()
+            status_device_key = str(status_info.get('device_id') or '').strip().lower()
+            local_profile_terminal_override = bool(
+                _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE')) == 'local'
+                and _is_local_artifact_origin_device(status_device_key)
+                and local_status in ('failed', 'skipped')
+                and not local_payload.get('has_report')
+            )
+            if (
+                local_status in ('failed', 'skipped')
+                and not local_payload.get('has_report')
+                and (
+                    remote_status_before_local_merge not in ('completed', 'ready')
+                    or local_profile_terminal_override
+                )
+            ):
+                status_info['status'] = local_status
+                status_info['has_report'] = False
+                status_info['has_cloud_report_artifact'] = False
+                status_info['error_message'] = local_payload.get('error_message') or status_info.get('error_message')
+                status_info['message'] = local_payload.get('message')
+                if _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE')) == 'local':
+                    status_info['source_scope'] = 'local'
+                    status_info['source_label'] = 'Local'
+            elif local_status == 'completed' and local_payload.get('has_report'):
                 status_info['status'] = 'completed'
                 status_info['error_message'] = None
             elif (

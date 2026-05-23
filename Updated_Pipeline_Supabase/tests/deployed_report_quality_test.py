@@ -56,6 +56,54 @@ NON_WORK_CAPTION_MARKERS = (
     "text on a dark background",
     "no individuals",
     "no person",
+    "looking directly at the camera",
+    "white t-shirt",
+    "head and shoulders",
+    "chest up",
+    "seated at a table",
+    "decorative, ornate design",
+    "eyeglasses",
+)
+
+WORK_SCENE_CAPTION_MARKERS = (
+    "construction",
+    "worksite",
+    "work site",
+    "jobsite",
+    "job site",
+    "worker",
+    "workers",
+    "ppe",
+    "hardhat",
+    "helmet",
+    "safety vest",
+    "safety boots",
+    "boots",
+    "gloves",
+    "mask",
+    "scaffold",
+    "ladder",
+    "machinery",
+    "equipment",
+    "warehouse",
+    "factory",
+    "industrial",
+    "loading dock",
+    "floor work",
+)
+
+DEMO_INDOOR_CAPTION_MARKERS = (
+    "indoor setting",
+    "indoor office setting",
+    "indoor residential setting",
+    "indoor room setting",
+    "single person visible",
+    "one visible person",
+    "young man",
+    "wall adorned",
+    "neutral gaze",
+    "neutral posture",
+    "looking directly",
 )
 
 
@@ -197,7 +245,11 @@ def is_non_work_caption(caption: str) -> bool:
     lower_caption = str(caption or "").strip().lower()
     if not lower_caption:
         return False
-    return any(marker in lower_caption for marker in NON_WORK_CAPTION_MARKERS)
+    if any(marker in lower_caption for marker in NON_WORK_CAPTION_MARKERS):
+        return True
+    has_work_marker = any(marker in lower_caption for marker in WORK_SCENE_CAPTION_MARKERS)
+    has_demo_indoor_marker = any(marker in lower_caption for marker in DEMO_INDOOR_CAPTION_MARKERS)
+    return has_demo_indoor_marker and not has_work_marker
 
 
 def rank_quality_candidate(item: Dict) -> tuple:

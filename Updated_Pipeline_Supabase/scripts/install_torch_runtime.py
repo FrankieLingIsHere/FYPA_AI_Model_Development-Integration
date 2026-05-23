@@ -148,8 +148,8 @@ def _needs_install(target: str, state: Dict[str, object]) -> Tuple[bool, str]:
         return True, "NVIDIA GPU detected but installed Torch is CPU-only"
 
     if target == "cpu":
-        if has_cuda_build and os.getenv("CASM_TORCH_STRICT_CPU", "").strip().lower() in ("1", "true", "yes", "on"):
-            return True, "Strict CPU runtime requested but CUDA Torch is installed"
+        if has_cuda_build:
+            return True, "CPU runtime requested but CUDA Torch is installed"
         return False, "CPU runtime is acceptable"
 
     return False, "No runtime change needed"
@@ -160,7 +160,7 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Install the selected Torch runtime when needed")
     args = parser.parse_args()
 
-    mode = os.getenv("CASM_TORCH_INSTALL_MODE", os.getenv("PYTORCH_INSTALL_MODE", "auto"))
+    mode = os.getenv("CASM_TORCH_INSTALL_MODE", os.getenv("PYTORCH_INSTALL_MODE", "cpu"))
     target, has_gpu, hardware_label = _target_runtime(mode)
     state = _torch_state()
 

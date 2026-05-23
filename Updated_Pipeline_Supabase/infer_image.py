@@ -234,15 +234,6 @@ def get_yolo_runtime_diagnostics() -> Dict[str, Any]:
     selected_device, payload = _resolve_yolo_device()
     gpu_hint = _detect_nvidia_gpu_hint()
     torch_install_recommendation = None
-    if (
-        gpu_hint.get('detected')
-        and not payload.get('cuda_available')
-        and str(payload.get('torch_version') or '').lower().endswith('+cpu')
-    ):
-        torch_install_recommendation = (
-            'NVIDIA GPU detected but this Python environment has CPU-only Torch. '
-            'Run start.bat again, or run scripts/install_torch_runtime.py --apply.'
-        )
     with _cached_model_lock:
         payload.update({
             'selected_device': selected_device,

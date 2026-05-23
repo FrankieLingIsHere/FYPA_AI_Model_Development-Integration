@@ -149,17 +149,6 @@ if not exist "%VENV_PIP%" (
     exit /b 1
 )
 
-REM Keep dependencies synced with latest source updates.
-echo Synchronizing Python dependencies...
-"%VENV_PIP%" install --disable-pip-version-check -r requirements.txt
-if errorlevel 1 (
-    echo Failed to synchronize dependencies!
-    pause
-    exit /b 1
-)
-echo Dependencies synchronized.
-echo.
-
 echo Selecting PyTorch runtime for this workstation...
 "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
 if errorlevel 1 (
@@ -169,6 +158,18 @@ if errorlevel 1 (
 ) else (
     echo PyTorch runtime checked.
 )
+echo.
+
+REM Keep dependencies synced with latest source updates. Torch is selected first
+REM so GPU workstations do not install CPU Torch and then replace it.
+echo Synchronizing Python dependencies...
+"%VENV_PIP%" install --disable-pip-version-check -r requirements.txt
+if errorlevel 1 (
+    echo Failed to synchronize dependencies!
+    pause
+    exit /b 1
+)
+echo Dependencies synchronized.
 echo.
 
 echo.

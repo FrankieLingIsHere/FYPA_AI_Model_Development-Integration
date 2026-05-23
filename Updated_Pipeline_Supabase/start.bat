@@ -149,23 +149,19 @@ if not exist "%VENV_PIP%" (
     exit /b 1
 )
 
-if "%CASM_TORCH_INSTALL_MODE%"=="" set "CASM_TORCH_INSTALL_MODE=skip"
-echo Checking PyTorch runtime...
-echo Torch auto-install mode: %CASM_TORCH_INSTALL_MODE%
-echo Set CASM_TORCH_INSTALL_MODE=auto or cuda before running start.bat to install CUDA Torch.
+echo Selecting PyTorch runtime for this workstation...
 "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
 if errorlevel 1 (
-    echo Warning: PyTorch runtime check/install failed. Continuing with installed Torch runtime.
+    echo Warning: PyTorch runtime auto-selection failed. Continuing with installed Torch runtime.
     echo You can rerun manually:
-    echo   set CASM_TORCH_INSTALL_MODE=auto
     echo   "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
 ) else (
     echo PyTorch runtime checked.
 )
 echo.
 
-REM Keep dependencies synced with latest source updates. Torch CUDA installation is opt-in;
-REM local report generation mainly uses Ollama for GPU acceleration.
+REM Keep dependencies synced with latest source updates. Torch is selected first
+REM so GPU workstations do not install CPU Torch and then replace it.
 echo Synchronizing Python dependencies...
 "%VENV_PIP%" install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 (

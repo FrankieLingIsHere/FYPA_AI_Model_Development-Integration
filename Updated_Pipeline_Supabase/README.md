@@ -385,16 +385,6 @@ The cloud relay helper still supports deployed mode:
 scripts\START_EDGE_REALSENSE_RELAY.bat https://your-backend.up.railway.app
 ```
 
-### Local Torch / GPU Note
-
-Local report text generation is accelerated through Ollama when Ollama can use the workstation GPU.
-`start.bat` keeps the installed Torch runtime stable by default and does not force a CUDA Torch reinstall.
-To opt in for CUDA YOLO inference, run `start.bat` with `CASM_TORCH_INSTALL_MODE=auto` or run:
-
-```bat
-venv\Scripts\python.exe scripts\install_torch_runtime.py --mode auto --apply
-```
-
 ### Alternative: Report Viewer Only
 
 If you only want to view existing reports without live monitoring:

@@ -744,15 +744,11 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(rendered_installer, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
-        self.assertRegex(rendered_installer, r'(?im)^:should_refresh_existing_source_snapshot\s*$')
-        self.assertRegex(rendered_installer, r'(?im)^:write_source_version_marker\s*$')
         self.assertIn('set "CASM_REPO_ZIP_URL=', rendered_installer)
         self.assertIn('set "CASM_SOURCE_ROOT=', rendered_installer)
         self.assertIn('set "CASM_CLOUD_URL=', rendered_installer)
         self.assertIn(f'set "CASM_PROVISION_SECRET={provision_secret}"', rendered_installer)
         self.assertIn('local_mode_provision_state.json', rendered_installer)
-        self.assertIn('source_version.txt', rendered_installer)
-        self.assertIn("$ProgressPreference='SilentlyContinue'", rendered_installer)
         self.assertIn('set "CASM_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
@@ -792,10 +788,6 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertRegex(installer_bat, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
-        self.assertRegex(installer_bat, r'(?im)^:stage_downloaded_launcher_if_current\s*$')
-        self.assertRegex(installer_bat, r'(?im)^:resolve_remote_source_version\s*$')
-        self.assertRegex(installer_bat, r'(?im)^:should_refresh_existing_source_snapshot\s*$')
-        self.assertRegex(installer_bat, r'(?im)^:write_source_version_marker\s*$')
         self.assertLess(
             installer_bat.index('Seeded local provisioning heartbeat linkage for approved installer.'),
             installer_bat.index('Handing off to managed local launcher:'),

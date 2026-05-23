@@ -85,10 +85,7 @@ def print_torch_install_recommendation() -> None:
         return
 
     print("Checking workstation-aware Torch install recommendation...")
-    result = subprocess.run(
-        [sys.executable, script_path, "--mode", "auto"],
-        cwd=os.path.dirname(os.path.dirname(script_path)),
-    )
+    result = subprocess.run([sys.executable, script_path], cwd=os.path.dirname(os.path.dirname(script_path)))
     if result.returncode != 0:
         print("WARN: Torch install recommendation check failed")
 

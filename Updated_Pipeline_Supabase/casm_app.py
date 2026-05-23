@@ -61,7 +61,13 @@ LOCAL_ENV_PATH = APP_DIR / '.env'
 LOCAL_ENV_EXAMPLE_PATH = APP_DIR / '.env.example'
 
 # Import project modules
-from infer_image import predict_image, resolve_model_path, warmup_model, is_model_ready
+from infer_image import (
+    predict_image,
+    resolve_model_path,
+    warmup_model,
+    is_model_ready,
+    get_yolo_runtime_diagnostics,
+)
 from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
 
 # Global progress tracking for report generation
@@ -10574,6 +10580,15 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     except Exception as e:
         probe_error = str(e)
 
+    try:
+        yolo_runtime = get_yolo_runtime_diagnostics()
+    except Exception as yolo_diag_err:
+        yolo_runtime = {
+            'requested_device': os.getenv('YOLO_DEVICE') or os.getenv('LOCAL_YOLO_DEVICE') or 'auto',
+            'selected_device': 'cpu',
+            'last_error': str(yolo_diag_err),
+        }
+
     return {
         'ollama_base_url': ollama_base_url,
         'ollama_model': ollama_model,
@@ -10588,6 +10603,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
         'install_url': install_guidance.get('install_url'),
         'install_commands': install_guidance.get('install_commands', []),
         'post_install_steps': install_guidance.get('post_install_steps', []),
+        'yolo_runtime': yolo_runtime,
         'error': probe_error,
     }
 
@@ -13331,9 +13347,23 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Unable to fetch vision runtime diagnostics: {e}")
 
+    yolo_runtime = {
+        'requested_device': os.getenv('YOLO_DEVICE') or os.getenv('LOCAL_YOLO_DEVICE') or 'auto',
+        'selected_device': 'cpu',
+        'cuda_available': False,
+        'model_loaded': False,
+        'last_error': None,
+    }
+    try:
+        yolo_runtime = get_yolo_runtime_diagnostics() or yolo_runtime
+    except Exception as e:
+        yolo_runtime['last_error'] = str(e)
+        logger.warning(f"Unable to fetch YOLO runtime diagnostics: {e}")
+
     return {
         'nlp': nlp_runtime,
         'vision': vision_runtime,
+        'yolo': yolo_runtime,
     }
 
 

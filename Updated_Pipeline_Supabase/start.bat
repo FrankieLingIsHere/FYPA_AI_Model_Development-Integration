@@ -160,6 +160,17 @@ if errorlevel 1 (
 echo Dependencies synchronized.
 echo.
 
+echo Selecting PyTorch runtime for this workstation...
+"%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
+if errorlevel 1 (
+    echo Warning: PyTorch runtime auto-selection failed. Continuing with installed Torch runtime.
+    echo You can rerun manually:
+    echo   "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
+) else (
+    echo PyTorch runtime checked.
+)
+echo.
+
 echo.
 echo ==========================================
 echo Checking Ollama Installation...

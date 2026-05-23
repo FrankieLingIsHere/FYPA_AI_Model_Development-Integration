@@ -17,6 +17,39 @@ const HomePage = {
         safetyShoes: '#E69F00'
     },
 
+    sanitizeInstallerDownloadError(rawText, fallback = 'Installer download failed') {
+        let text = String(rawText || '').trim();
+        if (!text) return fallback;
+
+        if (/<(?:!doctype|html|head|body|style|script)\b/i.test(text) && typeof DOMParser !== 'undefined') {
+            try {
+                const doc = new DOMParser().parseFromString(text, 'text/html');
+                const title = String((doc.querySelector('title') || {}).textContent || '').trim();
+                const heading = String((doc.querySelector('h1,h2') || {}).textContent || '').trim();
+                const body = String((doc.body || {}).textContent || '').trim();
+                text = [title, heading, body].filter(Boolean).join(' - ') || text;
+            } catch (_) { }
+        }
+
+        text = text
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#39;/gi, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text || /^(?:body|html)\s*\{|font-family|background-color/i.test(text)) {
+            return fallback;
+        }
+        return text.slice(0, 240);
+    },
+
     render() {
         return `
         <div class="home-dashboard">
@@ -306,7 +339,53 @@ const HomePage = {
                         provision_secret: provisionSecret,
                         _ts: String(Date.now())
                     });
-                    window.location.assign(`${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${params.toString()}`);
+                    try {
+                        const downloadUrl = `${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${params.toString()}`;
+                        const resp = await fetch(downloadUrl, {
+                            method: 'GET',
+                            cache: 'no-store',
+                            redirect: 'follow'
+                        });
+                        if (!resp.ok) {
+                            let message = `Installer download failed (${resp.status})`;
+                            try {
+                                const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
+                                if (contentType.includes('application/json')) {
+                                    const payload = await resp.json();
+                                    message = this.sanitizeInstallerDownloadError(payload.error || payload.message || message, message);
+                                } else {
+                                    const text = await resp.text();
+                                    message = this.sanitizeInstallerDownloadError(text, message);
+                                }
+                            } catch (_) { }
+                            throw new Error(message);
+                        }
+                        const blob = await resp.blob();
+                        if (!blob || blob.size === 0) {
+                            throw new Error('Installer download returned an empty file.');
+                        }
+                        const objectUrl = URL.createObjectURL(blob);
+                        const anchor = document.createElement('a');
+                        anchor.href = objectUrl;
+                        anchor.download = 'CASM_LocalInstaller.bat';
+                        anchor.style.display = 'none';
+                        document.body.appendChild(anchor);
+                        anchor.click();
+                        window.setTimeout(() => {
+                            URL.revokeObjectURL(objectUrl);
+                            anchor.remove();
+                        }, 1000);
+                        if (typeof NotificationManager !== 'undefined') {
+                            NotificationManager.success('Installer download started.');
+                        }
+                    } catch (downloadErr) {
+                        const message = (downloadErr && downloadErr.message) || 'Installer download failed. Run Local Mode Checkup and try again.';
+                        if (typeof NotificationManager !== 'undefined') {
+                            NotificationManager.warning(message);
+                        } else {
+                            alert(message);
+                        }
+                    }
                     return;
                 }
 

@@ -57,6 +57,39 @@ def install_requirements() -> bool:
     return result.returncode == 0
 
 
+def print_torch_runtime() -> None:
+    try:
+        import torch
+
+        cuda_available = bool(torch.cuda.is_available())
+        device_count = int(torch.cuda.device_count()) if cuda_available else 0
+        device_name = torch.cuda.get_device_name(0) if device_count > 0 else "none"
+        selected = "cuda:0" if cuda_available and device_count > 0 else "cpu"
+        print(
+            "OK: Torch runtime "
+            f"version={getattr(torch, '__version__', '?')} "
+            f"cuda_available={cuda_available} "
+            f"cuda_devices={device_count} "
+            f"first_device={device_name} "
+            f"yolo_auto_device={selected}"
+        )
+    except Exception as exc:
+        print(f"WARN: Could not inspect Torch runtime: {exc}")
+
+
+def print_torch_install_recommendation() -> None:
+    script_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "scripts", "install_torch_runtime.py")
+    )
+    if not os.path.exists(script_path):
+        return
+
+    print("Checking workstation-aware Torch install recommendation...")
+    result = subprocess.run([sys.executable, script_path], cwd=os.path.dirname(os.path.dirname(script_path)))
+    if result.returncode != 0:
+        print("WARN: Torch install recommendation check failed")
+
+
 def run_webcam_smoke_test(camera_index: int) -> int:
     script_path = os.path.join(os.path.dirname(__file__), "webcam_smoke_test.py")
     cmd = [
@@ -108,6 +141,9 @@ def main() -> int:
             print(f"OK: optional package available: {package_name}")
         except Exception:
             print(f"WARN: optional package missing: {package_name}. {warning}")
+
+    print_torch_runtime()
+    print_torch_install_recommendation()
 
     if args.check_webcam:
         webcam_exit = run_webcam_smoke_test(args.camera_index)

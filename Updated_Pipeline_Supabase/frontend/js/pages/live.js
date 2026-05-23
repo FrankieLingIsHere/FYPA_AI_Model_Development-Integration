@@ -540,6 +540,18 @@ const LivePage = {
             return `Webcam ${selectedCameraIndex}`;
         };
 
+        const hasCapabilityPayload = (caps) => {
+            return !!(caps && Object.prototype.hasOwnProperty.call(caps, 'sdk_available'));
+        };
+
+        const canAttemptRealsenseUsb = () => {
+            return realsenseAvailable || hasCapabilityPayload(realsenseCapabilities);
+        };
+
+        const canAttemptEdgeRealsense = () => {
+            return edgeRealsenseAvailable || hasCapabilityPayload(edgeRealsenseCapabilities);
+        };
+
         const shouldUseBrowserCaptureSource = () => {
             return !!(browserCameraSupported && useBrowserCaptureRuntime);
         };
@@ -683,10 +695,10 @@ const LivePage = {
 
         const getAvailableSources = () => {
             const sources = ['webcam'];
-            if (realsenseAvailable) {
+            if (canAttemptRealsenseUsb()) {
                 sources.push('realsense');
             }
-            if (edgeRealsenseAvailable) {
+            if (canAttemptEdgeRealsense()) {
                 sources.push('edge_realsense');
             }
             if (phoneCameraSupported) {
@@ -1237,8 +1249,8 @@ const LivePage = {
                 sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
                 const modeLabels = ['Webcam (Near-edge)'];
-                if (realsenseAvailable) modeLabels.push('RealSense USB');
-                if (edgeRealsenseAvailable) modeLabels.push('RealSense Edge Relay');
+                if (canAttemptRealsenseUsb()) modeLabels.push(realsenseAvailable ? 'RealSense USB' : 'RealSense USB (try)');
+                if (canAttemptEdgeRealsense()) modeLabels.push(edgeRealsenseAvailable ? 'RealSense Edge Relay' : 'RealSense Edge Relay (try)');
                 if (phoneCameraSupported) modeLabels.push('Phone Camera');
                 sourceToggleBtn.title = `Click to switch ${modeLabels.join(' / ')}`;
                 sourceToggleBtn.style.opacity = '1';

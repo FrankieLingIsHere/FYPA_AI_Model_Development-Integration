@@ -28,8 +28,12 @@ from typing import Tuple, List, Union
 import cv2
 import numpy as np
 import os
+import platform
+import shutil
+import subprocess
 from pathlib import Path
 from threading import Lock, Semaphore
+from typing import Any, Dict
 
 # Default model path used in the project
 DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt')
@@ -37,15 +41,222 @@ DEFAULT_MODEL_PATH = os.path.join('Results', 'ppe_yolov86', 'weights', 'best.pt'
 # Cache the model to avoid reloading
 _cached_model = None
 _cached_model_path = None
+_cached_model_device = None
 _cached_yolo_class = None
 _cached_model_lock = Lock()
 _cached_model_warm_paths = set()
+_forced_cpu_reason = ''
+_nvidia_gpu_hint_cache = None
+_last_yolo_runtime: Dict[str, Any] = {
+    'requested_device': 'auto',
+    'selected_device': 'cpu',
+    'selection_reason': 'not resolved yet',
+    'torch_version': None,
+    'cuda_available': False,
+    'cuda_device_count': 0,
+    'cuda_device_name': None,
+    'model_loaded': False,
+    'model_path': None,
+    'last_error': None,
+}
 try:
     _YOLO_PREDICT_MAX_CONCURRENCY = int(os.getenv('YOLO_PREDICT_MAX_CONCURRENCY', '1') or '1')
 except (TypeError, ValueError):
     _YOLO_PREDICT_MAX_CONCURRENCY = 1
 _YOLO_PREDICT_MAX_CONCURRENCY = max(1, min(_YOLO_PREDICT_MAX_CONCURRENCY, 4))
 _yolo_predict_semaphore = Semaphore(_YOLO_PREDICT_MAX_CONCURRENCY)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _torch_runtime_info() -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        'torch_version': None,
+        'cuda_available': False,
+        'cuda_device_count': 0,
+        'cuda_device_name': None,
+        'error': None,
+    }
+    try:
+        import torch
+
+        info['torch_version'] = getattr(torch, '__version__', None)
+        cuda_available = bool(torch.cuda.is_available())
+        info['cuda_available'] = cuda_available
+        if cuda_available:
+            device_count = int(torch.cuda.device_count())
+            info['cuda_device_count'] = device_count
+            if device_count > 0:
+                info['cuda_device_name'] = torch.cuda.get_device_name(0)
+    except Exception as exc:
+        info['error'] = str(exc)
+    return info
+
+
+def _detect_nvidia_gpu_hint() -> Dict[str, Any]:
+    global _nvidia_gpu_hint_cache
+    if _nvidia_gpu_hint_cache is not None:
+        return dict(_nvidia_gpu_hint_cache)
+
+    payload = {'detected': False, 'name': None, 'method': None}
+
+    nvidia_smi = shutil.which('nvidia-smi')
+    if nvidia_smi:
+        try:
+            completed = subprocess.run(
+                [nvidia_smi, '-L'],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            output = (completed.stdout or '').strip()
+            if completed.returncode == 0 and output:
+                payload = {'detected': True, 'name': output.splitlines()[0][:180], 'method': 'nvidia-smi'}
+                _nvidia_gpu_hint_cache = payload
+                return dict(payload)
+        except Exception:
+            pass
+
+    if platform.system().lower() == 'windows':
+        ps = shutil.which('powershell') or shutil.which('pwsh')
+        if ps:
+            try:
+                completed = subprocess.run(
+                    [
+                        ps,
+                        '-NoProfile',
+                        '-ExecutionPolicy',
+                        'Bypass',
+                        '-Command',
+                        (
+                            "Get-CimInstance Win32_VideoController | "
+                            "Where-Object { $_.Name -match 'NVIDIA' } | "
+                            "Select-Object -First 1 -ExpandProperty Name"
+                        ),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                name = (completed.stdout or '').strip()
+                if completed.returncode == 0 and name:
+                    payload = {'detected': True, 'name': name.splitlines()[0][:180], 'method': 'win32_video_controller'}
+            except Exception:
+                pass
+
+    _nvidia_gpu_hint_cache = payload
+    return dict(payload)
+
+
+def _resolve_yolo_device() -> Tuple[str, Dict[str, Any]]:
+    """Choose a safe YOLO runtime device without requiring CUDA on every host."""
+    global _last_yolo_runtime
+
+    requested = str(os.getenv('YOLO_DEVICE') or os.getenv('LOCAL_YOLO_DEVICE') or 'auto').strip().lower()
+    requested = requested or 'auto'
+    torch_info = _torch_runtime_info()
+
+    selected = 'cpu'
+    reason = ''
+
+    if _forced_cpu_reason:
+        selected = 'cpu'
+        reason = f'forced CPU fallback after device error: {_forced_cpu_reason}'
+    elif requested in ('cpu', 'none', 'off'):
+        selected = 'cpu'
+        reason = 'CPU explicitly requested'
+    elif requested in ('auto', 'gpu', 'cuda', 'cuda:0'):
+        if torch_info.get('cuda_available') and int(torch_info.get('cuda_device_count') or 0) > 0:
+            selected = 'cuda:0'
+            reason = 'CUDA-capable Torch detected'
+        else:
+            selected = 'cpu'
+            reason = 'CUDA unavailable in current Torch runtime'
+    elif requested.isdigit():
+        if torch_info.get('cuda_available') and int(requested) < int(torch_info.get('cuda_device_count') or 0):
+            selected = f'cuda:{int(requested)}'
+            reason = f'CUDA device {requested} requested'
+        else:
+            selected = 'cpu'
+            reason = f'CUDA device {requested} requested but unavailable'
+    elif requested.startswith('cuda:'):
+        try:
+            requested_idx = int(requested.split(':', 1)[1])
+        except Exception:
+            requested_idx = 0
+        if torch_info.get('cuda_available') and requested_idx < int(torch_info.get('cuda_device_count') or 0):
+            selected = f'cuda:{requested_idx}'
+            reason = f'CUDA device {requested_idx} requested'
+        else:
+            selected = 'cpu'
+            reason = f'{requested} requested but unavailable'
+    else:
+        selected = 'cpu'
+        reason = f"Unsupported YOLO_DEVICE={requested!r}; using CPU"
+
+    _last_yolo_runtime = {
+        **_last_yolo_runtime,
+        'requested_device': requested,
+        'selected_device': selected,
+        'selection_reason': reason,
+        'torch_version': torch_info.get('torch_version'),
+        'cuda_available': bool(torch_info.get('cuda_available')),
+        'cuda_device_count': int(torch_info.get('cuda_device_count') or 0),
+        'cuda_device_name': torch_info.get('cuda_device_name'),
+        'torch_error': torch_info.get('error'),
+    }
+    return selected, dict(_last_yolo_runtime)
+
+
+def _mark_yolo_device_error(device: str, exc: Exception) -> None:
+    """Latch CPU fallback after a CUDA/device failure so report generation continues."""
+    global _forced_cpu_reason, _last_yolo_runtime
+
+    message = str(exc)
+    _forced_cpu_reason = f'{device}: {message[:240]}'
+    _last_yolo_runtime = {
+        **_last_yolo_runtime,
+        'selected_device': 'cpu',
+        'selection_reason': f'forced CPU fallback after device error: {_forced_cpu_reason}',
+        'last_error': message,
+    }
+
+
+def get_yolo_runtime_diagnostics() -> Dict[str, Any]:
+    """Return current YOLO device/runtime details for local-mode diagnostics."""
+    selected_device, payload = _resolve_yolo_device()
+    gpu_hint = _detect_nvidia_gpu_hint()
+    torch_install_recommendation = None
+    if (
+        gpu_hint.get('detected')
+        and not payload.get('cuda_available')
+        and str(payload.get('torch_version') or '').lower().endswith('+cpu')
+    ):
+        torch_install_recommendation = (
+            'NVIDIA GPU detected but this Python environment has CPU-only Torch. '
+            'Run start.bat again, or run scripts/install_torch_runtime.py --apply.'
+        )
+    with _cached_model_lock:
+        payload.update({
+            'selected_device': selected_device,
+            'model_loaded': _cached_model is not None,
+            'model_path': _cached_model_path,
+            'model_device': _cached_model_device,
+            'nvidia_gpu_detected': bool(gpu_hint.get('detected')),
+            'nvidia_gpu_name': gpu_hint.get('name'),
+            'nvidia_gpu_detection_method': gpu_hint.get('method'),
+            'torch_install_recommendation': torch_install_recommendation,
+            'cpu_fallback_latched': bool(_forced_cpu_reason),
+            'cpu_fallback_reason': _forced_cpu_reason or None,
+        })
+    return payload
 
 
 def _get_yolo_class():
@@ -66,16 +277,33 @@ def _get_yolo_class():
     return _cached_yolo_class
 
 
-def _ensure_model_loaded(resolved_model_path: str):
+def _ensure_model_loaded(resolved_model_path: str, device: str = None):
     """Load and cache the YOLO model once per resolved weights path."""
-    global _cached_model, _cached_model_path
+    global _cached_model, _cached_model_path, _cached_model_device, _last_yolo_runtime
+
+    selected_device = device or _resolve_yolo_device()[0]
 
     with _cached_model_lock:
-        if _cached_model is None or _cached_model_path != resolved_model_path:
+        if (
+            _cached_model is None
+            or _cached_model_path != resolved_model_path
+            or _cached_model_device != selected_device
+        ):
             yolo_class = _get_yolo_class()
-            _cached_model = yolo_class(resolved_model_path)
+            model = yolo_class(resolved_model_path)
+            if selected_device and selected_device != 'cpu' and hasattr(model, 'to'):
+                model.to(selected_device)
+            _cached_model = model
             _cached_model_path = resolved_model_path
-            _cached_model_warm_paths.discard(resolved_model_path)
+            _cached_model_device = selected_device
+            _cached_model_warm_paths.discard((resolved_model_path, selected_device))
+            _last_yolo_runtime = {
+                **_last_yolo_runtime,
+                'model_loaded': True,
+                'model_path': resolved_model_path,
+                'model_device': selected_device,
+                'last_error': None,
+            }
 
         return _cached_model
 
@@ -147,13 +375,14 @@ def _read_image(input_image: Union[str, bytes, np.ndarray]):
 
 def is_model_ready(model_path: str = None) -> bool:
     """Return whether the requested YOLO weights are already loaded in memory."""
-    global _cached_model, _cached_model_path
+    global _cached_model, _cached_model_path, _cached_model_device
 
     if _cached_model is None or _cached_model_path is None:
         return False
 
     resolved_model_path = resolve_model_path(model_path)
-    return str(_cached_model_path) == str(resolved_model_path)
+    selected_device, _ = _resolve_yolo_device()
+    return str(_cached_model_path) == str(resolved_model_path) and _cached_model_device == selected_device
 
 
 def warmup_model(
@@ -163,17 +392,36 @@ def warmup_model(
 ) -> str:
     """Load the YOLO weights and run a tiny dummy inference once."""
     resolved_model_path = resolve_model_path(model_path)
+    selected_device, _ = _resolve_yolo_device()
 
     with _cached_model_lock:
-        if resolved_model_path in _cached_model_warm_paths:
+        if (resolved_model_path, selected_device) in _cached_model_warm_paths:
             return resolved_model_path
 
-    model = _ensure_model_loaded(resolved_model_path)
+    try:
+        model = _ensure_model_loaded(resolved_model_path, selected_device)
+    except Exception as exc:
+        if selected_device != 'cpu' and _env_flag('YOLO_ALLOW_CPU_FALLBACK', True):
+            _mark_yolo_device_error(selected_device, exc)
+            selected_device = 'cpu'
+            model = _ensure_model_loaded(resolved_model_path, selected_device)
+        else:
+            raise
+
     dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
-    model.predict(dummy, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
+    try:
+        model.predict(dummy, imgsz=imgsz, conf=conf, iou=0.45, half=False, device=selected_device, verbose=False)
+    except Exception as exc:
+        if selected_device != 'cpu' and _env_flag('YOLO_ALLOW_CPU_FALLBACK', True):
+            _mark_yolo_device_error(selected_device, exc)
+            selected_device = 'cpu'
+            model = _ensure_model_loaded(resolved_model_path, selected_device)
+            model.predict(dummy, imgsz=imgsz, conf=conf, iou=0.45, half=False, device=selected_device, verbose=False)
+        else:
+            raise
 
     with _cached_model_lock:
-        _cached_model_warm_paths.add(resolved_model_path)
+        _cached_model_warm_paths.add((resolved_model_path, selected_device))
 
     return resolved_model_path
 
@@ -196,7 +444,16 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
     img = _read_image(input_image)
 
     resolved_model_path = resolve_model_path(model_path)
-    model = _ensure_model_loaded(resolved_model_path)
+    selected_device, _ = _resolve_yolo_device()
+    try:
+        model = _ensure_model_loaded(resolved_model_path, selected_device)
+    except Exception as exc:
+        if selected_device != 'cpu' and _env_flag('YOLO_ALLOW_CPU_FALLBACK', True):
+            _mark_yolo_device_error(selected_device, exc)
+            selected_device = 'cpu'
+            model = _ensure_model_loaded(resolved_model_path, selected_device)
+        else:
+            raise
 
     # Ensure image is in uint8 format (not float)
     if img.dtype != np.uint8:
@@ -207,7 +464,32 @@ def predict_image(input_image: Union[str, bytes, np.ndarray],
     # Can be overridden by caller if needed, but 0.25 is recommended for PPE detection
     _yolo_predict_semaphore.acquire()
     try:
-        results = model.predict(img, imgsz=imgsz, conf=conf, iou=0.45, half=False, verbose=False)
+        try:
+            results = model.predict(
+                img,
+                imgsz=imgsz,
+                conf=conf,
+                iou=0.45,
+                half=False,
+                device=selected_device,
+                verbose=False,
+            )
+        except Exception as exc:
+            if selected_device != 'cpu' and _env_flag('YOLO_ALLOW_CPU_FALLBACK', True):
+                _mark_yolo_device_error(selected_device, exc)
+                selected_device = 'cpu'
+                model = _ensure_model_loaded(resolved_model_path, selected_device)
+                results = model.predict(
+                    img,
+                    imgsz=imgsz,
+                    conf=conf,
+                    iou=0.45,
+                    half=False,
+                    device=selected_device,
+                    verbose=False,
+                )
+            else:
+                raise
     finally:
         _yolo_predict_semaphore.release()
     detections = []

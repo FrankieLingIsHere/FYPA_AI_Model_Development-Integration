@@ -2405,6 +2405,122 @@ const GlobalSettingsModal = {
         }
     },
 
+    sanitizeInstallerDownloadError(rawText, fallback = 'Installer download failed') {
+        let text = String(rawText || '').trim();
+        if (!text) return fallback;
+
+        if (/<(?:!doctype|html|head|body|style|script)\b/i.test(text) && typeof DOMParser !== 'undefined') {
+            try {
+                const doc = new DOMParser().parseFromString(text, 'text/html');
+                const title = String((doc.querySelector('title') || {}).textContent || '').trim();
+                const heading = String((doc.querySelector('h1,h2') || {}).textContent || '').trim();
+                const body = String((doc.body || {}).textContent || '').trim();
+                text = [title, heading, body].filter(Boolean).join(' - ') || text;
+            } catch (error) { }
+        }
+
+        text = text
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#39;/gi, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text || /^(?:body|html)\s*\{|font-family|background-color/i.test(text)) {
+            return fallback;
+        }
+        return text.slice(0, 240);
+    },
+
+    async getDownloadErrorMessage(response) {
+        const fallback = `Installer download failed (${response.status})`;
+        try {
+            const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+            if (contentType.includes('application/json')) {
+                const payload = await response.json();
+                return this.sanitizeInstallerDownloadError(payload.error || payload.message || fallback, fallback);
+            }
+            const text = await response.text();
+            return this.sanitizeInstallerDownloadError(text, fallback);
+        } catch (error) {
+            return fallback;
+        }
+    },
+
+    resolveDownloadFilename(response, fallbackName = 'CASM_LocalInstaller.bat') {
+        try {
+            const disposition = String(response.headers.get('content-disposition') || '');
+            const match = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+            if (match && match[1]) {
+                return decodeURIComponent(match[1].replace(/"/g, '').trim()) || fallbackName;
+            }
+        } catch (error) { }
+        return fallbackName;
+    },
+
+    async downloadInstallerFromUrl(url, contextLabel = 'installer') {
+        const targetUrl = String(url || '').trim();
+        if (!targetUrl) {
+            this.showNotification('Installer download URL is unavailable.', 'error');
+            return false;
+        }
+
+        try {
+            this.setProviderStatus(`Requesting ${contextLabel}...`, 'info');
+            const response = await fetch(targetUrl, {
+                method: 'GET',
+                cache: 'no-store',
+                redirect: 'follow'
+            });
+
+            if (!response.ok) {
+                const message = await this.getDownloadErrorMessage(response);
+                this.setProviderStatus(message, 'error');
+                this.showNotification(message, 'warning');
+                return false;
+            }
+
+            const blob = await response.blob();
+            if (!blob || blob.size === 0) {
+                const message = 'Installer download returned an empty file. Try Local Mode Checkup again.';
+                this.setProviderStatus(message, 'error');
+                this.showNotification(message, 'warning');
+                return false;
+            }
+
+            const filename = this.resolveDownloadFilename(response);
+            const objectUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = filename;
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            window.setTimeout(() => {
+                URL.revokeObjectURL(objectUrl);
+                anchor.remove();
+            }, 1000);
+
+            this.setProviderStatus('Installer download started.', 'success');
+            this.showNotification('Installer download started.', 'success');
+            return true;
+        } catch (error) {
+            const message = (
+                'Installer download could not start. Keep using the main dashboard and rerun Local Mode Checkup. '
+                + `Error: ${(error && error.message) || error}`
+            );
+            this.setProviderStatus(message, 'error');
+            this.showNotification(message, 'warning');
+            return false;
+        }
+    },
+
     async redownloadInstaller() {
         const storedBefore = this.loadRemoteProvisionState() || {};
         if (
@@ -2481,7 +2597,7 @@ const GlobalSettingsModal = {
             }
         }
 
-        const tryDirectCloudDownload = () => {
+        const tryDirectCloudDownload = async () => {
             const stored = this.loadRemoteProvisionState() || {};
             const machineIdStored = String(stored.machineId || this.localProvisionState.machineId || machineId || '').trim();
             const provisionSecretStored = String(stored.provisionSecret || '').trim();
@@ -2506,8 +2622,10 @@ const GlobalSettingsModal = {
                 provision_secret: provisionSecretStored,
                 _ts: String(Date.now())
             });
-            window.location.assign(`${cloudBase}/api/bootstrap/installer/request?${params.toString()}`);
-            return true;
+            return await this.downloadInstallerFromUrl(
+                `${cloudBase}/api/bootstrap/installer/request?${params.toString()}`,
+                'installer from cloud'
+            );
         };
 
         if (!isRemoteBackend) {
@@ -2520,7 +2638,7 @@ const GlobalSettingsModal = {
                     signal: probeController.signal
                 }).finally(() => clearTimeout(probeTimer));
                 if (probeResp && (probeResp.status < 500 || probeResp.status === 503)) {
-                    window.location.assign(proxyUrl);
+                    await this.downloadInstallerFromUrl(proxyUrl, 'installer via local backend');
                     return;
                 }
             } catch (probeErr) {
@@ -2528,7 +2646,7 @@ const GlobalSettingsModal = {
             }
         }
 
-        if (tryDirectCloudDownload()) {
+        if (await tryDirectCloudDownload()) {
             return;
         }
 
@@ -2554,7 +2672,10 @@ const GlobalSettingsModal = {
             }
 
             if (localBackendUp) {
-                window.location.assign(`${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`);
+                await this.downloadInstallerFromUrl(
+                    `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`,
+                    'installer via local backend'
+                );
                 return;
             }
 

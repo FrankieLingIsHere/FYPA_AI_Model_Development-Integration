@@ -1,15 +1,13 @@
 """
 Select and install the local PyTorch runtime for this workstation.
 
-The cloud/Docker path stays CPU-only. This helper is called by start.bat for
-local Windows/demo machines, where an NVIDIA GPU may be available.
+The cloud/Docker path stays CPU-only. Local Windows/demo startup also enforces
+CPU Torch; Ollama owns GPU acceleration for local report generation.
 """
 
 import argparse
 import os
-import platform
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +16,6 @@ from typing import Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS_PATH = ROOT / "requirements.txt"
-DEFAULT_CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 DEFAULT_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 
 
@@ -59,36 +56,6 @@ def _read_pinned_packages() -> List[str]:
     return packages or ["torch", "torchvision"]
 
 
-def _detect_nvidia_gpu() -> Tuple[bool, str]:
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi:
-        code, output = _run([nvidia_smi, "-L"], timeout=5)
-        if code == 0 and "gpu" in output.lower():
-            return True, output.strip().splitlines()[0][:180]
-
-    if platform.system().lower() == "windows":
-        ps = shutil.which("powershell") or shutil.which("pwsh")
-        if ps:
-            command = (
-                "Get-CimInstance Win32_VideoController | "
-                "Where-Object { $_.Name -match 'NVIDIA' } | "
-                "Select-Object -First 1 -ExpandProperty Name"
-            )
-            code, output = _run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], timeout=8)
-            name = output.strip()
-            if code == 0 and name:
-                return True, name.splitlines()[0][:180]
-
-    lspci = shutil.which("lspci")
-    if lspci:
-        code, output = _run([lspci], timeout=5)
-        for line in output.splitlines():
-            if "nvidia" in line.lower():
-                return True, line.strip()[:180]
-
-    return False, ""
-
-
 def _torch_state() -> Dict[str, object]:
     state: Dict[str, object] = {
         "installed": False,
@@ -123,14 +90,10 @@ def _target_runtime(mode: str) -> Tuple[str, bool, str]:
         return "skip", False, "Torch runtime install disabled"
     if normalized in ("cpu", "cpu-only"):
         return "cpu", False, "CPU runtime requested"
-    if normalized in ("cuda", "gpu", "nvidia"):
-        has_gpu, label = _detect_nvidia_gpu()
-        return "cuda", has_gpu, label or "CUDA runtime requested"
+    if normalized in ("auto", "cuda", "gpu", "nvidia"):
+        return "cpu", False, "CUDA Torch install is disabled; using CPU runtime"
 
-    has_gpu, label = _detect_nvidia_gpu()
-    if has_gpu:
-        return "cuda", True, label
-    return "cpu", False, "No NVIDIA GPU detected"
+    return "cpu", False, f"Unsupported Torch mode {normalized!r}; using CPU runtime"
 
 
 def _needs_install(target: str, state: Dict[str, object]) -> Tuple[bool, str]:
@@ -139,13 +102,6 @@ def _needs_install(target: str, state: Dict[str, object]) -> Tuple[bool, str]:
 
     has_cuda_build = bool(state.get("torch_cuda_version"))
     cuda_available = bool(state.get("cuda_available"))
-
-    if target == "cuda":
-        if has_cuda_build and cuda_available:
-            return False, "CUDA Torch is installed and usable"
-        if has_cuda_build and not cuda_available:
-            return False, "CUDA Torch is installed but the driver/GPU is not currently usable"
-        return True, "NVIDIA GPU detected but installed Torch is CPU-only"
 
     if target == "cpu":
         if has_cuda_build:
@@ -161,13 +117,13 @@ def main() -> int:
     args = parser.parse_args()
 
     mode = os.getenv("CASM_TORCH_INSTALL_MODE", os.getenv("PYTORCH_INSTALL_MODE", "cpu"))
-    target, has_gpu, hardware_label = _target_runtime(mode)
+    target, _has_gpu, hardware_label = _target_runtime(mode)
     state = _torch_state()
 
     print("Torch runtime selector")
     print(f"  mode            : {mode}")
     print(f"  target          : {target}")
-    print(f"  nvidia_gpu      : {has_gpu}")
+    print("  cuda_install    : disabled")
     if hardware_label:
         print(f"  hardware        : {hardware_label}")
     print(f"  installed_torch : {state.get('torch_version') or 'missing'}")
@@ -186,11 +142,7 @@ def main() -> int:
         return 0
 
     packages = _read_pinned_packages()
-    index_url = (
-        os.getenv("PYTORCH_CUDA_INDEX_URL", DEFAULT_CUDA_INDEX_URL)
-        if target == "cuda"
-        else os.getenv("PYTORCH_CPU_INDEX_URL", DEFAULT_CPU_INDEX_URL)
-    )
+    index_url = os.getenv("PYTORCH_CPU_INDEX_URL", DEFAULT_CPU_INDEX_URL)
 
     cmd = [
         sys.executable,

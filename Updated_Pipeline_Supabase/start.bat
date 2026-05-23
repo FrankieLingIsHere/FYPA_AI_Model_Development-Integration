@@ -154,13 +154,15 @@ set "CASM_TORCH_STRICT_CPU=true"
 echo Selecting CPU-only PyTorch runtime...
 "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
 if errorlevel 1 (
-    echo Warning: CPU-only PyTorch runtime selection failed. Continuing with installed Torch runtime.
+    echo Error: CPU-only PyTorch runtime selection failed.
+    echo CUDA Torch is not allowed in local mode startup.
     echo You can rerun manually:
     echo   set CASM_TORCH_INSTALL_MODE=cpu
     echo   "%VENV_PYTHON%" scripts\install_torch_runtime.py --apply
-) else (
-    echo CPU-only PyTorch runtime checked.
+    pause
+    exit /b 1
 )
+echo CPU-only PyTorch runtime checked.
 echo.
 
 REM Keep dependencies synced with latest source updates. Torch is kept CPU-only;

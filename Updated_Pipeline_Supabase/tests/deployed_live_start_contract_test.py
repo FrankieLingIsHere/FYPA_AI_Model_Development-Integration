@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 
 import requests
 
@@ -37,6 +38,13 @@ def is_expected_webcam_unavailable_message(msg: str) -> bool:
     )
 
 
+def stop_live_best_effort() -> None:
+    code, payload, text = request_json("POST", "/api/live/stop", json={}, timeout=20)
+    if code >= 400 or not isinstance(payload, dict) or payload.get("success") is False:
+        preview = json.dumps(payload)[:300] if isinstance(payload, dict) else text
+        print(f"WARN: pre-test live stop cleanup was not accepted ({code}): {preview}")
+
+
 def main() -> int:
     try:
         code, payload, text = request_json("GET", "/api/live/status")
@@ -44,37 +52,45 @@ def main() -> int:
             return fail(f"/api/live/status invalid ({code}): {text}", 3)
         print("PASS: live status endpoint is reachable")
 
-        code, payload, text = request_json(
-            "POST",
-            "/api/live/start",
-            json={"source": "webcam"},
-            timeout=35,
-        )
-        if not isinstance(payload, dict):
-            return fail(f"/api/live/start non-JSON response ({code}): {text}", 4)
+        stop_live_best_effort()
 
-        if payload.get("success") is True:
-            print(f"PASS: live start accepted webcam request (status={code})")
-            stop_code, stop_payload, stop_text = request_json("POST", "/api/live/stop", json={})
-            if stop_code >= 400 or not isinstance(stop_payload, dict) or stop_payload.get("success") is False:
-                return fail(
-                    "live stop failed after successful start: "
-                    f"status={stop_code} payload={json.dumps(stop_payload)[:300] if isinstance(stop_payload, dict) else stop_text}",
-                    5,
+        last_failure = ""
+        for attempt in range(1, 3):
+            code, payload, text = request_json(
+                "POST",
+                "/api/live/start",
+                json={"source": "webcam"},
+                timeout=35,
+            )
+            if not isinstance(payload, dict):
+                last_failure = f"/api/live/start non-JSON response ({code}): {text}"
+            elif payload.get("success") is True:
+                print(f"PASS: live start accepted webcam request (status={code})")
+                stop_code, stop_payload, stop_text = request_json("POST", "/api/live/stop", json={})
+                if stop_code >= 400 or not isinstance(stop_payload, dict) or stop_payload.get("success") is False:
+                    return fail(
+                        "live stop failed after successful start: "
+                        f"status={stop_code} payload={json.dumps(stop_payload)[:300] if isinstance(stop_payload, dict) else stop_text}",
+                        5,
+                    )
+                print("PASS: live stop succeeded after start")
+                return 0
+            else:
+                error_message = str(payload.get("error") or payload.get("message") or "")
+                if is_expected_webcam_unavailable_message(error_message):
+                    print("PASS: live start returned explicit webcam-unavailable response")
+                    return 0
+                last_failure = (
+                    "unexpected /api/live/start failure payload: "
+                    f"status={code} body={json.dumps(payload)[:400]}"
                 )
-            print("PASS: live stop succeeded after start")
-            return 0
 
-        error_message = str(payload.get("error") or payload.get("message") or "")
-        if is_expected_webcam_unavailable_message(error_message):
-            print("PASS: live start returned explicit webcam-unavailable response")
-            return 0
+            if attempt < 2:
+                print(f"WARN: live start attempt {attempt} failed; cleaning up and retrying: {last_failure}")
+                stop_live_best_effort()
+                time.sleep(8)
 
-        return fail(
-            "unexpected /api/live/start failure payload: "
-            f"status={code} body={json.dumps(payload)[:400]}",
-            6,
-        )
+        return fail(last_failure, 6)
     except requests.HTTPError as exc:
         return fail(f"HTTP error during live start contract test: {exc}", 20)
     except Exception as exc:

@@ -52,6 +52,8 @@ set "CURRENT_LAUNCHER_BAT=%~f0"
 set "CASM_STATE_DIR_PATH=C:\CASM_System\CASM_LocalState"
 set "HAS_MANAGED_LAUNCHER=false"
 if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!"
+set "CASM_SOURCE_VERSION_FILE=!CASM_STATE_DIR_PATH!\source_version.txt"
+set "CASM_REMOTE_SOURCE_VERSION="
 
 if exist "!LOCAL_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
 if exist "!LEGACY_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
@@ -81,8 +83,9 @@ call :sync_launcher_aliases >nul 2>&1
 
 if not "!CASM_MACHINE_ID!"=="" (
     if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!" >nul 2>&1
-    >"!CASM_STATE_DIR_PATH!\machine_id.txt" echo !CASM_MACHINE_ID!
-    if errorlevel 1 (
+    set "CASM_MACHINE_ID_WRITE_OK="
+    (>"!CASM_STATE_DIR_PATH!\machine_id.txt" echo !CASM_MACHINE_ID!) && set "CASM_MACHINE_ID_WRITE_OK=1"
+    if not defined CASM_MACHINE_ID_WRITE_OK (
         echo Warning: Could not seed local machine ID into !CASM_STATE_DIR_PATH!\machine_id.txt
     ) else (
         echo Seeded local machine ID from approved installer token: !CASM_MACHINE_ID!
@@ -101,6 +104,10 @@ if not "!CASM_MACHINE_ID!"=="" if not "!CASM_PROVISION_SECRET!"=="" (
 
 if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
     if /I "!HAS_MANAGED_LAUNCHER!"=="true" (
+        call :stage_downloaded_launcher_if_current >nul 2>&1
+        if not errorlevel 1 (
+            echo Managed launcher refreshed from this downloaded installer before handoff.
+        )
         echo Detected external launcher execution. Fresh provisioning linkage was applied before handoff.
         echo Handing off to managed local launcher:
         echo   !LOCAL_LAUNCHER_BAT!
@@ -151,7 +158,15 @@ if exist "!CASM_APP_DIR!\start.bat" (
     echo   !CASM_APP_DIR!
     echo.
     set "CASM_SHOULD_CHECK_UPDATES=false"
-    if /I "!CASM_AUTO_UPDATE_ON_LAUNCH!"=="true" set "CASM_SHOULD_CHECK_UPDATES=true"
+    if /I "!CASM_AUTO_UPDATE_ON_LAUNCH!"=="true" (
+        call :should_refresh_existing_source_snapshot
+        if not errorlevel 1 (
+            set "CASM_SHOULD_CHECK_UPDATES=true"
+        ) else (
+            echo Local source snapshot already matches the latest known installer version.
+            echo.
+        )
+    )
 
     if /I "!CASM_PROMPT_UPDATE_ON_LAUNCH!"=="true" (
         echo Choose launch mode:
@@ -167,6 +182,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
 
     if /I "!CASM_SHOULD_CHECK_UPDATES!"=="true" (
         echo Checking for source updates before launch...
+        if not "!CASM_UPDATE_REASON!"=="" echo Update reason: !CASM_UPDATE_REASON!
         call :refresh_existing_source_snapshot
         if errorlevel 1 (
             echo Warning: Auto-update failed or was skipped. Launching existing local files.
@@ -309,7 +325,7 @@ if not exist "!CASM_SOURCE_ROOT!" (
     curl -L --ssl-no-revoke --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 "!CASM_REPO_ZIP_URL!" -o casm.zip
     if not exist casm.zip (
         echo curl download failed. Falling back to PowerShell Invoke-WebRequest...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { Invoke-WebRequest -UseBasicParsing -Uri '!CASM_REPO_ZIP_URL!' -OutFile 'casm.zip' } catch { Write-Host ('IWR failed: ' + $_.Exception.Message); exit 1 }"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { Invoke-WebRequest -UseBasicParsing -Uri '!CASM_REPO_ZIP_URL!' -OutFile 'casm.zip' -TimeoutSec 600 } catch { Write-Host ('IWR failed: ' + $_.Exception.Message); exit 1 }"
     )
     if not exist casm.zip (
         echo ERROR: Could not download source archive. Check internet connectivity / firewall and retry.
@@ -319,6 +335,7 @@ if not exist "!CASM_SOURCE_ROOT!" (
     echo Extracting files...
     powershell -command "Expand-Archive -Force casm.zip ."
     del casm.zip
+    call :write_source_version_marker >nul 2>&1
 )
 
 cd "!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase"
@@ -527,6 +544,80 @@ if not errorlevel 1 exit /b 0
 
 exit /b 1
 
+:stage_downloaded_launcher_if_current
+if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" exit /b 1
+if "!CASM_INSTALLER_VERSION!"=="" exit /b 1
+if /I "!CASM_INSTALLER_VERSION!"=="__CASM_INSTALLER_VERSION__" exit /b 1
+
+call :resolve_remote_source_version
+if errorlevel 1 exit /b 1
+
+set "CASM_REMOTE_SOURCE_VERSION_SHORT=!CASM_REMOTE_SOURCE_VERSION:~0,12!"
+if /I not "!CASM_REMOTE_SOURCE_VERSION_SHORT!"=="!CASM_INSTALLER_VERSION!" exit /b 1
+
+copy /Y "!CURRENT_LAUNCHER_BAT!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+if errorlevel 1 exit /b 1
+call :sync_launcher_aliases >nul 2>&1
+exit /b 0
+
+:resolve_remote_source_version
+set "CASM_REMOTE_SOURCE_VERSION="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; $url=$env:CASM_REPO_ZIP_URL; if([string]::IsNullOrWhiteSpace($url)){ exit 1 }; if($url -match 'github\.com/([^/]+)/([^/]+)/archive/refs/heads/([^/]+)\.zip'){ $owner=$Matches[1]; $repo=$Matches[2]; $branch=$Matches[3]; $api='https://api.github.com/repos/' + $owner + '/' + $repo + '/commits/' + $branch; try { $resp=Invoke-RestMethod -UseBasicParsing -Uri $api -Headers @{ 'User-Agent'='CASM-LocalInstaller' } -TimeoutSec 20; if($resp.sha){ Write-Output ([string]$resp.sha); exit 0 } } catch { exit 1 } }; exit 1"`) do set "CASM_REMOTE_SOURCE_VERSION=%%V"
+if "!CASM_REMOTE_SOURCE_VERSION!"=="" exit /b 1
+exit /b 0
+
+:should_refresh_existing_source_snapshot
+set "CASM_UPDATE_REASON="
+set "CASM_INSTALLED_SOURCE_VERSION="
+
+if /I "!CASM_FORCE_SOURCE_REFRESH!"=="true" (
+    set "CASM_UPDATE_REASON=forced_refresh"
+    exit /b 0
+)
+
+if not exist "!CASM_APP_DIR!\start.bat" (
+    set "CASM_UPDATE_REASON=source_missing"
+    exit /b 0
+)
+
+if not exist "!CASM_SOURCE_VERSION_FILE!" (
+    set "CASM_UPDATE_REASON=source_version_unknown"
+    exit /b 0
+)
+
+set /p CASM_INSTALLED_SOURCE_VERSION=<"!CASM_SOURCE_VERSION_FILE!"
+if "!CASM_INSTALLED_SOURCE_VERSION!"=="" (
+    set "CASM_UPDATE_REASON=source_version_empty"
+    exit /b 0
+)
+
+if not "!CASM_INSTALLER_VERSION!"=="" if /I not "!CASM_INSTALLER_VERSION!"=="__CASM_INSTALLER_VERSION__" (
+    if /I not "!CASM_INSTALLED_SOURCE_VERSION!"=="!CASM_INSTALLER_VERSION!" (
+        set "CASM_UPDATE_REASON=installer_version_changed"
+        exit /b 0
+    )
+)
+
+call :resolve_remote_source_version
+if not errorlevel 1 (
+    set "CASM_REMOTE_SOURCE_VERSION_SHORT=!CASM_REMOTE_SOURCE_VERSION:~0,12!"
+    if not "!CASM_REMOTE_SOURCE_VERSION_SHORT!"=="" if /I not "!CASM_REMOTE_SOURCE_VERSION_SHORT!"=="!CASM_INSTALLED_SOURCE_VERSION!" (
+        set "CASM_UPDATE_REASON=remote_version_changed"
+        set "CASM_INSTALLER_VERSION=!CASM_REMOTE_SOURCE_VERSION_SHORT!"
+        exit /b 0
+    )
+)
+
+set "CASM_UPDATE_REASON=source_current"
+exit /b 1
+
+:write_source_version_marker
+if "!CASM_INSTALLER_VERSION!"=="" exit /b 1
+if /I "!CASM_INSTALLER_VERSION!"=="__CASM_INSTALLER_VERSION__" exit /b 1
+if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!" >nul 2>&1
+>"!CASM_SOURCE_VERSION_FILE!" echo !CASM_INSTALLER_VERSION!
+exit /b 0
+
 :repair_startup_batch_label_mismatch
 set "CASM_START_BAT_REPAIR_ERROR="
 set "START_BAT_PATH=!CASM_APP_DIR!\start.bat"
@@ -627,6 +718,7 @@ if !ROBOCOPY_CODE! GEQ 8 (
     goto :refresh_existing_source_snapshot_fail
 )
 
+call :write_source_version_marker >nul 2>&1
 if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 set "CASM_UPDATE_ERROR="

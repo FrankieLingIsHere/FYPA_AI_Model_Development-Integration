@@ -158,9 +158,14 @@ def _needs_install(target: str, state: Dict[str, object]) -> Tuple[bool, str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true", help="Install the selected Torch runtime when needed")
+    parser.add_argument(
+        "--mode",
+        default=None,
+        help="Torch runtime mode: skip, cpu, cuda, or auto. Defaults to CASM_TORCH_INSTALL_MODE/PYTORCH_INSTALL_MODE, then skip.",
+    )
     args = parser.parse_args()
 
-    mode = os.getenv("CASM_TORCH_INSTALL_MODE", os.getenv("PYTORCH_INSTALL_MODE", "auto"))
+    mode = args.mode or os.getenv("CASM_TORCH_INSTALL_MODE", os.getenv("PYTORCH_INSTALL_MODE", "skip"))
     target, has_gpu, hardware_label = _target_runtime(mode)
     state = _torch_state()
 

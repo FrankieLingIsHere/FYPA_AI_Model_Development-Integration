@@ -241,7 +241,8 @@ def get_yolo_runtime_diagnostics() -> Dict[str, Any]:
     ):
         torch_install_recommendation = (
             'NVIDIA GPU detected but this Python environment has CPU-only Torch. '
-            'Run start.bat again, or run scripts/install_torch_runtime.py --apply.'
+            'YOLO will keep using CPU unless CUDA Torch is installed with '
+            'CASM_TORCH_INSTALL_MODE=auto start.bat, or scripts/install_torch_runtime.py --mode auto --apply.'
         )
     with _cached_model_lock:
         payload.update({

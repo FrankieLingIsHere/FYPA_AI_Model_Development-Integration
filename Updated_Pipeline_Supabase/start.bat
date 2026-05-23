@@ -177,6 +177,23 @@ if errorlevel 1 (
 echo Dependencies synchronized.
 echo.
 
+echo Checking optional Intel RealSense SDK...
+"%VENV_PYTHON%" -c "import pyrealsense2" >nul 2>&1
+if errorlevel 1 (
+    echo RealSense SDK missing. Installing optional pyrealsense2 for local USB detection...
+    "%VENV_PIP%" install --disable-pip-version-check pyrealsense2
+    if errorlevel 1 (
+        echo Warning: Could not install pyrealsense2 automatically.
+        echo RealSense USB will stay unavailable until pyrealsense2 / Intel RealSense SDK is installed.
+        echo The app can still use webcam and cloud mode.
+    ) else (
+        echo RealSense SDK installed.
+    )
+) else (
+    echo RealSense SDK available.
+)
+echo.
+
 echo.
 echo ==========================================
 echo Checking Ollama Installation...

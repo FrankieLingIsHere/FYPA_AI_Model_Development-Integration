@@ -1813,14 +1813,15 @@ const LivePage = {
                     // Safe to ignore: start call below remains authoritative.
                 }
 
+                const requestedSourceAtStart = selectedSource;
                 const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_START}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        source: selectedSource,
-                        camera_index: selectedSource === 'webcam' ? selectedCameraIndex : null
+                        source: requestedSourceAtStart,
+                        camera_index: requestedSourceAtStart === 'webcam' ? selectedCameraIndex : null
                     })
                 });
 
@@ -1847,6 +1848,18 @@ const LivePage = {
                         return;
                     }
                     throw new Error(backendErrorMessage);
+                }
+
+                const actualStartedSource = String((startData && startData.source) || '').trim().toLowerCase();
+                if (
+                    (requestedSourceAtStart === 'realsense' || requestedSourceAtStart === 'edge_realsense') &&
+                    actualStartedSource &&
+                    actualStartedSource !== requestedSourceAtStart
+                ) {
+                    throw new Error(
+                        (startData && startData.message)
+                        || `Requested ${requestedSourceAtStart}, but backend started ${actualStartedSource}.`
+                    );
                 }
 
                 useBrowserCaptureRuntime = false;

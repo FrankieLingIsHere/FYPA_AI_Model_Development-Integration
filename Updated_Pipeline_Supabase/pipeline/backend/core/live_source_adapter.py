@@ -90,6 +90,16 @@ class LiveSourceAdapter:
             'reason': 'No edge relay frames received yet'
         }
 
+    @staticmethod
+    def _allow_realsense_webcam_fallback() -> bool:
+        """Whether explicit RealSense selections may silently fall back to webcam."""
+        return str(os.getenv('LIVE_REALSENSE_ALLOW_WEBCAM_FALLBACK', 'false')).strip().lower() in (
+            '1',
+            'true',
+            'yes',
+            'on',
+        )
+
     def _load_last_good_camera_index(self, default_index: int = 0) -> int:
         try:
             if self.last_good_camera_index_path.exists():
@@ -513,12 +523,29 @@ class LiveSourceAdapter:
                     'message': 'Live monitoring started (Edge RealSense relay)'
                 }
 
+            if not self._allow_realsense_webcam_fallback():
+                return {
+                    'success': False,
+                    'source': 'edge_realsense',
+                    'camera_index': None,
+                    'fallback_to_webcam': False,
+                    'message': 'Edge RealSense relay is unavailable or stale. Start the edge relay and wait for fresh frames before selecting it.'
+                }
+
             source = 'webcam'
             fallback_to_webcam = True
             fallback_message = 'Edge RealSense relay is unavailable or stale; switched to webcam.'
 
         if source == 'realsense':
             if not REALSENSE_SOURCE_AVAILABLE:
+                if not self._allow_realsense_webcam_fallback():
+                    return {
+                        'success': False,
+                        'source': 'realsense',
+                        'camera_index': None,
+                        'fallback_to_webcam': False,
+                        'message': 'RealSense SDK is unavailable. Install pyrealsense2 on the local workstation before selecting RealSense USB.'
+                    }
                 source = 'webcam'
                 fallback_to_webcam = True
                 fallback_message = 'RealSense SDK is unavailable; switched to webcam.'
@@ -538,6 +565,22 @@ class LiveSourceAdapter:
                         'camera_index': None,
                         'fallback_to_webcam': False,
                         'message': 'Live monitoring started (RealSense)'
+                    }
+
+                try:
+                    if self.active_realsense_source is not None:
+                        self.active_realsense_source.stop()
+                except Exception:
+                    pass
+                self.active_realsense_source = None
+
+                if not self._allow_realsense_webcam_fallback():
+                    return {
+                        'success': False,
+                        'source': 'realsense',
+                        'camera_index': None,
+                        'fallback_to_webcam': False,
+                        'message': f'RealSense unavailable ({error_message}). Webcam fallback is disabled for explicit RealSense selections.'
                     }
 
                 source = 'webcam'

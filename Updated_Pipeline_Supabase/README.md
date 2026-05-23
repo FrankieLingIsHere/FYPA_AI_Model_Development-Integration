@@ -368,6 +368,23 @@ python edge_realsense_streamer.py \
 
 Then in Live Monitoring source selector, choose **RealSense Edge Relay**.
 
+### Local RealSense Relay (Local Mode)
+
+When using local mode from `http://localhost:5000`, RealSense should be consumed by the local backend, not Railway.
+If direct **RealSense USB** is unavailable or another process already owns the device, stop any cloud relay first or run the local relay:
+
+```bat
+cd Updated_Pipeline_Supabase
+scripts\START_LOCAL_REALSENSE_RELAY.bat
+```
+
+Then in Live Monitoring source selector, choose **RealSense Edge Relay**.
+The cloud relay helper still supports deployed mode:
+
+```bat
+scripts\START_EDGE_REALSENSE_RELAY.bat https://your-backend.up.railway.app
+```
+
 ### Alternative: Report Viewer Only
 
 If you only want to view existing reports without live monitoring:

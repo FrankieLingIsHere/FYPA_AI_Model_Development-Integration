@@ -1,12 +1,13 @@
 """
 Edge RealSense relay streamer.
 
-Captures frames from a local Intel RealSense camera and uploads them to a hosted
-CASM backend so deployment mode can consume local hardware as a live source.
+Captures frames from a local Intel RealSense camera and uploads them to a CASM
+backend so local or deployed mode can consume RealSense as a live source.
 """
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
@@ -26,11 +27,15 @@ def _normalize_base_url(value: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stream local RealSense to deployed backend")
+    parser = argparse.ArgumentParser(description="Stream local RealSense to a CASM backend")
     parser.add_argument(
         "--backend-url",
-        default="https://fypaaimodeldevelopment-integration-production.up.railway.app",
-        help="Backend base URL (Railway host)",
+        default=(
+            os.getenv("EDGE_REALSENSE_BACKEND_URL")
+            or os.getenv("CASM_EDGE_REALSENSE_BACKEND_URL")
+            or "http://127.0.0.1:5000"
+        ),
+        help="Backend base URL (local backend or Railway host)",
     )
     parser.add_argument(
         "--endpoint",

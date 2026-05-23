@@ -545,7 +545,11 @@ const LivePage = {
         };
 
         const canAttemptRealsenseUsb = () => {
-            return realsenseAvailable || hasCapabilityPayload(realsenseCapabilities);
+            return realsenseAvailable || (
+                !isLikelyRemoteBackend()
+                && hasCapabilityPayload(realsenseCapabilities)
+                && realsenseCapabilities.sdk_available === true
+            );
         };
 
         const canAttemptEdgeRealsense = () => {
@@ -1125,8 +1129,12 @@ const LivePage = {
             const hasAnyRealsense = realsenseAvailable || edgeRealsenseAvailable;
             if (!hasAnyRealsense) {
                 const reasonText = String((realsenseCapabilities && realsenseCapabilities.reason) || '').trim();
+                const edgeReasonText = String((edgeRealsenseCapabilities && edgeRealsenseCapabilities.reason) || '').trim();
                 const reasonBadge = reasonText
                     ? `<span class="rs-cap-badge off"><i class="fas fa-info-circle"></i> ${reasonText}</span>`
+                    : '';
+                const edgeReasonBadge = edgeReasonText
+                    ? `<span class="rs-cap-badge off"><i class="fas fa-network-wired"></i> Edge relay: ${edgeReasonText}</span>`
                     : '';
                 const hostedBadge = isLikelyRemoteBackend()
                     ? '<span class="rs-cap-badge off"><i class="fas fa-cloud"></i> Hosted backend cannot detect USB cameras on this PC</span>'
@@ -1134,6 +1142,7 @@ const LivePage = {
                 capabilitiesContainer.innerHTML = `
                     <span class="rs-cap-badge off"><i class="fas fa-microchip"></i> RealSense Depth: Not detected</span>
                     ${reasonBadge}
+                    ${edgeReasonBadge}
                     ${hostedBadge}
                 `;
                 return;

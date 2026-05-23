@@ -247,7 +247,7 @@ def test_yolo_model_calls_are_serialized_under_local_request_flood():
 
     try:
         infer_image.resolve_model_path = lambda model_path=None: "fake-yolo.pt"
-        infer_image._ensure_model_loaded = lambda resolved_model_path: fake_model
+        infer_image._ensure_model_loaded = lambda resolved_model_path, device=None: fake_model
         infer_image._yolo_predict_semaphore = Semaphore(1)
 
         frame = np.zeros((64, 64, 3), dtype=np.uint8)

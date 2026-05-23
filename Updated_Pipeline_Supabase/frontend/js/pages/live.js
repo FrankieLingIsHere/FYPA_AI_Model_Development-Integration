@@ -2120,8 +2120,13 @@ const LivePage = {
             setTimeout(() => { cooldownStatus.style.display = 'none'; }, 3000);
         }
 
+        function getCooldownSettingsUrl() {
+            const baseUrl = (typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) ? API_CONFIG.BASE_URL : '';
+            return `${baseUrl}/api/settings/cooldown`;
+        }
+
         // Load current cooldown from backend
-        fetch('/api/settings/cooldown')
+        fetch(getCooldownSettingsUrl())
             .then(r => r.ok ? r.json() : Promise.reject(r.status))
             .then(data => { if (data.cooldown_seconds) cooldownInput.value = data.cooldown_seconds; })
             .catch(() => {});
@@ -2134,7 +2139,7 @@ const LivePage = {
             }
             cooldownSaveBtn.disabled = true;
             try {
-                const res = await fetch('/api/settings/cooldown', {
+                const res = await fetch(getCooldownSettingsUrl(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ cooldown_seconds: val })
